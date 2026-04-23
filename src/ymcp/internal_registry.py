@@ -48,21 +48,21 @@ class ToolSpec:
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="plan",
-        description="根据模式给出需求摘要、计划步骤、风险、验证方式以及宿主下一步动作。",
+        description="根据模式输出 plan 状态机投影，给出需求摘要、计划步骤、风险、验证方式以及宿主下一步动作。",
         request_model=PlanRequest,
         response_model=PlanResult,
         handler=build_plan,
     ),
     ToolSpec(
         name="ralplan",
-        description="构建共识规划，以多角色讨论的方式达成计划共识",
+        description="输出 ralplan 状态机投影，通过多角色讨论帮助宿主推进计划共识。",
         request_model=RalplanRequest,
         response_model=RalplanResult,
         handler=build_ralplan,
     ),
     ToolSpec(
         name="deep_interview",
-        description="需求不明确事，进行多轮对话明确需求边界，获取更多需求信息。",
+        description="需求不明确时，为宿主生成多轮澄清问题与边界检查，逐步明确需求。",
         request_model=DeepInterviewRequest,
         response_model=DeepInterviewResult,
         handler=build_deep_interview,

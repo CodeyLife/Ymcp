@@ -113,7 +113,7 @@ def project_rule_template_text() -> str:
     return TRAE_PROJECT_RULE_TEMPLATE
 
 
-def create_project_rules(project_root: str | None = None, *, overwrite: bool = False) -> Path:
+def create_project_rules(project_root: str | None = None, *, overwrite: bool = True) -> Path:
     root = Path(project_root).expanduser().resolve() if project_root else Path.cwd()
     rules_dir = root / ".trae" / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)

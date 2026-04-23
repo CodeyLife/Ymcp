@@ -1,4 +1,4 @@
-TRAE_PROJECT_RULE_TEMPLATE = """
+
 # Ymcp 项目规则模板
 
 ## 必须遵守的规则
@@ -22,4 +22,3 @@ TRAE_PROJECT_RULE_TEMPLATE = """
 - 禁止在 `ralph` 阶段输出伪造的执行结果、测试结果或已修改文件列表。
 
 
-"""
