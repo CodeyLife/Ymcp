@@ -9,29 +9,23 @@ def test_workflow_tools_expose_state_machine_metadata():
     for name in WORKFLOW_NAMES:
         response_schema = payload[name]["response_schema"]
         artifacts_schema = response_schema["$defs"][response_schema["properties"]["artifacts"]["$ref"].split("/")[-1]]
-        assert "workflow_state" in artifacts_schema["properties"]
-        assert "continuation" in artifacts_schema["properties"]
+        assert REQUIRED_WORKFLOW_FIELDS <= set(artifacts_schema["properties"])
+        assert "interaction" not in artifacts_schema["properties"]
+        assert "continuation" not in artifacts_schema["properties"]
 
 
-def test_workflow_descriptions_are_chinese_and_host_controlled():
+def test_workflow_descriptions_are_mcp_first_and_host_controlled():
     payload = {item["name"]: item for item in inspect_tools_payload()}
-    assert "状态机投影" in payload["plan"]["description"]
-    assert "状态机投影" in payload["ralplan"]["description"]
-    assert "宿主" in payload["deep_interview"]["description"]
-    assert "宿主" in payload["ralph"]["description"]
+    assert "MCP" in payload["plan"]["description"]
+    assert "Elicitation" in payload["ralplan"]["description"]
+    assert "Elicitation" in payload["deep_interview"]["description"]
+    assert "Elicitation" in payload["ralph"]["description"]
 
 
-
-def test_continuation_contract_exposes_handoff_options():
-    from ymcp.contracts.workflow import ContinuationContract
-    fields = set(ContinuationContract.model_fields)
-    assert {"handoff_options", "tool_call_templates", "default_option", "selection_required", "option_prompt"} <= fields
-
-
-def test_tool_call_template_contract_exists():
-    from ymcp.contracts.workflow import ToolCallTemplate
-    assert {"tool", "purpose", "arguments"} <= set(ToolCallTemplate.model_fields)
-
+def test_tool_call_template_contract_removed_from_main_workflow_protocol():
+    import ymcp.contracts.workflow as workflow
+    assert not hasattr(workflow, "WorkflowInteraction")
+    assert not hasattr(workflow, "ContinuationContract")
 
 
 def test_workflow_state_exposes_memory_preflight():
@@ -39,10 +33,9 @@ def test_workflow_state_exposes_memory_preflight():
     assert "memory_preflight" in WorkflowState.model_fields
 
 
-def test_workflow_state_exposes_host_action_type():
+def test_workflow_state_no_longer_exposes_host_action_type():
     from ymcp.contracts.workflow import WorkflowState
-    assert "host_action_type" in WorkflowState.model_fields
-
+    assert "host_action_type" not in WorkflowState.model_fields
 
 
 def test_memory_preflight_records_search_results_fields():
@@ -55,22 +48,12 @@ def test_memory_context_contract_exists():
     assert {"searched", "hits", "failed", "query"} <= set(MemoryContext.model_fields)
 
 
-def test_continuation_contract_rejects_invalid_selection_combination():
-    import pytest
-    from ymcp.contracts.workflow import ContinuationContract
-
-    with pytest.raises(ValueError):
-        ContinuationContract(
-            interaction_mode="handoff",
-            continuation_required=False,
-            continuation_kind="select_handoff_option",
-            recommended_host_action="展示选项",
-            selection_required=True,
-            option_prompt="请选择",
-        )
-
-
 def test_workflow_state_exposes_memory_protocol():
     from ymcp.contracts.workflow import WorkflowState
     fields = set(WorkflowState.model_fields)
     assert {"memory_protocol_summary", "memory_protocol"} <= fields
+
+
+def test_workflow_choice_option_contract_exists():
+    from ymcp.contracts.workflow import WorkflowChoiceOption
+    assert {"id", "label", "description", "tool", "recommended", "requires_user_selection"} <= set(WorkflowChoiceOption.model_fields)

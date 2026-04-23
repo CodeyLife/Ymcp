@@ -15,6 +15,20 @@ MEMORY_NAMES = {
     "memory_delete_tunnel", "memory_diary_write", "memory_diary_read",
 }
 EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
+RESOURCE_URIS = {
+    "resource://ymcp/principles",
+    "resource://ymcp/tool-reference",
+    "resource://ymcp/memory-protocol",
+    "resource://ymcp/project-rule-template",
+    "resource://ymcp/host-integration",
+}
+PROMPT_NAMES = {
+    "deep_interview_clarify",
+    "plan_direct",
+    "ralplan_consensus",
+    "ralph_verify",
+    "memory_store_after_completion",
+}
 
 
 def test_version_command(capsys):
@@ -27,6 +41,30 @@ def test_inspect_tools_json_command(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert {item["name"] for item in payload} == EXPECTED_NAMES
     assert all(item["host_boundary"] for item in payload)
+
+
+def test_inspect_resources_json_command(capsys):
+    assert main(["inspect-resources", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {item["uri"] for item in payload} == RESOURCE_URIS
+    assert all(item["primitive"] == "resource" for item in payload)
+
+
+def test_inspect_prompts_json_command(capsys):
+    assert main(["inspect-prompts", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {item["name"] for item in payload} == PROMPT_NAMES
+    assert all(item["primitive"] == "prompt" for item in payload)
+    assert all(item["execution_boundary"] for item in payload)
+
+
+def test_inspect_capabilities_json_command(capsys):
+    assert main(["inspect-capabilities", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "FastMCP-first" in payload["principle"]
+    assert {item["name"] for item in payload["tools"]} == EXPECTED_NAMES
+    assert {item["uri"] for item in payload["resources"]} == RESOURCE_URIS
+    assert {item["name"] for item in payload["prompts"]} == PROMPT_NAMES
 
 
 def test_doctor_json_command(capsys):

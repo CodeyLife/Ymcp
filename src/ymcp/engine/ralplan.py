@@ -1,21 +1,41 @@
 from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.ralplan import AdrDraft, RalplanArtifacts, RalplanRequest, RalplanResult, ViableOption
-from ymcp.contracts.workflow import ContinuationContract, HandoffContract, HandoffOption, MemoryPreflight, ToolCallTemplate, WorkflowState
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowChoiceOption, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
 
 
 def _options(deliberate: bool) -> list[ViableOption]:
     options = [
-        ViableOption(name="状态机投影", pros=["最适合 Trae 宿主循环调用", "避免把 skill 原文直接塞给用户"], cons=["需要维护额外 contract 字段"]),
-        ViableOption(name="prompt 包投影", pros=["最贴近 skill 原文"], cons=["Trae 使用成本高", "不够 MCP-native"]),
+        ViableOption(name="状态机投影", pros=["更适合结构化交接", "更贴近 MCP 标准实践"], cons=["需要保持协议与文档一致"]),
+        ViableOption(name="prompt 包投影", pros=["保留原始 prompt 信息"], cons=["MCP 客户端消费成本更高", "更容易演变成宿主私有规则"]),
     ]
     if deliberate:
-        options.append(ViableOption(name="双层模式", pros=["兼顾保真与易用"], cons=["实现复杂度更高"] ))
+        options.append(ViableOption(name="双层模式", pros=["兼顾保真与易用"], cons=["实现复杂度更高"]))
     return options
 
 
-
+HANDOFF_OPTIONS = [
+    WorkflowChoiceOption(
+        id="ralph",
+        label="进入 ralph",
+        description="按批准方案进入执行与验证闭环。",
+        tool="ralph",
+        recommended=True,
+    ),
+    WorkflowChoiceOption(
+        id="plan",
+        label="进入 plan",
+        description="先把批准方案拆成更细执行计划。",
+        tool="plan",
+    ),
+    WorkflowChoiceOption(
+        id="memory_store",
+        label="写入 memory_store",
+        description="将规划摘要沉淀到长期记忆。",
+        tool="memory_store",
+    ),
+]
 
 
 def _detect_critic_verdict(request: RalplanRequest) -> str:
@@ -23,10 +43,11 @@ def _detect_critic_verdict(request: RalplanRequest) -> str:
         normalized = request.critic_verdict_input.strip().upper()
         if normalized in {"APPROVE", "REVISE", "REJECT"}:
             return normalized
-    joined = "\n".join(request.critic_feedback).upper()
-    if "REJECT" in joined or "驳回" in "\n".join(request.critic_feedback):
+    joined = "\n".join(request.critic_feedback)
+    joined_upper = joined.upper()
+    if "REJECT" in joined_upper or "驳回" in joined:
         return "REJECT"
-    if "APPROVE" in joined or "批准" in "\n".join(request.critic_feedback) or "通过" in "\n".join(request.critic_feedback):
+    if "APPROVE" in joined_upper or "批准" in joined or "通过" in joined:
         return "APPROVE"
     if request.critic_feedback:
         return "REVISE"
@@ -42,70 +63,47 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
     critic_prompt = None
     revise = []
     critic_verdict = None
-    handoff = None
+    approved_plan_summary = None
+    requested_input = None
+    handoff_options = []
     status = ToolStatus.OK
     readiness = "in_progress"
-    host_action = "宿主按当前阶段切换 perspective，并把结果继续传回 ralplan。"
-    handoff_target = None
     if phase == "planner_draft":
         architect_prompt = "请以 Architect 视角审查当前 favored option 的边界、反例和 tradeoff。"
-        host_action = "宿主下一步应以 Architect 视角审查 planner draft。"
-        handoff_target = "ralplan"
     elif phase == "architect_review":
         critic_prompt = "请以 Critic 视角检查 plan 的清晰度、测试性、风险和验证步骤。"
-        host_action = "宿主下一步应以 Critic 视角评估 architect review 之后的计划。"
-        handoff_target = "ralplan"
     elif phase == "critic_review":
         critic_verdict = _detect_critic_verdict(request)
         if critic_verdict in {"REVISE", "REJECT"}:
             phase = "revise"
             revise = request.critic_feedback or ["请补齐 acceptance criteria、验证步骤和架构边界。"]
-            host_action = "宿主应根据 critic feedback 修订 planner draft，然后再次进入 architect_review。" if critic_verdict == "REVISE" else "宿主应重新规划或缩小范围，然后从 planner_draft 重新开始。"
-            handoff_target = "ralplan"
             readiness = "needs_revision" if critic_verdict == "REVISE" else "rejected"
             status = ToolStatus.NEEDS_INPUT
         else:
             phase = "approved"
             readiness = "ready_for_handoff"
-            handoff_target = "ralph"
-            handoff = HandoffContract(
-                target_tool="ralph",
-                invocation_summary=f"已批准计划：{request.task}",
-                required_inputs=["approved_plan", "latest_evidence", "verification_commands"],
-                constraints_to_preserve=["宿主控制执行", "不得将 MCP server 视为 agent runtime"],
-            )
-            host_action = "宿主应把 approved plan 摘要和验证命令交给 ralph。"
+            approved_plan_summary = f"已批准计划：{request.task}"
+            requested_input = "选择下一步 workflow：ralph / plan / memory_store；支持 Elicitation 的客户端应由服务器发起表单请求。"
+            handoff_options = HANDOFF_OPTIONS
     elif phase == "revise":
         phase = "architect_review"
-        host_action = "宿主应使用修订后的计划重新进行 Architect 审查。"
-        handoff_target = "ralplan"
         status = ToolStatus.NEEDS_INPUT
     elif phase in {"approved", "handoff_to_ralph"}:
         phase = "handoff_to_ralph"
         readiness = "ready_for_handoff"
-        handoff_target = "ralph"
-        handoff = HandoffContract(
-            target_tool="ralph",
-            invocation_summary=f"已批准计划：{request.task}",
-            required_inputs=["approved_plan", "latest_evidence", "verification_commands"],
-            constraints_to_preserve=["宿主控制执行", "按批准计划收集验证证据"],
-        )
-        host_action = "宿主调用 ralph，并传入 approved plan 和最新证据。"
+        approved_plan_summary = f"已批准计划：{request.task}"
+        requested_input = "选择下一步 workflow：ralph / plan / memory_store；支持 Elicitation 的客户端应由服务器发起表单请求。"
+        handoff_options = HANDOFF_OPTIONS
     state = WorkflowState(
         workflow_name="ralplan",
         current_phase=phase,
         readiness=readiness,
-        host_next_action=host_action,
-        host_action_type="show_options" if handoff_target == "ralph" else ("call_tool" if phase in {"planner_draft", "architect_review", "handoff_to_ralph"} else ("revise_plan" if phase == "revise" else "run_host_execution")),
-        required_host_inputs=["planner_draft"] if phase == "planner_draft" and not request.planner_draft else [],
-        handoff_target=handoff_target,
-        handoff_contract=handoff.invocation_summary if handoff else None,
         evidence_gaps=[] if request.planner_draft or phase == "planner_draft" else ["缺少 planner draft 或评审反馈。"],
         blocked_reason=None,
         skill_source="skills/ralplan/SKILL.md",
         memory_preflight=MemoryPreflight(
             required=phase == "planner_draft" and not bool(request.constraints) and not bool(request.known_context),
-            reason="进入 ralplan 共识规划前应读取相关记忆，补充历史方案、约束和踩坑结论。",
+            reason="进入 ralplan 共识规划前应读取相关记忆。",
             query=request.task,
             already_satisfied=bool(request.constraints) or bool(request.known_context) or phase != "planner_draft",
             search_performed=search_performed,
@@ -115,80 +113,31 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
     )
     return RalplanResult(
         status=status,
-        summary=f"已生成 ralplan 阶段 `{phase}` 的状态机投影。",
-        assumptions=["Planner / Architect / Critic 视角在同一 Trae 宿主上下文中顺序完成。"],
-        next_actions=[build_next_action("继续共识规划", host_action)],
+        summary=f"已生成 ralplan 阶段 `{phase}` 的标准结构化结果。",
+        assumptions=["批准态的下一步选择应优先通过 MCP Elicitation 获取。"],
+        next_actions=[build_next_action("继续共识规划", requested_input or "继续按 planner → architect → critic 顺序推进。")],
         risks=[build_risk("若跳过 Architect 或 Critic 阶段，计划质量会显著下降。", "必须按顺序推进 planner → architect → critic。")],
-        meta=build_meta("ralplan", "ymcp.contracts.ralplan.RalplanResult", host_controls=["切换视角", "保留评审记录", "决定是否交接 ralph"]),
+        meta=build_meta("ralplan", "ymcp.contracts.ralplan.RalplanResult", host_controls=["MCP Elicitation", "state persistence", "display"]),
         artifacts=RalplanArtifacts(
-            principles=["宿主控制执行", "状态机投影优先", "以可测试计划为准"],
-            decision_drivers=["Trae 易用性", "MCP 输出结构化", "避免虚假 agent loop"],
+            principles=["MCP 第一规范", "状态机投影优先", "以可测试计划为准"],
+            decision_drivers=["MCP 标准能力", "结构化结果可消费", "减少宿主私有规则"],
             viable_options=options,
             chosen_option=chosen_option,
             adr=AdrDraft(
-                decision="将 skills 语义投影为 MCP 状态机，而不是直接输出整段 skill 文本。",
-                drivers=["Trae 更易消费", "更适合结构化交接", "避免宿主误解为自动执行器"],
+                decision="以 MCP 官方标准（Tools + Elicitation）为首要规范重构 workflow 交互。",
+                drivers=["客户端可按标准能力实现交互", "避免自定义宿主协议", "便于跨客户端兼容"],
                 alternatives_considered=[o.name for o in options],
-                consequences=["需要维护 workflow_state 字段", "文档和测试必须同步更新"],
-                follow_ups=["批准后交给 ralph，按验证证据继续推进。"],
+                consequences=["需要用 Elicitation 替换自定义 interaction/continuation", "不支持 Elicitation 的客户端只能标准降级"],
+                follow_ups=["批准后交给 ralph，或由用户选择 plan / memory_store。"],
             ),
-            test_strategy=["单元测试各 phase 转移", "契约测试 handoff_contract", "集成测试多轮 ralplan 调用"],
+            test_strategy=["单元测试各 phase 转移", "集成测试 Elicitation 能力分支", "客户端不支持 Elicitation 时返回标准降级结果"],
             architect_review_prompt=architect_prompt,
             critic_review_prompt=critic_prompt,
             revise_instructions=revise,
             workflow_state=state,
-            continuation=ContinuationContract(
-                interaction_mode="handoff" if handoff_target == "ralph" else "continue_workflow",
-                continuation_required=True,
-                continuation_kind="select_handoff_option" if handoff_target == "ralph" else "next_phase",
-                continuation_payload={"next_phase": phase, "next_tool": handoff_target},
-                recommended_user_message="共识规划已批准。请选择下一步：1) 使用 ralph 逐步实施并验证；2) 使用 plan 拆成更细执行计划；3) 保存规划摘要到记忆。不要在用户选择前结束对话。" if handoff_target == "ralph" else None,
-                recommended_host_action="向用户展示批准后的下一步选项，并等待用户选择；不要只询问是否进入 ralph，也不要结束对话。" if handoff_target == "ralph" else host_action,
-                handoff_options=[] if handoff_target != "ralph" else [
-                    HandoffOption(label="使用 ralph 逐步实施并验证", tool="ralph", description="按批准计划进入执行、修复和验证循环。", payload_hint={"approved_plan": "handoff_contract.invocation_summary"}),
-                    HandoffOption(label="使用 plan 拆成更细执行计划", tool="plan", description="先把批准方案拆成更细的执行步骤。", payload_hint={"task": "task", "mode": "direct"}),
-                    HandoffOption(label="保存规划摘要到记忆", tool="memory_store", description="把批准的架构决策、约束和验证策略保存为长期记忆。", payload_hint={"content": "artifacts.adr"}),
-                ],
-                tool_call_templates=[
-                    ToolCallTemplate(
-                        tool="ralplan",
-                        purpose="继续共识规划下一阶段时调用；宿主先生成对应视角反馈，再填入参数。",
-                        arguments={
-                            "task": "保持原始任务描述",
-                            "current_phase": "architect_review 或 critic_review 或 planner_draft；按上一轮 continuation_payload.next_phase 决定",
-                            "planner_draft": "Planner 草案全文或摘要；进入 architect/critic 阶段时必须提供",
-                            "architect_feedback": ["Architect 审查结论；进入 critic_review 前提供"],
-                            "critic_feedback": ["Critic 审查结论；进入 critic_review 时提供"],
-                            "critic_verdict": "可选：APPROVE / REVISE / REJECT；如果宿主能明确判断则传入",
-                            "iteration": "当前共识规划轮次，1-12",
-                        },
-                    ),
-                    ToolCallTemplate(
-                        tool="ralph",
-                        purpose="ralplan 批准且用户选择实施验证时调用。",
-                        arguments={
-                            "approved_plan": "使用 handoff_contract.invocation_summary，加上 ADR decision/test_strategy 摘要",
-                            "latest_evidence": ["当前已有证据；没有执行证据时写明计划已批准，不要伪造测试通过"],
-                            "verification_commands": ["从 test_strategy 转成可执行或人工验收动作"],
-                            "current_phase": "executing",
-                        },
-                    ),
-                    ToolCallTemplate(
-                        tool="memory_store",
-                        purpose="用户选择保存规划摘要时调用。",
-                        arguments={
-                            "content": "把 ADR decision、drivers、alternatives_considered、consequences 整理成稳定项目记忆",
-                            "wing": "personal",
-                            "room": "ymcp",
-                            "added_by": "ymcp",
-                        },
-                    ),
-                ],
-                default_option="ralph" if handoff_target == "ralph" else None,
-                selection_required=handoff_target == "ralph",
-                option_prompt="共识规划已批准。您希望我继续哪个方向？" if handoff_target == "ralph" else None,
-            ),
             critic_verdict=critic_verdict,
-            handoff_contract=handoff,
+            approved_plan_summary=approved_plan_summary,
+            requested_input=requested_input,
+            handoff_options=handoff_options,
         ),
     )

@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import ContinuationContract, WorkflowState
+from ymcp.contracts.workflow import WorkflowState
 
 
 class RalphRequest(WorkflowRequestBase):
@@ -25,7 +25,8 @@ class RalphArtifacts(BaseModel):
     skill_improvement_candidates: list[str] = Field(default_factory=list)
     final_report_skeleton: list[str] = Field(default_factory=list)
     workflow_state: WorkflowState
-    continuation: ContinuationContract
+    requested_input: str | None = None
+    selected_next_tool: str | None = None
 
 
 class RalphResult(ToolResultBase[RalphArtifacts]):

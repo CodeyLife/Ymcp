@@ -1,6 +1,6 @@
 import anyio
 
-from ymcp.server import create_app
+from ymcp.server import DeepInterviewNextToolInput, RalplanNextToolInput, create_app
 
 EXPECTED_WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
 EXPECTED_MEMORY_NAMES = {
@@ -12,6 +12,20 @@ EXPECTED_MEMORY_NAMES = {
     "memory_delete_tunnel", "memory_diary_write", "memory_diary_read",
 }
 EXPECTED_NAMES = EXPECTED_WORKFLOW_NAMES | EXPECTED_MEMORY_NAMES
+EXPECTED_RESOURCE_URIS = {
+    "resource://ymcp/principles",
+    "resource://ymcp/tool-reference",
+    "resource://ymcp/memory-protocol",
+    "resource://ymcp/project-rule-template",
+    "resource://ymcp/host-integration",
+}
+EXPECTED_PROMPT_NAMES = {
+    "deep_interview_clarify",
+    "plan_direct",
+    "ralplan_consensus",
+    "ralph_verify",
+    "memory_store_after_completion",
+}
 
 FIXTURES = {
     "plan": {"task": "为 Ymcp 工作流提供状态机输出", "constraints": ["宿主控制执行"]},
@@ -27,6 +41,18 @@ async def _exercise_app():
     app = create_app()
     tools = await app.list_tools()
     assert {tool.name for tool in tools} == EXPECTED_NAMES
+    resources = await app.list_resources()
+    assert {str(resource.uri) for resource in resources} == EXPECTED_RESOURCE_URIS
+    prompts = await app.list_prompts()
+    assert {prompt.name for prompt in prompts} == EXPECTED_PROMPT_NAMES
+    principles = await app.read_resource("resource://ymcp/principles")
+    assert "Tools" in principles[0].content
+    assert "Resources" in principles[0].content
+    assert "Prompts" in principles[0].content
+    assert "Elicitation" in principles[0].content
+    prompt = await app.get_prompt("plan_direct", {"task": "测试 FastMCP 三原语"})
+    assert "plan" in prompt.messages[0].content.text
+    assert "测试 FastMCP 三原语" in prompt.messages[0].content.text
     for name, args in FIXTURES.items():
         result = await app.call_tool(name, args)
         if isinstance(result, tuple):
@@ -40,13 +66,10 @@ async def _exercise_app():
         assert structured["artifacts"]
         if name in EXPECTED_WORKFLOW_NAMES:
             assert structured["artifacts"]["workflow_state"]["workflow_name"] == name
-            assert structured["artifacts"]["workflow_state"]["host_next_action"]
-            assert structured["artifacts"]["workflow_state"]["host_action_type"]
             if name in {"deep_interview", "plan", "ralplan"}:
                 assert structured["artifacts"]["workflow_state"]["memory_preflight"] is not None
-            assert structured["artifacts"]["continuation"]["interaction_mode"]
-            assert structured["artifacts"]["continuation"]["recommended_host_action"]
-            assert "handoff_options" in structured["artifacts"]["continuation"]
+            assert "interaction" not in structured["artifacts"]
+            assert "continuation" not in structured["artifacts"]
 
 
 def test_fastmcp_tool_discovery_and_calls():
@@ -72,8 +95,72 @@ def test_deep_interview_accepts_json_string_lists_from_host():
         else:
             structured = result
         assert structured["artifacts"]["workflow_state"]["workflow_name"] == "deep_interview"
-        assert structured["artifacts"]["interaction_mode"] in {"ask_user", "handoff"}
+        assert structured["artifacts"]["requested_input"]
     anyio.run(_run)
+
+
+def test_deep_interview_crystallize_exposes_handoff_options():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool(
+            "deep_interview",
+            {
+                "brief": "为 Ymcp 的工作流工具建立状态机投影",
+                "known_context": ["当前已有 4 个 workflow tools"],
+                "non_goals": ["不做 agent runtime"],
+                "decision_boundaries": ["宿主负责循环和执行"],
+                "profile": "quick",
+                "prior_rounds": [
+                    {"question": "Q1", "answer": "解决宿主难以继续推进的问题"},
+                    {"question": "Q2", "answer": "第一版不直接执行命令"},
+                    {"question": "Q3", "answer": "输出必须可交给 Trae"},
+                    {"question": "Q4", "answer": "验收标准要可测试"},
+                    {"question": "Q5", "answer": "保留现有工具名"},
+                ],
+            },
+        )
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured["status"] == "needs_input"
+        assert structured["artifacts"]["workflow_state"]["readiness"] == "needs_user_choice"
+        assert {item["id"] for item in structured["artifacts"]["handoff_options"]} == {"ralplan", "plan", "ralph", "refine_further"}
+        assert structured["artifacts"]["selected_next_tool"] is None
+    anyio.run(_run)
+
+
+def test_deep_interview_elicitation_schema_uses_standard_single_choice_shape():
+    schema = DeepInterviewNextToolInput.model_json_schema()
+    next_tool = schema["properties"]["next_tool"]
+    assert next_tool["type"] == "string"
+    assert next_tool["title"] == "下一步工作流"
+    assert "oneOf" in next_tool
+    assert {item["const"] for item in next_tool["oneOf"]} == {"ralplan", "plan", "ralph", "refine_further"}
+    assert any(item["title"] == "ralplan（推荐）" for item in next_tool["oneOf"])
+
+
+def test_ralplan_approved_exposes_handoff_options():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool(
+            "ralplan",
+            {
+                "task": "规划 Ymcp workflow refactor",
+                "current_phase": "critic_review",
+            },
+        )
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured["artifacts"]["workflow_state"]["current_phase"] == "approved"
+        assert {item["id"] for item in structured["artifacts"]["handoff_options"]} == {"ralph", "plan", "memory_store"}
+        assert structured["artifacts"]["selected_next_tool"] is None
+    anyio.run(_run)
+
+
+def test_ralplan_elicitation_schema_uses_standard_single_choice_shape():
+    schema = RalplanNextToolInput.model_json_schema()
+    next_tool = schema["properties"]["next_tool"]
+    assert next_tool["type"] == "string"
+    assert next_tool["title"] == "下一步工作流"
+    assert "oneOf" in next_tool
+    assert {item["const"] for item in next_tool["oneOf"]} == {"ralph", "plan", "memory_store"}
 
 
 

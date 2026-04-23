@@ -1,13 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import ContinuationContract, MemoryContext, WorkflowState
-
-
-class AnswerOption(BaseModel):
-    label: str
-    value: str
-    description: str
+from ymcp.contracts.workflow import MemoryContext, WorkflowChoiceOption, WorkflowState
 
 
 class InterviewRound(BaseModel):
@@ -50,19 +44,17 @@ class SpecSkeleton(BaseModel):
 
 
 class DeepInterviewArtifacts(BaseModel):
-    interaction_mode: str = "ask_user"
-    answer_options: list[AnswerOption] = Field(default_factory=list)
-    continuation_instruction: str = "宿主必须把用户回答追加到 prior_rounds 后再次调用 deep_interview；不要把本轮问题视为流程结束。"
     ambiguity_score: float
     weakest_dimension: str
-    next_question: str
-    question_rationale: str
+    next_question: str | None = None
+    question_rationale: str | None = None
     readiness_gates: ReadinessGates
     scores: DimensionScores
     transcript_delta: list[InterviewRound]
     workflow_state: WorkflowState
-    continuation: ContinuationContract
-    crystallize_ready: bool = False
+    requested_input: str | None = None
+    selected_next_tool: str | None = None
+    handoff_options: list[WorkflowChoiceOption] = Field(default_factory=list)
     spec_skeleton: SpecSkeleton | None = None
 
 

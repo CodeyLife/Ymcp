@@ -1,17 +1,20 @@
-# 工具参考
+# MCP 能力参考
+
+Ymcp 的第一原则是 FastMCP-first：所有能力按 **Tools / Resources / Prompts** 三原语组织。Tools 执行动作或产生结构化结果；Resources 暴露可读取上下文；Prompts 暴露可复用调用模板。用户输入/选择优先使用 MCP 官方 Elicitation。
+
+# Tools
 
 ## plan
-返回结构化计划草案、假设、验收标准和宿主下一步动作建议。
+返回 MCP 标准结构化计划结果；需要用户选择或补充输入时，优先通过官方 Elicitation 获取。
 
 ## ralplan
-返回共识规划包，包括原则、决策驱动、可选方案、ADR 内容和测试策略。
+返回 MCP 标准结构化共识规划结果；批准后的下一步选择优先通过官方 Elicitation 获取。
 
 ## deep_interview
-只返回下一问和评分建议。MCP 宿主负责询问用户，并维护 transcript/state。
+用于逐步澄清需求边界与意图。提问与下一步选择优先通过官方 Elicitation 获取，而不是自定义宿主协议。
 
 ## ralph
-只返回宿主下一步动作建议。不执行命令、不 spawn agent、不修改文件、不持久化循环，也不自行验证完成。
-
+返回执行/验证状态、证据缺口和完成摘要。缺证据或完成后的下一步选择优先通过官方 Elicitation 获取。
 
 # 记忆工具
 
@@ -54,48 +57,61 @@
 ## memory_diary_write / memory_diary_read
 写入或读取 MemPalace diary 条目。
 
+# Resources
+
+Resources 用于把文档型上下文以 MCP 可发现、可读取的方式暴露给宿主；不得只写在 Markdown 文档中。
+
+- `resource://ymcp/principles`：FastMCP 第一原则、三原语边界、Elicitation 规则。
+- `resource://ymcp/tool-reference`：workflow tools 与 memory tools 的标准用途。
+- `resource://ymcp/memory-protocol`：记忆核验、写入、更新、失效规则。
+- `resource://ymcp/project-rule-template`：Trae / LLM 宿主项目规则模板。
+- `resource://ymcp/host-integration`：宿主集成说明和 MCP-first 使用约束。
+
+# Prompts
+
+Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工具结果。
+
+- `deep_interview_clarify`：启动需求澄清。
+- `plan_direct`：明确任务的直接计划。
+- `ralplan_consensus`：高风险/架构型共识规划。
+- `ralph_verify`：执行后证据判断和继续/修复/完成决策。
+- `memory_store_after_completion`：任务结束后沉淀长期记忆。
 
 ## Trae 调用建议
 
-- 保存长期偏好：优先使用 `memory_store`，内容写成完整自然语言，便于未来搜索。
-- 搜索历史上下文：优先使用 `memory_search`，搜索词应包含项目名、主题和动作，例如“Ymcp Trae 初始化”。
+- 保存长期偏好：优先使用 `memory_store`。
+- 搜索历史上下文：优先使用 `memory_search`。
 - 维护已有记忆：搜索得到 `drawer_id` 后，再使用 `memory_get`、`memory_update` 或 `memory_delete`。
 - 写入前去重：重要结论保存前，可先调用 `memory_check_duplicate` 或 `memory_search`。
 - 查看记忆库状态：使用 `memory_status`、`memory_list_wings`、`memory_list_rooms`。
 
-
 # 工作流状态机投影
 
-`plan`、`ralplan`、`deep_interview`、`ralph` 均返回 `workflow_state`。这表示 MCP 工具不会直接执行 workflow，而是把 skill 的阶段、门槛、下一步和交接信息投影给 Trae。Trae 负责循环调用、提问、执行命令、保存状态和展示结果。
+`plan`、`ralplan`、`deep_interview`、`ralph` 均返回 `workflow_state`。这表示工具不会直接执行 workflow，而是把当前阶段、readiness、证据缺口和记忆预检结果投影给客户端。
+
+## MCP 第一规范
+
+- 能力优先按 Tools / Resources / Prompts 三原语组织。
+- 用户输入、选择和表单交互优先使用 MCP 官方 Elicitation。
+- 工具输出优先使用 MCP tools 的标准结构化结果。
+- 不再把自定义 `interaction`、`continuation`、`handoff_options` 作为主协议。
 
 `workflow_state` 常见字段：
 
-- `workflow_name`：当前工作流名称
-- `current_phase`：当前阶段
-- `readiness`：是否需要输入、修订、验证或可交接
-- `host_next_action`：Trae 下一步应该做什么
-- `host_action_type`：宿主动作类型，建议优先按结构化类型推进，而不是解析自然语言文案
-- `required_host_inputs`：宿主还需要补充的输入
-- `handoff_target`：建议交接的下一个工具
-- `handoff_contract`：交接约束或摘要
-- `evidence_gaps`：缺失证据
-- `skill_source`：语义来源 skill 文档
-
-`continuation` 常见字段：
-
-- `continuation_required=true`：当前轮不能直接结束，宿主还必须继续推进
-- `selection_required=true`：必须向用户展示选项并等待选择
-- `continuation_kind`：结构化下一步类型，例如 `user_answer`、`handoff_to_tool`、`select_handoff_option`、`select_completion_option`
-- `recommended_user_message`：当需要用户回答或选择时，宿主可直接复用的提示文案
-
+- `workflow_name`
+- `current_phase`
+- `readiness`
+- `evidence_gaps`
+- `blocked_reason`
+- `skill_source`
+- `memory_preflight`
 
 ## 推荐组合链路
 
 - `deep_interview → ralplan → ralph`：从模糊需求到批准计划再到执行验证。
 - `plan(mode="direct") → ralph`：明确任务的快速计划与验证循环。
-- `ralplan(current_phase="planner_draft") → ralplan(current_phase="architect_review") → ralplan(current_phase="critic_review")`：在 Trae 中顺序模拟 Planner / Architect / Critic 视角。
+- `ralplan(current_phase="planner_draft") → ralplan(current_phase="architect_review") → ralplan(current_phase="critic_review")`：顺序模拟 Planner / Architect / Critic 视角。
 - `memory_search → memory_store`：任务完成后先查重再沉淀长期记忆。
-
 
 ## memory_preflight
 
@@ -103,7 +119,7 @@
 
 - `required=true`：建议先读取记忆
 - `query`：推荐传给 `memory_search` 的查询词
-- `already_satisfied=true`：本次调用已经提供了相关上下文
+- `already_satisfied=true`：说明本次调用已经提供了相关上下文
 
 新宿主推荐直接传结构化 `memory_context`：
 

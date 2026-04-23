@@ -14,33 +14,27 @@ from ymcp.engine.ralplan import build_ralplan
 from ymcp.engine.ralph import build_ralph
 
 
-def test_plan_engine_direct_mode():
+def test_plan_engine_direct_mode_requests_standard_next_step_input():
     request = PlanRequest(task="为 Ymcp 增加状态机工作流输出", constraints=["宿主控制执行"])
     result = build_plan(request)
     assert result.status is ToolStatus.OK
     assert result.artifacts.workflow_state.current_phase == "direct_plan"
-    assert result.artifacts.workflow_state.host_next_action
-    assert result.artifacts.continuation.interaction_mode == "continue_workflow"
-    assert result.artifacts.continuation.continuation_required is True
-    assert result.artifacts.continuation.continuation_kind == "select_handoff_option"
+    assert result.artifacts.requested_input is not None
+    assert result.artifacts.recommended_next_tool is None
     assert result.artifacts.workflow_state.memory_preflight.required is True
-    assert result.artifacts.continuation.selection_required is True
-    assert result.artifacts.continuation.recommended_user_message is not None
-    assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"ralph", "ralplan", "deep_interview"}
 
 
 def test_plan_engine_vague_task_requests_interview():
     result = build_plan(PlanRequest(task="改好它"))
     assert result.status is ToolStatus.NEEDS_INPUT
     assert result.artifacts.recommended_next_tool == "deep_interview"
-    assert result.artifacts.continuation.continuation_kind == "handoff_to_tool"
+    assert result.artifacts.requested_input is not None
 
 
 def test_plan_engine_auto_mode_handles_clear_chinese_tasks():
     result = build_plan(PlanRequest(task="优化项目稳定性"))
     assert result.status is ToolStatus.OK
     assert result.artifacts.workflow_state.current_phase == "direct_plan"
-    assert result.artifacts.recommended_next_tool is None
 
 
 def test_deep_interview_engine_needs_input_until_gates_resolved():
@@ -48,10 +42,8 @@ def test_deep_interview_engine_needs_input_until_gates_resolved():
     assert result.status is ToolStatus.NEEDS_INPUT
     assert result.artifacts.workflow_state.readiness == "needs_input"
     assert result.artifacts.readiness_gates.non_goals == "needs_clarification"
-    assert result.artifacts.interaction_mode == "ask_user"
-    assert result.artifacts.answer_options
-    assert "不要在提问后结束对话" in result.artifacts.continuation_instruction
-    assert result.artifacts.continuation.continuation_kind == "user_answer"
+    assert result.artifacts.next_question is not None
+    assert result.artifacts.requested_input is not None
     assert result.artifacts.workflow_state.memory_preflight.required is True
     assert result.artifacts.workflow_state.memory_preflight.suggested_tool == "memory_search"
 
@@ -72,17 +64,33 @@ def test_deep_interview_engine_can_crystallize():
         profile="quick",
     )
     result = build_deep_interview(request)
-    assert result.status is ToolStatus.OK
-    assert result.artifacts.crystallize_ready is True
-    assert result.artifacts.workflow_state.handoff_target == "ralplan"
-    assert result.artifacts.continuation.interaction_mode == "handoff"
-    assert result.artifacts.continuation.continuation_required is True
-    assert result.artifacts.continuation.continuation_kind == "select_handoff_option"
-    assert result.artifacts.continuation.selection_required is True
-    assert result.artifacts.continuation.recommended_user_message is not None
-    assert result.artifacts.continuation.tool_call_templates
-    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"ralplan", "deep_interview"}
-    assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"ralplan", "plan", "ralph"}
+    assert result.status is ToolStatus.NEEDS_INPUT
+    assert result.artifacts.spec_skeleton is not None
+    assert result.artifacts.workflow_state.current_phase == "handoff_selection"
+    assert result.artifacts.workflow_state.readiness == "needs_user_choice"
+    assert result.artifacts.requested_input is not None
+    assert result.artifacts.selected_next_tool is None
+    assert {option.id for option in result.artifacts.handoff_options} == {"ralplan", "plan", "ralph", "refine_further"}
+    assert next(option for option in result.artifacts.handoff_options if option.id == "ralplan").recommended is True
+
+
+def test_deep_interview_crystallize_does_not_auto_select_next_tool():
+    result = build_deep_interview(
+        DeepInterviewRequest(
+            brief="为 Ymcp 的工作流工具建立状态机投影",
+            prior_rounds=[
+                {"question": "Q1", "answer": "解决宿主难以继续推进的问题"},
+                {"question": "Q2", "answer": "第一版不直接执行命令"},
+                {"question": "Q3", "answer": "输出必须可交给 Trae"},
+            ],
+            non_goals=["不做 agent runtime"],
+            decision_boundaries=["宿主负责循环和执行"],
+            known_context=["当前已有 4 个 workflow tools"],
+            profile="quick",
+        )
+    )
+    assert result.artifacts.selected_next_tool is None
+    assert "自动调用 plan、ralplan 或 ralph" in result.artifacts.requested_input
 
 
 def test_ralplan_engine_returns_architect_review_first():
@@ -90,46 +98,38 @@ def test_ralplan_engine_returns_architect_review_first():
     assert result.status is ToolStatus.OK
     assert result.artifacts.workflow_state.current_phase == "planner_draft"
     assert result.artifacts.architect_review_prompt
-    assert result.artifacts.continuation.continuation_kind == "next_phase"
     assert result.artifacts.workflow_state.memory_preflight.required is True
 
 
 def test_ralplan_engine_requires_revision_when_critic_feedback_present():
-    result = build_ralplan(RalplanRequest(task="规划 Ymcp workflow refactor", current_phase="critic_review", critic_feedback=["补充测试"] ))
+    result = build_ralplan(RalplanRequest(task="规划 Ymcp workflow refactor", current_phase="critic_review", critic_feedback=["补充测试"]))
     assert result.status is ToolStatus.NEEDS_INPUT
     assert result.artifacts.workflow_state.current_phase == "revise"
     assert result.artifacts.critic_verdict == "REVISE"
-    assert result.artifacts.continuation.continuation_kind == "next_phase"
 
 
-def test_ralplan_engine_approves_and_handoffs_to_ralph():
+def test_ralplan_engine_approves_and_requests_standard_next_step():
     result = build_ralplan(RalplanRequest(task="规划 Ymcp workflow refactor", current_phase="critic_review"))
     assert result.status is ToolStatus.OK
-    assert result.artifacts.workflow_state.handoff_target == "ralph"
-    assert result.artifacts.handoff_contract is not None
-    assert result.artifacts.continuation.interaction_mode == "handoff"
-    assert result.artifacts.continuation.continuation_required is True
-    assert result.artifacts.continuation.continuation_kind == "select_handoff_option"
-    assert result.artifacts.continuation.selection_required is True
-    assert result.artifacts.continuation.recommended_user_message is not None
-    assert "不要在用户选择前结束对话" in result.artifacts.continuation.recommended_user_message
-    assert result.artifacts.continuation.tool_call_templates
-    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"ralph", "memory_store"}
-    assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"ralph", "plan", "memory_store"}
+    assert result.artifacts.workflow_state.current_phase == "approved"
+    assert result.artifacts.approved_plan_summary is not None
+    assert result.artifacts.requested_input is not None
+    assert {option.id for option in result.artifacts.handoff_options} == {"ralph", "plan", "memory_store"}
+    assert next(option for option in result.artifacts.handoff_options if option.id == "ralph").recommended is True
 
 
 def test_ralph_engine_requires_evidence_and_verification():
     result = build_ralph(RalphRequest(approved_plan="Do the plan"))
     assert result.status is ToolStatus.NEEDS_INPUT
     assert "latest_evidence" in result.artifacts.missing_evidence
-    assert result.artifacts.continuation.continuation_kind == "provide_evidence"
+    assert result.artifacts.requested_input is not None
 
 
 def test_ralph_engine_detects_failures():
     result = build_ralph(RalphRequest(approved_plan="Do the plan", latest_evidence=["测试失败"], verification_commands=["pytest"], known_failures=["单元测试失败"]))
     assert result.status is ToolStatus.NEEDS_INPUT
     assert result.artifacts.workflow_state.readiness == "fixing"
-    assert result.artifacts.continuation.continuation_kind == "fix_failures"
+    assert result.artifacts.requested_input is None
 
 
 def test_engines_do_not_use_subprocess_or_file_mutation_calls():
@@ -151,13 +151,12 @@ def test_ralplan_engine_approves_when_feedback_contains_approve():
     assert result.status is ToolStatus.OK
     assert result.artifacts.workflow_state.current_phase == "approved"
     assert result.artifacts.critic_verdict == "APPROVE"
-    assert result.artifacts.workflow_state.handoff_target == "ralph"
 
 
 def test_ralplan_engine_honors_explicit_critic_verdict():
     result = build_ralplan(RalplanRequest(task="规划 Ymcp workflow refactor", current_phase="critic_review", critic_feedback=["有一些建议"], critic_verdict_input="APPROVE"))
     assert result.artifacts.critic_verdict == "APPROVE"
-    assert result.artifacts.handoff_contract is not None
+
 
 
 def test_ralplan_request_allows_iteration_up_to_twelve():
@@ -174,30 +173,18 @@ def test_ralplan_request_allows_iteration_up_to_twelve():
     assert result.artifacts.workflow_state.current_phase == "approved"
 
 
+
 def test_ralplan_request_rejects_iteration_above_twelve():
     with pytest.raises(ValueError):
         RalplanRequest(task="规划功能", iteration=13)
 
 
 
-def test_ralph_engine_complete_returns_next_step_options():
+def test_ralph_engine_complete_requests_next_step_choice():
     result = build_ralph(RalphRequest(approved_plan="Do the plan", current_phase="complete", latest_evidence=["pytest passed"], verification_commands=["pytest"]))
     assert result.status is ToolStatus.OK
-    assert result.artifacts.continuation.interaction_mode == "complete"
-    assert result.artifacts.continuation.continuation_required is True
-    assert result.artifacts.continuation.continuation_kind == "select_completion_option"
-    assert result.artifacts.continuation.selection_required is True
-    assert result.artifacts.continuation.recommended_user_message is not None
-    assert result.artifacts.continuation.tool_call_templates
-    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"memory_store", "plan", "ralph"}
-    assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"memory_store", "plan", None}
-
-
-def test_plan_direct_returns_tool_call_templates():
-    result = build_plan(PlanRequest(task="实现功能", mode="direct"))
-    assert result.artifacts.continuation.tool_call_templates
-    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"ralph", "ralplan", "deep_interview"}
-    assert any("approved_plan" in template.arguments for template in result.artifacts.continuation.tool_call_templates if template.tool == "ralph")
+    assert result.artifacts.stop_continue_judgement == "complete"
+    assert result.artifacts.requested_input is not None
 
 
 
@@ -208,6 +195,7 @@ def test_memory_preflight_satisfied_when_context_present():
 
     interview = build_deep_interview(DeepInterviewRequest(brief="实现功能", known_context=["历史约定"]))
     assert interview.artifacts.workflow_state.memory_preflight.already_satisfied is True
+
 
 
 def test_memory_preflight_counts_only_actual_memory_hits():

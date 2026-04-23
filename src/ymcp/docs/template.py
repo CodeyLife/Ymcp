@@ -1,25 +1,28 @@
 TRAE_PROJECT_RULE_TEMPLATE = """
 # Ymcp 项目规则模板
 
-## 必须遵守的规则
+## 记忆规则
 
-- 在首次进入工作流、会话唤醒或需要恢复长期上下文时，必须优先调用 `memory_status` 获取当前记忆库概览，再决定是否继续搜索或写入。
-- 当缺少上下文时，必须调用memory_search工具获取相关记忆。
-- 当回答涉及人物、项目、历史事件、过往决策或任何“过去发生了什么”时，必须先调用 `memory_search`、`memory_get` 或相关图谱工具核验，禁止凭印象作答。
-- 当对记忆事实不确定时，必须明确表达“我先查一下记忆”之类的核验意图，然后再调用相关记忆工具；不得在不确定时直接猜测。
-- 每次任务或会话结束后，如产生了稳定偏好、项目约定、重要决策、踩坑结论或可复用事实，应先查重，再调用 `memory_store` / `memory_diary_write` 完成沉淀。
-- 当已保存事实发生变化时，必须优先使旧事实失效或更新，再补写新事实；可使用 `memory_update`、`memory_delete`、`memory_kg_invalidate` 与 `memory_kg_add` 维护一致性。
-- 必须将 Ymcp 视为 MCP 工作流工具服务器，不得将其描述或使用为 agent runtime。
-- 当需要澄清需求时，只能通过 `deep_interview` 提供下一问建议，不得伪造用户回答，不得代替宿主或用户继续完成问答。
-- 当使用 `ralph` 时，只能输出下一步行动建议和验证清单，不得执行命令，不得修改文件，不得声称已完成实际执行。
-- 输出必须使用结构化结果，至少明确包含：当前结论、风险、假设、下一步。
-- 当信息不足、前提缺失或无法继续判断时，必须明确返回 `needs_input`，不得在关键前提缺失时假设完成。
+- 需要历史事实、项目约定、偏好、决策或上下文时，先用 `memory_status` / `memory_search` / `memory_get` 核验；不要凭印象猜。
+- 任务结束后，如有稳定偏好、项目约定、重要决策或踩坑结论，先查重，再用 `memory_store` / `memory_diary_write` 保存；旧事实变化时用 `memory_update`、`memory_delete`、`memory_kg_invalidate`、`memory_kg_add` 维护。
 
-## 禁止事项
+## 推荐 workflow
 
-- 禁止把 Ymcp 工具调用描述为自动执行、自动落地或自动修改代码。
-- 禁止在 `deep_interview` 阶段输出已确认需求，除非这些需求已由宿主或用户明确提供。
-- 禁止在 `ralph` 阶段输出伪造的执行结果、测试结果或已修改文件列表。
+- 需求不清晰：`deep_interview`
+- 明确任务直接计划：`plan`
+- 高风险或架构型共识规划：`ralplan`
+- 执行后证据判断：`ralph`
 
+## deep_interview 结束规则
+
+- 当 `deep_interview` 返回 `handoff_options` 时，必须让用户从结构化后续 workflow 选项中做选择。
+- 在 `selected_next_tool` 缺失前，禁止宿主自动调用 `plan`、`ralplan`、`ralph`。
+- 禁止用“这个计划是否符合预期”之类普通文本结束 deep_interview；必须继续显示可交互的后续菜单。
+
+## 禁止
+
+- 禁止把 Ymcp 描述为 agent runtime，或声称它会自动执行、自动修改、自动验证。
+- 禁止伪造用户回答、执行结果、测试结果或文件修改。
+- 禁止在关键前提、证据或用户选择缺失时宣布完成。
 
 """

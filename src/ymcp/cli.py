@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ymcp import __version__
+from ymcp.capabilities import get_prompt_specs, get_resource_specs
 from ymcp.fixtures import FIXTURES, fixture_for
 from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 from ymcp.internal_registry import get_tool_specs
@@ -145,6 +146,43 @@ def inspect_tools_payload() -> list[dict[str, Any]]:
     return payload
 
 
+def inspect_resources_payload() -> list[dict[str, Any]]:
+    return [
+        {
+            "uri": spec.uri,
+            "name": spec.name,
+            "title": spec.title,
+            "description": spec.description,
+            "mime_type": spec.mime_type,
+            "primitive": "resource",
+        }
+        for spec in get_resource_specs()
+    ]
+
+
+def inspect_prompts_payload() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": spec.name,
+            "title": spec.title,
+            "description": spec.description,
+            "arguments": list(spec.argument_names),
+            "primitive": "prompt",
+            "execution_boundary": "Prompt 只生成可复用调用模板，不直接执行工具，也不伪造工具结果。",
+        }
+        for spec in get_prompt_specs()
+    ]
+
+
+def inspect_capabilities_payload() -> dict[str, Any]:
+    return {
+        "principle": "FastMCP-first: Tools / Resources / Prompts；用户输入优先使用 MCP Elicitation。",
+        "tools": inspect_tools_payload(),
+        "resources": inspect_resources_payload(),
+        "prompts": inspect_prompts_payload(),
+    }
+
+
 def doctor_payload() -> dict[str, Any]:
     python_ok = sys.version_info >= (3, 10)
     packages: dict[str, str | None] = {}
@@ -199,6 +237,15 @@ def main(argv: list[str] | None = None) -> int:
     inspect_cmd = subparsers.add_parser("inspect-tools", help="打印工具元数据")
     inspect_cmd.add_argument("--json", action="store_true", help="输出 JSON")
 
+    inspect_resources_cmd = subparsers.add_parser("inspect-resources", help="打印 Resources 元数据")
+    inspect_resources_cmd.add_argument("--json", action="store_true", help="输出 JSON")
+
+    inspect_prompts_cmd = subparsers.add_parser("inspect-prompts", help="打印 Prompts 元数据")
+    inspect_prompts_cmd.add_argument("--json", action="store_true", help="输出 JSON")
+
+    inspect_capabilities_cmd = subparsers.add_parser("inspect-capabilities", help="打印 Tools / Resources / Prompts 能力元数据")
+    inspect_capabilities_cmd.add_argument("--json", action="store_true", help="输出 JSON")
+
     doctor_cmd = subparsers.add_parser("doctor", help="检查本地 Ymcp 和 Trae MCP 准备状态")
     doctor_cmd.add_argument("--json", action="store_true", help="输出 JSON")
 
@@ -233,6 +280,35 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for item in payload:
                 print(f"{item['name']}: {item['description']}")
+        return 0
+
+    if args.command == "inspect-resources":
+        payload = inspect_resources_payload()
+        if args.json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            for item in payload:
+                print(f"{item['uri']}: {item['description']}")
+        return 0
+
+    if args.command == "inspect-prompts":
+        payload = inspect_prompts_payload()
+        if args.json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            for item in payload:
+                print(f"{item['name']}: {item['description']}")
+        return 0
+
+    if args.command == "inspect-capabilities":
+        payload = inspect_capabilities_payload()
+        if args.json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            print(payload["principle"])
+            print(f"Tools: {len(payload['tools'])}")
+            print(f"Resources: {len(payload['resources'])}")
+            print(f"Prompts: {len(payload['prompts'])}")
         return 0
 
     if args.command == "doctor":

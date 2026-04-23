@@ -48,28 +48,28 @@ class ToolSpec:
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="plan",
-        description="根据模式输出 plan 状态机投影，给出需求摘要、计划步骤、风险、验证方式以及宿主下一步动作。",
+        description="根据模式输出 MCP 标准结构化计划结果；需要用户输入时优先使用 MCP Elicitation。",
         request_model=PlanRequest,
         response_model=PlanResult,
         handler=build_plan,
     ),
     ToolSpec(
         name="ralplan",
-        description="输出 ralplan 状态机投影，通过多角色讨论帮助宿主推进计划共识。",
+        description="输出 MCP 标准结构化 ralplan 共识结果；批准后的下一步选择优先使用 MCP Elicitation。",
         request_model=RalplanRequest,
         response_model=RalplanResult,
         handler=build_ralplan,
     ),
     ToolSpec(
         name="deep_interview",
-        description="需求不明确时，为宿主生成多轮澄清问题与边界检查，逐步明确需求。",
+        description="需求不明确时通过 MCP Elicitation 收集澄清回答；结晶后返回 handoff_options，宿主必须等待用户选择下一步 workflow。",
         request_model=DeepInterviewRequest,
         response_model=DeepInterviewResult,
         handler=build_deep_interview,
     ),
     ToolSpec(
         name="ralph",
-        description="根据计划和用户反馈，给出宿主下一步、验证清单、是否继续以及证据缺口，不执行命令或循环。",
+        description="根据计划和证据返回 MCP 标准结构化验证状态；不执行命令；缺证据或完成选择优先使用 MCP Elicitation。",
         request_model=RalphRequest,
         response_model=RalphResult,
         handler=build_ralph,
@@ -248,4 +248,3 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 
 def get_tool_specs() -> tuple[ToolSpec, ...]:
     return TOOL_SPECS
-

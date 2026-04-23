@@ -1,7 +1,6 @@
 from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.deep_interview import (
     DeepInterviewArtifacts,
-    AnswerOption,
     DeepInterviewRequest,
     DeepInterviewResult,
     DimensionScores,
@@ -9,7 +8,7 @@ from ymcp.contracts.deep_interview import (
     ReadinessGates,
     SpecSkeleton,
 )
-from ymcp.contracts.workflow import ContinuationContract, HandoffOption, MemoryPreflight, ToolCallTemplate, WorkflowState
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowChoiceOption, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -25,23 +24,49 @@ QUESTION_BANK = {
 }
 
 RATIONALES = {
-    "intent": "skill 要求先澄清意图，避免直接进入实现细节。",
+    "intent": "先澄清意图，避免直接进入实现细节。",
     "outcome": "结果不清会导致计划不可验收。",
-    "scope": "Non-goals 是 deep-interview 的必过 readiness gate。",
+    "scope": "Non-goals 是 deep_interview 的必过 readiness gate。",
     "constraints": "约束决定后续计划和执行边界。",
-    "success": "成功标准必须可测试，才能交给 plan/ralplan。",
-    "context": "MCP 宿主应基于证据推进，无法确认时标记 evidence gap。",
+    "success": "成功标准必须可测试。",
+    "context": "需要基于证据推进，无法确认时标记 evidence gap。",
 }
+
+HANDOFF_OPTIONS = [
+    WorkflowChoiceOption(
+        id="ralplan",
+        label="进入 ralplan",
+        description="先做共识规划，再进入执行。",
+        tool="ralplan",
+        recommended=True,
+    ),
+    WorkflowChoiceOption(
+        id="plan",
+        label="进入 plan",
+        description="直接产出更细的执行计划。",
+        tool="plan",
+    ),
+    WorkflowChoiceOption(
+        id="ralph",
+        label="进入 ralph",
+        description="基于澄清后的规格进入执行与验证闭环。",
+        tool="ralph",
+    ),
+    WorkflowChoiceOption(
+        id="refine_further",
+        label="继续深访",
+        description="保留当前规格，继续补充边界和细节。",
+        tool="deep_interview",
+    ),
+]
 
 
 def _score(request: DeepInterviewRequest) -> DimensionScores:
     rounds = len(request.prior_rounds)
-    has_non_goals = bool(request.non_goals)
-    has_boundaries = bool(request.decision_boundaries)
     return DimensionScores(
         intent=min(1.0, 0.35 + 0.18 * rounds),
         outcome=min(1.0, 0.25 + 0.14 * rounds),
-        scope=0.85 if has_non_goals else min(0.65, 0.2 + 0.12 * rounds),
+        scope=0.85 if request.non_goals else min(0.65, 0.2 + 0.12 * rounds),
         constraints=min(1.0, 0.3 + 0.12 * rounds + (0.1 if request.known_context else 0)),
         success=min(1.0, 0.2 + 0.13 * rounds),
         context=min(1.0, 0.2 + (0.35 if request.known_context else 0) + 0.08 * rounds),
@@ -49,14 +74,7 @@ def _score(request: DeepInterviewRequest) -> DimensionScores:
 
 
 def _ambiguity(scores: DimensionScores) -> float:
-    weighted = (
-        scores.intent * 0.25
-        + scores.outcome * 0.2
-        + scores.scope * 0.2
-        + scores.constraints * 0.15
-        + scores.success * 0.1
-        + scores.context * 0.1
-    )
+    weighted = scores.intent * 0.25 + scores.outcome * 0.2 + scores.scope * 0.2 + scores.constraints * 0.15 + scores.success * 0.1 + scores.context * 0.1
     return round(max(0.0, 1.0 - weighted), 2)
 
 
@@ -67,27 +85,6 @@ def _weakest(scores: DimensionScores, request: DeepInterviewRequest) -> str:
         return "constraints"
     values = scores.model_dump()
     return min(values, key=values.get)
-
-
-
-def _answer_options(dimension: str) -> list[AnswerOption]:
-    if dimension == "scope":
-        return [
-            AnswerOption(label="必须做", value="must", description="这是第一版必须包含的范围。"),
-            AnswerOption(label="可以后做", value="later", description="这有价值，但可以推迟。"),
-            AnswerOption(label="明确不做", value="no", description="这不属于当前目标。"),
-        ]
-    if dimension == "constraints":
-        return [
-            AnswerOption(label="可自动决定", value="auto", description="实现者或宿主可以自行决定。"),
-            AnswerOption(label="必须确认", value="confirm", description="继续前需要用户明确确认。"),
-            AnswerOption(label="硬性约束", value="hard", description="任何方案都必须满足。"),
-        ]
-    return [
-        AnswerOption(label="回答问题", value="answer", description="直接回答下一问。"),
-        AnswerOption(label="补充例子", value="example", description="用具体例子说明。"),
-        AnswerOption(label="跳过/不确定", value="unsure", description="当前无法回答，要求宿主记录为 evidence gap。"),
-    ]
 
 
 def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
@@ -103,21 +100,21 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
     )
     crystallize_ready = ambiguity <= threshold and gates.non_goals == "resolved" and gates.decision_boundaries == "resolved" and pressure_pass
     weakest = "success" if crystallize_ready else _weakest(scores, request)
-    next_question = "需求已达到可结晶状态。请宿主把 spec_skeleton 交给 ralplan。" if crystallize_ready else QUESTION_BANK[weakest]
+    next_question = None if crystallize_ready else QUESTION_BANK[weakest]
+    requested_input = (
+        "请选择下一步工作流；宿主不得在用户选择前自动调用 plan、ralplan 或 ralph。"
+        if crystallize_ready
+        else "用户对 deep_interview 下一问的回答；支持 Elicitation 的客户端应由服务器发起 elicitation/create。"
+    )
     state = WorkflowState(
         workflow_name="deep_interview",
-        current_phase="crystallize" if crystallize_ready else "intent_first_interview",
-        readiness="ready_for_handoff" if crystallize_ready else "needs_input",
-        host_next_action="调用 ralplan 继续规划" if crystallize_ready else "宿主必须向用户提出 next_question，并提供 answer_options 供用户选择或自由回答；收到回答后追加到 prior_rounds 并再次调用 deep_interview。",
-        host_action_type="show_options" if crystallize_ready else "ask_user",
-        required_host_inputs=[] if crystallize_ready else ["用户对下一问的回答"],
-        handoff_target="ralplan" if crystallize_ready else None,
-        handoff_contract="将 spec_skeleton 作为 task/known_context 输入给 ralplan。" if crystallize_ready else None,
+        current_phase="handoff_selection" if crystallize_ready else "intent_first_interview",
+        readiness="needs_user_choice" if crystallize_ready else "needs_input",
         evidence_gaps=[] if request.known_context else ["缺少宿主可验证的项目上下文"],
         skill_source="skills/deep-interview/SKILL.md",
         memory_preflight=MemoryPreflight(
             required=not bool(request.known_context),
-            reason="进入 deep_interview 前应先读取相关长期记忆，避免重复询问已知偏好/约定。",
+            reason="进入 deep_interview 前应先读取相关长期记忆。",
             query=request.brief,
             already_satisfied=bool(request.known_context),
             search_performed=search_performed,
@@ -129,74 +126,29 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
     if crystallize_ready:
         spec = SpecSkeleton(
             intent=request.brief,
-            desired_outcome="由宿主基于已完成问答生成执行就绪规格。",
+            desired_outcome="由已完成问答生成执行就绪规格。",
             in_scope=[round.answer for round in request.prior_rounds[-2:] if round.answer],
             non_goals=request.non_goals,
             decision_boundaries=request.decision_boundaries,
         )
     return DeepInterviewResult(
-        status=ToolStatus.OK if crystallize_ready else ToolStatus.NEEDS_INPUT,
-        summary="已生成 deep_interview 状态机投影。" if not crystallize_ready else "需求已可结晶并交给 ralplan。",
-        assumptions=["Trae 负责提问、保存 transcript/state 和循环调用。"],
-        next_actions=[build_next_action("继续深访" if not crystallize_ready else "交给 ralplan", state.host_next_action)],
+        status=ToolStatus.NEEDS_INPUT if crystallize_ready else ToolStatus.NEEDS_INPUT,
+        summary="需求已可结晶，等待用户选择下一步工作流。" if crystallize_ready else "deep_interview 需要继续通过 MCP Elicitation 收集用户回答。",
+        assumptions=["用户输入应优先通过 MCP Elicitation 获取；不支持时仅返回标准 needs_input 结果。"],
+        next_actions=[build_next_action("继续深访" if not crystallize_ready else "选择下一工具", requested_input)],
         risks=[build_risk("跳过 readiness gates 会导致后续计划不稳。", "必须明确 non_goals、decision_boundaries 并完成 pressure_pass。")],
-        meta=build_meta("deep_interview", "ymcp.contracts.deep_interview.DeepInterviewResult", host_controls=["提问", "保存状态", "循环调用", "展示"]),
+        meta=build_meta("deep_interview", "ymcp.contracts.deep_interview.DeepInterviewResult", host_controls=["MCP Elicitation", "looping", "state persistence"]),
         artifacts=DeepInterviewArtifacts(
-            interaction_mode="handoff" if crystallize_ready else "ask_user",
-            answer_options=[] if crystallize_ready else _answer_options(weakest),
-            continuation_instruction="需求已可交给 ralplan。" if crystallize_ready else "宿主必须等待用户回答，把 {question: next_question, answer: 用户回答} 追加到 prior_rounds 后再次调用 deep_interview；不要在提问后结束对话。",
             ambiguity_score=ambiguity,
             weakest_dimension=weakest,
             next_question=next_question,
-            question_rationale=RATIONALES.get(weakest, "继续补齐最薄弱维度。"),
+            question_rationale=RATIONALES.get(weakest),
             readiness_gates=gates,
             scores=scores,
-            transcript_delta=[] if crystallize_ready else [InterviewRound(question=next_question, answer="")],
+            transcript_delta=[] if crystallize_ready else [InterviewRound(question=next_question or "", answer="")],
             workflow_state=state,
-            continuation=ContinuationContract(
-                interaction_mode="handoff" if crystallize_ready else "ask_user",
-                continuation_required=True,
-                continuation_kind="select_handoff_option" if crystallize_ready else "user_answer",
-                continuation_payload={
-                    "next_tool": "ralplan" if crystallize_ready else None,
-                    "question": None if crystallize_ready else next_question,
-                    "append_to": None if crystallize_ready else "prior_rounds",
-                },
-                recommended_user_message="需求澄清已完成。请选择下一步：1) 使用 ralplan 进行共识规划；2) 直接使用 plan 生成执行计划；3) 使用 ralph 逐步实施并验证。不要在用户选择前结束对话。" if crystallize_ready else next_question,
-                recommended_host_action="向用户展示下一步工作流选项，并等待用户选择；不要在用户选择前结束对话。" if crystallize_ready else "等待用户回答，把回答追加到 prior_rounds 后再次调用 deep_interview。",
-                handoff_options=[] if not crystallize_ready else [
-                    HandoffOption(label="使用 ralplan 进行共识规划", tool="ralplan", description="适合需要确定实施优先级、方案取舍和验证策略的任务。", payload_hint={"task": "spec_skeleton.intent"}),
-                    HandoffOption(label="直接使用 plan 生成执行计划", tool="plan", description="适合需求已清晰、风险较低，直接生成实施步骤。", payload_hint={"task": "spec_skeleton.intent", "mode": "direct"}),
-                    HandoffOption(label="使用 ralph 逐步实施并验证", tool="ralph", description="适合已有明确计划或用户希望马上进入执行验证循环。", payload_hint={"approved_plan": "spec_skeleton"}),
-                ],
-                tool_call_templates=[
-                    ToolCallTemplate(
-                        tool="ralplan",
-                        purpose="用户选择共识规划时调用；把澄清后的需求摘要作为 task。",
-                        arguments={
-                            "task": "用 spec_skeleton.intent 或宿主整理后的需求摘要替换这里",
-                            "current_phase": "planner_draft",
-                            "known_context": ["可选：项目事实、用户约定、记忆检索摘要"],
-                            "memory_context": "可选：{searched: true/false, hits: [...], failed: false, query: '检索词'}",
-                        },
-                    ),
-                    ToolCallTemplate(
-                        tool="deep_interview",
-                        purpose="未达到结晶条件时，用户回答 next_question 后再次调用。",
-                        arguments={
-                            "brief": "保持原始需求 brief",
-                            "prior_rounds": ["追加 {question: 本轮 next_question, answer: 用户刚才的回答}"],
-                            "non_goals": ["已确认的不做范围；如果用户刚回答的是范围问题，在这里更新"],
-                            "decision_boundaries": ["已确认的硬约束或决策边界"],
-                            "known_context": ["可选：宿主已知项目事实"],
-                        },
-                    ),
-                ],
-                default_option="ralplan" if crystallize_ready else None,
-                selection_required=crystallize_ready,
-                option_prompt="需求澄清已完成。您希望我继续哪个方向？" if crystallize_ready else None,
-            ),
-            crystallize_ready=crystallize_ready,
+            requested_input=requested_input,
+            handoff_options=HANDOFF_OPTIONS if crystallize_ready else [],
             spec_skeleton=spec,
         ),
     )

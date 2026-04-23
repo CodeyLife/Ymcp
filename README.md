@@ -20,6 +20,9 @@ python -m pip install -e .[dev]
 ymcp doctor
 ymcp --version
 ymcp inspect-tools --json
+ymcp inspect-resources --json
+ymcp inspect-prompts --json
+ymcp inspect-capabilities --json
 ```
 
 一键初始化 Trae 与默认记忆库：
@@ -29,6 +32,33 @@ ymcp init-trae
 ```
 
 `init-trae` 会检查 `~/.yjj`。如果该目录不存在，会自动初始化 MemPalace，并把 `~/.yjj` 配置为 Ymcp 的默认记忆库目录。
+
+## FastMCP 第一原则
+
+Ymcp 的第一原则是：所有能力优先按 FastMCP / MCP 官方三原语组织，而不是只提供 tools-only 接口：
+
+- **Tools**：执行动作、查询外部系统、产生结构化结果。
+- **Resources**：暴露可读取上下文、项目原则、规则模板、工具参考、记忆协议。
+- **Prompts**：暴露可复用调用模板和标准工作流提示；Prompt 不直接执行工具，也不伪造工具结果。
+- **Elicitation**：当 Tool 执行中需要用户输入/选择时，优先使用 MCP 官方 Elicitation；不支持时返回标准 `needs_input` / `blocked` 结构化降级结果。
+
+标准 Resources：
+
+- `resource://ymcp/principles`
+- `resource://ymcp/tool-reference`
+- `resource://ymcp/memory-protocol`
+- `resource://ymcp/project-rule-template`
+- `resource://ymcp/host-integration`
+
+标准 Prompts：
+
+- `deep_interview_clarify`
+- `plan_direct`
+- `ralplan_consensus`
+- `ralph_verify`
+- `memory_store_after_completion`
+
+禁止用自定义宿主协议替代 MCP 原语；禁止把文档型上下文只放在 Markdown 中而不暴露为 Resource；禁止把可复用提示只写在文档中而不暴露为 Prompt。
 
 
 ## 记忆工具

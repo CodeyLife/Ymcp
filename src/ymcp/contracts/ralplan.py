@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import ContinuationContract, HandoffContract, MemoryContext, WorkflowState
+from ymcp.contracts.workflow import MemoryContext, WorkflowChoiceOption, WorkflowState
 
 
 class RalplanRequest(WorkflowRequestBase):
@@ -44,9 +44,11 @@ class RalplanArtifacts(BaseModel):
     critic_review_prompt: str | None = None
     revise_instructions: list[str] = Field(default_factory=list)
     workflow_state: WorkflowState
-    continuation: ContinuationContract
     critic_verdict: str | None = None
-    handoff_contract: HandoffContract | None = None
+    approved_plan_summary: str | None = None
+    requested_input: str | None = None
+    selected_next_tool: str | None = None
+    handoff_options: list[WorkflowChoiceOption] = Field(default_factory=list)
 
 
 class RalplanResult(ToolResultBase[RalplanArtifacts]):
