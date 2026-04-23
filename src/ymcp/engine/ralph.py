@@ -1,44 +1,89 @@
 from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.ralph import RalphArtifacts, RalphRequest, RalphResult
+from ymcp.contracts.workflow import ContinuationContract, HandoffOption, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 
 
 def build_ralph(request: RalphRequest) -> RalphResult:
-    has_evidence = bool(request.evidence)
-    status = ToolStatus.OK if has_evidence else ToolStatus.NEEDS_INPUT
-    summary = "Returned host next-step guidance from the approved plan."
-    if not has_evidence:
-        summary = "More host-supplied evidence is required before a strong next-step judgement is possible."
+    has_evidence = bool(request.latest_evidence)
+    has_failures = bool(request.known_failures)
+    verification_defined = bool(request.verification_commands)
+    if request.current_phase == "complete":
+        readiness = "complete"
+        status = ToolStatus.OK
+        next_action = "宿主可输出最终完成报告并沉淀可复用经验。"
+        judgement = "complete"
+        missing = []
+    elif has_failures:
+        readiness = "fixing"
+        status = ToolStatus.NEEDS_INPUT
+        next_action = "宿主应先修复失败项，再重新收集验证证据。"
+        judgement = "fixing"
+        missing = []
+    elif not has_evidence:
+        readiness = "needs_input"
+        status = ToolStatus.NEEDS_INPUT
+        next_action = "宿主需要提供最新测试、构建、lint 或人工验证证据。"
+        judgement = "needs_more_evidence"
+        missing = ["latest_evidence"]
+    elif not verification_defined:
+        readiness = "needs_input"
+        status = ToolStatus.NEEDS_INPUT
+        next_action = "宿主需要补充 verification_commands，便于判断是否可以完成。"
+        judgement = "needs_verification_plan"
+        missing = ["verification_commands"]
+    else:
+        readiness = "executing"
+        status = ToolStatus.OK
+        next_action = "宿主根据 approved plan 和最新证据继续执行下一步，并在关键节点重新调用 ralph。"
+        judgement = "continue"
+        missing = []
+    state = WorkflowState(
+        workflow_name="ralph",
+        current_phase=request.current_phase if readiness != "fixing" else "fixing",
+        readiness=readiness,
+        host_next_action=next_action,
+        required_host_inputs=missing,
+        handoff_target=None,
+        handoff_contract=None,
+        evidence_gaps=missing,
+        blocked_reason="存在已知失败项" if has_failures else None,
+        skill_source="skills/ralph/SKILL.md",
+    )
+    reusable_memory = [e for e in request.latest_evidence if "约定" in e or "偏好" in e or "流程" in e][:3]
+    skill_candidates = [f for f in request.known_failures if "流程" in f or "重复" in f][:3]
     return RalphResult(
         status=status,
-        summary=summary,
-        assumptions=[
-            "The host owns command execution, verification, looping, and persistence.",
-            "This tool only projects the next recommended action from the approved plan.",
-        ],
-        next_actions=[
-            build_next_action("Gather evidence", "Provide the latest outputs, logs, or completed milestones to refine the recommendation."),
-            build_next_action("Execute host-side", "Use the recommendation to drive host-controlled execution and verification."),
-        ],
-        risks=[
-            build_risk("Without fresh evidence, the next step may be too generic.", "Re-run after the host gathers results from the last action."),
-        ],
-        meta=build_meta(
-            "ralph",
-            "ymcp.contracts.ralph.RalphResult",
-            host_controls=["execution", "looping", "verification", "persistence", "display"],
-        ),
+        summary="已生成 ralph 宿主控制循环状态。",
+        assumptions=["Trae 负责执行命令、保存状态、决定何时再次调用 ralph。"],
+        next_actions=[build_next_action("继续 Ralph 循环", next_action)],
+        risks=[build_risk("如果宿主不提供新鲜证据，ralph 只能返回泛化建议。", "每轮都附带最新验证结果和失败信息。")],
+        meta=build_meta("ralph", "ymcp.contracts.ralph.RalphResult", host_controls=["执行", "验证", "循环调用", "沉淀经验"]),
         artifacts=RalphArtifacts(
-            recommended_next_action="Validate the current milestone against the test spec and then implement the highest-priority missing contract or behavior.",
-            verification_checklist=[
-                "Confirm the current change maps to an approved plan item.",
-                "Run the relevant contract/integration tests.",
-                "Capture evidence before deciding whether to continue or stop.",
-            ],
-            stop_continue_judgement="continue" if has_evidence else "needs_more_evidence",
-            outstanding_risks=[
-                "Host may over-trust the guidance as an execution engine.",
-                "Evidence may be stale or incomplete.",
-            ],
+            recommended_next_action=next_action,
+            verification_checklist=request.verification_commands or ["定义至少一条验证命令或验收动作。"],
+            stop_continue_judgement=judgement,
+            outstanding_risks=request.known_failures or ["宿主可能过度信任工具输出而跳过验证。"],
+            missing_evidence=missing,
+            reusable_memory_candidates=reusable_memory,
+            skill_improvement_candidates=skill_candidates,
+            final_report_skeleton=["完成内容", "验证证据", "剩余风险", "可沉淀经验"],
+            workflow_state=state,
+            continuation=ContinuationContract(
+                interaction_mode="complete" if judgement == "complete" else "continue_workflow",
+                continuation_required=judgement != "complete",
+                continuation_kind=("report_completion" if judgement == "complete" else ("provide_evidence" if missing else ("fix_failures" if has_failures else "host_execution"))),
+                continuation_payload={"current_phase": state.current_phase, "missing_evidence": missing, "judgement": judgement},
+                recommended_user_message=None,
+                recommended_host_action="向用户展示完成后的下一步选项，而不是直接结束对话。" if judgement == "complete" else next_action,
+                handoff_options=[] if judgement != "complete" else [
+                    HandoffOption(label="保存完成经验到记忆", tool="memory_store", description="保存稳定事实、用户偏好、项目约定或踩坑结论。", payload_hint={"content": "artifacts.final_report_skeleton"}),
+                    HandoffOption(label="使用 plan 规划下一阶段", tool="plan", description="基于本次完成结果继续规划下一阶段。", payload_hint={"task": "下一阶段计划", "mode": "auto"}),
+                    HandoffOption(label="结束当前工作流", tool=None, description="只输出完成报告，不再调用其他工具。", payload_hint={}),
+                ],
+                default_option="memory_store" if judgement == "complete" else None,
+                selection_required=judgement == "complete",
+                option_prompt="Ralph 已判断当前工作流完成。您希望我继续哪个方向？" if judgement == "complete" else None,
+            ),
         ),
     )

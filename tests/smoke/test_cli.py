@@ -4,7 +4,16 @@ import sys
 
 from ymcp.cli import main
 
-EXPECTED_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
+WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
+MEMORY_NAMES = {
+    "memory_store", "memory_search", "memory_get", "memory_update", "memory_delete",
+    "memory_status", "memory_list_wings", "memory_list_rooms", "memory_taxonomy",
+    "memory_check_duplicate", "memory_reconnect", "memory_graph_stats", "memory_graph_query",
+    "memory_graph_traverse", "memory_kg_add", "memory_kg_timeline", "memory_kg_invalidate",
+    "memory_create_tunnel", "memory_list_tunnels", "memory_find_tunnels", "memory_follow_tunnels",
+    "memory_delete_tunnel", "memory_diary_write", "memory_diary_read",
+}
+EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
 
 
 def test_version_command(capsys):
@@ -25,6 +34,7 @@ def test_doctor_json_command(capsys):
     assert exit_code in {0, 1}
     assert payload["python"]["supported"] is True
     assert "mcp" in payload["packages"]
+    assert payload["mempalace"]["default_wing"] == "personal"
     assert payload["trae"]["recommended_config_command"] == "ymcp print-config --host trae"
 
 
@@ -36,7 +46,7 @@ def test_print_config_for_trae(capsys):
 
 
 def test_call_fixture_json_for_all_tools(capsys):
-    for tool_name in sorted(EXPECTED_NAMES):
+    for tool_name in ["plan", "ralplan", "deep_interview", "ralph", "memory_status", "memory_search"]:
         assert main(["call-fixture", tool_name, "--json"]) == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["meta"]["tool_name"] == tool_name
@@ -53,7 +63,6 @@ def test_example_host_call_all_tools_runs():
     )
     assert "plan:" in completed.stdout
     assert "ralph:" in completed.stdout
-
 
 
 def test_init_trae_updates_user_mcp_json_and_creates_rules(tmp_path, monkeypatch, capsys):
@@ -96,9 +105,8 @@ def test_init_trae_can_skip_rules_and_merge_existing_json(tmp_path, capsys):
     assert "已跳过项目规则创建" in capsys.readouterr().out
 
 
-
 def test_init_trae_accepts_underscore_and_typo_aliases(tmp_path):
-    for command in ["init_trae", "init_trae"]:
+    for command in ["init_trae", "init_trea"]:
         config_dir = tmp_path / command / "User"
         project_root = tmp_path / command / "project"
         project_root.mkdir(parents=True)

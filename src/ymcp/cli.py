@@ -6,13 +6,15 @@ import logging
 import platform
 import shutil
 import sys
-from importlib import metadata, resources
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
 from ymcp import __version__
 from ymcp.fixtures import FIXTURES, fixture_for
+from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 from ymcp.internal_registry import get_tool_specs
+from ymcp.memory import mempalace_palace_path, mempalace_version
 from ymcp.server import configure_logging, create_app
 
 
@@ -65,7 +67,7 @@ def update_trae_mcp_json(config_dir: str | None = None) -> Path:
 
 
 def project_rule_template_text() -> str:
-    return resources.files("ymcp.docs").joinpath(PROJECT_RULE_TEMPLATE).read_text(encoding="utf-8")
+    return TRAE_PROJECT_RULE_TEMPLATE
 
 
 def create_project_rules(project_root: str | None = None, *, overwrite: bool = False) -> Path:
@@ -103,7 +105,7 @@ def inspect_tools_payload() -> list[dict[str, Any]]:
 def doctor_payload() -> dict[str, Any]:
     python_ok = sys.version_info >= (3, 10)
     packages: dict[str, str | None] = {}
-    for package_name in ("mcp", "pydantic"):
+    for package_name in ("mcp", "pydantic", "mempalace"):
         try:
             packages[package_name] = metadata.version(package_name)
         except metadata.PackageNotFoundError:
@@ -123,6 +125,12 @@ def doctor_payload() -> dict[str, Any]:
             "recommended_config_command": "ymcp print-config --host trae",
             "project_config_path": ".trae/mcp.json",
             "note": "请在 Trae MCP 设置中手动添加该配置；如当前 Trae 版本支持项目级 .trae/mcp.json，也可使用项目级配置。",
+        },
+        "mempalace": {
+            "version": mempalace_version(),
+            "palace_path": mempalace_palace_path(),
+            "default_wing": "personal",
+            "default_room": "ymcp",
         },
     }
 
@@ -156,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
 
     init_trae_cmd = subparsers.add_parser(
         "init-trae",
-        aliases=["init_trae", "init_trae"],
+        aliases=["init_trae", "init_trea"],
         help="初始化 Trae 用户级 MCP 配置，并可创建项目规则",
     )
     init_trae_cmd.add_argument("--config-dir", help="Trae 用户配置目录；默认是当前用户的 AppData/Roaming/Trae CN/User")
@@ -203,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
 
-    if args.command in {"init-trae", "init_trae", "init_trae"}:
+    if args.command in {"init-trae", "init_trae", "init_trea"}:
         if args.yes_project_rules and args.no_project_rules:
             parser.error("--yes-project-rules 和 --no-project-rules 不能同时使用")
         config_path = update_trae_mcp_json(args.config_dir)
@@ -240,3 +248,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

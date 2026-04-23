@@ -4,7 +4,7 @@ from typing import Any
 
 FIXTURES: dict[str, dict[str, Any]] = {
     "plan": {
-        "problem": "Ship a host-controlled MCP workflow tool",
+        "task": "Ship a host-controlled MCP workflow tool",
         "constraints": ["Keep execution in the host", "Return typed artifacts"],
         "desired_outcome": "A plan the host can review and execute outside the MCP server.",
     },
@@ -18,9 +18,12 @@ FIXTURES: dict[str, dict[str, Any]] = {
     },
     "ralph": {
         "approved_plan": "Implement the approved Ymcp PRD with tests and docs",
-        "evidence": ["package scaffolding exists", "contract tests pass"],
+        "latest_evidence": ["package scaffolding exists", "contract tests pass"],
+        "verification_commands": ["python -m pytest"],
         "current_status": "implementation in progress",
     },
+    "memory_status": {},
+    "memory_search": {"query": "Ymcp 发布流程", "limit": 3},
 }
 
 

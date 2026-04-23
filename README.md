@@ -1,2 +1,42 @@
 # Ymcp
 Trae MCP工具包  提供工作流以及mempalace的长记忆存储
+
+
+## 记忆工具
+
+Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
+
+常用工具：
+
+- `memory_store`：保存一条长期记忆
+- `memory_search`：搜索长期记忆
+- `memory_get` / `memory_update` / `memory_delete`：读取、更新、删除指定记忆
+- `memory_status` / `memory_list_wings` / `memory_list_rooms` / `memory_taxonomy`：查看记忆空间状态
+- `memory_graph_*`、`memory_kg_*`、`memory_*_tunnel`、`memory_diary_*`：封装 MemPalace 的图谱、关系和日记能力
+
+记忆写入是持久化副作用。请不要保存密钥、隐私或未经确认的敏感信息。
+
+
+## Trae 中常用记忆 prompt
+
+```text
+调用 Ymcp 的 memory_search，搜索：“当前项目的发布流程”。请只总结与当前任务相关的记忆。
+```
+
+```text
+调用 Ymcp 的 memory_store，保存这条长期项目约定：“Ymcp 的文档和用户回复都使用中文，代码接口名保持英文。”
+```
+
+更多示例见 `docs/trae-integration.md`。
+
+
+## Trae Workflow 最佳调用链
+
+推荐链路：`deep_interview → ralplan → ralph → memory_store`。
+
+- 需求不清晰：先调用 `deep_interview`，按 `next_question` 多轮澄清。
+- 需要共识规划：调用 `ralplan`，按 `planner_draft → architect_review → critic_review` 推进。
+- 执行验证：调用 `ralph`，根据 `stop_continue_judgement` 继续、修复或完成。
+- 完成沉淀：调用 `memory_search` 查重，再用 `memory_store` 保存稳定经验。
+
+完整 prompt 模板见 `docs/trae-integration.md`。
