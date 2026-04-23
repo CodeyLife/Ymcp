@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ymcp": {
+      "command": "ymcp",
+      "args": ["serve"]
+    }
+  }
+}
