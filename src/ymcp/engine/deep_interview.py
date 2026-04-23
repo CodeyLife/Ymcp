@@ -9,7 +9,7 @@ from ymcp.contracts.deep_interview import (
     ReadinessGates,
     SpecSkeleton,
 )
-from ymcp.contracts.workflow import ContinuationContract, HandoffOption, MemoryPreflight, WorkflowState
+from ymcp.contracts.workflow import ContinuationContract, HandoffOption, MemoryPreflight, ToolCallTemplate, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -91,7 +91,7 @@ def _answer_options(dimension: str) -> list[AnswerOption]:
 
 
 def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
-    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context)
+    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context, request.memory_context)
     threshold = PROFILE_THRESHOLDS.get(request.profile, request.target_threshold)
     scores = _score(request)
     ambiguity = _ambiguity(scores)
@@ -109,6 +109,7 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
         current_phase="crystallize" if crystallize_ready else "intent_first_interview",
         readiness="ready_for_handoff" if crystallize_ready else "needs_input",
         host_next_action="调用 ralplan 继续规划" if crystallize_ready else "宿主必须向用户提出 next_question，并提供 answer_options 供用户选择或自由回答；收到回答后追加到 prior_rounds 并再次调用 deep_interview。",
+        host_action_type="show_options" if crystallize_ready else "ask_user",
         required_host_inputs=[] if crystallize_ready else ["用户对下一问的回答"],
         handoff_target="ralplan" if crystallize_ready else None,
         handoff_contract="将 spec_skeleton 作为 task/known_context 输入给 ralplan。" if crystallize_ready else None,
@@ -154,19 +155,42 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
             workflow_state=state,
             continuation=ContinuationContract(
                 interaction_mode="handoff" if crystallize_ready else "ask_user",
-                continuation_required=not crystallize_ready,
-                continuation_kind="handoff_to_tool" if crystallize_ready else "user_answer",
+                continuation_required=True,
+                continuation_kind="select_handoff_option" if crystallize_ready else "user_answer",
                 continuation_payload={
                     "next_tool": "ralplan" if crystallize_ready else None,
                     "question": None if crystallize_ready else next_question,
                     "append_to": None if crystallize_ready else "prior_rounds",
                 },
-                recommended_user_message=None if crystallize_ready else next_question,
-                recommended_host_action="向用户展示下一步工作流选项，而不是结束对话。" if crystallize_ready else "等待用户回答，把回答追加到 prior_rounds 后再次调用 deep_interview。",
+                recommended_user_message="需求澄清已完成。请选择下一步：1) 使用 ralplan 进行共识规划；2) 直接使用 plan 生成执行计划；3) 使用 ralph 逐步实施并验证。不要在用户选择前结束对话。" if crystallize_ready else next_question,
+                recommended_host_action="向用户展示下一步工作流选项，并等待用户选择；不要在用户选择前结束对话。" if crystallize_ready else "等待用户回答，把回答追加到 prior_rounds 后再次调用 deep_interview。",
                 handoff_options=[] if not crystallize_ready else [
                     HandoffOption(label="使用 ralplan 进行共识规划", tool="ralplan", description="适合需要确定实施优先级、方案取舍和验证策略的任务。", payload_hint={"task": "spec_skeleton.intent"}),
                     HandoffOption(label="直接使用 plan 生成执行计划", tool="plan", description="适合需求已清晰、风险较低，直接生成实施步骤。", payload_hint={"task": "spec_skeleton.intent", "mode": "direct"}),
                     HandoffOption(label="使用 ralph 逐步实施并验证", tool="ralph", description="适合已有明确计划或用户希望马上进入执行验证循环。", payload_hint={"approved_plan": "spec_skeleton"}),
+                ],
+                tool_call_templates=[
+                    ToolCallTemplate(
+                        tool="ralplan",
+                        purpose="用户选择共识规划时调用；把澄清后的需求摘要作为 task。",
+                        arguments={
+                            "task": "用 spec_skeleton.intent 或宿主整理后的需求摘要替换这里",
+                            "current_phase": "planner_draft",
+                            "known_context": ["可选：项目事实、用户约定、记忆检索摘要"],
+                            "memory_context": "可选：{searched: true/false, hits: [...], failed: false, query: '检索词'}",
+                        },
+                    ),
+                    ToolCallTemplate(
+                        tool="deep_interview",
+                        purpose="未达到结晶条件时，用户回答 next_question 后再次调用。",
+                        arguments={
+                            "brief": "保持原始需求 brief",
+                            "prior_rounds": ["追加 {question: 本轮 next_question, answer: 用户刚才的回答}"],
+                            "non_goals": ["已确认的不做范围；如果用户刚回答的是范围问题，在这里更新"],
+                            "decision_boundaries": ["已确认的硬约束或决策边界"],
+                            "known_context": ["可选：宿主已知项目事实"],
+                        },
+                    ),
                 ],
                 default_option="ralplan" if crystallize_ready else None,
                 selection_required=crystallize_ready,

@@ -1,13 +1,14 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import ContinuationContract, HandoffContract, WorkflowState
+from ymcp.contracts.workflow import ContinuationContract, HandoffContract, MemoryContext, WorkflowState
 
 
 class RalplanRequest(WorkflowRequestBase):
     task: str = Field(..., min_length=1)
     constraints: list[str] = Field(default_factory=list)
     known_context: list[str] = Field(default_factory=list)
+    memory_context: MemoryContext = Field(default_factory=MemoryContext)
     deliberate: bool = False
     interactive: bool = False
     current_phase: str = Field(default="planner_draft")
@@ -15,7 +16,7 @@ class RalplanRequest(WorkflowRequestBase):
     architect_feedback: list[str] = Field(default_factory=list)
     critic_feedback: list[str] = Field(default_factory=list)
     critic_verdict_input: str | None = None
-    iteration: int = Field(default=1, ge=1, le=5)
+    iteration: int = Field(default=1, ge=1, le=12)
 
 
 class ViableOption(BaseModel):

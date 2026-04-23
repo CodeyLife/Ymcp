@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import ContinuationContract, WorkflowState
+from ymcp.contracts.workflow import ContinuationContract, MemoryContext, WorkflowState
 
 
 class AnswerOption(BaseModel):
@@ -30,6 +30,7 @@ class DeepInterviewRequest(WorkflowRequestBase):
     target_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
     profile: str = Field(default="standard")
     known_context: list[str] = Field(default_factory=list)
+    memory_context: MemoryContext = Field(default_factory=MemoryContext)
     non_goals: list[str] = Field(default_factory=list)
     decision_boundaries: list[str] = Field(default_factory=list)
 

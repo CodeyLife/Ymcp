@@ -225,6 +225,12 @@ source="当前项目约定"
 
 Ymcp 会把 `skills/` 中的工作流语义转换成 MCP 友好的状态机投影。工具不会直接执行工作流，Trae 宿主负责循环、提问、执行命令、保存状态和展示结果。
 
+宿主应优先读取结构化字段推进流程，而不是依赖中文说明文案：
+
+- `workflow_state.host_action_type`：告诉宿主本轮主要动作是 `ask_user`、`show_options`、`call_tool`、`collect_evidence`、`revise_plan` 还是 `run_host_execution`
+- `continuation.continuation_kind`：告诉宿主本轮是等待用户回答、交接工具、等待用户选下一流程、继续执行还是补证据
+- 当 `continuation.selection_required=true` 时，宿主不应结束对话，必须展示 `handoff_options`
+
 推荐调用方式：
 
 ```text
@@ -423,7 +429,7 @@ current_phase="verifying"
 ```text
 在调用 deep_interview/plan/ralplan 前，先调用 Ymcp 的 memory_search。
 query 使用当前需求标题、项目名和关键动作。
-把搜索到的相关结果摘要放入 known_context，再调用目标工作流工具。
+把搜索到的相关结果摘要放入 `known_context`，或优先传入结构化 `memory_context`，再调用目标工作流工具。
 ```
 
 示例：
@@ -431,4 +437,17 @@ query 使用当前需求标题、项目名和关键动作。
 ```text
 先调用 memory_search，query="Ymcp Trae workflow 状态机"。
 如果找到相关记忆，请把摘要作为 known_context 传给 deep_interview，然后再开始提问。
+```
+
+结构化方式示例：
+
+```json
+{
+  "memory_context": {
+    "searched": true,
+    "hits": ["Ymcp 的 Trae 配置使用 ymcp serve"],
+    "failed": false,
+    "query": "Ymcp Trae workflow 状态机"
+  }
+}
 ```

@@ -10,6 +10,7 @@ from ymcp.contracts.deep_interview import DeepInterviewRequest, InterviewRound
 from ymcp.contracts.plan import PlanRequest
 from ymcp.contracts.ralplan import RalplanRequest
 from ymcp.contracts.ralph import RalphRequest
+from ymcp.contracts.workflow import MemoryContext
 from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.plan import build_plan
 from ymcp.engine.ralplan import build_ralplan
@@ -68,6 +69,24 @@ def _known_context(value: Any = None) -> list[str]:
     return _coerce_str_list(value)
 
 
+def _memory_context(value: Any = None) -> MemoryContext:
+    if value is None:
+        return MemoryContext()
+    if isinstance(value, MemoryContext):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return MemoryContext()
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            return MemoryContext()
+    if isinstance(value, dict):
+        return MemoryContext.model_validate(value)
+    return MemoryContext()
+
+
 def create_app() -> FastMCP:
     app = FastMCP(
         name="ymcp",
@@ -77,20 +96,20 @@ def create_app() -> FastMCP:
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
 
     @app.tool(name="plan", description=descriptions["plan"], structured_output=True)
-    def plan(task: str | None = None, problem: str | None = None, mode: str = "auto", constraints: Any = None, known_context: Any = None, acceptance_criteria: Any = None, review_target: str | None = None, desired_outcome: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
+    def plan(task: str | None = None, problem: str | None = None, mode: str = "auto", constraints: Any = None, known_context: Any = None, memory_context: Any = None, acceptance_criteria: Any = None, review_target: str | None = None, desired_outcome: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
         task_value = task or problem or ""
-        request = PlanRequest(task=task_value, mode=mode, constraints=_coerce_str_list(constraints), known_context=_known_context(known_context), acceptance_criteria=_coerce_str_list(acceptance_criteria), review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
+        request = PlanRequest(task=task_value, mode=mode, constraints=_coerce_str_list(constraints), known_context=_known_context(known_context), memory_context=_memory_context(memory_context), acceptance_criteria=_coerce_str_list(acceptance_criteria), review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
         return build_plan(request).to_mcp_result()
 
     @app.tool(name="ralplan", description=descriptions["ralplan"], structured_output=True)
-    def ralplan(task: str, constraints: Any = None, deliberate: bool = False, interactive: bool = False, current_phase: str = "planner_draft", planner_draft: str | None = None, architect_feedback: Any = None, critic_feedback: Any = None, critic_verdict: str | None = None, known_context: Any = None, iteration: int = 1, schema_version: str = "1.0") -> dict[str, Any]:
-        request = RalplanRequest(task=task, constraints=_coerce_str_list(constraints), deliberate=deliberate, interactive=interactive, current_phase=current_phase, planner_draft=planner_draft, architect_feedback=_coerce_str_list(architect_feedback), critic_feedback=_coerce_str_list(critic_feedback), critic_verdict_input=critic_verdict, known_context=_known_context(known_context), iteration=iteration, schema_version=schema_version)
+    def ralplan(task: str, constraints: Any = None, deliberate: bool = False, interactive: bool = False, current_phase: str = "planner_draft", planner_draft: str | None = None, architect_feedback: Any = None, critic_feedback: Any = None, critic_verdict: str | None = None, known_context: Any = None, memory_context: Any = None, iteration: int = 1, schema_version: str = "1.0") -> dict[str, Any]:
+        request = RalplanRequest(task=task, constraints=_coerce_str_list(constraints), deliberate=deliberate, interactive=interactive, current_phase=current_phase, planner_draft=planner_draft, architect_feedback=_coerce_str_list(architect_feedback), critic_feedback=_coerce_str_list(critic_feedback), critic_verdict_input=critic_verdict, known_context=_known_context(known_context), memory_context=_memory_context(memory_context), iteration=iteration, schema_version=schema_version)
         return build_ralplan(request).to_mcp_result()
 
     @app.tool(name="deep_interview", description=descriptions["deep_interview"], structured_output=True)
-    def deep_interview(brief: str, prior_rounds: Any = None, target_threshold: float = 0.2, profile: str = "standard", known_context: Any = None, non_goals: Any = None, decision_boundaries: Any = None, schema_version: str = "1.0") -> dict[str, Any]:
+    def deep_interview(brief: str, prior_rounds: Any = None, target_threshold: float = 0.2, profile: str = "standard", known_context: Any = None, memory_context: Any = None, non_goals: Any = None, decision_boundaries: Any = None, schema_version: str = "1.0") -> dict[str, Any]:
         rounds = _coerce_rounds(prior_rounds)
-        request = DeepInterviewRequest(brief=brief, prior_rounds=rounds, target_threshold=target_threshold, profile=profile, known_context=_known_context(known_context), non_goals=_coerce_str_list(non_goals), decision_boundaries=_coerce_str_list(decision_boundaries), schema_version=schema_version)
+        request = DeepInterviewRequest(brief=brief, prior_rounds=rounds, target_threshold=target_threshold, profile=profile, known_context=_known_context(known_context), memory_context=_memory_context(memory_context), non_goals=_coerce_str_list(non_goals), decision_boundaries=_coerce_str_list(decision_boundaries), schema_version=schema_version)
         return build_deep_interview(request).to_mcp_result()
 
     @app.tool(name="ralph", description=descriptions["ralph"], structured_output=True)

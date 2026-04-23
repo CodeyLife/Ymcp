@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import ContinuationContract, WorkflowState
+from ymcp.contracts.workflow import ContinuationContract, MemoryContext, WorkflowState
 
 
 class PlanRequest(WorkflowRequestBase):
@@ -9,6 +9,7 @@ class PlanRequest(WorkflowRequestBase):
     mode: str = Field(default="auto")
     constraints: list[str] = Field(default_factory=list)
     known_context: list[str] = Field(default_factory=list)
+    memory_context: MemoryContext = Field(default_factory=MemoryContext)
     acceptance_criteria: list[str] = Field(default_factory=list)
     review_target: str | None = None
     desired_outcome: str | None = None

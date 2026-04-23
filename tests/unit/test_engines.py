@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.deep_interview import DeepInterviewRequest
 from ymcp.contracts.plan import PlanRequest
@@ -19,8 +21,11 @@ def test_plan_engine_direct_mode():
     assert result.artifacts.workflow_state.current_phase == "direct_plan"
     assert result.artifacts.workflow_state.host_next_action
     assert result.artifacts.continuation.interaction_mode == "continue_workflow"
+    assert result.artifacts.continuation.continuation_required is True
+    assert result.artifacts.continuation.continuation_kind == "select_handoff_option"
     assert result.artifacts.workflow_state.memory_preflight.required is True
     assert result.artifacts.continuation.selection_required is True
+    assert result.artifacts.continuation.recommended_user_message is not None
     assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"ralph", "ralplan", "deep_interview"}
 
 
@@ -71,7 +76,12 @@ def test_deep_interview_engine_can_crystallize():
     assert result.artifacts.crystallize_ready is True
     assert result.artifacts.workflow_state.handoff_target == "ralplan"
     assert result.artifacts.continuation.interaction_mode == "handoff"
+    assert result.artifacts.continuation.continuation_required is True
+    assert result.artifacts.continuation.continuation_kind == "select_handoff_option"
     assert result.artifacts.continuation.selection_required is True
+    assert result.artifacts.continuation.recommended_user_message is not None
+    assert result.artifacts.continuation.tool_call_templates
+    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"ralplan", "deep_interview"}
     assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"ralplan", "plan", "ralph"}
 
 
@@ -98,7 +108,13 @@ def test_ralplan_engine_approves_and_handoffs_to_ralph():
     assert result.artifacts.workflow_state.handoff_target == "ralph"
     assert result.artifacts.handoff_contract is not None
     assert result.artifacts.continuation.interaction_mode == "handoff"
+    assert result.artifacts.continuation.continuation_required is True
+    assert result.artifacts.continuation.continuation_kind == "select_handoff_option"
     assert result.artifacts.continuation.selection_required is True
+    assert result.artifacts.continuation.recommended_user_message is not None
+    assert "不要在用户选择前结束对话" in result.artifacts.continuation.recommended_user_message
+    assert result.artifacts.continuation.tool_call_templates
+    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"ralph", "memory_store"}
     assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"ralph", "plan", "memory_store"}
 
 
@@ -144,13 +160,44 @@ def test_ralplan_engine_honors_explicit_critic_verdict():
     assert result.artifacts.handoff_contract is not None
 
 
+def test_ralplan_request_allows_iteration_up_to_twelve():
+    result = build_ralplan(
+        RalplanRequest(
+            task="分析预加载功能模块和 combattext 缓存机制",
+            current_phase="critic_review",
+            critic_feedback=["Critic 最终评估通过。计划清晰，测试性良好，风险可控。建议进入实施阶段。"],
+            iteration=12,
+        )
+    )
+    assert result.status is ToolStatus.OK
+    assert result.artifacts.critic_verdict == "APPROVE"
+    assert result.artifacts.workflow_state.current_phase == "approved"
+
+
+def test_ralplan_request_rejects_iteration_above_twelve():
+    with pytest.raises(ValueError):
+        RalplanRequest(task="规划功能", iteration=13)
+
+
 
 def test_ralph_engine_complete_returns_next_step_options():
     result = build_ralph(RalphRequest(approved_plan="Do the plan", current_phase="complete", latest_evidence=["pytest passed"], verification_commands=["pytest"]))
     assert result.status is ToolStatus.OK
     assert result.artifacts.continuation.interaction_mode == "complete"
+    assert result.artifacts.continuation.continuation_required is True
+    assert result.artifacts.continuation.continuation_kind == "select_completion_option"
     assert result.artifacts.continuation.selection_required is True
+    assert result.artifacts.continuation.recommended_user_message is not None
+    assert result.artifacts.continuation.tool_call_templates
+    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"memory_store", "plan", "ralph"}
     assert {option.tool for option in result.artifacts.continuation.handoff_options} >= {"memory_store", "plan", None}
+
+
+def test_plan_direct_returns_tool_call_templates():
+    result = build_plan(PlanRequest(task="实现功能", mode="direct"))
+    assert result.artifacts.continuation.tool_call_templates
+    assert {template.tool for template in result.artifacts.continuation.tool_call_templates} >= {"ralph", "ralplan", "deep_interview"}
+    assert any("approved_plan" in template.arguments for template in result.artifacts.continuation.tool_call_templates if template.tool == "ralph")
 
 
 

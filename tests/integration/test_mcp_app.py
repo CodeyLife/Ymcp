@@ -41,6 +41,7 @@ async def _exercise_app():
         if name in EXPECTED_WORKFLOW_NAMES:
             assert structured["artifacts"]["workflow_state"]["workflow_name"] == name
             assert structured["artifacts"]["workflow_state"]["host_next_action"]
+            assert structured["artifacts"]["workflow_state"]["host_action_type"]
             if name in {"deep_interview", "plan", "ralplan"}:
                 assert structured["artifacts"]["workflow_state"]["memory_preflight"] is not None
             assert structured["artifacts"]["continuation"]["interaction_mode"]
@@ -91,6 +92,24 @@ def test_workflows_require_explicit_memory_search_when_context_missing():
             assert preflight["search_performed"] is False
             assert preflight["retrieved_count"] == 0
             assert preflight["retrieved_context"] == []
+
+    anyio.run(_run)
+
+
+def test_workflows_accept_structured_memory_context():
+    async def _run():
+        app = create_app()
+        for name, args in {
+            "deep_interview": {"brief": "优化项目稳定性", "memory_context": {"searched": True, "hits": ["记忆A"], "query": "稳定性"}},
+            "plan": {"task": "优化项目稳定性", "mode": "direct", "memory_context": {"searched": True, "hits": ["记忆A"]}},
+            "ralplan": {"task": "优化项目稳定性", "current_phase": "planner_draft", "memory_context": {"searched": True, "hits": ["记忆A"]}},
+        }.items():
+            result = await app.call_tool(name, args)
+            structured = result[1] if isinstance(result, tuple) else result
+            preflight = structured["artifacts"]["workflow_state"]["memory_preflight"]
+            assert preflight["search_performed"] is True
+            assert preflight["retrieved_count"] == 1
+            assert preflight["retrieved_context"] == ["记忆A"]
 
     anyio.run(_run)
 

@@ -48,28 +48,28 @@ class ToolSpec:
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="plan",
-        description="返回 plan 状态机投影：根据模式给出需求摘要、计划步骤、风险、验证方式以及宿主下一步动作。",
+        description="根据模式给出需求摘要、计划步骤、风险、验证方式以及宿主下一步动作。",
         request_model=PlanRequest,
         response_model=PlanResult,
         handler=build_plan,
     ),
     ToolSpec(
         name="ralplan",
-        description="返回 ralplan 状态机投影：按 planner/architect/critic 顺序推进共识规划，并给出可交接给 ralph 的合同。",
+        description="构建共识规划，以多角色讨论的方式达成计划共识",
         request_model=RalplanRequest,
         response_model=RalplanResult,
         handler=build_ralplan,
     ),
     ToolSpec(
         name="deep_interview",
-        description="返回 deep_interview 状态机投影：给出下一问、歧义评分、readiness gates 和宿主下一步动作。",
+        description="需求不明确事，进行多轮对话明确需求边界，获取更多需求信息。",
         request_model=DeepInterviewRequest,
         response_model=DeepInterviewResult,
         handler=build_deep_interview,
     ),
     ToolSpec(
         name="ralph",
-        description="返回 ralph 状态机投影：给出宿主下一步、验证清单、是否继续以及证据缺口，不执行命令或循环。",
+        description="根据计划和用户反馈，给出宿主下一步、验证清单、是否继续以及证据缺口，不执行命令或循环。",
         request_model=RalphRequest,
         response_model=RalphResult,
         handler=build_ralph,

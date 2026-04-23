@@ -1,6 +1,6 @@
 from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.plan import PlanArtifacts, PlanRequest, PlanResult
-from ymcp.contracts.workflow import ContinuationContract, HandoffOption, MemoryPreflight, WorkflowState
+from ymcp.contracts.workflow import ContinuationContract, HandoffOption, MemoryPreflight, ToolCallTemplate, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -13,7 +13,7 @@ def _is_vague(request: PlanRequest) -> bool:
 
 
 def build_plan(request: PlanRequest) -> PlanResult:
-    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context)
+    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context, request.memory_context)
     mode = request.mode
     if mode == "auto":
         mode = "interview" if _is_vague(request) else "direct"
@@ -47,6 +47,7 @@ def build_plan(request: PlanRequest) -> PlanResult:
         current_phase=phase,
         readiness=readiness,
         host_next_action=host_action,
+        host_action_type="show_options" if mode == "direct" else ("call_tool" if mode in {"interview", "consensus"} else ("ask_user" if mode == "review" and not request.review_target else "run_host_execution")),
         required_host_inputs=["review_target"] if mode == "review" and not request.review_target else [],
         handoff_target="deep_interview" if mode == "interview" else ("ralplan" if mode == "consensus" else None),
         handoff_contract="传入 task、constraints、known_context。" if mode in {"interview", "consensus"} else None,
@@ -84,15 +85,45 @@ def build_plan(request: PlanRequest) -> PlanResult:
             workflow_state=state,
             continuation=ContinuationContract(
                 interaction_mode="handoff" if state.handoff_target else ("continue_workflow" if status is ToolStatus.OK else "ask_user"),
-                continuation_required=state.readiness != "plan_ready",
-                continuation_kind="handoff_to_tool" if state.handoff_target else ("review_input" if mode == "review" and not request.review_target else ("user_clarification" if mode == "interview" else "host_execution")),
+                continuation_required=True,
+                continuation_kind="handoff_to_tool" if state.handoff_target else ("review_input" if mode == "review" and not request.review_target else ("user_clarification" if mode == "interview" else ("select_handoff_option" if mode == "direct" else "host_execution"))),
                 continuation_payload={"next_tool": state.handoff_target, "mode": mode},
-                recommended_user_message="请补充 review_target。" if mode == "review" and not request.review_target else None,
-                recommended_host_action="向用户展示下一步工作流选项，而不是结束对话。" if mode == "direct" else state.host_next_action,
+                recommended_user_message="请补充 review_target。" if mode == "review" and not request.review_target else ("计划已生成。请选择下一步：1) 使用 ralph 逐步实施并验证；2) 使用 ralplan 做共识规划；3) 回到 deep_interview 继续澄清。不要在用户选择前结束对话。" if mode == "direct" else None),
+                recommended_host_action="向用户展示下一步工作流选项，并等待用户选择；不要在用户选择前结束对话。" if mode == "direct" else state.host_next_action,
                 handoff_options=[] if mode != "direct" else [
                     HandoffOption(label="使用 ralph 逐步实施并验证", tool="ralph", description="使用当前计划进入执行与验证循环。", payload_hint={"approved_plan": "artifacts.requirements_summary", "verification_commands": "artifacts.verification_steps"}),
                     HandoffOption(label="使用 ralplan 做共识规划", tool="ralplan", description="当计划风险较高或需要多方案取舍时选择。", payload_hint={"task": "task", "current_phase": "planner_draft"}),
                     HandoffOption(label="回到 deep_interview 继续澄清", tool="deep_interview", description="如果仍觉得需求边界不清，继续深访。", payload_hint={"brief": "task"}),
+                ],
+                tool_call_templates=[
+                    ToolCallTemplate(
+                        tool="ralph",
+                        purpose="用户选择进入执行验证循环时调用；approved_plan 用本次 plan 的 requirements_summary/implementation_steps 摘要。",
+                        arguments={
+                            "approved_plan": "把本次计划摘要、步骤、验收标准整理成一段文本",
+                            "latest_evidence": ["刚执行或人工确认的最新证据；没有证据时先不要伪造"],
+                            "verification_commands": ["本计划建议的测试/构建/lint/人工验收命令"],
+                            "current_phase": "executing",
+                        },
+                    ),
+                    ToolCallTemplate(
+                        tool="ralplan",
+                        purpose="用户选择高风险共识规划时调用。",
+                        arguments={
+                            "task": "沿用当前 plan.task 或宿主整理后的问题描述",
+                            "current_phase": "planner_draft",
+                            "constraints": ["必须保持的约束"],
+                            "known_context": ["可选：项目事实、记忆摘要"],
+                        },
+                    ),
+                    ToolCallTemplate(
+                        tool="deep_interview",
+                        purpose="用户认为需求仍不清楚时调用。",
+                        arguments={
+                            "brief": "沿用当前 task，说明还需要澄清",
+                            "known_context": ["可选：当前计划中已确认的事实"],
+                        },
+                    ),
                 ],
                 default_option="ralph" if mode == "direct" else None,
                 selection_required=mode == "direct",

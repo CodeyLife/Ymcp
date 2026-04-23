@@ -1,6 +1,6 @@
 from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.ralplan import AdrDraft, RalplanArtifacts, RalplanRequest, RalplanResult, ViableOption
-from ymcp.contracts.workflow import ContinuationContract, HandoffContract, HandoffOption, MemoryPreflight, WorkflowState
+from ymcp.contracts.workflow import ContinuationContract, HandoffContract, HandoffOption, MemoryPreflight, ToolCallTemplate, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -34,7 +34,7 @@ def _detect_critic_verdict(request: RalplanRequest) -> str:
 
 
 def build_ralplan(request: RalplanRequest) -> RalplanResult:
-    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context)
+    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context, request.memory_context)
     phase = request.current_phase
     options = _options(request.deliberate)
     chosen_option = "状态机投影"
@@ -96,6 +96,7 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
         current_phase=phase,
         readiness=readiness,
         host_next_action=host_action,
+        host_action_type="show_options" if handoff_target == "ralph" else ("call_tool" if phase in {"planner_draft", "architect_review", "handoff_to_ralph"} else ("revise_plan" if phase == "revise" else "run_host_execution")),
         required_host_inputs=["planner_draft"] if phase == "planner_draft" and not request.planner_draft else [],
         handoff_target=handoff_target,
         handoff_contract=handoff.invocation_summary if handoff else None,
@@ -138,15 +139,50 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
             workflow_state=state,
             continuation=ContinuationContract(
                 interaction_mode="handoff" if handoff_target == "ralph" else "continue_workflow",
-                continuation_required=handoff_target != "ralph",
-                continuation_kind="handoff_to_tool" if handoff_target == "ralph" else "next_phase",
+                continuation_required=True,
+                continuation_kind="select_handoff_option" if handoff_target == "ralph" else "next_phase",
                 continuation_payload={"next_phase": phase, "next_tool": handoff_target},
-                recommended_user_message=None,
-                recommended_host_action="向用户展示批准后的下一步选项，而不是结束对话。" if handoff_target == "ralph" else host_action,
+                recommended_user_message="共识规划已批准。请选择下一步：1) 使用 ralph 逐步实施并验证；2) 使用 plan 拆成更细执行计划；3) 保存规划摘要到记忆。不要在用户选择前结束对话。" if handoff_target == "ralph" else None,
+                recommended_host_action="向用户展示批准后的下一步选项，并等待用户选择；不要只询问是否进入 ralph，也不要结束对话。" if handoff_target == "ralph" else host_action,
                 handoff_options=[] if handoff_target != "ralph" else [
                     HandoffOption(label="使用 ralph 逐步实施并验证", tool="ralph", description="按批准计划进入执行、修复和验证循环。", payload_hint={"approved_plan": "handoff_contract.invocation_summary"}),
                     HandoffOption(label="使用 plan 拆成更细执行计划", tool="plan", description="先把批准方案拆成更细的执行步骤。", payload_hint={"task": "task", "mode": "direct"}),
                     HandoffOption(label="保存规划摘要到记忆", tool="memory_store", description="把批准的架构决策、约束和验证策略保存为长期记忆。", payload_hint={"content": "artifacts.adr"}),
+                ],
+                tool_call_templates=[
+                    ToolCallTemplate(
+                        tool="ralplan",
+                        purpose="继续共识规划下一阶段时调用；宿主先生成对应视角反馈，再填入参数。",
+                        arguments={
+                            "task": "保持原始任务描述",
+                            "current_phase": "architect_review 或 critic_review 或 planner_draft；按上一轮 continuation_payload.next_phase 决定",
+                            "planner_draft": "Planner 草案全文或摘要；进入 architect/critic 阶段时必须提供",
+                            "architect_feedback": ["Architect 审查结论；进入 critic_review 前提供"],
+                            "critic_feedback": ["Critic 审查结论；进入 critic_review 时提供"],
+                            "critic_verdict": "可选：APPROVE / REVISE / REJECT；如果宿主能明确判断则传入",
+                            "iteration": "当前共识规划轮次，1-12",
+                        },
+                    ),
+                    ToolCallTemplate(
+                        tool="ralph",
+                        purpose="ralplan 批准且用户选择实施验证时调用。",
+                        arguments={
+                            "approved_plan": "使用 handoff_contract.invocation_summary，加上 ADR decision/test_strategy 摘要",
+                            "latest_evidence": ["当前已有证据；没有执行证据时写明计划已批准，不要伪造测试通过"],
+                            "verification_commands": ["从 test_strategy 转成可执行或人工验收动作"],
+                            "current_phase": "executing",
+                        },
+                    ),
+                    ToolCallTemplate(
+                        tool="memory_store",
+                        purpose="用户选择保存规划摘要时调用。",
+                        arguments={
+                            "content": "把 ADR decision、drivers、alternatives_considered、consequences 整理成稳定项目记忆",
+                            "wing": "personal",
+                            "room": "ymcp",
+                            "added_by": "ymcp",
+                        },
+                    ),
                 ],
                 default_option="ralph" if handoff_target == "ralph" else None,
                 selection_required=handoff_target == "ralph",

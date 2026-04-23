@@ -74,11 +74,19 @@
 - `current_phase`：当前阶段
 - `readiness`：是否需要输入、修订、验证或可交接
 - `host_next_action`：Trae 下一步应该做什么
+- `host_action_type`：宿主动作类型，建议优先按结构化类型推进，而不是解析自然语言文案
 - `required_host_inputs`：宿主还需要补充的输入
 - `handoff_target`：建议交接的下一个工具
 - `handoff_contract`：交接约束或摘要
 - `evidence_gaps`：缺失证据
 - `skill_source`：语义来源 skill 文档
+
+`continuation` 常见字段：
+
+- `continuation_required=true`：当前轮不能直接结束，宿主还必须继续推进
+- `selection_required=true`：必须向用户展示选项并等待选择
+- `continuation_kind`：结构化下一步类型，例如 `user_answer`、`handoff_to_tool`、`select_handoff_option`、`select_completion_option`
+- `recommended_user_message`：当需要用户回答或选择时，宿主可直接复用的提示文案
 
 
 ## 推荐组合链路
@@ -96,3 +104,12 @@
 - `required=true`：建议先读取记忆
 - `query`：推荐传给 `memory_search` 的查询词
 - `already_satisfied=true`：本次调用已经提供了相关上下文
+
+新宿主推荐直接传结构化 `memory_context`：
+
+- `searched`：是否已执行记忆检索
+- `hits`：命中的记忆摘要列表
+- `failed`：检索是否失败
+- `query`：检索查询词
+
+旧的 `known_context` 文本摘要仍兼容，但仅作为 legacy path。
