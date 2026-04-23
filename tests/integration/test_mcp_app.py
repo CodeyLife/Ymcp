@@ -73,3 +73,30 @@ def test_deep_interview_accepts_json_string_lists_from_host():
         assert structured["artifacts"]["workflow_state"]["workflow_name"] == "deep_interview"
         assert structured["artifacts"]["interaction_mode"] in {"ask_user", "handoff"}
     anyio.run(_run)
+
+
+
+def test_workflows_auto_read_memory_when_context_missing(monkeypatch):
+    import ymcp.server as server
+
+    def fake_memory(tool_name, operation, function_name, *args, **kwargs):
+        from ymcp.memory import memory_result
+        return memory_result(tool_name, operation, {"results": [{"summary": "用户偏好中文输出"}]})
+
+    monkeypatch.setattr(server, "call_mempalace_tool", fake_memory)
+
+    async def _run():
+        app = create_app()
+        for name, args in {
+            "deep_interview": {"brief": "优化项目稳定性"},
+            "plan": {"task": "优化项目稳定性", "mode": "direct"},
+            "ralplan": {"task": "优化项目稳定性", "current_phase": "planner_draft"},
+        }.items():
+            result = await app.call_tool(name, args)
+            structured = result[1] if isinstance(result, tuple) else result
+            preflight = structured["artifacts"]["workflow_state"]["memory_preflight"]
+            assert preflight["search_performed"] is True
+            assert preflight["retrieved_count"] == 1
+            assert "用户偏好中文输出" in preflight["retrieved_context"][0]
+
+    anyio.run(_run)

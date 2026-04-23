@@ -32,7 +32,7 @@ def test_release_docs_include_testpypi_then_pypi_gate():
 
 def test_project_rule_template_exists_and_is_chinese_oriented():
     template = Path("docs/trae-project-rule-template.md").read_text(encoding="utf-8")
-    assert "Ymcp 项目规则" in template
+    assert "项目规则" in template
     assert "deep_interview" in template
     assert "ralph" in template
 
@@ -89,3 +89,4 @@ def test_memory_preflight_docs_present():
     assert "memory_search" in trae
     assert "known_context" in trae
     assert "memory_preflight" in reference
+

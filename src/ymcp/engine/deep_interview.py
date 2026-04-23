@@ -117,6 +117,9 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
             reason="进入 deep_interview 前应先读取相关长期记忆，避免重复询问已知偏好/约定。",
             query=request.brief,
             already_satisfied=bool(request.known_context),
+            search_performed=any(str(item).startswith("记忆检索：") for item in request.known_context),
+            retrieved_count=sum(1 for item in request.known_context if str(item).startswith("记忆检索：")),
+            retrieved_context=[item for item in request.known_context if str(item).startswith("记忆检索：")],
         ),
     )
     spec = None

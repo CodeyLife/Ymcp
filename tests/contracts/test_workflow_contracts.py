@@ -32,3 +32,9 @@ def test_continuation_contract_exposes_handoff_options():
 def test_workflow_state_exposes_memory_preflight():
     from ymcp.contracts.workflow import WorkflowState
     assert "memory_preflight" in WorkflowState.model_fields
+
+
+
+def test_memory_preflight_records_search_results_fields():
+    from ymcp.contracts.workflow import MemoryPreflight
+    assert {"search_performed", "retrieved_count", "retrieved_context"} <= set(MemoryPreflight.model_fields)

@@ -52,6 +52,9 @@ def build_plan(request: PlanRequest) -> PlanResult:
             reason="进入 plan 前应先搜索历史约束、用户偏好和项目决策。",
             query=request.task,
             already_satisfied=bool(request.known_context),
+            search_performed=any(str(item).startswith("记忆检索：") for item in request.known_context),
+            retrieved_count=sum(1 for item in request.known_context if str(item).startswith("记忆检索：")),
+            retrieved_context=[item for item in request.known_context if str(item).startswith("记忆检索：")],
         ),
     )
     return PlanResult(

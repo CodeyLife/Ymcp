@@ -1,17 +1,22 @@
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from ymcp.cli import main
 
 
 def test_ymcp_serve_starts_and_keeps_stdout_for_protocol():
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path("src").resolve())
     process = subprocess.Popen(
         [sys.executable, "-m", "ymcp.cli", "serve"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     try:
         time.sleep(0.75)

@@ -7,6 +7,7 @@ from ymcp.contracts.workflow import ContinuationContract, HandoffContract, Workf
 class RalplanRequest(WorkflowRequestBase):
     task: str = Field(..., min_length=1)
     constraints: list[str] = Field(default_factory=list)
+    known_context: list[str] = Field(default_factory=list)
     deliberate: bool = False
     interactive: bool = False
     current_phase: str = Field(default="planner_draft")

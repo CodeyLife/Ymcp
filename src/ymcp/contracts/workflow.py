@@ -9,6 +9,9 @@ class MemoryPreflight(BaseModel):
     query: str | None = None
     suggested_tool: str = "memory_search"
     already_satisfied: bool = False
+    search_performed: bool = False
+    retrieved_count: int = 0
+    retrieved_context: list[str] = Field(default_factory=list)
 
 
 class WorkflowState(BaseModel):

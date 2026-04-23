@@ -101,10 +101,13 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
         blocked_reason=None,
         skill_source="skills/ralplan/SKILL.md",
         memory_preflight=MemoryPreflight(
-            required=phase == "planner_draft" and not bool(request.constraints),
+            required=phase == "planner_draft" and not bool(request.constraints) and not bool(request.known_context),
             reason="进入 ralplan 共识规划前应读取相关记忆，补充历史方案、约束和踩坑结论。",
             query=request.task,
-            already_satisfied=bool(request.constraints) or phase != "planner_draft",
+            already_satisfied=bool(request.constraints) or bool(request.known_context) or phase != "planner_draft",
+            search_performed=any(str(item).startswith("记忆检索：") for item in request.known_context),
+            retrieved_count=sum(1 for item in request.known_context if str(item).startswith("记忆检索：")),
+            retrieved_context=[item for item in request.known_context if str(item).startswith("记忆检索：")],
         ),
     )
     return RalplanResult(

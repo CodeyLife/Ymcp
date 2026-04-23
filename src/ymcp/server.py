@@ -63,6 +63,36 @@ def _coerce_rounds(value: Any) -> list[InterviewRound]:
     return rounds
 
 
+
+def _memory_context_from_query(query: str, provided_context: Any = None) -> list[str]:
+    context = _coerce_str_list(provided_context)
+    if context or not query.strip():
+        return context
+    try:
+        result = call_mempalace_tool(
+            "memory_search",
+            "search",
+            "tool_search",
+            query=query,
+            limit=5,
+            wing="personal",
+            room="ymcp",
+        )
+    except Exception as exc:
+        return [f"记忆检索：失败：{exc}"]
+    artifacts = result.artifacts
+    if artifacts.count == 0:
+        return [f"记忆检索：未找到与“{query}”相关的长期记忆。"]
+    items = []
+    for index, item in enumerate(artifacts.items[:5], start=1):
+        if isinstance(item, dict):
+            content = item.get("content") or item.get("document") or item.get("text") or item.get("summary") or str(item)
+        else:
+            content = str(item)
+        items.append(f"记忆检索：{index}. {content}")
+    return items
+
+
 def create_app() -> FastMCP:
     app = FastMCP(
         name="ymcp",
@@ -73,18 +103,19 @@ def create_app() -> FastMCP:
 
     @app.tool(name="plan", description=descriptions["plan"], structured_output=True)
     def plan(task: str | None = None, problem: str | None = None, mode: str = "auto", constraints: Any = None, known_context: Any = None, acceptance_criteria: Any = None, review_target: str | None = None, desired_outcome: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        request = PlanRequest(task=task or problem or "", mode=mode, constraints=_coerce_str_list(constraints), known_context=_coerce_str_list(known_context), acceptance_criteria=_coerce_str_list(acceptance_criteria), review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
+        task_value = task or problem or ""
+        request = PlanRequest(task=task_value, mode=mode, constraints=_coerce_str_list(constraints), known_context=_memory_context_from_query(task_value, known_context), acceptance_criteria=_coerce_str_list(acceptance_criteria), review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
         return build_plan(request).to_mcp_result()
 
     @app.tool(name="ralplan", description=descriptions["ralplan"], structured_output=True)
-    def ralplan(task: str, constraints: Any = None, deliberate: bool = False, interactive: bool = False, current_phase: str = "planner_draft", planner_draft: str | None = None, architect_feedback: Any = None, critic_feedback: Any = None, critic_verdict: str | None = None, iteration: int = 1, schema_version: str = "1.0") -> dict[str, Any]:
-        request = RalplanRequest(task=task, constraints=_coerce_str_list(constraints), deliberate=deliberate, interactive=interactive, current_phase=current_phase, planner_draft=planner_draft, architect_feedback=_coerce_str_list(architect_feedback), critic_feedback=_coerce_str_list(critic_feedback), critic_verdict_input=critic_verdict, iteration=iteration, schema_version=schema_version)
+    def ralplan(task: str, constraints: Any = None, deliberate: bool = False, interactive: bool = False, current_phase: str = "planner_draft", planner_draft: str | None = None, architect_feedback: Any = None, critic_feedback: Any = None, critic_verdict: str | None = None, known_context: Any = None, iteration: int = 1, schema_version: str = "1.0") -> dict[str, Any]:
+        request = RalplanRequest(task=task, constraints=_coerce_str_list(constraints), deliberate=deliberate, interactive=interactive, current_phase=current_phase, planner_draft=planner_draft, architect_feedback=_coerce_str_list(architect_feedback), critic_feedback=_coerce_str_list(critic_feedback), critic_verdict_input=critic_verdict, known_context=_memory_context_from_query(task, known_context), iteration=iteration, schema_version=schema_version)
         return build_ralplan(request).to_mcp_result()
 
     @app.tool(name="deep_interview", description=descriptions["deep_interview"], structured_output=True)
     def deep_interview(brief: str, prior_rounds: Any = None, target_threshold: float = 0.2, profile: str = "standard", known_context: Any = None, non_goals: Any = None, decision_boundaries: Any = None, schema_version: str = "1.0") -> dict[str, Any]:
         rounds = _coerce_rounds(prior_rounds)
-        request = DeepInterviewRequest(brief=brief, prior_rounds=rounds, target_threshold=target_threshold, profile=profile, known_context=_coerce_str_list(known_context), non_goals=_coerce_str_list(non_goals), decision_boundaries=_coerce_str_list(decision_boundaries), schema_version=schema_version)
+        request = DeepInterviewRequest(brief=brief, prior_rounds=rounds, target_threshold=target_threshold, profile=profile, known_context=_memory_context_from_query(brief, known_context), non_goals=_coerce_str_list(non_goals), decision_boundaries=_coerce_str_list(decision_boundaries), schema_version=schema_version)
         return build_deep_interview(request).to_mcp_result()
 
     @app.tool(name="ralph", description=descriptions["ralph"], structured_output=True)

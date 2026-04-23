@@ -109,6 +109,9 @@ class MemoryArtifacts(BaseModel):
     operation: str
     wing: str | None = DEFAULT_MEMORY_WING
     room: str | None = DEFAULT_MEMORY_ROOM
+    count: int = 0
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    message: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
