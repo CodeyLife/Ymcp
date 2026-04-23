@@ -75,6 +75,12 @@ class MemoryKgAddRequest(WorkflowRequestBase):
     source: str | None = "ymcp"
 
 
+class MemoryKgInvalidateRequest(WorkflowRequestBase):
+    subject: str = Field(..., min_length=1)
+    predicate: str = Field(..., min_length=1)
+    object: str = Field(..., min_length=1)
+
+
 class MemoryTunnelCreateRequest(WorkflowRequestBase):
     source: str = Field(..., min_length=1)
     target: str = Field(..., min_length=1)
@@ -88,7 +94,6 @@ class MemoryTunnelFindRequest(WorkflowRequestBase):
 
 class MemoryTunnelFollowRequest(WorkflowRequestBase):
     start: str = Field(..., min_length=1)
-    depth: int = Field(default=2, ge=1, le=5)
 
 
 class MemoryTunnelDeleteRequest(WorkflowRequestBase):
@@ -101,7 +106,6 @@ class MemoryDiaryWriteRequest(WorkflowRequestBase):
 
 
 class MemoryDiaryReadRequest(WorkflowRequestBase):
-    date: str | None = None
     limit: int = Field(default=10, ge=1, le=100)
 
 

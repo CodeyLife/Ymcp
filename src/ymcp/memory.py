@@ -85,7 +85,7 @@ def _derive_items(operation: str, raw: dict[str, Any]) -> tuple[int, list[dict[s
             if isinstance(value, list):
                 return len(value), value, None
         return (raw.get("total_drawers") or 0), [], None
-    if operation in {"get", "update", "delete", "store", "check_duplicate", "reconnect", "graph_stats", "graph_query", "graph_traverse", "kg_add", "kg_timeline", "kg_invalidate", "create_tunnel", "follow_tunnels", "delete_tunnel", "diary_write", "diary_read"}:
+    if operation in {"get", "update", "delete", "store", "check_duplicate", "reconnect", "graph_stats", "graph_query", "graph_traverse", "kg_add", "kg_timeline", "kg_invalidate", "create_tunnel", "find_tunnels", "follow_tunnels", "delete_tunnel", "diary_write", "diary_read"}:
         if isinstance(raw, dict):
             if "results" in raw and isinstance(raw["results"], list):
                 return len(raw["results"]), raw["results"], None
@@ -133,6 +133,23 @@ def memory_result(tool_name: str, operation: str, raw: Any, *, wing: str | None 
         meta=build_meta(tool_name, "ymcp.contracts.memory.MemoryResult", host_controls=MEMORY_HOST_CONTROLS),
         artifacts=MemoryArtifacts(operation=operation, wing=wing, room=room, count=count, items=items, message=message, raw=raw_dict),
     )
+
+
+def limit_memory_result_items(result: MemoryResult, limit: int) -> MemoryResult:
+    limited_items = result.artifacts.items[:limit]
+    result.artifacts.items = limited_items
+    result.artifacts.count = len(limited_items)
+    if isinstance(result.artifacts.raw, dict):
+        if isinstance(result.artifacts.raw.get("results"), list):
+            result.artifacts.raw["results"] = result.artifacts.raw["results"][:limit]
+        if isinstance(result.artifacts.raw.get("matches"), list):
+            result.artifacts.raw["matches"] = result.artifacts.raw["matches"][:limit]
+        if isinstance(result.artifacts.raw.get("tunnels"), list):
+            result.artifacts.raw["tunnels"] = result.artifacts.raw["tunnels"][:limit]
+    if result.artifacts.operation == "search":
+        result.summary = f"已完成记忆搜索，返回 {len(limited_items)} 条候选结果。"
+        result.artifacts.message = "未找到相关记忆。" if not limited_items else f"找到 {len(limited_items)} 条相关记忆。"
+    return result
 
 
 def capability_blocked(tool_name: str, operation: str, function_name: str) -> MemoryResult:

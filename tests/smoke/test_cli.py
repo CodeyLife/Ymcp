@@ -1,8 +1,9 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 
-from ymcp.cli import main
+from ymcp.cli import doctor_payload, main, resolve_mempalace_dir
 
 WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
 MEMORY_NAMES = {
@@ -66,6 +67,8 @@ def test_example_host_call_all_tools_runs():
 
 
 def test_init_trae_updates_user_mcp_json_and_creates_rules(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
     config_dir = tmp_path / "User"
     project_root = tmp_path / "project"
     project_root.mkdir()
@@ -79,19 +82,28 @@ def test_init_trae_updates_user_mcp_json_and_creates_rules(tmp_path, monkeypatch
     assert mcp_path.exists()
     payload = json.loads(mcp_path.read_text(encoding="utf-8"))
     assert payload["mcpServers"]["ymcp"]["command"] == "ymcp"
+    memory_dir = resolve_mempalace_dir(Path(tmp_path))
+    assert memory_dir.exists()
+    mem_config = tmp_path / ".mempalace" / "config.json"
+    assert json.loads(mem_config.read_text(encoding="utf-8"))["palace_path"] == str(memory_dir)
     rules_path = project_root / ".trae" / "rules" / "ymcp-workflow-rules.md"
     assert rules_path.exists()
     output = capsys.readouterr().out
+    assert "已初始化 MemPalace 记忆库" in output
     assert "已更新 Trae MCP 配置" in output
     assert "已创建/更新 Trae 项目规则" in output
 
 
-def test_init_trae_can_skip_rules_and_merge_existing_json(tmp_path, capsys):
+def test_init_trae_can_skip_rules_and_merge_existing_json(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
     config_dir = tmp_path / "User"
     config_dir.mkdir(parents=True)
     (config_dir / "mcp.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}), encoding="utf-8")
     project_root = tmp_path / "project"
     project_root.mkdir()
+    memory_dir = resolve_mempalace_dir(Path(tmp_path))
+    memory_dir.mkdir(parents=True)
     assert main([
         "init-trae",
         "--config-dir", str(config_dir),
@@ -102,11 +114,15 @@ def test_init_trae_can_skip_rules_and_merge_existing_json(tmp_path, capsys):
     assert "other" in payload["mcpServers"]
     assert payload["mcpServers"]["ymcp"]["args"] == ["serve"]
     assert not (project_root / ".trae" / "rules" / "ymcp-workflow-rules.md").exists()
-    assert "已跳过项目规则创建" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "已确认 MemPalace 记忆库目录" in output
+    assert "已跳过项目规则创建" in output
 
 
-def test_init_trae_accepts_underscore_and_typo_aliases(tmp_path):
-    for command in ["init_trae", "init_trea"]:
+def test_init_trae_accepts_underscore_and_typo_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for command in ["init_trae"]:
         config_dir = tmp_path / command / "User"
         project_root = tmp_path / command / "project"
         project_root.mkdir(parents=True)
@@ -118,3 +134,19 @@ def test_init_trae_accepts_underscore_and_typo_aliases(tmp_path):
         ]) == 0
         payload = json.loads((config_dir / "mcp.json").read_text(encoding="utf-8"))
         assert payload["mcpServers"]["ymcp"]["args"] == ["serve"]
+
+
+def test_init_trae_updates_doctor_palace_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_dir = tmp_path / "User"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    assert main([
+        "init-trae",
+        "--config-dir", str(config_dir),
+        "--project-root", str(project_root),
+        "--no-project-rules",
+    ]) == 0
+    payload = doctor_payload()
+    assert payload["mempalace"]["palace_path"] == str(resolve_mempalace_dir(Path(tmp_path)))

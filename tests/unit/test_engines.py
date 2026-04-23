@@ -31,6 +31,13 @@ def test_plan_engine_vague_task_requests_interview():
     assert result.artifacts.continuation.continuation_kind == "handoff_to_tool"
 
 
+def test_plan_engine_auto_mode_handles_clear_chinese_tasks():
+    result = build_plan(PlanRequest(task="优化项目稳定性"))
+    assert result.status is ToolStatus.OK
+    assert result.artifacts.workflow_state.current_phase == "direct_plan"
+    assert result.artifacts.recommended_next_tool is None
+
+
 def test_deep_interview_engine_needs_input_until_gates_resolved():
     result = build_deep_interview(DeepInterviewRequest(brief="Build MCP workflows"))
     assert result.status is ToolStatus.NEEDS_INPUT
@@ -154,3 +161,23 @@ def test_memory_preflight_satisfied_when_context_present():
 
     interview = build_deep_interview(DeepInterviewRequest(brief="实现功能", known_context=["历史约定"]))
     assert interview.artifacts.workflow_state.memory_preflight.already_satisfied is True
+
+
+def test_memory_preflight_counts_only_actual_memory_hits():
+    no_result = ["记忆检索：未找到与“实现功能”相关的长期记忆。"]
+    failed = ["记忆检索：失败：连接失败"]
+    hit = ["记忆检索：1. 用户偏好中文输出"]
+
+    plan_no_result = build_plan(PlanRequest(task="实现功能", known_context=no_result))
+    assert plan_no_result.artifacts.workflow_state.memory_preflight.search_performed is True
+    assert plan_no_result.artifacts.workflow_state.memory_preflight.retrieved_count == 0
+    assert plan_no_result.artifacts.workflow_state.memory_preflight.retrieved_context == []
+
+    interview_failed = build_deep_interview(DeepInterviewRequest(brief="实现功能", known_context=failed))
+    assert interview_failed.artifacts.workflow_state.memory_preflight.search_performed is True
+    assert interview_failed.artifacts.workflow_state.memory_preflight.retrieved_count == 0
+
+    ralplan_hit = build_ralplan(RalplanRequest(task="规划功能", known_context=hit))
+    assert ralplan_hit.artifacts.workflow_state.memory_preflight.search_performed is True
+    assert ralplan_hit.artifacts.workflow_state.memory_preflight.retrieved_count == 1
+    assert ralplan_hit.artifacts.workflow_state.memory_preflight.retrieved_context == hit

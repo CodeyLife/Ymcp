@@ -38,3 +38,9 @@ def test_workflow_state_exposes_memory_preflight():
 def test_memory_preflight_records_search_results_fields():
     from ymcp.contracts.workflow import MemoryPreflight
     assert {"search_performed", "retrieved_count", "retrieved_context"} <= set(MemoryPreflight.model_fields)
+
+
+def test_workflow_state_exposes_memory_protocol():
+    from ymcp.contracts.workflow import WorkflowState
+    fields = set(WorkflowState.model_fields)
+    assert {"memory_protocol_summary", "memory_protocol"} <= fields

@@ -46,6 +46,13 @@ def test_inspect_tools_json_contract_metadata():
         assert item["host_boundary"]
 
 
+def test_inspect_schema_does_not_expose_unsupported_memory_parameters():
+    payload = {item["name"]: item for item in inspect_tools_payload()}
+    assert "depth" not in payload["memory_follow_tunnels"]["request_schema"]["properties"]
+    assert "date" not in payload["memory_diary_read"]["request_schema"]["properties"]
+    assert "source" not in payload["memory_kg_invalidate"]["request_schema"]["properties"]
+
+
 def test_docs_do_not_publish_plugin_or_catalog_api():
     import pathlib
     text = "\n".join(path.read_text(encoding="utf-8") for path in pathlib.Path("docs").glob("*.md"))

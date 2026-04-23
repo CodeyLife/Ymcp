@@ -76,15 +76,7 @@ def test_deep_interview_accepts_json_string_lists_from_host():
 
 
 
-def test_workflows_auto_read_memory_when_context_missing(monkeypatch):
-    import ymcp.server as server
-
-    def fake_memory(tool_name, operation, function_name, *args, **kwargs):
-        from ymcp.memory import memory_result
-        return memory_result(tool_name, operation, {"results": [{"summary": "用户偏好中文输出"}]})
-
-    monkeypatch.setattr(server, "call_mempalace_tool", fake_memory)
-
+def test_workflows_require_explicit_memory_search_when_context_missing():
     async def _run():
         app = create_app()
         for name, args in {
@@ -95,8 +87,46 @@ def test_workflows_auto_read_memory_when_context_missing(monkeypatch):
             result = await app.call_tool(name, args)
             structured = result[1] if isinstance(result, tuple) else result
             preflight = structured["artifacts"]["workflow_state"]["memory_preflight"]
-            assert preflight["search_performed"] is True
-            assert preflight["retrieved_count"] == 1
-            assert "用户偏好中文输出" in preflight["retrieved_context"][0]
+            assert preflight["required"] is True
+            assert preflight["search_performed"] is False
+            assert preflight["retrieved_count"] == 0
+            assert preflight["retrieved_context"] == []
+
+    anyio.run(_run)
+
+
+def test_memory_tool_runtime_schema_matches_supported_parameters():
+    async def _run():
+        app = create_app()
+        tools = {tool.name: tool for tool in await app.list_tools()}
+        assert "depth" not in tools["memory_follow_tunnels"].inputSchema["properties"]
+        assert "date" not in tools["memory_diary_read"].inputSchema["properties"]
+        assert "source" not in tools["memory_kg_invalidate"].inputSchema["properties"]
+
+    anyio.run(_run)
+
+
+def test_memory_result_limits_are_enforced(monkeypatch):
+    import ymcp.server as server
+    from ymcp.memory import memory_result
+
+    def fake_memory(tool_name, operation, function_name, *args, **kwargs):
+        if tool_name == "memory_graph_query":
+            return memory_result(tool_name, operation, {"results": [{"id": 1}, {"id": 2}, {"id": 3}]})
+        if tool_name == "memory_find_tunnels":
+            return memory_result(tool_name, operation, {"results": [{"id": "a"}, {"id": "b"}, {"id": "c"}]})
+        if tool_name == "memory_kg_timeline":
+            return memory_result(tool_name, operation, {"results": [{"t": 1}, {"t": 2}, {"t": 3}]})
+        return memory_result(tool_name, operation, {})
+
+    monkeypatch.setattr(server, "call_mempalace_tool", fake_memory)
+
+    async def _run():
+        app = create_app()
+        for name in ("memory_graph_query", "memory_find_tunnels", "memory_kg_timeline"):
+            result = await app.call_tool(name, {"query": "ymcp", "limit": 2})
+            structured = result[1] if isinstance(result, tuple) else result
+            assert structured["artifacts"]["count"] == 2
+            assert len(structured["artifacts"]["items"]) == 2
 
     anyio.run(_run)

@@ -14,7 +14,7 @@ from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.plan import build_plan
 from ymcp.engine.ralplan import build_ralplan
 from ymcp.engine.ralph import build_ralph
-from ymcp.memory import call_mempalace_tool
+from ymcp.memory import call_mempalace_tool, limit_memory_result_items
 from ymcp.internal_registry import get_tool_specs
 
 LOGGER = logging.getLogger("ymcp")
@@ -64,33 +64,8 @@ def _coerce_rounds(value: Any) -> list[InterviewRound]:
 
 
 
-def _memory_context_from_query(query: str, provided_context: Any = None) -> list[str]:
-    context = _coerce_str_list(provided_context)
-    if context or not query.strip():
-        return context
-    try:
-        result = call_mempalace_tool(
-            "memory_search",
-            "search",
-            "tool_search",
-            query=query,
-            limit=5,
-            wing="personal",
-            room="ymcp",
-        )
-    except Exception as exc:
-        return [f"记忆检索：失败：{exc}"]
-    artifacts = result.artifacts
-    if artifacts.count == 0:
-        return [f"记忆检索：未找到与“{query}”相关的长期记忆。"]
-    items = []
-    for index, item in enumerate(artifacts.items[:5], start=1):
-        if isinstance(item, dict):
-            content = item.get("content") or item.get("document") or item.get("text") or item.get("summary") or str(item)
-        else:
-            content = str(item)
-        items.append(f"记忆检索：{index}. {content}")
-    return items
+def _known_context(value: Any = None) -> list[str]:
+    return _coerce_str_list(value)
 
 
 def create_app() -> FastMCP:
@@ -104,18 +79,18 @@ def create_app() -> FastMCP:
     @app.tool(name="plan", description=descriptions["plan"], structured_output=True)
     def plan(task: str | None = None, problem: str | None = None, mode: str = "auto", constraints: Any = None, known_context: Any = None, acceptance_criteria: Any = None, review_target: str | None = None, desired_outcome: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
         task_value = task or problem or ""
-        request = PlanRequest(task=task_value, mode=mode, constraints=_coerce_str_list(constraints), known_context=_memory_context_from_query(task_value, known_context), acceptance_criteria=_coerce_str_list(acceptance_criteria), review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
+        request = PlanRequest(task=task_value, mode=mode, constraints=_coerce_str_list(constraints), known_context=_known_context(known_context), acceptance_criteria=_coerce_str_list(acceptance_criteria), review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
         return build_plan(request).to_mcp_result()
 
     @app.tool(name="ralplan", description=descriptions["ralplan"], structured_output=True)
     def ralplan(task: str, constraints: Any = None, deliberate: bool = False, interactive: bool = False, current_phase: str = "planner_draft", planner_draft: str | None = None, architect_feedback: Any = None, critic_feedback: Any = None, critic_verdict: str | None = None, known_context: Any = None, iteration: int = 1, schema_version: str = "1.0") -> dict[str, Any]:
-        request = RalplanRequest(task=task, constraints=_coerce_str_list(constraints), deliberate=deliberate, interactive=interactive, current_phase=current_phase, planner_draft=planner_draft, architect_feedback=_coerce_str_list(architect_feedback), critic_feedback=_coerce_str_list(critic_feedback), critic_verdict_input=critic_verdict, known_context=_memory_context_from_query(task, known_context), iteration=iteration, schema_version=schema_version)
+        request = RalplanRequest(task=task, constraints=_coerce_str_list(constraints), deliberate=deliberate, interactive=interactive, current_phase=current_phase, planner_draft=planner_draft, architect_feedback=_coerce_str_list(architect_feedback), critic_feedback=_coerce_str_list(critic_feedback), critic_verdict_input=critic_verdict, known_context=_known_context(known_context), iteration=iteration, schema_version=schema_version)
         return build_ralplan(request).to_mcp_result()
 
     @app.tool(name="deep_interview", description=descriptions["deep_interview"], structured_output=True)
     def deep_interview(brief: str, prior_rounds: Any = None, target_threshold: float = 0.2, profile: str = "standard", known_context: Any = None, non_goals: Any = None, decision_boundaries: Any = None, schema_version: str = "1.0") -> dict[str, Any]:
         rounds = _coerce_rounds(prior_rounds)
-        request = DeepInterviewRequest(brief=brief, prior_rounds=rounds, target_threshold=target_threshold, profile=profile, known_context=_memory_context_from_query(brief, known_context), non_goals=_coerce_str_list(non_goals), decision_boundaries=_coerce_str_list(decision_boundaries), schema_version=schema_version)
+        request = DeepInterviewRequest(brief=brief, prior_rounds=rounds, target_threshold=target_threshold, profile=profile, known_context=_known_context(known_context), non_goals=_coerce_str_list(non_goals), decision_boundaries=_coerce_str_list(decision_boundaries), schema_version=schema_version)
         return build_deep_interview(request).to_mcp_result()
 
     @app.tool(name="ralph", description=descriptions["ralph"], structured_output=True)
@@ -174,7 +149,8 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_graph_query", description=descriptions["memory_graph_query"], structured_output=True)
     def memory_graph_query(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_graph_query", "graph_query", "tool_kg_query", entity=query).to_mcp_result()
+        result = call_mempalace_tool("memory_graph_query", "graph_query", "tool_kg_query", entity=query)
+        return limit_memory_result_items(result, limit).to_mcp_result()
 
     @app.tool(name="memory_graph_traverse", description=descriptions["memory_graph_traverse"], structured_output=True)
     def memory_graph_traverse(start: str, depth: int = 2, schema_version: str = "1.0") -> dict[str, Any]:
@@ -186,10 +162,11 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_kg_timeline", description=descriptions["memory_kg_timeline"], structured_output=True)
     def memory_kg_timeline(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_kg_timeline", "kg_timeline", "tool_kg_timeline", entity=query).to_mcp_result()
+        result = call_mempalace_tool("memory_kg_timeline", "kg_timeline", "tool_kg_timeline", entity=query)
+        return limit_memory_result_items(result, limit).to_mcp_result()
 
     @app.tool(name="memory_kg_invalidate", description=descriptions["memory_kg_invalidate"], structured_output=True)
-    def memory_kg_invalidate(subject: str, predicate: str, object: str, source: str | None = "ymcp", schema_version: str = "1.0") -> dict[str, Any]:
+    def memory_kg_invalidate(subject: str, predicate: str, object: str, schema_version: str = "1.0") -> dict[str, Any]:
         return call_mempalace_tool("memory_kg_invalidate", "kg_invalidate", "tool_kg_invalidate", subject=subject, predicate=predicate, object=object).to_mcp_result()
 
     @app.tool(name="memory_create_tunnel", description=descriptions["memory_create_tunnel"], structured_output=True)
@@ -202,10 +179,11 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_find_tunnels", description=descriptions["memory_find_tunnels"], structured_output=True)
     def memory_find_tunnels(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_find_tunnels", "find_tunnels", "tool_find_tunnels", wing_a=query).to_mcp_result()
+        result = call_mempalace_tool("memory_find_tunnels", "find_tunnels", "tool_find_tunnels", wing_a=query)
+        return limit_memory_result_items(result, limit).to_mcp_result()
 
     @app.tool(name="memory_follow_tunnels", description=descriptions["memory_follow_tunnels"], structured_output=True)
-    def memory_follow_tunnels(start: str, depth: int = 2, schema_version: str = "1.0") -> dict[str, Any]:
+    def memory_follow_tunnels(start: str, schema_version: str = "1.0") -> dict[str, Any]:
         return call_mempalace_tool("memory_follow_tunnels", "follow_tunnels", "tool_follow_tunnels", wing="personal", room=start).to_mcp_result()
 
     @app.tool(name="memory_delete_tunnel", description=descriptions["memory_delete_tunnel"], structured_output=True)
@@ -217,7 +195,7 @@ def create_app() -> FastMCP:
         return call_mempalace_tool("memory_diary_write", "diary_write", "tool_diary_write", agent_name="ymcp", entry=entry, topic=date or "general").to_mcp_result()
 
     @app.tool(name="memory_diary_read", description=descriptions["memory_diary_read"], structured_output=True)
-    def memory_diary_read(date: str | None = None, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
+    def memory_diary_read(limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
         return call_mempalace_tool("memory_diary_read", "diary_read", "tool_diary_read", agent_name="ymcp", last_n=limit).to_mcp_result()
 
     return app

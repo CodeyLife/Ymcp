@@ -1,10 +1,41 @@
 # Ymcp
 Trae MCP工具包  提供工作流以及mempalace的长记忆存储
 
+# 安装与更新
+
+```powershell
+pip install ymcp
+pip install -U ymcp
+```
+
+本地开发安装：
+
+```powershell
+python -m pip install -e .[dev]
+```
+
+安装后建议检查：
+
+```powershell
+ymcp doctor
+ymcp --version
+ymcp inspect-tools --json
+```
+
+一键初始化 Trae 与默认记忆库：
+
+```powershell
+ymcp init-trae
+```
+
+`init-trae` 会检查 `~/.yjj`。如果该目录不存在，会自动初始化 MemPalace，并把 `~/.yjj` 配置为 Ymcp 的默认记忆库目录。
+
 
 ## 记忆工具
 
-Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
+Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用 `~/.yjj` 作为 MemPalace 记忆库目录，并写入全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
+
+Memory Protocol：唤醒或恢复上下文时先调用 `memory_status`；回答人物、项目、历史事件或过往决策前先查 `memory_search` / `memory_get`，不要凭印象猜；任务结束后把稳定偏好、项目约定、重要决策和踩坑结论写入 `memory_store` 或 `memory_diary_write`；事实变化时用更新、删除或 KG 失效工具维护旧记忆。
 
 常用工具：
 

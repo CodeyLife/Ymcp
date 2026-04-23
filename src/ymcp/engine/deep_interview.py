@@ -11,6 +11,7 @@ from ymcp.contracts.deep_interview import (
 )
 from ymcp.contracts.workflow import ContinuationContract, HandoffOption, MemoryPreflight, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
+from ymcp.engine.memory_preflight import analyze_memory_context
 
 PROFILE_THRESHOLDS = {"quick": 0.30, "standard": 0.20, "deep": 0.15}
 
@@ -90,6 +91,7 @@ def _answer_options(dimension: str) -> list[AnswerOption]:
 
 
 def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
+    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context)
     threshold = PROFILE_THRESHOLDS.get(request.profile, request.target_threshold)
     scores = _score(request)
     ambiguity = _ambiguity(scores)
@@ -117,9 +119,9 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
             reason="进入 deep_interview 前应先读取相关长期记忆，避免重复询问已知偏好/约定。",
             query=request.brief,
             already_satisfied=bool(request.known_context),
-            search_performed=any(str(item).startswith("记忆检索：") for item in request.known_context),
-            retrieved_count=sum(1 for item in request.known_context if str(item).startswith("记忆检索：")),
-            retrieved_context=[item for item in request.known_context if str(item).startswith("记忆检索：")],
+            search_performed=search_performed,
+            retrieved_count=retrieved_count,
+            retrieved_context=retrieved_context,
         ),
     )
     spec = None

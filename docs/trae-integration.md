@@ -59,10 +59,11 @@ ymcp print-config --host trae
 ymcp init-trae
 ```
 
-该命令会执行两步：
+该命令会执行三步：
 
-1. 创建或更新当前 Windows 用户的 Trae CN 用户级 MCP 配置：`C:\Users\{用户}\AppData\Roaming\Trae CN\User\mcp.json`
-2. 询问是否在当前项目 `.trae/rules/` 下创建 Ymcp 项目规则
+1. 检查 `~/.yjj` 是否存在；如果不存在，则自动初始化 MemPalace，并把该目录配置为默认记忆库目录
+2. 创建或更新当前 Windows 用户的 Trae CN 用户级 MCP 配置：`C:\Users\{用户}\AppData\Roaming\Trae CN\User\mcp.json`
+3. 询问是否在当前项目 `.trae/rules/` 下创建 Ymcp 项目规则
 
 非交互场景可使用：
 
@@ -72,6 +73,8 @@ ymcp init-trae --no-project-rules
 ```
 
 项目规则范本位于：`docs/trae-project-rule-template.md`。
+
+初始化完成后，可通过 `ymcp doctor --json` 查看 `mempalace.palace_path` 是否已指向 `~/.yjj`。
 
 ## 5. 预期工具
 
@@ -103,7 +106,19 @@ Ymcp 不执行命令、不 spawn agent、不修改文件、不持久化循环，
 
 ## 9. 记忆工具使用指南
 
-Ymcp 的记忆工具基于 MemPalace。默认写入全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
+Ymcp 的记忆工具基于 MemPalace。默认使用 `~/.yjj` 作为记忆库目录，并写入全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
+
+### Memory Protocol（建议宿主纳入固定协议）
+
+为避免“把存储当记忆直接复述”，建议宿主把下面这组行为规则固定到提示词或项目规则中：
+
+1. **唤醒时先看总览**：进入工作流、恢复历史任务或切换上下文时，先调用 `memory_status` 读取当前记忆库概览。
+2. **回答过去事实前先查**：涉及人物、项目、历史事件、过往决策或“之前怎么做的”时，先调用 `memory_search` / `memory_get` / 图谱工具核验，不要直接猜。
+3. **不确定就明确说要查**：如果对记忆事实没有把握，应先说明“我先查一下记忆”，再调用相关工具。
+4. **结束后写回**：每次任务或会话结束后，把稳定偏好、项目约定、重要决策、踩坑结论等内容通过 `memory_store` 或 `memory_diary_write` 沉淀下来。
+5. **事实变化要维护**：旧事实失效时，优先用 `memory_update` / `memory_delete` / `memory_kg_invalidate` 清理或失效旧内容，再补写新事实。
+
+这套协议的核心目标是：**先核验，再作答；先维护，再复用。**
 
 ### 推荐使用流程
 
@@ -156,7 +171,7 @@ Ymcp 的记忆工具基于 MemPalace。默认写入全局个人记忆空间：`w
 ```text
 先调用 Ymcp 的 memory_search 搜索：“Trae MCP 配置 init-trae”。
 如果没有相同或高度相似记忆，再调用 memory_store 保存当前结论：
-“ymcp init-trae 会更新 Trae CN 用户级 mcp.json，并可创建 .trae/rules 项目规则。”
+“ymcp init-trae 会检查 ~/.yjj、自动初始化默认记忆库，并更新 Trae CN 用户级 mcp.json；随后可创建 .trae/rules 项目规则。”
 ```
 
 ### 读取完整记忆

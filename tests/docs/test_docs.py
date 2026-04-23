@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
+
 
 def test_docs_include_install_update_and_trae_example():
     readme = Path("README.md").read_text(encoding="utf-8")
@@ -52,6 +54,11 @@ def test_trae_memory_prompt_guide_is_present():
     assert "记忆写入安全提醒" in trae
     assert "Trae 中常用记忆 prompt" in readme
     assert "Trae 调用建议" in reference
+    assert "Memory Protocol" in trae
+    assert "memory_status" in trae
+    assert "memory_diary_write" in trae
+    assert "memory_kg_invalidate" in trae
+    assert "Memory Protocol" in readme
 
 
 def test_workflow_state_machine_docs_present():
@@ -89,4 +96,12 @@ def test_memory_preflight_docs_present():
     assert "memory_search" in trae
     assert "known_context" in trae
     assert "memory_preflight" in reference
+
+
+def test_project_rule_template_contains_memory_protocol_rules():
+    template = TRAE_PROJECT_RULE_TEMPLATE
+    assert "memory_status" in template
+    assert "memory_search" in template
+    assert "memory_diary_write" in template
+    assert "memory_kg_invalidate" in template
 

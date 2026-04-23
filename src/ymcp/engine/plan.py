@@ -2,13 +2,18 @@ from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.plan import PlanArtifacts, PlanRequest, PlanResult
 from ymcp.contracts.workflow import ContinuationContract, HandoffOption, MemoryPreflight, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
+from ymcp.engine.memory_preflight import analyze_memory_context
 
 
 def _is_vague(request: PlanRequest) -> bool:
-    return request.mode == "auto" and len(request.task.split()) < 8 and not request.acceptance_criteria and not request.constraints and not request.known_context and not request.desired_outcome
+    stripped = "".join(request.task.split())
+    has_cjk = any("\u4e00" <= char <= "\u9fff" for char in stripped)
+    too_short = len(stripped) < 4 if has_cjk else len(request.task.split()) < 8
+    return request.mode == "auto" and too_short and not request.acceptance_criteria and not request.constraints and not request.known_context and not request.desired_outcome
 
 
 def build_plan(request: PlanRequest) -> PlanResult:
+    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context)
     mode = request.mode
     if mode == "auto":
         mode = "interview" if _is_vague(request) else "direct"
@@ -52,9 +57,9 @@ def build_plan(request: PlanRequest) -> PlanResult:
             reason="进入 plan 前应先搜索历史约束、用户偏好和项目决策。",
             query=request.task,
             already_satisfied=bool(request.known_context),
-            search_performed=any(str(item).startswith("记忆检索：") for item in request.known_context),
-            retrieved_count=sum(1 for item in request.known_context if str(item).startswith("记忆检索：")),
-            retrieved_context=[item for item in request.known_context if str(item).startswith("记忆检索：")],
+            search_performed=search_performed,
+            retrieved_count=retrieved_count,
+            retrieved_context=retrieved_context,
         ),
     )
     return PlanResult(

@@ -2,6 +2,7 @@ from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.ralplan import AdrDraft, RalplanArtifacts, RalplanRequest, RalplanResult, ViableOption
 from ymcp.contracts.workflow import ContinuationContract, HandoffContract, HandoffOption, MemoryPreflight, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
+from ymcp.engine.memory_preflight import analyze_memory_context
 
 
 def _options(deliberate: bool) -> list[ViableOption]:
@@ -33,6 +34,7 @@ def _detect_critic_verdict(request: RalplanRequest) -> str:
 
 
 def build_ralplan(request: RalplanRequest) -> RalplanResult:
+    search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context)
     phase = request.current_phase
     options = _options(request.deliberate)
     chosen_option = "状态机投影"
@@ -105,9 +107,9 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
             reason="进入 ralplan 共识规划前应读取相关记忆，补充历史方案、约束和踩坑结论。",
             query=request.task,
             already_satisfied=bool(request.constraints) or bool(request.known_context) or phase != "planner_draft",
-            search_performed=any(str(item).startswith("记忆检索：") for item in request.known_context),
-            retrieved_count=sum(1 for item in request.known_context if str(item).startswith("记忆检索：")),
-            retrieved_context=[item for item in request.known_context if str(item).startswith("记忆检索：")],
+            search_performed=search_performed,
+            retrieved_count=retrieved_count,
+            retrieved_context=retrieved_context,
         ),
     )
     return RalplanResult(

@@ -17,6 +17,16 @@
 
 默认记忆空间：`wing="personal"`、`room="ymcp"`。
 
+## Memory Protocol
+
+宿主和大模型应把 MemPalace 当作“先核验再作答”的长期记忆层，而不是普通文本仓库：
+
+- 唤醒、恢复上下文或进入工作流时，先调用 `memory_status` 读取记忆库概览。
+- 回答人物、项目、历史事件、过往决策或过去事实前，先调用 `memory_search`、`memory_get` 或图谱工具核验。
+- 对事实不确定时，先说明需要查询记忆，再调用相关工具，禁止凭印象猜测。
+- 任务或会话结束后，将稳定偏好、项目约定、重要决策和踩坑结论写入 `memory_store` 或 `memory_diary_write`。
+- 已保存事实变化时，用 `memory_update`、`memory_delete`、`memory_kg_invalidate`、`memory_kg_add` 维护一致性。
+
 ## memory_store
 写入一条 MemPalace 长期记忆。
 

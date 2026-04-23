@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
+import os
 import platform
 import shutil
 import sys
 from importlib import metadata
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from ymcp import __version__
@@ -23,6 +26,7 @@ TRAE_USER_CONFIG_DIR = Path.home() / "AppData" / "Roaming" / "Trae CN" / "User"
 TRAE_MCP_FILENAME = "mcp.json"
 PROJECT_RULE_TEMPLATE = "trae-project-rule-template.md"
 PROJECT_RULE_FILENAME = "ymcp-workflow-rules.md"
+DEFAULT_MEMPALACE_DIRNAME = ".yjj"
 
 TRAE_HOST_CONFIG = {
     "mcpServers": {
@@ -38,6 +42,45 @@ TRAE_HOST_CONFIG = {
 
 def resolve_trae_config_dir(config_dir: str | None = None) -> Path:
     return Path(config_dir).expanduser().resolve() if config_dir else TRAE_USER_CONFIG_DIR
+
+
+def resolve_mempalace_dir(home_dir: Path | None = None) -> Path:
+    base_dir = home_dir.resolve() if home_dir else Path("~").expanduser()
+    return (base_dir / DEFAULT_MEMPALACE_DIRNAME).resolve()
+
+
+def _mempalace_config_file(home_dir: Path | None = None) -> Path:
+    base_dir = home_dir.resolve() if home_dir else Path("~").expanduser()
+    return (base_dir / ".mempalace" / "config.json").resolve()
+
+
+def configure_mempalace_palace_path(palace_path: Path, home_dir: Path | None = None) -> Path:
+    config_path = _mempalace_config_file(home_dir)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+    else:
+        data = {}
+    data["palace_path"] = str(palace_path)
+    config_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return config_path
+
+
+def ensure_mempalace_initialized(home_dir: Path | None = None) -> tuple[Path, bool]:
+    palace_dir = resolve_mempalace_dir(home_dir)
+    configure_mempalace_palace_path(palace_dir, home_dir)
+    os.environ["MEMPALACE_PALACE_PATH"] = str(palace_dir)
+    if palace_dir.exists():
+        return palace_dir, False
+    palace_dir.mkdir(parents=True, exist_ok=True)
+    mempalace_cli = importlib.import_module("mempalace.cli")
+    mempalace_cli.cmd_init(SimpleNamespace(dir=str(palace_dir), yes=True, lang=None))
+    return palace_dir, True
 
 
 def merge_trae_mcp_config(config_path: Path) -> dict[str, Any]:
@@ -164,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
 
     init_trae_cmd = subparsers.add_parser(
         "init-trae",
-        aliases=["init_trae", "init_trea"],
+        aliases=["init_trae"],
         help="初始化 Trae 用户级 MCP 配置，并可创建项目规则",
     )
     init_trae_cmd.add_argument("--config-dir", help="Trae 用户配置目录；默认是当前用户的 AppData/Roaming/Trae CN/User")
@@ -211,9 +254,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
 
-    if args.command in {"init-trae", "init_trae", "init_trea"}:
+    if args.command in {"init-trae", "init_trae"}:
         if args.yes_project_rules and args.no_project_rules:
             parser.error("--yes-project-rules 和 --no-project-rules 不能同时使用")
+        palace_path, palace_initialized = ensure_mempalace_initialized()
+        if palace_initialized:
+            print(f"已初始化 MemPalace 记忆库：{palace_path}")
+        else:
+            print(f"已确认 MemPalace 记忆库目录：{palace_path}")
         config_path = update_trae_mcp_json(args.config_dir)
         print(f"已更新 Trae MCP 配置：{config_path}")
         should_create_rules = args.yes_project_rules

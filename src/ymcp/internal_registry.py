@@ -17,6 +17,7 @@ from ymcp.contracts.memory import (
     MemoryGraphQueryRequest,
     MemoryGraphTraverseRequest,
     MemoryKgAddRequest,
+    MemoryKgInvalidateRequest,
     MemoryListRoomsRequest,
     MemoryNoArgsRequest,
     MemoryResult,
@@ -32,7 +33,7 @@ from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.plan import build_plan
 from ymcp.engine.ralplan import build_ralplan
 from ymcp.engine.ralph import build_ralph
-from ymcp.memory import call_mempalace_tool
+from ymcp.memory import call_mempalace_tool, limit_memory_result_items
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         description="查询 MemPalace 知识图谱实体关系。",
         request_model=MemoryGraphQueryRequest,
         response_model=MemoryResult,
-        handler=lambda request: call_mempalace_tool("memory_graph_query", "graph_query", "tool_kg_query", entity=request.query),
+        handler=lambda request: limit_memory_result_items(call_mempalace_tool("memory_graph_query", "graph_query", "tool_kg_query", entity=request.query), request.limit),
     ),
     ToolSpec(
         name="memory_graph_traverse",
@@ -184,12 +185,12 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         description="查看 MemPalace 知识图谱时间线。",
         request_model=MemoryGraphQueryRequest,
         response_model=MemoryResult,
-        handler=lambda request: call_mempalace_tool("memory_kg_timeline", "kg_timeline", "tool_kg_timeline", entity=request.query),
+        handler=lambda request: limit_memory_result_items(call_mempalace_tool("memory_kg_timeline", "kg_timeline", "tool_kg_timeline", entity=request.query), request.limit),
     ),
     ToolSpec(
         name="memory_kg_invalidate",
         description="使 MemPalace 知识图谱中的一条关系失效。",
-        request_model=MemoryKgAddRequest,
+        request_model=MemoryKgInvalidateRequest,
         response_model=MemoryResult,
         handler=lambda request: call_mempalace_tool("memory_kg_invalidate", "kg_invalidate", "tool_kg_invalidate", subject=request.subject, predicate=request.predicate, object=request.object),
     ),
@@ -212,7 +213,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         description="查找 MemPalace tunnel。",
         request_model=MemoryTunnelFindRequest,
         response_model=MemoryResult,
-        handler=lambda request: call_mempalace_tool("memory_find_tunnels", "find_tunnels", "tool_find_tunnels", wing_a=request.query),
+        handler=lambda request: limit_memory_result_items(call_mempalace_tool("memory_find_tunnels", "find_tunnels", "tool_find_tunnels", wing_a=request.query), request.limit),
     ),
     ToolSpec(
         name="memory_follow_tunnels",
