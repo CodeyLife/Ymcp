@@ -30,9 +30,11 @@ ymcp inspect-capabilities --json
 宿主不应只读取仓库 Markdown 文档，而应优先通过 MCP 能力发现和读取：
 
 - Resources：`resource://ymcp/principles`、`resource://ymcp/tool-reference`、`resource://ymcp/memory-protocol`、`resource://ymcp/project-rule-template`、`resource://ymcp/host-integration`。
-- Prompts：`deep_interview_clarify`、`plan_direct`、`ralplan_consensus`、`ralph_verify`、`memory_store_after_completion`。
+- Prompts：`deep_interview_clarify`、`plan_direct`、`ralplan_consensus`、`ralplan_planner_pass`、`ralplan_architect_pass`、`ralplan_critic_pass`、`ralph_verify`、`memory_store_after_completion`。
 
 Prompt 只负责生成可复用调用模板；真正的状态变化、查询和持久化必须通过 Tools 完成。
+
+其中 `ralplan_consensus` 是总入口模板；`ralplan_planner_pass`、`ralplan_architect_pass`、`ralplan_critic_pass` 则把三种角色视角作为宿主可发现的 MCP Prompt 暴露出来，便于宿主按 phase 精确拉取和执行。
 
 ## LLM 宿主系统提示模板
 

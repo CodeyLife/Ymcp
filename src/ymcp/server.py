@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from typing import Annotated, Any
 
 import mcp.types as types
@@ -18,7 +20,13 @@ from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.plan import build_plan
 from ymcp.engine.ralplan import build_ralplan
 from ymcp.engine.ralph import build_ralph
-from ymcp.memory import call_mempalace_tool, limit_memory_result_items
+from ymcp.memory import (
+    build_memory_request_id,
+    call_mempalace_tool,
+    limit_memory_result_items,
+    memory_log_kv,
+    mempalace_palace_path,
+)
 from ymcp.internal_registry import get_tool_specs
 
 LOGGER = logging.getLogger("ymcp")
@@ -343,6 +351,18 @@ def create_app() -> FastMCP:
     def ralplan_consensus(task: str = "{task}") -> str:
         return prompt_template("ralplan_consensus", task=task)
 
+    @app.prompt(name="ralplan_planner_pass", title="Ralplan Planner Pass", description=prompt_descriptions["ralplan_planner_pass"])
+    def ralplan_planner_pass(task: str = "{task}", deliberate: bool = False, constraints: Any = "{constraints}") -> str:
+        return prompt_template("ralplan_planner_pass", task=task, deliberate=deliberate, constraints=constraints)
+
+    @app.prompt(name="ralplan_architect_pass", title="Ralplan Architect Pass", description=prompt_descriptions["ralplan_architect_pass"])
+    def ralplan_architect_pass(task: str = "{task}", planner_draft: str = "{planner_draft}", deliberate: bool = False) -> str:
+        return prompt_template("ralplan_architect_pass", task=task, planner_draft=planner_draft, deliberate=deliberate)
+
+    @app.prompt(name="ralplan_critic_pass", title="Ralplan Critic Pass", description=prompt_descriptions["ralplan_critic_pass"])
+    def ralplan_critic_pass(task: str = "{task}", planner_draft: str = "{planner_draft}", architect_feedback: Any = "{architect_feedback}", deliberate: bool = False) -> str:
+        return prompt_template("ralplan_critic_pass", task=task, planner_draft=planner_draft, architect_feedback=architect_feedback, deliberate=deliberate)
+
     @app.prompt(name="ralph_verify", title="Ralph Verify", description=prompt_descriptions["ralph_verify"])
     def ralph_verify(approved_plan: str = "{approved_plan}", latest_evidence: str = "{latest_evidence}") -> str:
         return prompt_template("ralph_verify", approved_plan=approved_plan, latest_evidence=latest_evidence)
@@ -379,7 +399,66 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_search", description=descriptions["memory_search"], structured_output=True)
     def memory_search(query: str, limit: int = 5, wing: str | None = "personal", room: str | None = None, max_distance: float = 1.5, min_similarity: float | None = None, context: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_search", "search", "tool_search", query=query, limit=limit, wing=wing, room=room, max_distance=max_distance, min_similarity=min_similarity, context=context).to_mcp_result()
+        request_id = build_memory_request_id()
+        started_at = time.perf_counter()
+        memory_log_kv(
+            "memory_search_handler_start",
+            request_id=request_id,
+            pid=os.getpid(),
+            palace_path=mempalace_palace_path(),
+            query_length=len(query),
+            limit=limit,
+            wing=wing,
+            room=room,
+            max_distance=max_distance,
+            min_similarity=min_similarity,
+            context_length=(len(context) if context else 0),
+        )
+        try:
+            result = call_mempalace_tool(
+                "memory_search",
+                "search",
+                "tool_search",
+                query=query,
+                limit=limit,
+                wing=wing,
+                room=room,
+                max_distance=max_distance,
+                min_similarity=min_similarity,
+                context=context,
+                request_id=request_id,
+            )
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            memory_log_kv(
+                "memory_search_handler_end",
+                request_id=request_id,
+                pid=os.getpid(),
+                duration_ms=duration_ms,
+                status=result.status.value,
+                result_count=result.artifacts.count,
+                message=result.artifacts.message,
+            )
+            payload = result.to_mcp_result()
+            memory_log_kv(
+                "memory_search_handler_return",
+                request_id=request_id,
+                pid=os.getpid(),
+                payload_status=payload.get("status"),
+                payload_keys=",".join(sorted(payload.keys())),
+                artifacts_count=payload.get("artifacts", {}).get("count"),
+            )
+            return payload
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            memory_log_kv(
+                "memory_search_handler_error",
+                request_id=request_id,
+                pid=os.getpid(),
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise
 
     @app.tool(name="memory_get", description=descriptions["memory_get"], structured_output=True)
     def memory_get(drawer_id: str, schema_version: str = "1.0") -> dict[str, Any]:
@@ -395,7 +474,52 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_status", description=descriptions["memory_status"], structured_output=True)
     def memory_status(schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_status", "status", "tool_status").to_mcp_result()
+        request_id = build_memory_request_id()
+        started_at = time.perf_counter()
+        memory_log_kv(
+            "memory_status_handler_start",
+            request_id=request_id,
+            pid=os.getpid(),
+            palace_path=mempalace_palace_path(),
+        )
+        try:
+            result = call_mempalace_tool(
+                "memory_status",
+                "status",
+                "tool_status",
+                request_id=request_id,
+            )
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            memory_log_kv(
+                "memory_status_handler_end",
+                request_id=request_id,
+                pid=os.getpid(),
+                duration_ms=duration_ms,
+                status=result.status.value,
+                result_count=result.artifacts.count,
+                message=result.artifacts.message,
+            )
+            payload = result.to_mcp_result()
+            memory_log_kv(
+                "memory_status_handler_return",
+                request_id=request_id,
+                pid=os.getpid(),
+                payload_status=payload.get("status"),
+                payload_keys=",".join(sorted(payload.keys())),
+                artifacts_count=payload.get("artifacts", {}).get("count"),
+            )
+            return payload
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            memory_log_kv(
+                "memory_status_handler_error",
+                request_id=request_id,
+                pid=os.getpid(),
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise
 
     @app.tool(name="memory_list_wings", description=descriptions["memory_list_wings"], structured_output=True)
     def memory_list_wings(schema_version: str = "1.0") -> dict[str, Any]:

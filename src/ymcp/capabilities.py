@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,7 +110,7 @@ Ymcp 默认使用 stdio 传输，并以 MCP-first 能力边界集成到 Trae、C
 
 - 宿主应优先发现并消费 Tools / Resources / Prompts 三类能力，而不是只读取 Markdown 文档。
 - 规则、参考和协议上下文从 `resource://ymcp/*` 读取。
-- 可复用 workflow 话术从 Prompt 获取，再由宿主决定是否展示或调用 Tool。
+- 可复用 workflow 话术从 Prompt 获取，再由宿主决定是否展示或调用 Tool；例如 `ralplan_consensus` 用于总入口，`ralplan_planner_pass` / `ralplan_architect_pass` / `ralplan_critic_pass` 用于三角色 phase prompt。
 - 如果客户端支持 Elicitation，必须处理服务器发起的表单/选择请求。
 - 如果客户端不支持 Elicitation，不要伪造用户输入；只根据 Tool 返回的标准结构化结果继续。
 """
@@ -164,6 +165,9 @@ PROMPT_SPECS: tuple[PromptSpec, ...] = (
     PromptSpec("deep_interview_clarify", "Deep Interview Clarify", "启动需求澄清的可复用调用模板。", ("brief",)),
     PromptSpec("plan_direct", "Plan Direct", "明确任务的直接计划模板。", ("task",)),
     PromptSpec("ralplan_consensus", "Ralplan Consensus", "高风险/架构型共识规划模板。", ("task",)),
+    PromptSpec("ralplan_planner_pass", "Ralplan Planner Pass", "以 Planner 视角起草 ralplan 共识方案。", ("task", "deliberate", "constraints")),
+    PromptSpec("ralplan_architect_pass", "Ralplan Architect Pass", "以 Architect 视角审查 ralplan draft。", ("task", "planner_draft", "deliberate")),
+    PromptSpec("ralplan_critic_pass", "Ralplan Critic Pass", "以 Critic 视角评估 ralplan draft 与 architect feedback。", ("task", "planner_draft", "architect_feedback", "deliberate")),
     PromptSpec("ralph_verify", "Ralph Verify", "执行后证据判断和继续/修复/完成决策模板。", ("approved_plan", "latest_evidence")),
     PromptSpec("memory_store_after_completion", "Memory Store After Completion", "任务结束后沉淀长期记忆模板。", ("summary",)),
 )
@@ -171,6 +175,20 @@ PROMPT_SPECS: tuple[PromptSpec, ...] = (
 
 def get_prompt_specs() -> tuple[PromptSpec, ...]:
     return PROMPT_SPECS
+
+
+def _render_prompt_value(value: Any, placeholder: str) -> str:
+    if value is None:
+        return placeholder
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or placeholder
+    if isinstance(value, (list, tuple)):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return "\n".join(f"- {item}" for item in items) if items else "[]"
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
 
 
 def prompt_template(name: str, **kwargs: Any) -> str:
@@ -197,6 +215,41 @@ task: {task}
 current_phase: planner_draft
 
 流程：planner_draft → architect_review → critic_review。每轮只把真实评审结论传回工具；批准后再让用户选择 ralph / plan / memory_store。"""
+    if name == "ralplan_planner_pass":
+        task = kwargs.get("task") or "{task}"
+        deliberate = kwargs.get("deliberate")
+        constraints = _render_prompt_value(kwargs.get("constraints"), "{constraints}")
+        return f"""请以 Planner 视角推进 Ymcp 的 `ralplan` 共识规划：
+
+task: {task}
+deliberate: {deliberate if deliberate is not None else "{deliberate}"}
+constraints: {constraints}
+
+要求：先生成 Planner draft，再调用 `ralplan` 工具并传入 `current_phase=\"planner_draft\"`、真实的 `planner_draft` 内容，以及任何已知 constraints / memory_context。输出必须包含原则、决策驱动因素、可行选项、ADR 草案和测试策略。"""
+    if name == "ralplan_architect_pass":
+        task = kwargs.get("task") or "{task}"
+        planner_draft = kwargs.get("planner_draft") or "{planner_draft}"
+        deliberate = kwargs.get("deliberate")
+        return f"""请以 Architect 视角审查 Ymcp 的 ralplan draft：
+
+task: {task}
+planner_draft: {planner_draft}
+deliberate: {deliberate if deliberate is not None else "{deliberate}"}
+
+要求：给出最强反方观点、真实 tradeoff tension、边界/反例，以及可行 synthesis。完成后调用 `ralplan` 工具并传入 `current_phase=\"architect_review\"`、原始 `planner_draft` 和真实 `architect_feedback`。"""
+    if name == "ralplan_critic_pass":
+        task = kwargs.get("task") or "{task}"
+        planner_draft = kwargs.get("planner_draft") or "{planner_draft}"
+        architect_feedback = _render_prompt_value(kwargs.get("architect_feedback"), "{architect_feedback}")
+        deliberate = kwargs.get("deliberate")
+        return f"""请以 Critic 视角评估 Ymcp 的 ralplan 方案：
+
+task: {task}
+planner_draft: {planner_draft}
+architect_feedback: {architect_feedback}
+deliberate: {deliberate if deliberate is not None else "{deliberate}"}
+
+要求：检查原则-方案一致性、替代方案公平性、风险缓解清晰度、验收标准可测试性和验证步骤是否具体。完成后调用 `ralplan` 工具并传入 `current_phase=\"critic_review\"`、原始 `planner_draft`、真实 `architect_feedback`、`critic_feedback`，必要时显式给出 `critic_verdict`。"""
     if name == "ralph_verify":
         approved_plan = kwargs.get("approved_plan") or "{approved_plan}"
         latest_evidence = kwargs.get("latest_evidence") or "{latest_evidence}"

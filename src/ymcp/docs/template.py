@@ -3,15 +3,9 @@ TRAE_PROJECT_RULE_TEMPLATE = """
 
 ## 记忆规则
 
-- 需要历史事实、项目约定、偏好、决策或上下文时，先用 `memory_status` / `memory_search` / `memory_get` 核验；不要凭印象猜。
+- 唤醒或恢复上下文时，先用 `memory_status` 查看记忆库概览。
+- 需要历史事实、项目约定、偏好、决策或上下文时，先用 `memory_search` / `memory_get` 核验；不要凭印象猜。
 - 任务结束后，如有稳定偏好、项目约定、重要决策或踩坑结论，先查重，再用 `memory_store` / `memory_diary_write` 保存；旧事实变化时用 `memory_update`、`memory_delete`、`memory_kg_invalidate`、`memory_kg_add` 维护。
-
-## 推荐 workflow
-
-- 需求不清晰：`deep_interview`
-- 明确任务直接计划：`plan`
-- 高风险或架构型共识规划：`ralplan`
-- 执行后证据判断：`ralph`
 
 ## deep_interview 结束规则
 

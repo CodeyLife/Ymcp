@@ -55,6 +55,9 @@ Ymcp 的第一原则是：所有能力优先按 FastMCP / MCP 官方三原语组
 - `deep_interview_clarify`
 - `plan_direct`
 - `ralplan_consensus`
+- `ralplan_planner_pass`
+- `ralplan_architect_pass`
+- `ralplan_critic_pass`
 - `ralph_verify`
 - `memory_store_after_completion`
 

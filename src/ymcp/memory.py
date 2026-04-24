@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib
 import inspect
+import logging
 import os
 import sys
+import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -13,6 +17,69 @@ from ymcp.contracts.memory import DEFAULT_MEMORY_ROOM, DEFAULT_MEMORY_WING, Memo
 from ymcp.core.result import build_meta, build_next_action, build_risk
 
 MEMORY_HOST_CONTROLS = ["调用", "展示", "后续决策", "权限控制", "敏感信息判断"]
+LOGGER = logging.getLogger("ymcp.memory")
+TRACE_MEMORY_ENV = "YMCP_TRACE_MEMORY"
+
+
+def memory_trace_enabled() -> bool:
+    value = os.getenv(TRACE_MEMORY_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on", "debug"}
+
+
+def memory_log_kv(event: str, **fields: Any) -> None:
+    if not memory_trace_enabled():
+        return
+    payload = {"event": event, **fields}
+    parts = []
+    for key, value in payload.items():
+        if value is None:
+            continue
+        text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+        if any(ch.isspace() for ch in text):
+            text = repr(text)
+        parts.append(f"{key}={text}")
+    LOGGER.info(" ".join(parts))
+
+
+def build_memory_request_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _preview_text(value: Any, limit: int = 80) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text[:limit]
+    return text + ("…" if len(str(value).strip()) > limit else "")
+
+
+def _short_hash(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return None
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+
+
+def _safe_payload_summary(kwargs: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in ("query", "content", "context"):
+        value = kwargs.get(key)
+        if value is None:
+            continue
+        payload[f"{key}_length"] = len(str(value))
+        payload[f"{key}_hash"] = _short_hash(value)
+        preview = _preview_text(value)
+        if preview is not None:
+            payload[f"{key}_preview"] = preview
+    for key in ("limit", "max_distance", "min_similarity", "source_file", "added_by", "drawer_id"):
+        value = kwargs.get(key)
+        if value is not None:
+            payload[key] = value
+    return payload
 
 
 @contextlib.contextmanager
@@ -164,16 +231,91 @@ def capability_blocked(tool_name: str, operation: str, function_name: str) -> Me
     )
 
 
-def call_mempalace_tool(tool_name: str, operation: str, function_name: str, *args: Any, wing: str | None = DEFAULT_MEMORY_WING, room: str | None = DEFAULT_MEMORY_ROOM, palace_path: str | None = None, **kwargs: Any) -> MemoryResult:
-    module = _mempalace_module(palace_path)
-    fn: Callable[..., Any] | None = getattr(module, function_name, None)
-    if fn is None:
-        return capability_blocked(tool_name, operation, function_name)
-    sig = inspect.signature(fn)
-    accepts_var_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values())
-    if ("wing" in sig.parameters or accepts_var_kwargs) and "wing" not in kwargs and wing is not None:
-        kwargs["wing"] = wing
-    if ("room" in sig.parameters or accepts_var_kwargs) and "room" not in kwargs and room is not None:
-        kwargs["room"] = room
-    raw = fn(*args, **kwargs)
-    return memory_result(tool_name, operation, raw, wing=wing, room=room)
+def call_mempalace_tool(tool_name: str, operation: str, function_name: str, *args: Any, wing: str | None = DEFAULT_MEMORY_WING, room: str | None = DEFAULT_MEMORY_ROOM, palace_path: str | None = None, request_id: str | None = None, **kwargs: Any) -> MemoryResult:
+    resolved_palace_path = os.path.abspath(os.path.expanduser(palace_path)) if palace_path else mempalace_palace_path()
+    request_id = request_id or build_memory_request_id()
+    pid = os.getpid()
+    started_at = time.perf_counter()
+    memory_log_kv(
+        "memory_call_start",
+        tool_name=tool_name,
+        operation=operation,
+        function_name=function_name,
+        request_id=request_id,
+        pid=pid,
+        palace_path=resolved_palace_path,
+        wing=wing,
+        room=room,
+        **_safe_payload_summary(kwargs),
+    )
+    try:
+        module = _mempalace_module(palace_path)
+        memory_log_kv(
+            "memory_module_ready",
+            tool_name=tool_name,
+            operation=operation,
+            request_id=request_id,
+            pid=pid,
+            module=getattr(module, "__name__", type(module).__name__),
+            palace_path=resolved_palace_path,
+        )
+        fn: Callable[..., Any] | None = getattr(module, function_name, None)
+        if fn is None:
+            result = capability_blocked(tool_name, operation, function_name)
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            memory_log_kv(
+                "memory_call_blocked",
+                tool_name=tool_name,
+                operation=operation,
+                request_id=request_id,
+                pid=pid,
+                duration_ms=duration_ms,
+                status=result.status.value,
+                error_type="missing_function",
+                error_message=function_name,
+            )
+            return result
+        sig = inspect.signature(fn)
+        accepts_var_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values())
+        memory_log_kv(
+            "memory_function_resolved",
+            tool_name=tool_name,
+            operation=operation,
+            request_id=request_id,
+            pid=pid,
+            function_name=function_name,
+            accepts_wing=("wing" in sig.parameters or accepts_var_kwargs),
+            accepts_room=("room" in sig.parameters or accepts_var_kwargs),
+        )
+        if ("wing" in sig.parameters or accepts_var_kwargs) and "wing" not in kwargs and wing is not None:
+            kwargs["wing"] = wing
+        if ("room" in sig.parameters or accepts_var_kwargs) and "room" not in kwargs and room is not None:
+            kwargs["room"] = room
+        raw = fn(*args, **kwargs)
+        result = memory_result(tool_name, operation, raw, wing=wing, room=room)
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        memory_log_kv(
+            "memory_call_end",
+            tool_name=tool_name,
+            operation=operation,
+            request_id=request_id,
+            pid=pid,
+            duration_ms=duration_ms,
+            status=result.status.value,
+            result_count=result.artifacts.count,
+            message=result.artifacts.message,
+        )
+        return result
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        memory_log_kv(
+            "memory_call_error",
+            tool_name=tool_name,
+            operation=operation,
+            request_id=request_id,
+            pid=pid,
+            duration_ms=duration_ms,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+        raise

@@ -1,5 +1,5 @@
 from ymcp.contracts.common import ToolStatus
-from ymcp.contracts.ralplan import AdrDraft, RalplanArtifacts, RalplanRequest, RalplanResult, ViableOption
+from ymcp.contracts.ralplan import AdrDraft, RalplanArtifacts, RalplanRequest, RalplanResult, RolePromptRef, ViableOption
 from ymcp.contracts.workflow import MemoryPreflight, WorkflowChoiceOption, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
@@ -59,8 +59,18 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
     phase = request.current_phase
     options = _options(request.deliberate)
     chosen_option = "状态机投影"
+    planner_prompt_ref = RolePromptRef(
+        name="ralplan_planner_pass",
+        arguments={
+            "task": request.task,
+            "deliberate": request.deliberate,
+            "constraints": request.constraints,
+        },
+    )
     architect_prompt = None
+    architect_prompt_ref = None
     critic_prompt = None
+    critic_prompt_ref = None
     revise = []
     critic_verdict = None
     approved_plan_summary = None
@@ -70,8 +80,25 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
     readiness = "in_progress"
     if phase == "planner_draft":
         architect_prompt = "请以 Architect 视角审查当前 favored option 的边界、反例和 tradeoff。"
+        architect_prompt_ref = RolePromptRef(
+            name="ralplan_architect_pass",
+            arguments={
+                "task": request.task,
+                "planner_draft": request.planner_draft or "",
+                "deliberate": request.deliberate,
+            },
+        )
     elif phase == "architect_review":
         critic_prompt = "请以 Critic 视角检查 plan 的清晰度、测试性、风险和验证步骤。"
+        critic_prompt_ref = RolePromptRef(
+            name="ralplan_critic_pass",
+            arguments={
+                "task": request.task,
+                "planner_draft": request.planner_draft or "",
+                "architect_feedback": request.architect_feedback,
+                "deliberate": request.deliberate,
+            },
+        )
     elif phase == "critic_review":
         critic_verdict = _detect_critic_verdict(request)
         if critic_verdict in {"REVISE", "REJECT"}:
@@ -131,8 +158,11 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
                 follow_ups=["批准后交给 ralph，或由用户选择 plan / memory_store。"],
             ),
             test_strategy=["单元测试各 phase 转移", "集成测试 Elicitation 能力分支", "客户端不支持 Elicitation 时返回标准降级结果"],
+            planner_prompt_ref=planner_prompt_ref,
             architect_review_prompt=architect_prompt,
+            architect_prompt_ref=architect_prompt_ref,
             critic_review_prompt=critic_prompt,
+            critic_prompt_ref=critic_prompt_ref,
             revise_instructions=revise,
             workflow_state=state,
             critic_verdict=critic_verdict,

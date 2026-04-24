@@ -23,6 +23,9 @@ EXPECTED_PROMPT_NAMES = {
     "deep_interview_clarify",
     "plan_direct",
     "ralplan_consensus",
+    "ralplan_planner_pass",
+    "ralplan_architect_pass",
+    "ralplan_critic_pass",
     "ralph_verify",
     "memory_store_after_completion",
 }
@@ -53,6 +56,9 @@ async def _exercise_app():
     prompt = await app.get_prompt("plan_direct", {"task": "测试 FastMCP 三原语"})
     assert "plan" in prompt.messages[0].content.text
     assert "测试 FastMCP 三原语" in prompt.messages[0].content.text
+    architect_prompt = await app.get_prompt("ralplan_architect_pass", {"task": "规划 Ymcp", "planner_draft": "draft"})
+    assert "Architect" in architect_prompt.messages[0].content.text
+    assert "planner_draft: draft" in architect_prompt.messages[0].content.text
     for name, args in FIXTURES.items():
         result = await app.call_tool(name, args)
         if isinstance(result, tuple):
@@ -151,6 +157,72 @@ def test_ralplan_approved_exposes_handoff_options():
         assert structured["artifacts"]["workflow_state"]["current_phase"] == "approved"
         assert {item["id"] for item in structured["artifacts"]["handoff_options"]} == {"ralph", "plan", "memory_store"}
         assert structured["artifacts"]["selected_next_tool"] is None
+    anyio.run(_run)
+
+
+def test_ralplan_phase_outputs_prompt_refs():
+    async def _run():
+        app = create_app()
+        planner_result = await app.call_tool(
+            "ralplan",
+            {
+                "task": "规划 Ymcp workflow refactor",
+                "current_phase": "planner_draft",
+                "planner_draft": "draft-v1",
+            },
+        )
+        planner_structured = planner_result[1] if isinstance(planner_result, tuple) else planner_result
+        assert planner_structured["artifacts"]["planner_prompt_ref"]["name"] == "ralplan_planner_pass"
+        assert planner_structured["artifacts"]["architect_prompt_ref"]["name"] == "ralplan_architect_pass"
+
+        architect_result = await app.call_tool(
+            "ralplan",
+            {
+                "task": "规划 Ymcp workflow refactor",
+                "current_phase": "architect_review",
+                "planner_draft": "draft-v1",
+                "architect_feedback": ["需要边界条件"],
+            },
+        )
+        architect_structured = architect_result[1] if isinstance(architect_result, tuple) else architect_result
+        assert architect_structured["artifacts"]["critic_prompt_ref"]["name"] == "ralplan_critic_pass"
+        assert architect_structured["artifacts"]["critic_prompt_ref"]["arguments"]["architect_feedback"] == ["需要边界条件"]
+
+    anyio.run(_run)
+
+
+def test_ralplan_prompt_refs_render_with_tool_returned_argument_shapes():
+    async def _run():
+        app = create_app()
+
+        planner_result = await app.call_tool(
+            "ralplan",
+            {
+                "task": "规划 Ymcp workflow refactor",
+                "current_phase": "planner_draft",
+            },
+        )
+        planner_structured = planner_result[1] if isinstance(planner_result, tuple) else planner_result
+        planner_ref = planner_structured["artifacts"]["planner_prompt_ref"]
+        planner_prompt = await app.get_prompt(planner_ref["name"], planner_ref["arguments"])
+        assert "Planner" in planner_prompt.messages[0].content.text
+        assert "constraints: []" in planner_prompt.messages[0].content.text
+
+        architect_result = await app.call_tool(
+            "ralplan",
+            {
+                "task": "规划 Ymcp workflow refactor",
+                "current_phase": "architect_review",
+                "planner_draft": "draft-v1",
+                "architect_feedback": ["需要边界条件"],
+            },
+        )
+        architect_structured = architect_result[1] if isinstance(architect_result, tuple) else architect_result
+        critic_ref = architect_structured["artifacts"]["critic_prompt_ref"]
+        critic_prompt = await app.get_prompt(critic_ref["name"], critic_ref["arguments"])
+        assert "Critic" in critic_prompt.messages[0].content.text
+        assert "- 需要边界条件" in critic_prompt.messages[0].content.text
+
     anyio.run(_run)
 
 

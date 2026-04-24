@@ -74,6 +74,9 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 - `deep_interview_clarify`：启动需求澄清。
 - `plan_direct`：明确任务的直接计划。
 - `ralplan_consensus`：高风险/架构型共识规划。
+- `ralplan_planner_pass`：以 Planner 视角起草 ralplan draft。
+- `ralplan_architect_pass`：以 Architect 视角审查 ralplan draft。
+- `ralplan_critic_pass`：以 Critic 视角评估 ralplan draft。
 - `ralph_verify`：执行后证据判断和继续/修复/完成决策。
 - `memory_store_after_completion`：任务结束后沉淀长期记忆。
 

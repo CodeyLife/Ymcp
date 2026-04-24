@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import sys
+import threading
 from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +19,7 @@ from ymcp.capabilities import get_prompt_specs, get_resource_specs
 from ymcp.fixtures import FIXTURES, fixture_for
 from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 from ymcp.internal_registry import get_tool_specs
-from ymcp.memory import mempalace_palace_path, mempalace_version
+from ymcp.memory import call_mempalace_tool, mempalace_palace_path, mempalace_version, memory_log_kv
 from ymcp.server import configure_logging, create_app
 
 
@@ -38,6 +39,45 @@ TRAE_HOST_CONFIG = {
         }
     }
 }
+
+
+def _memory_prewarm_enabled() -> bool:
+    value = os.getenv("YMCP_PREWARM_MEMORY", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def start_memory_prewarm_thread() -> None:
+    if not _memory_prewarm_enabled():
+        return
+
+    def _worker() -> None:
+        try:
+            memory_log_kv(
+                "memory_prewarm_start",
+                pid=os.getpid(),
+                palace_path=mempalace_palace_path(),
+            )
+            result = call_mempalace_tool(
+                "memory_status",
+                "status",
+                "tool_status",
+            )
+            memory_log_kv(
+                "memory_prewarm_end",
+                pid=os.getpid(),
+                status=result.status.value,
+                result_count=result.artifacts.count,
+                message=result.artifacts.message,
+            )
+        except Exception as exc:
+            memory_log_kv(
+                "memory_prewarm_error",
+                pid=os.getpid(),
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+
+    threading.Thread(target=_worker, name="ymcp-memory-prewarm", daemon=True).start()
 
 
 
@@ -261,7 +301,11 @@ def main(argv: list[str] | None = None) -> int:
     init_trae_cmd.add_argument("--project-root", help="项目根目录；默认是当前工作目录")
     init_trae_cmd.add_argument("--yes-project-rules", action="store_true", help="不询问，直接创建项目规则")
     init_trae_cmd.add_argument("--no-project-rules", action="store_true", help="不询问，跳过项目规则创建")
-    init_trae_cmd.add_argument("--overwrite-rules", action="store_true", help="项目规则已存在时覆盖写入")
+    init_trae_cmd.add_argument(
+        "--overwrite-rules",
+        action="store_true",
+        help="兼容旧参数；当前创建项目规则时默认会覆盖写入",
+    )
 
     fixture_cmd = subparsers.add_parser("call-fixture", help="调用内置确定性示例")
     fixture_cmd.add_argument("tool", choices=sorted(FIXTURES))
@@ -345,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
             answer = input("是否在当前项目的 .trae/rules/ 下创建 Ymcp 项目规则？[y/N] ")
             should_create_rules = parse_yes_no(answer)
         if should_create_rules:
-            rule_path = create_project_rules(args.project_root, overwrite=args.overwrite_rules)
+            rule_path = create_project_rules(args.project_root, overwrite=True)
             print(f"已创建/更新 Trae 项目规则：{rule_path}")
         else:
             print("已跳过项目规则创建。")
@@ -363,6 +407,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         level = getattr(logging, str(args.log_level).upper(), logging.ERROR)
         configure_logging(level)
+        memory_log_kv(
+            "ymcp_serve_start",
+            pid=os.getpid(),
+            ymcp_version=__version__,
+            python=sys.executable,
+            mempalace_version=mempalace_version(),
+            palace_path=mempalace_palace_path(),
+            log_level=str(args.log_level).upper(),
+        )
+        start_memory_prewarm_thread()
         create_app().run(transport="stdio")
         return 0
 

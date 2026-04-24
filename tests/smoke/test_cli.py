@@ -1,9 +1,10 @@
 import json
+from types import SimpleNamespace
 import subprocess
 import sys
 from pathlib import Path
 
-from ymcp.cli import doctor_payload, main, resolve_mempalace_dir
+from ymcp.cli import doctor_payload, main, resolve_mempalace_dir, start_memory_prewarm_thread
 
 WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
 MEMORY_NAMES = {
@@ -26,6 +27,9 @@ PROMPT_NAMES = {
     "deep_interview_clarify",
     "plan_direct",
     "ralplan_consensus",
+    "ralplan_planner_pass",
+    "ralplan_architect_pass",
+    "ralplan_critic_pass",
     "ralph_verify",
     "memory_store_after_completion",
 }
@@ -157,6 +161,26 @@ def test_init_trae_can_skip_rules_and_merge_existing_json(tmp_path, monkeypatch,
     assert "已跳过项目规则创建" in output
 
 
+def test_init_trae_overwrites_existing_rules_file_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_dir = tmp_path / "User"
+    project_root = tmp_path / "project"
+    rules_path = project_root / ".trae" / "rules" / "ymcp-workflow-rules.md"
+    rules_path.parent.mkdir(parents=True)
+    rules_path.write_text("# stale\n", encoding="utf-8")
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+
+    assert main([
+        "init-trae",
+        "--config-dir", str(config_dir),
+        "--project-root", str(project_root),
+    ]) == 0
+
+    assert rules_path.read_text(encoding="utf-8") != "# stale\n"
+    assert "Ymcp 项目规则模板" in rules_path.read_text(encoding="utf-8")
+
+
 def test_init_trae_accepts_underscore_and_typo_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -188,3 +212,32 @@ def test_init_trae_updates_doctor_palace_path(tmp_path, monkeypatch):
     ]) == 0
     payload = doctor_payload()
     assert payload["mempalace"]["palace_path"] == str(resolve_mempalace_dir(Path(tmp_path)))
+
+
+def test_start_memory_prewarm_thread_invokes_memory_status_when_enabled(monkeypatch):
+    captured = {}
+
+    class ImmediateThread:
+        def __init__(self, *, target, name, daemon):
+            captured["name"] = name
+            captured["daemon"] = daemon
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setenv("YMCP_PREWARM_MEMORY", "1")
+    monkeypatch.setattr("ymcp.cli.threading.Thread", ImmediateThread)
+    monkeypatch.setattr("ymcp.cli.mempalace_palace_path", lambda: r"C:\Users\BSTECH05\.yjj")
+    monkeypatch.setattr(
+        "ymcp.cli.call_mempalace_tool",
+        lambda *args, **kwargs: SimpleNamespace(
+            status=SimpleNamespace(value="ok"),
+            artifacts=SimpleNamespace(count=1, message=None),
+        ),
+    )
+
+    start_memory_prewarm_thread()
+
+    assert captured["name"] == "ymcp-memory-prewarm"
+    assert captured["daemon"] is True

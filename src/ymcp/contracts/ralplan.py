@@ -33,6 +33,11 @@ class AdrDraft(BaseModel):
     follow_ups: list[str]
 
 
+class RolePromptRef(BaseModel):
+    name: str
+    arguments: dict[str, str | bool | list[str] | None] = Field(default_factory=dict)
+
+
 class RalplanArtifacts(BaseModel):
     principles: list[str]
     decision_drivers: list[str]
@@ -40,8 +45,11 @@ class RalplanArtifacts(BaseModel):
     chosen_option: str
     adr: AdrDraft
     test_strategy: list[str]
+    planner_prompt_ref: RolePromptRef | None = None
     architect_review_prompt: str | None = None
+    architect_prompt_ref: RolePromptRef | None = None
     critic_review_prompt: str | None = None
+    critic_prompt_ref: RolePromptRef | None = None
     revise_instructions: list[str] = Field(default_factory=list)
     workflow_state: WorkflowState
     critic_verdict: str | None = None
