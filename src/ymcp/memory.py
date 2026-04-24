@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import json
 import logging
+import ntpath
 import os
 import subprocess
 import sys
@@ -269,8 +270,8 @@ def _derive_wing_from_project_root(project_root: Any) -> str | None:
     raw = str(project_root or "").strip()
     if not raw:
         return None
-    path = Path(raw).expanduser()
-    name = path.name or path.resolve().name
+    expanded = str(Path(raw).expanduser())
+    name = ntpath.basename(expanded.rstrip("\\/")) or Path(expanded).name
     return _slugify_wing(name)
 
 
