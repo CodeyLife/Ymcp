@@ -1,5 +1,6 @@
 import anyio
 
+from ymcp.memory import limit_memory_result_items
 from ymcp.server import DeepInterviewNextToolInput, RalplanNextToolInput, create_app
 
 EXPECTED_WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
@@ -288,16 +289,20 @@ def test_memory_result_limits_are_enforced(monkeypatch):
     import ymcp.server as server
     from ymcp.memory import memory_result
 
-    def fake_memory(tool_name, operation, function_name, *args, **kwargs):
+    def fake_memory(tool_name, **kwargs):
+        limit = kwargs.get("limit")
         if tool_name == "memory_graph_query":
-            return memory_result(tool_name, operation, {"results": [{"id": 1}, {"id": 2}, {"id": 3}]})
+            result = memory_result(tool_name, "graph_query", {"results": [{"id": 1}, {"id": 2}, {"id": 3}]})
+            return result if limit is None else limit_memory_result_items(result, limit)
         if tool_name == "memory_find_tunnels":
-            return memory_result(tool_name, operation, {"results": [{"id": "a"}, {"id": "b"}, {"id": "c"}]})
+            result = memory_result(tool_name, "find_tunnels", {"results": [{"id": "a"}, {"id": "b"}, {"id": "c"}]})
+            return result if limit is None else limit_memory_result_items(result, limit)
         if tool_name == "memory_kg_timeline":
-            return memory_result(tool_name, operation, {"results": [{"t": 1}, {"t": 2}, {"t": 3}]})
-        return memory_result(tool_name, operation, {})
+            result = memory_result(tool_name, "kg_timeline", {"results": [{"t": 1}, {"t": 2}, {"t": 3}]})
+            return result if limit is None else limit_memory_result_items(result, limit)
+        return memory_result(tool_name, "unknown", {})
 
-    monkeypatch.setattr(server, "call_mempalace_tool", fake_memory)
+    monkeypatch.setattr(server, "execute_memory_operation", fake_memory)
 
     async def _run():
         app = create_app()

@@ -2,6 +2,8 @@
 
 Ymcp 默认使用 stdio 传输，并优先优化 Trae 的 MCP 工具调用体验。
 
+对于长期记忆能力，Ymcp 会进一步通过 `python -m mempalace.mcp_server` 调用 MemPalace 的 MCP 服务；宿主只需要接入 Ymcp，无需再单独实现 MemPalace 的双路径兼容。
+
 推荐的本地服务器配置：
 
 ```json

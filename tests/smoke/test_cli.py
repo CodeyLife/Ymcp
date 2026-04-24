@@ -1,10 +1,9 @@
 import json
-from types import SimpleNamespace
 import subprocess
 import sys
 from pathlib import Path
 
-from ymcp.cli import doctor_payload, main, resolve_mempalace_dir, start_memory_prewarm_thread
+from ymcp.cli import doctor_payload, main, resolve_mempalace_dir
 
 WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
 MEMORY_NAMES = {
@@ -212,32 +211,3 @@ def test_init_trae_updates_doctor_palace_path(tmp_path, monkeypatch):
     ]) == 0
     payload = doctor_payload()
     assert payload["mempalace"]["palace_path"] == str(resolve_mempalace_dir(Path(tmp_path)))
-
-
-def test_start_memory_prewarm_thread_invokes_memory_status_when_enabled(monkeypatch):
-    captured = {}
-
-    class ImmediateThread:
-        def __init__(self, *, target, name, daemon):
-            captured["name"] = name
-            captured["daemon"] = daemon
-            self._target = target
-
-        def start(self):
-            self._target()
-
-    monkeypatch.setenv("YMCP_PREWARM_MEMORY", "1")
-    monkeypatch.setattr("ymcp.cli.threading.Thread", ImmediateThread)
-    monkeypatch.setattr("ymcp.cli.mempalace_palace_path", lambda: r"C:\Users\BSTECH05\.yjj")
-    monkeypatch.setattr(
-        "ymcp.cli.call_mempalace_tool",
-        lambda *args, **kwargs: SimpleNamespace(
-            status=SimpleNamespace(value="ok"),
-            artifacts=SimpleNamespace(count=1, message=None),
-        ),
-    )
-
-    start_memory_prewarm_thread()
-
-    assert captured["name"] == "ymcp-memory-prewarm"
-    assert captured["daemon"] is True

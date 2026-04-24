@@ -8,7 +8,6 @@ import os
 import platform
 import shutil
 import sys
-import threading
 from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +18,7 @@ from ymcp.capabilities import get_prompt_specs, get_resource_specs
 from ymcp.fixtures import FIXTURES, fixture_for
 from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 from ymcp.internal_registry import get_tool_specs
-from ymcp.memory import call_mempalace_tool, mempalace_palace_path, mempalace_version, memory_log_kv
+from ymcp.memory import mempalace_palace_path, mempalace_version, memory_log_kv
 from ymcp.server import configure_logging, create_app
 
 
@@ -39,45 +38,6 @@ TRAE_HOST_CONFIG = {
         }
     }
 }
-
-
-def _memory_prewarm_enabled() -> bool:
-    value = os.getenv("YMCP_PREWARM_MEMORY", "1").strip().lower()
-    return value not in {"0", "false", "no", "off"}
-
-
-def start_memory_prewarm_thread() -> None:
-    if not _memory_prewarm_enabled():
-        return
-
-    def _worker() -> None:
-        try:
-            memory_log_kv(
-                "memory_prewarm_start",
-                pid=os.getpid(),
-                palace_path=mempalace_palace_path(),
-            )
-            result = call_mempalace_tool(
-                "memory_status",
-                "status",
-                "tool_status",
-            )
-            memory_log_kv(
-                "memory_prewarm_end",
-                pid=os.getpid(),
-                status=result.status.value,
-                result_count=result.artifacts.count,
-                message=result.artifacts.message,
-            )
-        except Exception as exc:
-            memory_log_kv(
-                "memory_prewarm_error",
-                pid=os.getpid(),
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-
-    threading.Thread(target=_worker, name="ymcp-memory-prewarm", daemon=True).start()
 
 
 
@@ -416,7 +376,6 @@ def main(argv: list[str] | None = None) -> int:
             palace_path=mempalace_palace_path(),
             log_level=str(args.log_level).upper(),
         )
-        start_memory_prewarm_thread()
         create_app().run(transport="stdio")
         return 0
 

@@ -20,6 +20,8 @@ Ymcp 的第一原则是 FastMCP-first：所有能力按 **Tools / Resources / Pr
 
 默认记忆空间：`wing="personal"`、`room="ymcp"`。
 
+Ymcp 的记忆工具统一通过 MemPalace MCP 服务执行。
+
 ## Memory Protocol
 
 宿主和大模型应把 MemPalace 当作“先核验再作答”的长期记忆层，而不是普通文本仓库：
@@ -43,7 +45,7 @@ Ymcp 的第一原则是 FastMCP-first：所有能力按 **Tools / Resources / Pr
 查看记忆库状态、wing/room 分布和 taxonomy。
 
 ## memory_check_duplicate / memory_reconnect
-检查重复内容，或刷新 MemPalace 连接和缓存。
+检查重复内容，或刷新 Ymcp 到 MemPalace MCP 服务的连接状态。
 
 ## memory_graph_stats / memory_graph_query / memory_graph_traverse
 查看或遍历 MemPalace 图谱能力。
@@ -131,4 +133,4 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 - `failed`：检索是否失败
 - `query`：检索查询词
 
-旧的 `known_context` 文本摘要仍兼容，但仅作为 legacy path。
+旧的 `known_context` 文本摘要仍兼容，但推荐优先使用结构化 `memory_context`。

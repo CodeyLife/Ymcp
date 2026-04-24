@@ -22,10 +22,11 @@ from ymcp.engine.ralplan import build_ralplan
 from ymcp.engine.ralph import build_ralph
 from ymcp.memory import (
     build_memory_request_id,
-    call_mempalace_tool,
-    limit_memory_result_items,
+    execute_memory_operation,
     memory_log_kv,
+    memory_result_to_mcp_payload,
     mempalace_palace_path,
+    run_memory_search_operation,
 )
 from ymcp.internal_registry import get_tool_specs
 
@@ -339,6 +340,9 @@ def create_app() -> FastMCP:
 
     prompt_descriptions = {spec.name: spec.description for spec in get_prompt_specs()}
 
+    def _memory_payload(tool_name: str, **kwargs: Any) -> dict[str, Any]:
+        return execute_memory_operation(tool_name, **kwargs).to_mcp_result()
+
     @app.prompt(name="deep_interview_clarify", title="Deep Interview Clarify", description=prompt_descriptions["deep_interview_clarify"])
     def deep_interview_clarify(brief: str = "{brief}") -> str:
         return prompt_template("deep_interview_clarify", brief=brief)
@@ -395,7 +399,7 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_store", description=descriptions["memory_store"], structured_output=True)
     def memory_store(content: str, wing: str = "personal", room: str = "ymcp", source_file: str | None = None, added_by: str = "ymcp", schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_store", "store", "tool_add_drawer", wing=wing, room=room, content=content, source_file=source_file, added_by=added_by).to_mcp_result()
+        return _memory_payload("memory_store", wing=wing, room=room, content=content, source_file=source_file, added_by=added_by)
 
     @app.tool(name="memory_search", description=descriptions["memory_search"], structured_output=True)
     def memory_search(query: str, limit: int = 5, wing: str | None = "personal", room: str | None = None, max_distance: float = 1.5, min_similarity: float | None = None, context: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
@@ -415,10 +419,7 @@ def create_app() -> FastMCP:
             context_length=(len(context) if context else 0),
         )
         try:
-            result = call_mempalace_tool(
-                "memory_search",
-                "search",
-                "tool_search",
+            result = run_memory_search_operation(
                 query=query,
                 limit=limit,
                 wing=wing,
@@ -428,26 +429,12 @@ def create_app() -> FastMCP:
                 context=context,
                 request_id=request_id,
             )
-            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-            memory_log_kv(
-                "memory_search_handler_end",
+            return memory_result_to_mcp_payload(
+                result,
+                handler_name="memory_search_handler",
                 request_id=request_id,
-                pid=os.getpid(),
-                duration_ms=duration_ms,
-                status=result.status.value,
-                result_count=result.artifacts.count,
-                message=result.artifacts.message,
+                started_at=started_at,
             )
-            payload = result.to_mcp_result()
-            memory_log_kv(
-                "memory_search_handler_return",
-                request_id=request_id,
-                pid=os.getpid(),
-                payload_status=payload.get("status"),
-                payload_keys=",".join(sorted(payload.keys())),
-                artifacts_count=payload.get("artifacts", {}).get("count"),
-            )
-            return payload
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
             memory_log_kv(
@@ -462,15 +449,15 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_get", description=descriptions["memory_get"], structured_output=True)
     def memory_get(drawer_id: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_get", "get", "tool_get_drawer", drawer_id=drawer_id).to_mcp_result()
+        return _memory_payload("memory_get", drawer_id=drawer_id)
 
     @app.tool(name="memory_update", description=descriptions["memory_update"], structured_output=True)
     def memory_update(drawer_id: str, content: str | None = None, wing: str | None = None, room: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_update", "update", "tool_update_drawer", drawer_id=drawer_id, content=content, wing=wing, room=room).to_mcp_result()
+        return _memory_payload("memory_update", drawer_id=drawer_id, content=content, wing=wing, room=room)
 
     @app.tool(name="memory_delete", description=descriptions["memory_delete"], structured_output=True)
     def memory_delete(drawer_id: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_delete", "delete", "tool_delete_drawer", drawer_id=drawer_id).to_mcp_result()
+        return _memory_payload("memory_delete", drawer_id=drawer_id)
 
     @app.tool(name="memory_status", description=descriptions["memory_status"], structured_output=True)
     def memory_status(schema_version: str = "1.0") -> dict[str, Any]:
@@ -483,32 +470,13 @@ def create_app() -> FastMCP:
             palace_path=mempalace_palace_path(),
         )
         try:
-            result = call_mempalace_tool(
-                "memory_status",
-                "status",
-                "tool_status",
+            result = execute_memory_operation("memory_status", request_id=request_id)
+            return memory_result_to_mcp_payload(
+                result,
+                handler_name="memory_status_handler",
                 request_id=request_id,
+                started_at=started_at,
             )
-            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-            memory_log_kv(
-                "memory_status_handler_end",
-                request_id=request_id,
-                pid=os.getpid(),
-                duration_ms=duration_ms,
-                status=result.status.value,
-                result_count=result.artifacts.count,
-                message=result.artifacts.message,
-            )
-            payload = result.to_mcp_result()
-            memory_log_kv(
-                "memory_status_handler_return",
-                request_id=request_id,
-                pid=os.getpid(),
-                payload_status=payload.get("status"),
-                payload_keys=",".join(sorted(payload.keys())),
-                artifacts_count=payload.get("artifacts", {}).get("count"),
-            )
-            return payload
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
             memory_log_kv(
@@ -523,77 +491,74 @@ def create_app() -> FastMCP:
 
     @app.tool(name="memory_list_wings", description=descriptions["memory_list_wings"], structured_output=True)
     def memory_list_wings(schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_list_wings", "list_wings", "tool_list_wings").to_mcp_result()
+        return _memory_payload("memory_list_wings")
 
     @app.tool(name="memory_list_rooms", description=descriptions["memory_list_rooms"], structured_output=True)
     def memory_list_rooms(wing: str | None = "personal", schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_list_rooms", "list_rooms", "tool_list_rooms", wing=wing, room=None).to_mcp_result()
+        return _memory_payload("memory_list_rooms", wing=wing, room=None)
 
     @app.tool(name="memory_taxonomy", description=descriptions["memory_taxonomy"], structured_output=True)
     def memory_taxonomy(schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_taxonomy", "taxonomy", "tool_get_taxonomy").to_mcp_result()
+        return _memory_payload("memory_taxonomy")
 
     @app.tool(name="memory_check_duplicate", description=descriptions["memory_check_duplicate"], structured_output=True)
     def memory_check_duplicate(content: str, wing: str = "personal", room: str = "ymcp", schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_check_duplicate", "check_duplicate", "tool_check_duplicate", content=content, wing=wing, room=room).to_mcp_result()
+        return _memory_payload("memory_check_duplicate", content=content, wing=wing, room=room)
 
     @app.tool(name="memory_reconnect", description=descriptions["memory_reconnect"], structured_output=True)
     def memory_reconnect(schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_reconnect", "reconnect", "tool_reconnect").to_mcp_result()
+        return _memory_payload("memory_reconnect")
 
     @app.tool(name="memory_graph_stats", description=descriptions["memory_graph_stats"], structured_output=True)
     def memory_graph_stats(schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_graph_stats", "graph_stats", "tool_graph_stats").to_mcp_result()
+        return _memory_payload("memory_graph_stats")
 
     @app.tool(name="memory_graph_query", description=descriptions["memory_graph_query"], structured_output=True)
     def memory_graph_query(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        result = call_mempalace_tool("memory_graph_query", "graph_query", "tool_kg_query", entity=query)
-        return limit_memory_result_items(result, limit).to_mcp_result()
+        return _memory_payload("memory_graph_query", entity=query, limit=limit)
 
     @app.tool(name="memory_graph_traverse", description=descriptions["memory_graph_traverse"], structured_output=True)
     def memory_graph_traverse(start: str, depth: int = 2, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_graph_traverse", "graph_traverse", "tool_traverse_graph", start_room=start, max_hops=depth).to_mcp_result()
+        return _memory_payload("memory_graph_traverse", start_room=start, max_hops=depth)
 
     @app.tool(name="memory_kg_add", description=descriptions["memory_kg_add"], structured_output=True)
     def memory_kg_add(subject: str, predicate: str, object: str, source: str | None = "ymcp", schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_kg_add", "kg_add", "tool_kg_add", subject=subject, predicate=predicate, object=object, source_closet=source).to_mcp_result()
+        return _memory_payload("memory_kg_add", subject=subject, predicate=predicate, object=object, source_closet=source)
 
     @app.tool(name="memory_kg_timeline", description=descriptions["memory_kg_timeline"], structured_output=True)
     def memory_kg_timeline(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        result = call_mempalace_tool("memory_kg_timeline", "kg_timeline", "tool_kg_timeline", entity=query)
-        return limit_memory_result_items(result, limit).to_mcp_result()
+        return _memory_payload("memory_kg_timeline", entity=query, limit=limit)
 
     @app.tool(name="memory_kg_invalidate", description=descriptions["memory_kg_invalidate"], structured_output=True)
     def memory_kg_invalidate(subject: str, predicate: str, object: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_kg_invalidate", "kg_invalidate", "tool_kg_invalidate", subject=subject, predicate=predicate, object=object).to_mcp_result()
+        return _memory_payload("memory_kg_invalidate", subject=subject, predicate=predicate, object=object)
 
     @app.tool(name="memory_create_tunnel", description=descriptions["memory_create_tunnel"], structured_output=True)
     def memory_create_tunnel(source: str, target: str, relationship: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_create_tunnel", "create_tunnel", "tool_create_tunnel", source_wing="personal", source_room=source, target_wing="personal", target_room=target, label=relationship or "").to_mcp_result()
+        return _memory_payload("memory_create_tunnel", source_wing="personal", source_room=source, target_wing="personal", target_room=target, label=relationship or "")
 
     @app.tool(name="memory_list_tunnels", description=descriptions["memory_list_tunnels"], structured_output=True)
     def memory_list_tunnels(schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_list_tunnels", "list_tunnels", "tool_list_tunnels").to_mcp_result()
+        return _memory_payload("memory_list_tunnels")
 
     @app.tool(name="memory_find_tunnels", description=descriptions["memory_find_tunnels"], structured_output=True)
     def memory_find_tunnels(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        result = call_mempalace_tool("memory_find_tunnels", "find_tunnels", "tool_find_tunnels", wing_a=query)
-        return limit_memory_result_items(result, limit).to_mcp_result()
+        return _memory_payload("memory_find_tunnels", wing_a=query, limit=limit)
 
     @app.tool(name="memory_follow_tunnels", description=descriptions["memory_follow_tunnels"], structured_output=True)
     def memory_follow_tunnels(start: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_follow_tunnels", "follow_tunnels", "tool_follow_tunnels", wing="personal", room=start).to_mcp_result()
+        return _memory_payload("memory_follow_tunnels", wing="personal", room=start)
 
     @app.tool(name="memory_delete_tunnel", description=descriptions["memory_delete_tunnel"], structured_output=True)
     def memory_delete_tunnel(tunnel_id: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_delete_tunnel", "delete_tunnel", "tool_delete_tunnel", tunnel_id=tunnel_id).to_mcp_result()
+        return _memory_payload("memory_delete_tunnel", tunnel_id=tunnel_id)
 
     @app.tool(name="memory_diary_write", description=descriptions["memory_diary_write"], structured_output=True)
     def memory_diary_write(entry: str, date: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_diary_write", "diary_write", "tool_diary_write", agent_name="ymcp", entry=entry, topic=date or "general").to_mcp_result()
+        return _memory_payload("memory_diary_write", agent_name="ymcp", entry=entry, topic=date or "general")
 
     @app.tool(name="memory_diary_read", description=descriptions["memory_diary_read"], structured_output=True)
     def memory_diary_read(limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return call_mempalace_tool("memory_diary_read", "diary_read", "tool_diary_read", agent_name="ymcp", last_n=limit).to_mcp_result()
+        return _memory_payload("memory_diary_read", agent_name="ymcp", last_n=limit)
 
     return app

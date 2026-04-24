@@ -86,6 +86,11 @@ Ymcp 不执行命令、不 spawn agent、不修改文件、不持久化循环。
 
 Ymcp 的记忆工具基于 MemPalace。默认使用 `~/.yjj` 作为记忆库目录，并写入全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
 
+当前记忆接入已经统一为 MCP-only：
+
+- Ymcp 通过 `python -m mempalace.mcp_server` 与 MemPalace 通信
+- 所有 `memory_*` 工具都经由 MemPalace MCP tool 调用完成
+
 ### Memory Protocol（建议宿主纳入固定协议）
 
 1. **唤醒时先看总览**：进入工作流、恢复历史任务或切换上下文时，先调用 `memory_status`。
