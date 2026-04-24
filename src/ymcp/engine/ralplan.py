@@ -30,10 +30,10 @@ HANDOFF_OPTIONS = [
         tool="plan",
     ),
     WorkflowChoiceOption(
-        id="memory_store",
-        label="写入 memory_store",
+        id="mempalace_add_drawer",
+        label="写入 mempalace_add_drawer",
         description="将规划摘要沉淀到长期记忆。",
-        tool="memory_store",
+        tool="mempalace_add_drawer",
     ),
 ]
 
@@ -110,7 +110,7 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
             phase = "approved"
             readiness = "ready_for_handoff"
             approved_plan_summary = f"已批准计划：{request.task}"
-            requested_input = "选择下一步 workflow：ralph / plan / memory_store；支持 Elicitation 的客户端应由服务器发起表单请求。"
+            requested_input = "选择下一步 workflow：ralph / plan / mempalace_add_drawer；支持 Elicitation 的客户端应由服务器发起表单请求。"
             handoff_options = HANDOFF_OPTIONS
     elif phase == "revise":
         phase = "architect_review"
@@ -119,7 +119,7 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
         phase = "handoff_to_ralph"
         readiness = "ready_for_handoff"
         approved_plan_summary = f"已批准计划：{request.task}"
-        requested_input = "选择下一步 workflow：ralph / plan / memory_store；支持 Elicitation 的客户端应由服务器发起表单请求。"
+        requested_input = "选择下一步 workflow：ralph / plan / mempalace_add_drawer；支持 Elicitation 的客户端应由服务器发起表单请求。"
         handoff_options = HANDOFF_OPTIONS
     state = WorkflowState(
         workflow_name="ralplan",
@@ -155,7 +155,7 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
                 drivers=["客户端可按标准能力实现交互", "避免自定义宿主协议", "便于跨客户端兼容"],
                 alternatives_considered=[o.name for o in options],
                 consequences=["需要用 Elicitation 替换自定义 interaction/continuation", "不支持 Elicitation 的客户端只能标准降级"],
-                follow_ups=["批准后交给 ralph，或由用户选择 plan / memory_store。"],
+                follow_ups=["批准后交给 ralph，或由用户选择 plan / mempalace_add_drawer。"],
             ),
             test_strategy=["单元测试各 phase 转移", "集成测试 Elicitation 能力分支", "客户端不支持 Elicitation 时返回标准降级结果"],
             planner_prompt_ref=planner_prompt_ref,

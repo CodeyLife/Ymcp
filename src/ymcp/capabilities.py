@@ -28,8 +28,8 @@ class PromptSpec:
 
 
 def _tool_reference_content() -> str:
-    workflow = [spec for spec in get_tool_specs() if not spec.name.startswith("memory_")]
-    memory = [spec for spec in get_tool_specs() if spec.name.startswith("memory_")]
+    workflow = [spec for spec in get_tool_specs() if not spec.name.startswith("mempalace_")]
+    memory = [spec for spec in get_tool_specs() if spec.name.startswith("mempalace_")]
     lines = [
         "# Ymcp MCP 能力参考：Tools",
         "",
@@ -56,7 +56,7 @@ def _memory_protocol_content() -> str:
             "",
             "## 写入与更新规则",
             "",
-            "- 写入前先用 `memory_search` 或 `memory_check_duplicate` 查重。",
+            "- 写入前先用 `mempalace_search` 或 `mempalace_check_duplicate` 查重。",
             "- 只保存稳定偏好、项目约定、重要决策和可复用踩坑结论。",
             "- 不保存密钥、隐私或未经确认的敏感信息。",
             "- 事实变化时优先更新/删除旧记忆或使 KG 关系失效，再写入新事实。",
@@ -198,7 +198,7 @@ def prompt_template(name: str, **kwargs: Any) -> str:
 
 brief: {brief}
 
-规则：先读取 `resource://ymcp/principles`；如涉及历史项目事实，先调用 `memory_search` 并把结果作为 memory_context。不要伪造用户回答；需要继续提问时使用工具返回的 next_question 或 MCP Elicitation。需求结晶后必须根据 `handoff_options` 展示结构化下一步菜单；在 `selected_next_tool` 缺失前不得自动调用 plan、ralplan 或 ralph，也不要用普通结束文案替代菜单。"""
+规则：先读取 `resource://ymcp/principles`；如涉及历史项目事实，先调用 `mempalace_search` 并把结果作为 memory_context。不要伪造用户回答；需要继续提问时使用工具返回的 next_question 或 MCP Elicitation。需求结晶后必须根据 `handoff_options` 展示结构化下一步菜单；在 `selected_next_tool` 缺失前不得自动调用 plan、ralplan 或 ralph，也不要用普通结束文案替代菜单。"""
     if name == "plan_direct":
         task = kwargs.get("task") or "{task}"
         return f"""请使用 Ymcp 的 `plan` 工具生成直接计划：
@@ -214,7 +214,7 @@ mode: direct
 task: {task}
 current_phase: planner_draft
 
-流程：planner_draft → architect_review → critic_review。每轮只把真实评审结论传回工具；批准后再让用户选择 ralph / plan / memory_store。"""
+流程：planner_draft → architect_review → critic_review。每轮只把真实评审结论传回工具；批准后再让用户选择 ralph / plan / mempalace_add_drawer。"""
     if name == "ralplan_planner_pass":
         task = kwargs.get("task") or "{task}"
         deliberate = kwargs.get("deliberate")
@@ -261,7 +261,7 @@ latest_evidence: {latest_evidence}
 规则：只依据真实证据判断 complete / needs_more_evidence / needs_verification_plan；不要伪造测试或执行结果。"""
     if name == "memory_store_after_completion":
         summary = kwargs.get("summary") or "{summary}"
-        return f"""任务完成后，请先用 `memory_search` 或 `memory_check_duplicate` 查重，再按需调用 `memory_store` 保存长期记忆：
+        return f"""任务完成后，请先用 `mempalace_search` 或 `mempalace_check_duplicate` 查重，再按需调用 `mempalace_add_drawer` 保存长期记忆：
 
 summary: {summary}
 

@@ -14,8 +14,8 @@ def test_docs_include_install_update_and_trae_example():
     assert "Trae" in readme
     assert "ymcp print-config --host trae" in trae
     assert "宿主边界" in trae
-    assert "memory_store" in reference
-    for name in ["plan", "ralplan", "deep_interview", "ralph", "memory_search", "memory_status"]:
+    assert "mempalace_add_drawer" in reference
+    for name in ["plan", "ralplan", "deep_interview", "ralph", "mempalace_search", "mempalace_status"]:
         assert name in reference
 
 
@@ -46,18 +46,17 @@ def test_trae_memory_prompt_guide_is_present():
     assert "记忆工具使用指南" in trae
     assert "Trae 可复制 prompt 示例" in trae
     assert "先查再写" in trae
-    assert "memory_store" in trae
-    assert "memory_search" in trae
-    assert "memory_get" in trae
-    assert "memory_update" in trae
-    assert "memory_delete" in trae
+    assert "mempalace_add_drawer" in trae
+    assert "mempalace_search" in trae
+    assert "mempalace_get_drawer" in trae
+    assert "mempalace_update_drawer" in trae
+    assert "mempalace_delete_drawer" in trae
     assert "记忆写入安全提醒" in trae
     assert "Trae 中常用记忆 prompt" in readme
     assert "Trae 调用建议" in reference
     assert "Memory Protocol" in trae
-    assert "memory_status" in trae
-    assert "memory_diary_write" in trae
-    assert "memory_kg_invalidate" in trae
+    assert "mempalace_diary_write" in trae
+    assert "mempalace_kg_invalidate" in trae
     assert "Memory Protocol" in readme
 
 
@@ -83,7 +82,7 @@ def test_trae_workflow_prompt_templates_present():
     assert "ralplan Architect → Critic 阶段模板" in trae
     assert "ralph 执行验证模板" in trae
     assert "完成后记忆沉淀模板" in trae
-    assert "deep_interview → ralplan → ralph → memory_store" in readme
+    assert "deep_interview → ralplan → ralph → mempalace_add_drawer" in readme
     assert "推荐组合链路" in reference
 
 
@@ -93,15 +92,14 @@ def test_memory_preflight_docs_present():
     reference = Path("docs/tool-reference.md").read_text(encoding="utf-8")
     assert "工作流开始前读取记忆" in trae
     assert "workflow_state.memory_preflight" in trae
-    assert "memory_search" in trae
+    assert "mempalace_search" in trae
     assert "known_context" in trae
     assert "memory_preflight" in reference
 
 
 def test_project_rule_template_contains_memory_protocol_rules():
     template = TRAE_PROJECT_RULE_TEMPLATE
-    assert "memory_status" in template
-    assert "memory_search" in template
-    assert "memory_diary_write" in template
-    assert "memory_kg_invalidate" in template
+    assert "mempalace_search" in template
+    assert "mempalace_diary_write" in template
+    assert "mempalace_kg_invalidate" in template
 

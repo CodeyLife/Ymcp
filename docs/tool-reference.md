@@ -26,37 +26,36 @@ Ymcp 的记忆工具统一通过 MemPalace MCP 服务执行。
 
 宿主和大模型应把 MemPalace 当作“先核验再作答”的长期记忆层，而不是普通文本仓库：
 
-- 唤醒、恢复上下文或进入工作流时，先调用 `memory_status` 读取记忆库概览。
-- 回答人物、项目、历史事件、过往决策或过去事实前，先调用 `memory_search`、`memory_get` 或图谱工具核验。
+- 回答人物、项目、历史事件、过往决策或过去事实前，先调用 `mempalace_search`、`mempalace_get_drawer` 或图谱工具核验。
 - 对事实不确定时，先说明需要查询记忆，再调用相关工具，禁止凭印象猜测。
-- 任务或会话结束后，将稳定偏好、项目约定、重要决策和踩坑结论写入 `memory_store` 或 `memory_diary_write`。
-- 已保存事实变化时，用 `memory_update`、`memory_delete`、`memory_kg_invalidate`、`memory_kg_add` 维护一致性。
+- 任务或会话结束后，将稳定偏好、项目约定、重要决策和踩坑结论写入 `mempalace_add_drawer` 或 `mempalace_diary_write`。
+- 已保存事实变化时，用 `mempalace_update_drawer`、`mempalace_delete_drawer`、`mempalace_kg_invalidate`、`mempalace_kg_add` 维护一致性。
 
-## memory_store
+## mempalace_add_drawer
 写入一条 MemPalace 长期记忆。
 
-## memory_search
+## mempalace_search
 从 MemPalace 中搜索长期记忆。
 
-## memory_get / memory_update / memory_delete
+## mempalace_get_drawer / mempalace_update_drawer / mempalace_delete_drawer
 通过 `drawer_id` 读取、更新或删除记忆。
 
-## memory_status / memory_list_wings / memory_list_rooms / memory_taxonomy
+## mempalace_status / mempalace_list_wings / mempalace_list_rooms / mempalace_get_taxonomy
 查看记忆库状态、wing/room 分布和 taxonomy。
 
-## memory_check_duplicate / memory_reconnect
+## mempalace_check_duplicate / mempalace_reconnect
 检查重复内容，或刷新 Ymcp 到 MemPalace MCP 服务的连接状态。
 
-## memory_graph_stats / memory_graph_query / memory_graph_traverse
+## mempalace_graph_stats / mempalace_kg_query / mempalace_traverse
 查看或遍历 MemPalace 图谱能力。
 
-## memory_kg_add / memory_kg_timeline / memory_kg_invalidate
+## mempalace_kg_add / mempalace_kg_timeline / mempalace_kg_invalidate
 写入、查询时间线或失效化知识图谱关系。
 
-## memory_create_tunnel / memory_list_tunnels / memory_find_tunnels / memory_follow_tunnels / memory_delete_tunnel
+## mempalace_create_tunnel / mempalace_list_tunnels / mempalace_find_tunnels / mempalace_follow_tunnels / mempalace_delete_tunnel
 管理 MemPalace tunnel 关系。
 
-## memory_diary_write / memory_diary_read
+## mempalace_diary_write / mempalace_diary_read
 写入或读取 MemPalace diary 条目。
 
 # Resources
@@ -84,11 +83,11 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 
 ## Trae 调用建议
 
-- 保存长期偏好：优先使用 `memory_store`。
-- 搜索历史上下文：优先使用 `memory_search`。
-- 维护已有记忆：搜索得到 `drawer_id` 后，再使用 `memory_get`、`memory_update` 或 `memory_delete`。
-- 写入前去重：重要结论保存前，可先调用 `memory_check_duplicate` 或 `memory_search`。
-- 查看记忆库状态：使用 `memory_status`、`memory_list_wings`、`memory_list_rooms`。
+- 保存长期偏好：优先使用 `mempalace_add_drawer`。
+- 搜索历史上下文：优先使用 `mempalace_search`。
+- 维护已有记忆：搜索得到 `drawer_id` 后，再使用 `mempalace_get_drawer`、`mempalace_update_drawer` 或 `mempalace_delete_drawer`。
+- 写入前去重：重要结论保存前，可先调用 `mempalace_check_duplicate` 或 `mempalace_search`。
+- 查看记忆库状态：使用 `mempalace_status`、`mempalace_list_wings`、`mempalace_list_rooms`。
 
 # 工作流状态机投影
 
@@ -116,14 +115,14 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 - `deep_interview → ralplan → ralph`：从模糊需求到批准计划再到执行验证。
 - `plan(mode="direct") → ralph`：明确任务的快速计划与验证循环。
 - `ralplan(current_phase="planner_draft") → ralplan(current_phase="architect_review") → ralplan(current_phase="critic_review")`：顺序模拟 Planner / Architect / Critic 视角。
-- `memory_search → memory_store`：任务完成后先查重再沉淀长期记忆。
+- `mempalace_search → mempalace_add_drawer`：任务完成后先查重再沉淀长期记忆。
 
 ## memory_preflight
 
-`deep_interview`、`plan`、`ralplan` 的 `workflow_state` 中会包含 `memory_preflight`。宿主应根据它判断是否在工作流开始前先调用 `memory_search`。
+`deep_interview`、`plan`、`ralplan` 的 `workflow_state` 中会包含 `memory_preflight`。宿主应根据它判断是否在工作流开始前先调用 `mempalace_search`。
 
 - `required=true`：建议先读取记忆
-- `query`：推荐传给 `memory_search` 的查询词
+- `query`：推荐传给 `mempalace_search` 的查询词
 - `already_satisfied=true`：说明本次调用已经提供了相关上下文
 
 新宿主推荐直接传结构化 `memory_context`：

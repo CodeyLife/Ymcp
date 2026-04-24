@@ -12,7 +12,7 @@ def build_ralph(request: RalphRequest) -> RalphResult:
     if request.current_phase == "complete":
         readiness = "complete"
         status = ToolStatus.OK
-        next_action = "选择下一步：memory_store / plan / finish；支持 Elicitation 的客户端应由服务器发起表单请求。"
+        next_action = "选择下一步：mempalace_add_drawer / plan / finish；支持 Elicitation 的客户端应由服务器发起表单请求。"
         judgement = "complete"
         missing = []
         requested_input = next_action

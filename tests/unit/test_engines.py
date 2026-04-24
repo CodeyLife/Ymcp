@@ -45,7 +45,7 @@ def test_deep_interview_engine_needs_input_until_gates_resolved():
     assert result.artifacts.next_question is not None
     assert result.artifacts.requested_input is not None
     assert result.artifacts.workflow_state.memory_preflight.required is True
-    assert result.artifacts.workflow_state.memory_preflight.suggested_tool == "memory_search"
+    assert result.artifacts.workflow_state.memory_preflight.suggested_tool == "mempalace_search"
 
 
 def test_deep_interview_engine_can_crystallize():
@@ -114,7 +114,7 @@ def test_ralplan_engine_approves_and_requests_standard_next_step():
     assert result.artifacts.workflow_state.current_phase == "approved"
     assert result.artifacts.approved_plan_summary is not None
     assert result.artifacts.requested_input is not None
-    assert {option.id for option in result.artifacts.handoff_options} == {"ralph", "plan", "memory_store"}
+    assert {option.id for option in result.artifacts.handoff_options} == {"ralph", "plan", "mempalace_add_drawer"}
     assert next(option for option in result.artifacts.handoff_options if option.id == "ralph").recommended is True
 
 

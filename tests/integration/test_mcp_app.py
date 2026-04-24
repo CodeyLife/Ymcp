@@ -1,17 +1,11 @@
 import anyio
 
+from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
 from ymcp.memory import limit_memory_result_items
 from ymcp.server import DeepInterviewNextToolInput, RalplanNextToolInput, create_app
 
 EXPECTED_WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
-EXPECTED_MEMORY_NAMES = {
-    "memory_store", "memory_search", "memory_get", "memory_update", "memory_delete",
-    "memory_status", "memory_list_wings", "memory_list_rooms", "memory_taxonomy",
-    "memory_check_duplicate", "memory_reconnect", "memory_graph_stats", "memory_graph_query",
-    "memory_graph_traverse", "memory_kg_add", "memory_kg_timeline", "memory_kg_invalidate",
-    "memory_create_tunnel", "memory_list_tunnels", "memory_find_tunnels", "memory_follow_tunnels",
-    "memory_delete_tunnel", "memory_diary_write", "memory_diary_read",
-}
+EXPECTED_MEMORY_NAMES = {tool["name"] for tool in MEMPALACE_TOOL_SCHEMAS}
 EXPECTED_NAMES = EXPECTED_WORKFLOW_NAMES | EXPECTED_MEMORY_NAMES
 EXPECTED_RESOURCE_URIS = {
     "resource://ymcp/principles",
@@ -36,8 +30,8 @@ FIXTURES = {
     "ralplan": {"task": "规划 Ymcp 状态机 refactor", "current_phase": "planner_draft"},
     "deep_interview": {"brief": "希望工作流工具更适合 Trae 使用", "prior_rounds": []},
     "ralph": {"approved_plan": "Implement workflow state machine", "latest_evidence": ["planner draft ready"], "verification_commands": ["python -m pytest"]},
-    "memory_status": {},
-    "memory_search": {"query": "Ymcp 发布流程", "limit": 2},
+    "mempalace_status": {},
+    "mempalace_search": {"query": "Ymcp 发布流程", "limit": 2},
 }
 
 
@@ -156,7 +150,7 @@ def test_ralplan_approved_exposes_handoff_options():
         )
         structured = result[1] if isinstance(result, tuple) else result
         assert structured["artifacts"]["workflow_state"]["current_phase"] == "approved"
-        assert {item["id"] for item in structured["artifacts"]["handoff_options"]} == {"ralph", "plan", "memory_store"}
+        assert {item["id"] for item in structured["artifacts"]["handoff_options"]} == {"ralph", "plan", "mempalace_add_drawer"}
         assert structured["artifacts"]["selected_next_tool"] is None
     anyio.run(_run)
 
@@ -233,7 +227,7 @@ def test_ralplan_elicitation_schema_uses_standard_single_choice_shape():
     assert next_tool["type"] == "string"
     assert next_tool["title"] == "下一步工作流"
     assert "oneOf" in next_tool
-    assert {item["const"] for item in next_tool["oneOf"]} == {"ralph", "plan", "memory_store"}
+    assert {item["const"] for item in next_tool["oneOf"]} == {"ralph", "plan", "mempalace_add_drawer"}
 
 
 
@@ -274,13 +268,15 @@ def test_workflows_accept_structured_memory_context():
     anyio.run(_run)
 
 
-def test_memory_tool_runtime_schema_matches_supported_parameters():
+def test_memory_tool_runtime_schema_matches_mempalace_parameters():
     async def _run():
         app = create_app()
         tools = {tool.name: tool for tool in await app.list_tools()}
-        assert "depth" not in tools["memory_follow_tunnels"].inputSchema["properties"]
-        assert "date" not in tools["memory_diary_read"].inputSchema["properties"]
-        assert "source" not in tools["memory_kg_invalidate"].inputSchema["properties"]
+        assert "start" not in tools["mempalace_follow_tunnels"].inputSchema["properties"]
+        assert "limit" not in tools["mempalace_diary_read"].inputSchema["properties"]
+        assert "source" not in tools["mempalace_kg_invalidate"].inputSchema["properties"]
+        assert "room" in tools["mempalace_follow_tunnels"].inputSchema["properties"]
+        assert "last_n" in tools["mempalace_diary_read"].inputSchema["properties"]
 
     anyio.run(_run)
 
@@ -291,23 +287,24 @@ def test_memory_result_limits_are_enforced(monkeypatch):
 
     def fake_memory(tool_name, **kwargs):
         limit = kwargs.get("limit")
-        if tool_name == "memory_graph_query":
-            result = memory_result(tool_name, "graph_query", {"results": [{"id": 1}, {"id": 2}, {"id": 3}]})
+        if tool_name == "mempalace_search":
+            result = memory_result(tool_name, tool_name, {"results": [{"id": 1}, {"id": 2}, {"id": 3}]})
             return result if limit is None else limit_memory_result_items(result, limit)
-        if tool_name == "memory_find_tunnels":
-            result = memory_result(tool_name, "find_tunnels", {"results": [{"id": "a"}, {"id": "b"}, {"id": "c"}]})
+        if tool_name == "mempalace_list_drawers":
+            result = memory_result(tool_name, tool_name, {"results": [{"id": "a"}, {"id": "b"}, {"id": "c"}]})
             return result if limit is None else limit_memory_result_items(result, limit)
-        if tool_name == "memory_kg_timeline":
-            result = memory_result(tool_name, "kg_timeline", {"results": [{"t": 1}, {"t": 2}, {"t": 3}]})
-            return result if limit is None else limit_memory_result_items(result, limit)
-        return memory_result(tool_name, "unknown", {})
+        return memory_result(tool_name, tool_name, {})
 
     monkeypatch.setattr(server, "execute_memory_operation", fake_memory)
 
     async def _run():
         app = create_app()
-        for name in ("memory_graph_query", "memory_find_tunnels", "memory_kg_timeline"):
-            result = await app.call_tool(name, {"query": "ymcp", "limit": 2})
+        calls = {
+            "mempalace_search": {"query": "ymcp", "limit": 2},
+            "mempalace_list_drawers": {"limit": 2},
+        }
+        for name, args in calls.items():
+            result = await app.call_tool(name, args)
             structured = result[1] if isinstance(result, tuple) else result
             assert structured["artifacts"]["count"] == 2
             assert len(structured["artifacts"]["items"]) == 2

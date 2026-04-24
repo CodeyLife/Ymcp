@@ -22,8 +22,8 @@ FIXTURES: dict[str, dict[str, Any]] = {
         "verification_commands": ["python -m pytest"],
         "current_status": "implementation in progress",
     },
-    "memory_status": {},
-    "memory_search": {"query": "Ymcp 发布流程", "limit": 3},
+    "mempalace_status": {},
+    "mempalace_search": {"query": "Ymcp 发布流程", "limit": 3},
 }
 
 

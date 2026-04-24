@@ -4,16 +4,10 @@ import sys
 from pathlib import Path
 
 from ymcp.cli import doctor_payload, main, resolve_mempalace_dir
+from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
 
 WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
-MEMORY_NAMES = {
-    "memory_store", "memory_search", "memory_get", "memory_update", "memory_delete",
-    "memory_status", "memory_list_wings", "memory_list_rooms", "memory_taxonomy",
-    "memory_check_duplicate", "memory_reconnect", "memory_graph_stats", "memory_graph_query",
-    "memory_graph_traverse", "memory_kg_add", "memory_kg_timeline", "memory_kg_invalidate",
-    "memory_create_tunnel", "memory_list_tunnels", "memory_find_tunnels", "memory_follow_tunnels",
-    "memory_delete_tunnel", "memory_diary_write", "memory_diary_read",
-}
+MEMORY_NAMES = {tool["name"] for tool in MEMPALACE_TOOL_SCHEMAS}
 EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
 RESOURCE_URIS = {
     "resource://ymcp/principles",
@@ -88,7 +82,7 @@ def test_print_config_for_trae(capsys):
 
 
 def test_call_fixture_json_for_all_tools(capsys):
-    for tool_name in ["plan", "ralplan", "deep_interview", "ralph", "memory_status", "memory_search"]:
+    for tool_name in ["plan", "ralplan", "deep_interview", "ralph", "mempalace_status", "mempalace_search"]:
         assert main(["call-fixture", tool_name, "--json"]) == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["meta"]["tool_name"] == tool_name
@@ -177,7 +171,7 @@ def test_init_trae_overwrites_existing_rules_file_by_default(tmp_path, monkeypat
     ]) == 0
 
     assert rules_path.read_text(encoding="utf-8") != "# stale\n"
-    assert "Ymcp 项目规则模板" in rules_path.read_text(encoding="utf-8")
+    assert "## 记忆规则" in rules_path.read_text(encoding="utf-8")
 
 
 def test_init_trae_accepts_underscore_and_typo_aliases(tmp_path, monkeypatch):

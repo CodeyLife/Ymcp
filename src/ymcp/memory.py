@@ -12,11 +12,10 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Any
 
 from ymcp.contracts.common import ToolStatus
-from ymcp.contracts.memory import DEFAULT_MEMORY_ROOM, DEFAULT_MEMORY_WING, MemoryArtifacts, MemoryResult
+from ymcp.contracts.memory import MemoryArtifacts, MemoryResult
 from ymcp.core.result import build_meta, build_next_action, build_risk
 
 MEMORY_HOST_CONTROLS = ["调用", "展示", "后续决策", "权限控制", "敏感信息判断"]
@@ -25,15 +24,6 @@ TRACE_MEMORY_ENV = "YMCP_TRACE_MEMORY"
 MEMPALACE_MCP_TIMEOUT_ENV = "YMCP_MEMPALACE_MCP_TIMEOUT_SECONDS"
 MEMPALACE_MCP_MODULE = "mempalace.mcp_server"
 DEFAULT_MCP_TIMEOUT_SECONDS = 15.0
-
-
-@dataclass(frozen=True)
-class MemoryOperationSpec:
-    tool_name: str
-    operation: str
-    function_name: str
-    default_limit_param: str | None = None
-
 
 class MempalaceRelayError(RuntimeError):
     """Base error for relay transport failures."""
@@ -293,39 +283,6 @@ def _mempalace_tool_name(function_name: str) -> str:
     return function_name
 
 
-MEMORY_OPERATION_SPECS: dict[str, MemoryOperationSpec] = {
-    "memory_store": MemoryOperationSpec("memory_store", "store", "tool_add_drawer"),
-    "memory_search": MemoryOperationSpec("memory_search", "search", "tool_search"),
-    "memory_get": MemoryOperationSpec("memory_get", "get", "tool_get_drawer"),
-    "memory_update": MemoryOperationSpec("memory_update", "update", "tool_update_drawer"),
-    "memory_delete": MemoryOperationSpec("memory_delete", "delete", "tool_delete_drawer"),
-    "memory_status": MemoryOperationSpec("memory_status", "status", "tool_status"),
-    "memory_list_wings": MemoryOperationSpec("memory_list_wings", "list_wings", "tool_list_wings"),
-    "memory_list_rooms": MemoryOperationSpec("memory_list_rooms", "list_rooms", "tool_list_rooms"),
-    "memory_taxonomy": MemoryOperationSpec("memory_taxonomy", "taxonomy", "tool_get_taxonomy"),
-    "memory_check_duplicate": MemoryOperationSpec("memory_check_duplicate", "check_duplicate", "tool_check_duplicate"),
-    "memory_reconnect": MemoryOperationSpec("memory_reconnect", "reconnect", "tool_reconnect"),
-    "memory_graph_stats": MemoryOperationSpec("memory_graph_stats", "graph_stats", "tool_graph_stats"),
-    "memory_graph_query": MemoryOperationSpec("memory_graph_query", "graph_query", "tool_kg_query", default_limit_param="limit"),
-    "memory_graph_traverse": MemoryOperationSpec("memory_graph_traverse", "graph_traverse", "tool_traverse_graph"),
-    "memory_kg_add": MemoryOperationSpec("memory_kg_add", "kg_add", "tool_kg_add"),
-    "memory_kg_timeline": MemoryOperationSpec("memory_kg_timeline", "kg_timeline", "tool_kg_timeline", default_limit_param="limit"),
-    "memory_kg_invalidate": MemoryOperationSpec("memory_kg_invalidate", "kg_invalidate", "tool_kg_invalidate"),
-    "memory_create_tunnel": MemoryOperationSpec("memory_create_tunnel", "create_tunnel", "tool_create_tunnel"),
-    "memory_list_tunnels": MemoryOperationSpec("memory_list_tunnels", "list_tunnels", "tool_list_tunnels"),
-    "memory_find_tunnels": MemoryOperationSpec("memory_find_tunnels", "find_tunnels", "tool_find_tunnels", default_limit_param="limit"),
-    "memory_follow_tunnels": MemoryOperationSpec("memory_follow_tunnels", "follow_tunnels", "tool_follow_tunnels"),
-    "memory_delete_tunnel": MemoryOperationSpec("memory_delete_tunnel", "delete_tunnel", "tool_delete_tunnel"),
-    "memory_diary_write": MemoryOperationSpec("memory_diary_write", "diary_write", "tool_diary_write"),
-    "memory_diary_read": MemoryOperationSpec("memory_diary_read", "diary_read", "tool_diary_read"),
-}
-
-
-def get_memory_operation_spec(tool_name: str) -> MemoryOperationSpec:
-    return MEMORY_OPERATION_SPECS[tool_name]
-
-
-
 def mempalace_version() -> str | None:
     try:
         version_module = importlib.import_module("mempalace.version")
@@ -345,12 +302,23 @@ def mempalace_palace_path() -> str | None:
 
 
 def _derive_items(operation: str, raw: dict[str, Any]) -> tuple[int, list[dict[str, Any]], str | None]:
-    if operation == "search":
+    if operation in {"search", "mempalace_search"}:
         results = raw.get("results") or raw.get("matches") or []
         count = len(results)
         message = "未找到相关记忆。" if count == 0 else f"找到 {count} 条相关记忆。"
         return count, results, message
-    if operation in {"list_wings", "list_rooms", "list_tunnels", "taxonomy", "status"}:
+    if operation in {
+        "list_wings",
+        "list_rooms",
+        "list_tunnels",
+        "taxonomy",
+        "status",
+        "mempalace_list_wings",
+        "mempalace_list_rooms",
+        "mempalace_list_tunnels",
+        "mempalace_get_taxonomy",
+        "mempalace_status",
+    }:
         for key in ("wings", "rooms", "tunnels"):
             value = raw.get(key)
             if isinstance(value, dict):
@@ -359,11 +327,12 @@ def _derive_items(operation: str, raw: dict[str, Any]) -> tuple[int, list[dict[s
             if isinstance(value, list):
                 return len(value), value, None
         return (raw.get("total_drawers") or 0), [], None
-    if operation in {"get", "update", "delete", "store", "check_duplicate", "reconnect", "graph_stats", "graph_query", "graph_traverse", "kg_add", "kg_timeline", "kg_invalidate", "create_tunnel", "find_tunnels", "follow_tunnels", "delete_tunnel", "diary_write", "diary_read"}:
-        if isinstance(raw, dict):
-            if "results" in raw and isinstance(raw["results"], list):
-                return len(raw["results"]), raw["results"], None
-            return (1 if raw else 0), ([raw] if raw else []), None
+    if isinstance(raw, dict):
+        if "results" in raw and isinstance(raw["results"], list):
+            return len(raw["results"]), raw["results"], None
+        if "tunnels" in raw and isinstance(raw["tunnels"], list):
+            return len(raw["tunnels"]), raw["tunnels"], None
+        return (1 if raw else 0), ([raw] if raw else []), None
     return 0, [], None
 
 
@@ -389,16 +358,11 @@ def _summary(operation: str, raw: dict[str, Any], status: ToolStatus) -> str:
         return f"记忆操作 {operation} 失败：{raw.get('error', '未知错误')}"
     if status is ToolStatus.BLOCKED:
         return f"记忆操作 {operation} 当前不可用。"
-    if operation == "store":
-        return f"已请求保存记忆：{raw.get('drawer_id', raw.get('entry_id', '未返回 ID'))}"
-    if operation == "search":
-        count = len(raw.get("results", raw.get("matches", []))) if isinstance(raw, dict) else 0
-        return f"已完成记忆搜索，返回 {count} 条候选结果。"
-    return f"已完成记忆操作：{operation}。"
+    return f"已完成 MemPalace 工具调用：{operation}。"
 
 
 
-def memory_result(tool_name: str, operation: str, raw: Any, *, wing: str | None = DEFAULT_MEMORY_WING, room: str | None = DEFAULT_MEMORY_ROOM) -> MemoryResult:
+def memory_result(tool_name: str, operation: str, raw: Any) -> MemoryResult:
     raw_dict = _normalize_raw(raw)
     status = _status_from_raw(raw_dict)
     count, items, message = _derive_items(operation, raw_dict)
@@ -409,7 +373,7 @@ def memory_result(tool_name: str, operation: str, raw: Any, *, wing: str | None 
         next_actions=[build_next_action("查看结果", "由宿主展示或继续处理 MemPalace 返回的原始结果。")],
         risks=[build_risk("记忆写入是持久化副作用。", "写入前应避免保存密钥、隐私或未经确认的敏感信息。")],
         meta=build_meta(tool_name, "ymcp.contracts.memory.MemoryResult", host_controls=MEMORY_HOST_CONTROLS),
-        artifacts=MemoryArtifacts(operation=operation, wing=wing, room=room, count=count, items=items, message=message, raw=raw_dict),
+        artifacts=MemoryArtifacts(operation=operation, count=count, items=items, message=message, raw=raw_dict),
     )
 
 
@@ -425,9 +389,6 @@ def limit_memory_result_items(result: MemoryResult, limit: int) -> MemoryResult:
             result.artifacts.raw["matches"] = result.artifacts.raw["matches"][:limit]
         if isinstance(result.artifacts.raw.get("tunnels"), list):
             result.artifacts.raw["tunnels"] = result.artifacts.raw["tunnels"][:limit]
-    if result.artifacts.operation == "search":
-        result.summary = f"已完成记忆搜索，返回 {len(limited_items)} 条候选结果。"
-        result.artifacts.message = "未找到相关记忆。" if not limited_items else f"找到 {len(limited_items)} 条相关记忆。"
     return result
 
 
@@ -438,7 +399,7 @@ def capability_blocked(tool_name: str, operation: str, function_name: str) -> Me
         summary=f"当前 MemPalace 版本未提供 {function_name}，无法执行 {operation}。",
         assumptions=["不同 MemPalace 版本可能提供不同高级能力。"],
         next_actions=[build_next_action("检查版本", "运行 ymcp doctor --json 查看 MemPalace 版本。")],
-        risks=[build_risk("高级能力不可用。", "升级 mempalace 或改用基础 memory_store/memory_search 工具。")],
+        risks=[build_risk("高级能力不可用。", "升级 mempalace 或改用基础 mempalace_add_drawer/mempalace_search 工具。")],
         meta=build_meta(tool_name, "ymcp.contracts.memory.MemoryResult", host_controls=MEMORY_HOST_CONTROLS),
         artifacts=MemoryArtifacts(operation=operation, raw={"blocked": True, "missing_function": function_name}),
     )
@@ -457,10 +418,7 @@ def _extract_mcp_content_text(result: dict[str, Any]) -> str:
 def _call_mempalace_tool_via_mcp(
     tool_name: str,
     operation: str,
-    function_name: str,
     *args: Any,
-    wing: str | None = DEFAULT_MEMORY_WING,
-    room: str | None = DEFAULT_MEMORY_ROOM,
     palace_path: str | None = None,
     request_id: str | None = None,
     **kwargs: Any,
@@ -469,12 +427,8 @@ def _call_mempalace_tool_via_mcp(
         raise TypeError("MCP relay transport only supports keyword arguments")
     resolved_palace_path = _normalize_palace_path(palace_path)
     request_id = request_id or build_memory_request_id()
-    mcp_tool_name = _mempalace_tool_name(function_name)
+    mcp_tool_name = tool_name
     tool_args = dict(kwargs)
-    if wing is not None and "wing" not in tool_args:
-        tool_args["wing"] = wing
-    if room is not None and "room" not in tool_args:
-        tool_args["room"] = room
     client = _get_mempalace_mcp_relay_client(resolved_palace_path)
     memory_log_kv(
         "memory_relay_tool_resolved",
@@ -490,7 +444,7 @@ def _call_mempalace_tool_via_mcp(
         raw = json.loads(text) if text else {}
     except json.JSONDecodeError as exc:
         raise MempalaceRelayError(f"MemPalace MCP relay returned non-JSON content: {text!r}") from exc
-    return memory_result(tool_name, operation, raw, wing=wing, room=room)
+    return memory_result(tool_name, operation, raw)
 
 
 
@@ -499,56 +453,19 @@ def _call_mempalace_tool_via_mcp(
 def run_memory_operation(
     tool_name: str,
     operation: str,
-    function_name: str,
     *,
-    limit: int | None = None,
+    result_limit: int | None = None,
     **kwargs: Any,
 ) -> MemoryResult:
-    result = call_mempalace_tool(tool_name, operation, function_name, **kwargs)
-    if limit is not None:
-        result = limit_memory_result_items(result, limit)
+    result = call_mempalace_tool(tool_name, operation, **kwargs)
+    if result_limit is not None:
+        result = limit_memory_result_items(result, result_limit)
     return result
 
 
 def execute_memory_operation(tool_name: str, **kwargs: Any) -> MemoryResult:
-    spec = get_memory_operation_spec(tool_name)
-    limit = None
-    if spec.default_limit_param and spec.default_limit_param in kwargs:
-        limit = kwargs.pop(spec.default_limit_param)
-    return run_memory_operation(
-        spec.tool_name,
-        spec.operation,
-        spec.function_name,
-        limit=limit,
-        **kwargs,
-    )
-
-
-
-def run_memory_search_operation(
-    *,
-    query: str,
-    limit: int = 5,
-    wing: str | None = DEFAULT_MEMORY_WING,
-    room: str | None = None,
-    max_distance: float = 1.5,
-    min_similarity: float | None = None,
-    context: str | None = None,
-    request_id: str | None = None,
-) -> MemoryResult:
-    return run_memory_operation(
-        "memory_search",
-        "search",
-        "tool_search",
-        query=query,
-        limit=limit,
-        wing=wing,
-        room=room,
-        max_distance=max_distance,
-        min_similarity=min_similarity,
-        context=context,
-        request_id=request_id,
-    )
+    result_limit = kwargs.get("limit") if tool_name in {"mempalace_search", "mempalace_list_drawers"} else None
+    return run_memory_operation(tool_name, tool_name, result_limit=result_limit, **kwargs)
 
 
 
@@ -584,10 +501,7 @@ def memory_result_to_mcp_payload(
 def call_mempalace_tool(
     tool_name: str,
     operation: str,
-    function_name: str,
     *args: Any,
-    wing: str | None = DEFAULT_MEMORY_WING,
-    room: str | None = DEFAULT_MEMORY_ROOM,
     palace_path: str | None = None,
     request_id: str | None = None,
     **kwargs: Any,
@@ -600,13 +514,10 @@ def call_mempalace_tool(
         "memory_call_start",
         tool_name=tool_name,
         operation=operation,
-        function_name=function_name,
         transport="mcp_relay",
         request_id=request_id,
         pid=pid,
         palace_path=resolved_palace_path,
-        wing=wing,
-        room=room,
         **_safe_payload_summary(kwargs),
     )
 
@@ -614,10 +525,7 @@ def call_mempalace_tool(
         result = _call_mempalace_tool_via_mcp(
             tool_name,
             operation,
-            function_name,
             *args,
-            wing=wing,
-            room=room,
             palace_path=palace_path,
             request_id=request_id,
             **kwargs,
@@ -638,7 +546,7 @@ def call_mempalace_tool(
         return result
     except MempalaceRelayProtocolError as exc:
         if exc.code == -32601:
-            result = capability_blocked(tool_name, operation, function_name)
+            result = capability_blocked(tool_name, operation, tool_name)
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
             memory_log_kv(
                 "memory_call_blocked",
@@ -650,7 +558,7 @@ def call_mempalace_tool(
                 duration_ms=duration_ms,
                 status=result.status.value,
                 error_type="missing_function",
-                error_message=function_name,
+                error_message=tool_name,
             )
             return result
         memory_log_kv(

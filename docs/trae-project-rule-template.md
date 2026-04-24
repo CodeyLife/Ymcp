@@ -11,8 +11,8 @@
 
 ## 记忆规则
 
-- 需要历史事实、项目约定、偏好、决策或上下文时，先用 `memory_status` / `memory_search` / `memory_get` 核验；不要凭印象猜。
-- 任务结束后，如有稳定偏好、项目约定、重要决策或踩坑结论，先查重，再用 `memory_store` / `memory_diary_write` 保存；旧事实变化时用 `memory_update`、`memory_delete`、`memory_kg_invalidate`、`memory_kg_add` 维护。
+- 需要历史事实、项目约定、偏好、决策或上下文时，先用 `mempalace_search` / `mempalace_get_drawer` 核验；不要凭印象猜。
+- 任务结束后，如有稳定偏好、项目约定、重要决策或踩坑结论，先查重，再用 `mempalace_add_drawer` / `mempalace_diary_write` 保存；旧事实变化时用 `mempalace_update_drawer`、`mempalace_delete_drawer`、`mempalace_kg_invalidate`、`mempalace_kg_add` 维护。
 
 ## 推荐 workflow
 

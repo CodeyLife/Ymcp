@@ -1,16 +1,10 @@
 from ymcp.cli import inspect_tools_payload
+from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
 from ymcp.core.versioning import SCHEMA_VERSION
 from ymcp.internal_registry import get_tool_specs
 
 WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
-MEMORY_NAMES = {
-    "memory_store", "memory_search", "memory_get", "memory_update", "memory_delete",
-    "memory_status", "memory_list_wings", "memory_list_rooms", "memory_taxonomy",
-    "memory_check_duplicate", "memory_reconnect", "memory_graph_stats", "memory_graph_query",
-    "memory_graph_traverse", "memory_kg_add", "memory_kg_timeline", "memory_kg_invalidate",
-    "memory_create_tunnel", "memory_list_tunnels", "memory_find_tunnels", "memory_follow_tunnels",
-    "memory_delete_tunnel", "memory_diary_write", "memory_diary_read",
-}
+MEMORY_NAMES = {tool["name"] for tool in MEMPALACE_TOOL_SCHEMAS}
 EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
 COMMON_FIELDS = {"schema_version", "status", "summary", "assumptions", "next_actions", "risks", "meta", "artifacts"}
 
@@ -23,8 +17,8 @@ def test_tool_descriptions_include_boundaries():
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
     assert "不执行命令" in descriptions["ralph"]
     assert "宿主" in descriptions["deep_interview"]
-    assert "MemPalace" in descriptions["memory_store"]
-    assert "长期记忆" in descriptions["memory_search"]
+    assert "palace" in descriptions["mempalace_add_drawer"].lower()
+    assert "search" in descriptions["mempalace_search"].lower()
 
 
 def test_response_models_include_common_fields_and_v1_schema():
@@ -46,11 +40,14 @@ def test_inspect_tools_json_contract_metadata():
         assert item["host_boundary"]
 
 
-def test_inspect_schema_does_not_expose_unsupported_memory_parameters():
+def test_inspect_schema_matches_mempalace_native_parameter_names():
     payload = {item["name"]: item for item in inspect_tools_payload()}
-    assert "depth" not in payload["memory_follow_tunnels"]["request_schema"]["properties"]
-    assert "date" not in payload["memory_diary_read"]["request_schema"]["properties"]
-    assert "source" not in payload["memory_kg_invalidate"]["request_schema"]["properties"]
+    assert "start" not in payload["mempalace_follow_tunnels"]["request_schema"]["properties"]
+    assert "limit" not in payload["mempalace_diary_read"]["request_schema"]["properties"]
+    assert "source" not in payload["mempalace_kg_invalidate"]["request_schema"]["properties"]
+    assert "room" in payload["mempalace_follow_tunnels"]["request_schema"]["properties"]
+    assert "last_n" in payload["mempalace_diary_read"]["request_schema"]["properties"]
+    assert "source_closet" in payload["mempalace_kg_add"]["request_schema"]["properties"]
 
 
 def test_docs_do_not_publish_plugin_or_catalog_api():

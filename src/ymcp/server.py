@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import os
 import time
@@ -10,6 +11,7 @@ import mcp.types as types
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field, WithJsonSchema
 
+from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS
 from ymcp.contracts.deep_interview import DeepInterviewRequest, InterviewRound
 from ymcp.contracts.plan import PlanRequest
 from ymcp.contracts.ralplan import RalplanRequest
@@ -26,7 +28,6 @@ from ymcp.memory import (
     memory_log_kv,
     memory_result_to_mcp_payload,
     mempalace_palace_path,
-    run_memory_search_operation,
 )
 from ymcp.internal_registry import get_tool_specs
 
@@ -103,7 +104,7 @@ RalplanNextToolChoice = Annotated[
             [
                 ("ralph", "ralph", "按批准方案进入执行与验证。"),
                 ("plan", "plan", "先把批准方案拆成更细执行计划。"),
-                ("memory_store", "memory_store", "将规划摘要写入长期记忆。"),
+                ("mempalace_add_drawer", "mempalace_add_drawer", "将规划摘要写入长期记忆。"),
             ],
         )
     ),
@@ -117,7 +118,7 @@ RalphNextToolChoice = Annotated[
             "下一步动作",
             "请选择 ralph 完成后的下一步动作。",
             [
-                ("memory_store", "memory_store", "保存完成摘要到长期记忆。"),
+                ("mempalace_add_drawer", "mempalace_add_drawer", "保存完成摘要到长期记忆。"),
                 ("plan", "plan", "基于结果重新规划。"),
                 ("finish", "finish", "结束当前流程。"),
             ],
@@ -241,6 +242,77 @@ def _supports_form_elicitation(ctx: Context | None) -> bool:
         return False
 
 
+def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, request_model: type[BaseModel]) -> None:
+    fields = request_model.model_fields
+    parameters: list[inspect.Parameter] = []
+    annotations: dict[str, Any] = {"return": dict[str, Any]}
+
+    for field_name, field_info in fields.items():
+        if field_name == "schema_version":
+            continue
+        field_dict = field_info.asdict()
+        field_description = field_dict["attributes"].get("description")
+        annotation = Annotated[
+            (
+                field_dict["annotation"],
+                *field_dict["metadata"],
+                Field(description=field_description) if field_description else Field(),
+            )
+        ]
+        default = inspect.Parameter.empty if field_info.is_required() else field_info.default
+        parameters.append(
+            inspect.Parameter(
+                field_name,
+                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=default,
+                annotation=annotation,
+            )
+        )
+        annotations[field_name] = annotation
+
+    signature = inspect.Signature(parameters=parameters, return_annotation=dict[str, Any])
+
+    def _tool_impl(**kwargs: Any) -> dict[str, Any]:
+        request_id = build_memory_request_id()
+        started_at = time.perf_counter()
+        memory_log_kv(
+            f"{name}_handler_start",
+            request_id=request_id,
+            pid=os.getpid(),
+            palace_path=mempalace_palace_path(),
+        )
+        try:
+            validated = request_model.model_validate(kwargs)
+            result = execute_memory_operation(
+                name,
+                **validated.model_dump(exclude={"schema_version"}, exclude_none=True),
+            )
+            return memory_result_to_mcp_payload(
+                result,
+                handler_name=f"{name}_handler",
+                request_id=request_id,
+                started_at=started_at,
+            )
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            memory_log_kv(
+                f"{name}_handler_error",
+                request_id=request_id,
+                pid=os.getpid(),
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise
+
+    _tool_impl.__name__ = name
+    _tool_impl.__qualname__ = name
+    _tool_impl.__doc__ = description
+    _tool_impl.__annotations__ = annotations
+    _tool_impl.__signature__ = signature
+    app.add_tool(_tool_impl, name=name, description=description, structured_output=True)
+
+
 async def _maybe_elicit_deep_interview(ctx: Context | None, request: DeepInterviewRequest):
     result = build_deep_interview(request)
     if not _supports_form_elicitation(ctx):
@@ -340,9 +412,6 @@ def create_app() -> FastMCP:
 
     prompt_descriptions = {spec.name: spec.description for spec in get_prompt_specs()}
 
-    def _memory_payload(tool_name: str, **kwargs: Any) -> dict[str, Any]:
-        return execute_memory_operation(tool_name, **kwargs).to_mcp_result()
-
     @app.prompt(name="deep_interview_clarify", title="Deep Interview Clarify", description=prompt_descriptions["deep_interview_clarify"])
     def deep_interview_clarify(brief: str = "{brief}") -> str:
         return prompt_template("deep_interview_clarify", brief=brief)
@@ -397,168 +466,12 @@ def create_app() -> FastMCP:
         request = RalphRequest(approved_plan=approved_plan, latest_evidence=_coerce_str_list(latest_evidence or evidence), current_phase=current_phase, todo_status=_coerce_str_list(todo_status), verification_commands=_coerce_str_list(verification_commands), known_failures=_coerce_str_list(known_failures), iteration=iteration, current_status=current_status, schema_version=schema_version)
         return (await _maybe_elicit_ralph(ctx, request)).to_mcp_result()
 
-    @app.tool(name="memory_store", description=descriptions["memory_store"], structured_output=True)
-    def memory_store(content: str, wing: str = "personal", room: str = "ymcp", source_file: str | None = None, added_by: str = "ymcp", schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_store", wing=wing, room=room, content=content, source_file=source_file, added_by=added_by)
-
-    @app.tool(name="memory_search", description=descriptions["memory_search"], structured_output=True)
-    def memory_search(query: str, limit: int = 5, wing: str | None = "personal", room: str | None = None, max_distance: float = 1.5, min_similarity: float | None = None, context: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        request_id = build_memory_request_id()
-        started_at = time.perf_counter()
-        memory_log_kv(
-            "memory_search_handler_start",
-            request_id=request_id,
-            pid=os.getpid(),
-            palace_path=mempalace_palace_path(),
-            query_length=len(query),
-            limit=limit,
-            wing=wing,
-            room=room,
-            max_distance=max_distance,
-            min_similarity=min_similarity,
-            context_length=(len(context) if context else 0),
+    for tool_schema in MEMPALACE_TOOL_SCHEMAS:
+        _register_mempalace_tool(
+            app,
+            name=tool_schema["name"],
+            description=descriptions[tool_schema["name"]],
+            request_model=MEMPALACE_REQUEST_MODELS[tool_schema["name"]],
         )
-        try:
-            result = run_memory_search_operation(
-                query=query,
-                limit=limit,
-                wing=wing,
-                room=room,
-                max_distance=max_distance,
-                min_similarity=min_similarity,
-                context=context,
-                request_id=request_id,
-            )
-            return memory_result_to_mcp_payload(
-                result,
-                handler_name="memory_search_handler",
-                request_id=request_id,
-                started_at=started_at,
-            )
-        except Exception as exc:
-            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-            memory_log_kv(
-                "memory_search_handler_error",
-                request_id=request_id,
-                pid=os.getpid(),
-                duration_ms=duration_ms,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-            raise
-
-    @app.tool(name="memory_get", description=descriptions["memory_get"], structured_output=True)
-    def memory_get(drawer_id: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_get", drawer_id=drawer_id)
-
-    @app.tool(name="memory_update", description=descriptions["memory_update"], structured_output=True)
-    def memory_update(drawer_id: str, content: str | None = None, wing: str | None = None, room: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_update", drawer_id=drawer_id, content=content, wing=wing, room=room)
-
-    @app.tool(name="memory_delete", description=descriptions["memory_delete"], structured_output=True)
-    def memory_delete(drawer_id: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_delete", drawer_id=drawer_id)
-
-    @app.tool(name="memory_status", description=descriptions["memory_status"], structured_output=True)
-    def memory_status(schema_version: str = "1.0") -> dict[str, Any]:
-        request_id = build_memory_request_id()
-        started_at = time.perf_counter()
-        memory_log_kv(
-            "memory_status_handler_start",
-            request_id=request_id,
-            pid=os.getpid(),
-            palace_path=mempalace_palace_path(),
-        )
-        try:
-            result = execute_memory_operation("memory_status", request_id=request_id)
-            return memory_result_to_mcp_payload(
-                result,
-                handler_name="memory_status_handler",
-                request_id=request_id,
-                started_at=started_at,
-            )
-        except Exception as exc:
-            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-            memory_log_kv(
-                "memory_status_handler_error",
-                request_id=request_id,
-                pid=os.getpid(),
-                duration_ms=duration_ms,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-            raise
-
-    @app.tool(name="memory_list_wings", description=descriptions["memory_list_wings"], structured_output=True)
-    def memory_list_wings(schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_list_wings")
-
-    @app.tool(name="memory_list_rooms", description=descriptions["memory_list_rooms"], structured_output=True)
-    def memory_list_rooms(wing: str | None = "personal", schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_list_rooms", wing=wing, room=None)
-
-    @app.tool(name="memory_taxonomy", description=descriptions["memory_taxonomy"], structured_output=True)
-    def memory_taxonomy(schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_taxonomy")
-
-    @app.tool(name="memory_check_duplicate", description=descriptions["memory_check_duplicate"], structured_output=True)
-    def memory_check_duplicate(content: str, wing: str = "personal", room: str = "ymcp", schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_check_duplicate", content=content, wing=wing, room=room)
-
-    @app.tool(name="memory_reconnect", description=descriptions["memory_reconnect"], structured_output=True)
-    def memory_reconnect(schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_reconnect")
-
-    @app.tool(name="memory_graph_stats", description=descriptions["memory_graph_stats"], structured_output=True)
-    def memory_graph_stats(schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_graph_stats")
-
-    @app.tool(name="memory_graph_query", description=descriptions["memory_graph_query"], structured_output=True)
-    def memory_graph_query(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_graph_query", entity=query, limit=limit)
-
-    @app.tool(name="memory_graph_traverse", description=descriptions["memory_graph_traverse"], structured_output=True)
-    def memory_graph_traverse(start: str, depth: int = 2, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_graph_traverse", start_room=start, max_hops=depth)
-
-    @app.tool(name="memory_kg_add", description=descriptions["memory_kg_add"], structured_output=True)
-    def memory_kg_add(subject: str, predicate: str, object: str, source: str | None = "ymcp", schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_kg_add", subject=subject, predicate=predicate, object=object, source_closet=source)
-
-    @app.tool(name="memory_kg_timeline", description=descriptions["memory_kg_timeline"], structured_output=True)
-    def memory_kg_timeline(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_kg_timeline", entity=query, limit=limit)
-
-    @app.tool(name="memory_kg_invalidate", description=descriptions["memory_kg_invalidate"], structured_output=True)
-    def memory_kg_invalidate(subject: str, predicate: str, object: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_kg_invalidate", subject=subject, predicate=predicate, object=object)
-
-    @app.tool(name="memory_create_tunnel", description=descriptions["memory_create_tunnel"], structured_output=True)
-    def memory_create_tunnel(source: str, target: str, relationship: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_create_tunnel", source_wing="personal", source_room=source, target_wing="personal", target_room=target, label=relationship or "")
-
-    @app.tool(name="memory_list_tunnels", description=descriptions["memory_list_tunnels"], structured_output=True)
-    def memory_list_tunnels(schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_list_tunnels")
-
-    @app.tool(name="memory_find_tunnels", description=descriptions["memory_find_tunnels"], structured_output=True)
-    def memory_find_tunnels(query: str, limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_find_tunnels", wing_a=query, limit=limit)
-
-    @app.tool(name="memory_follow_tunnels", description=descriptions["memory_follow_tunnels"], structured_output=True)
-    def memory_follow_tunnels(start: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_follow_tunnels", wing="personal", room=start)
-
-    @app.tool(name="memory_delete_tunnel", description=descriptions["memory_delete_tunnel"], structured_output=True)
-    def memory_delete_tunnel(tunnel_id: str, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_delete_tunnel", tunnel_id=tunnel_id)
-
-    @app.tool(name="memory_diary_write", description=descriptions["memory_diary_write"], structured_output=True)
-    def memory_diary_write(entry: str, date: str | None = None, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_diary_write", agent_name="ymcp", entry=entry, topic=date or "general")
-
-    @app.tool(name="memory_diary_read", description=descriptions["memory_diary_read"], structured_output=True)
-    def memory_diary_read(limit: int = 10, schema_version: str = "1.0") -> dict[str, Any]:
-        return _memory_payload("memory_diary_read", agent_name="ymcp", last_n=limit)
 
     return app

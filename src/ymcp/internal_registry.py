@@ -6,34 +6,19 @@ from typing import Callable, Type
 from pydantic import BaseModel
 
 from ymcp.contracts.deep_interview import DeepInterviewRequest, DeepInterviewResult
+from ymcp.contracts.memory import (
+    MEMPALACE_REQUEST_MODELS,
+    MEMPALACE_TOOL_SCHEMAS,
+    MemoryResult,
+)
 from ymcp.contracts.plan import PlanRequest, PlanResult
 from ymcp.contracts.ralplan import RalplanRequest, RalplanResult
 from ymcp.contracts.ralph import RalphRequest, RalphResult
-from ymcp.contracts.memory import (
-    MemoryDiaryReadRequest,
-    MemoryDiaryWriteRequest,
-    MemoryDrawerIdRequest,
-    MemoryDuplicateRequest,
-    MemoryGraphQueryRequest,
-    MemoryGraphTraverseRequest,
-    MemoryKgAddRequest,
-    MemoryKgInvalidateRequest,
-    MemoryListRoomsRequest,
-    MemoryNoArgsRequest,
-    MemoryResult,
-    MemorySearchRequest,
-    MemoryStoreRequest,
-    MemoryTunnelCreateRequest,
-    MemoryTunnelDeleteRequest,
-    MemoryTunnelFindRequest,
-    MemoryTunnelFollowRequest,
-    MemoryUpdateRequest,
-)
 from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.plan import build_plan
 from ymcp.engine.ralplan import build_ralplan
 from ymcp.engine.ralph import build_ralph
-from ymcp.memory import execute_memory_operation, run_memory_search_operation
+from ymcp.memory import execute_memory_operation
 
 
 @dataclass(frozen=True)
@@ -74,175 +59,25 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         response_model=RalphResult,
         handler=build_ralph,
     ),
+)
 
+
+def _memory_handler(tool_name: str):
+    return lambda request: execute_memory_operation(
+        tool_name,
+        **request.model_dump(exclude={"schema_version"}, exclude_none=True),
+    )
+
+
+TOOL_SPECS = TOOL_SPECS + tuple(
     ToolSpec(
-        name="memory_store",
-        description="将内容写入 MemPalace 长期记忆，默认 wing=personal、room=ymcp。",
-        request_model=MemoryStoreRequest,
+        name=tool_schema["name"],
+        description=tool_schema["description"],
+        request_model=MEMPALACE_REQUEST_MODELS[tool_schema["name"]],
         response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_store", wing=request.wing, room=request.room, content=request.content, source_file=request.source_file, added_by=request.added_by),
-    ),
-    ToolSpec(
-        name="memory_search",
-        description="从 MemPalace 中搜索长期记忆，默认搜索 personal wing。",
-        request_model=MemorySearchRequest,
-        response_model=MemoryResult,
-        handler=lambda request: run_memory_search_operation(query=request.query, limit=request.limit, wing=request.wing, room=request.room, max_distance=request.max_distance, min_similarity=request.min_similarity, context=request.context),
-    ),
-    ToolSpec(
-        name="memory_get",
-        description="根据 drawer_id 读取完整 MemPalace 记忆。",
-        request_model=MemoryDrawerIdRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_get", drawer_id=request.drawer_id),
-    ),
-    ToolSpec(
-        name="memory_update",
-        description="更新 MemPalace 记忆内容或分类。",
-        request_model=MemoryUpdateRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_update", drawer_id=request.drawer_id, content=request.content, wing=request.wing, room=request.room),
-    ),
-    ToolSpec(
-        name="memory_delete",
-        description="删除指定 drawer_id 的 MemPalace 记忆。",
-        request_model=MemoryDrawerIdRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_delete", drawer_id=request.drawer_id),
-    ),
-    ToolSpec(
-        name="memory_status",
-        description="查看 MemPalace 状态、总记忆数和 wing/room 分布。",
-        request_model=MemoryNoArgsRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_status"),
-    ),
-    ToolSpec(
-        name="memory_list_wings",
-        description="列出 MemPalace 中的所有 wing。",
-        request_model=MemoryNoArgsRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_list_wings"),
-    ),
-    ToolSpec(
-        name="memory_list_rooms",
-        description="列出 MemPalace room，可按 wing 过滤。",
-        request_model=MemoryListRoomsRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_list_rooms", wing=request.wing, room=None),
-    ),
-    ToolSpec(
-        name="memory_taxonomy",
-        description="查看 MemPalace taxonomy 树。",
-        request_model=MemoryNoArgsRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_taxonomy"),
-    ),
-    ToolSpec(
-        name="memory_check_duplicate",
-        description="写入前检查内容是否已存在于 MemPalace。",
-        request_model=MemoryDuplicateRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_check_duplicate", content=request.content, wing=request.wing, room=request.room),
-    ),
-    ToolSpec(
-        name="memory_reconnect",
-        description="刷新 MemPalace 连接和缓存。",
-        request_model=MemoryNoArgsRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_reconnect"),
-    ),
-    ToolSpec(
-        name="memory_graph_stats",
-        description="查看 MemPalace 图谱统计信息。",
-        request_model=MemoryNoArgsRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_graph_stats"),
-    ),
-    ToolSpec(
-        name="memory_graph_query",
-        description="查询 MemPalace 知识图谱实体关系。",
-        request_model=MemoryGraphQueryRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_graph_query", entity=request.query, limit=request.limit),
-    ),
-    ToolSpec(
-        name="memory_graph_traverse",
-        description="从指定节点遍历 MemPalace 图谱。",
-        request_model=MemoryGraphTraverseRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_graph_traverse", start_room=request.start, max_hops=request.depth),
-    ),
-    ToolSpec(
-        name="memory_kg_add",
-        description="向 MemPalace 知识图谱写入一条关系。",
-        request_model=MemoryKgAddRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_kg_add", subject=request.subject, predicate=request.predicate, object=request.object, source_closet=request.source),
-    ),
-    ToolSpec(
-        name="memory_kg_timeline",
-        description="查看 MemPalace 知识图谱时间线。",
-        request_model=MemoryGraphQueryRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_kg_timeline", entity=request.query, limit=request.limit),
-    ),
-    ToolSpec(
-        name="memory_kg_invalidate",
-        description="使 MemPalace 知识图谱中的一条关系失效。",
-        request_model=MemoryKgInvalidateRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_kg_invalidate", subject=request.subject, predicate=request.predicate, object=request.object),
-    ),
-    ToolSpec(
-        name="memory_create_tunnel",
-        description="在 MemPalace room 之间创建 tunnel 关系。",
-        request_model=MemoryTunnelCreateRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_create_tunnel", source_wing="personal", source_room=request.source, target_wing="personal", target_room=request.target, label=request.relationship or ""),
-    ),
-    ToolSpec(
-        name="memory_list_tunnels",
-        description="列出 MemPalace tunnel。",
-        request_model=MemoryNoArgsRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_list_tunnels"),
-    ),
-    ToolSpec(
-        name="memory_find_tunnels",
-        description="查找 MemPalace tunnel。",
-        request_model=MemoryTunnelFindRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_find_tunnels", wing_a=request.query, limit=request.limit),
-    ),
-    ToolSpec(
-        name="memory_follow_tunnels",
-        description="从指定 room 出发跟随 MemPalace tunnel。",
-        request_model=MemoryTunnelFollowRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_follow_tunnels", wing="personal", room=request.start),
-    ),
-    ToolSpec(
-        name="memory_delete_tunnel",
-        description="删除指定 MemPalace tunnel。",
-        request_model=MemoryTunnelDeleteRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_delete_tunnel", tunnel_id=request.tunnel_id),
-    ),
-    ToolSpec(
-        name="memory_diary_write",
-        description="写入 MemPalace diary 条目。",
-        request_model=MemoryDiaryWriteRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_diary_write", agent_name="ymcp", entry=request.entry, topic=request.date or "general"),
-    ),
-    ToolSpec(
-        name="memory_diary_read",
-        description="读取 MemPalace diary 条目。",
-        request_model=MemoryDiaryReadRequest,
-        response_model=MemoryResult,
-        handler=lambda request: execute_memory_operation("memory_diary_read", agent_name="ymcp", last_n=request.limit),
-    ),
+        handler=_memory_handler(tool_schema["name"]),
+    )
+    for tool_schema in MEMPALACE_TOOL_SCHEMAS
 )
 
 
