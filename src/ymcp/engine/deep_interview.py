@@ -8,7 +8,7 @@ from ymcp.contracts.deep_interview import (
     ReadinessGates,
     SpecSkeleton,
 )
-from ymcp.contracts.workflow import MemoryPreflight, WorkflowChoiceOption, WorkflowState
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowChoiceMenu, WorkflowChoiceOption, WorkflowPhaseSummary, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -32,7 +32,7 @@ RATIONALES = {
     "context": "需要基于证据推进，无法确认时标记 evidence gap。",
 }
 
-HANDOFF_OPTIONS = [
+CHOICE_OPTIONS = [
     WorkflowChoiceOption(
         id="ralplan",
         label="进入 ralplan",
@@ -106,6 +106,38 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
         if crystallize_ready
         else "用户对 deep_interview 下一问的回答；支持 Elicitation 的客户端应由服务器发起 elicitation/create。"
     )
+    phase_summary = (
+        WorkflowPhaseSummary(
+            title="需求已结晶，等待下一步工作流选择",
+            summary="当前 deep_interview 已达到可交接状态，规格骨架已生成，下一步应由用户明确选择进入 ralplan、plan、ralph 或继续深访。",
+            highlights=[
+                f"当前歧义分数：{ambiguity}",
+                "readiness gates 已满足：non_goals、decision_boundaries、pressure_pass",
+                "服务器不会在未选择前自动跳转到后续 workflow",
+            ],
+        )
+        if crystallize_ready
+        else WorkflowPhaseSummary(
+            title="仍需继续需求澄清",
+            summary="当前需求尚未满足结晶条件，应继续回答下一问，优先补齐最弱维度与 readiness gates。",
+            highlights=[
+                f"当前最弱维度：{weakest}",
+                f"当前歧义分数：{ambiguity}",
+                f"下一问聚焦：{next_question}" if next_question else "下一问待宿主根据结果展示",
+            ],
+        )
+    )
+    choice_menu = (
+        WorkflowChoiceMenu(
+            title="请选择 deep_interview 的下一步工作流",
+            prompt="需求已澄清完成。即使宿主未正确渲染 Elicitation，也应直接展示以下结构化选项，而不是结束对话。",
+            options=CHOICE_OPTIONS,
+            recommended_option_id="ralplan",
+            fallback_instructions="若 Elicitation UI 不完整，宿主应直接按 options 渲染单选菜单，并在 selected_next_tool 为空时保持会话继续。",
+        )
+        if crystallize_ready
+        else None
+    )
     state = WorkflowState(
         workflow_name="deep_interview",
         current_phase="handoff_selection" if crystallize_ready else "intent_first_interview",
@@ -147,8 +179,9 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
             scores=scores,
             transcript_delta=[] if crystallize_ready else [InterviewRound(question=next_question or "", answer="")],
             workflow_state=state,
+            phase_summary=phase_summary,
             requested_input=requested_input,
-            handoff_options=HANDOFF_OPTIONS if crystallize_ready else [],
+            choice_menu=choice_menu,
             spec_skeleton=spec,
         ),
     )

@@ -113,6 +113,7 @@ Ymcp 默认使用 stdio 传输，并以 MCP-first 能力边界集成到 Trae、C
 - 可复用 workflow 话术从 Prompt 获取，再由宿主决定是否展示或调用 Tool；例如 `ralplan_consensus` 用于总入口，`ralplan_planner_pass` / `ralplan_architect_pass` / `ralplan_critic_pass` 用于三角色 phase prompt。
 - 如果客户端支持 Elicitation，必须处理服务器发起的表单/选择请求。
 - 如果客户端不支持 Elicitation，不要伪造用户输入；只根据 Tool 返回的标准结构化结果继续。
+- 如果 Elicitation UI 渲染不完整，必须退回使用 `phase_summary`、`choice_menu` 展示当前阶段结论与下一步菜单，不能直接结束对话。
 """
 
 
@@ -198,7 +199,7 @@ def prompt_template(name: str, **kwargs: Any) -> str:
 
 brief: {brief}
 
-规则：先读取 `resource://ymcp/principles`；如涉及历史项目事实，先调用 `mempalace_search` 并把结果作为 memory_context。不要伪造用户回答；需要继续提问时使用工具返回的 next_question 或 MCP Elicitation。需求结晶后必须根据 `handoff_options` 展示结构化下一步菜单；在 `selected_next_tool` 缺失前不得自动调用 plan、ralplan 或 ralph，也不要用普通结束文案替代菜单。"""
+规则：先读取 `resource://ymcp/principles`；如涉及历史项目事实，先调用 `mempalace_search` 并把结果作为 memory_context。不要伪造用户回答；需要继续提问时使用工具返回的 next_question 或 MCP Elicitation。需求结晶后必须根据 `choice_menu` 展示结构化下一步菜单；在 `selected_next_tool` 缺失前不得自动调用 plan、ralplan 或 ralph，也不要用普通结束文案替代菜单。"""
     if name == "plan_direct":
         task = kwargs.get("task") or "{task}"
         return f"""请使用 Ymcp 的 `plan` 工具生成直接计划：

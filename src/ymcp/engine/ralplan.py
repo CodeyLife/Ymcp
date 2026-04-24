@@ -1,6 +1,6 @@
 from ymcp.contracts.common import ToolStatus
 from ymcp.contracts.ralplan import AdrDraft, RalplanArtifacts, RalplanRequest, RalplanResult, RolePromptRef, ViableOption
-from ymcp.contracts.workflow import MemoryPreflight, WorkflowChoiceOption, WorkflowState
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowChoiceMenu, WorkflowChoiceOption, WorkflowPhaseSummary, WorkflowState
 from ymcp.core.result import build_meta, build_next_action, build_risk
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -15,11 +15,12 @@ def _options(deliberate: bool) -> list[ViableOption]:
     return options
 
 
-HANDOFF_OPTIONS = [
+CHOICE_OPTIONS = [
     WorkflowChoiceOption(
         id="ralph",
         label="进入 ralph",
         description="按批准方案进入执行与验证闭环。",
+        kind="tool",
         tool="ralph",
         recommended=True,
     ),
@@ -27,15 +28,70 @@ HANDOFF_OPTIONS = [
         id="plan",
         label="进入 plan",
         description="先把批准方案拆成更细执行计划。",
+        kind="tool",
         tool="plan",
     ),
     WorkflowChoiceOption(
         id="mempalace_add_drawer",
         label="写入 mempalace_add_drawer",
         description="将规划摘要沉淀到长期记忆。",
+        kind="tool",
         tool="mempalace_add_drawer",
     ),
 ]
+
+
+def _phase_summary(
+    phase: str,
+    request: RalplanRequest,
+    options: list[ViableOption],
+    critic_verdict: str | None,
+    revise: list[str],
+) -> WorkflowPhaseSummary:
+    if phase == "planner_draft":
+        return WorkflowPhaseSummary(
+            title="Planner 草案阶段",
+            summary="ralplan 已产出可供宿主展示的初始分析框架，应先展示当前问题、候选方案和推荐方向，再继续进入 Architect 审查。",
+            highlights=[
+                f"任务：{request.task}",
+                f"候选方案：{', '.join(option.name for option in options)}",
+                "推荐方向：状态机投影",
+            ],
+        )
+    if phase == "architect_review":
+        return WorkflowPhaseSummary(
+            title="Architect 审查阶段",
+            summary="当前应围绕 Planner 草案进行架构边界、反例和 tradeoff 审查，完成后再进入 Critic 评价。",
+            highlights=[
+                "必须先完成 Architect，再进入 Critic",
+                f"planner_draft 长度：{len(request.planner_draft or '')}",
+                "重点检查边界、反例、tradeoff tension",
+            ],
+        )
+    if phase == "revise":
+        return WorkflowPhaseSummary(
+            title="需要修订后重审",
+            summary="Critic 尚未批准当前方案，宿主应先展示修订要点，再回到 Planner/Architect/Critic 闭环，而不是直接结束。",
+            highlights=revise or ["请补齐 acceptance criteria、验证步骤和架构边界。"],
+        )
+    if phase in {"approved", "handoff_to_ralph"}:
+        return WorkflowPhaseSummary(
+            title="共识规划已批准",
+            summary="当前 ralplan 已完成共识审查。宿主应展示批准摘要、优化结论和下一步 workflow 菜单，而不是仅展示结束文案。",
+            highlights=[
+                f"critic verdict：{critic_verdict or 'APPROVE'}",
+                "推荐下一步：进入 ralph",
+                "备选：进入 plan / 写入 mempalace_add_drawer",
+            ],
+        )
+    return WorkflowPhaseSummary(
+        title="Critic 终审阶段",
+        summary="当前正在根据 Architect 反馈进行 Critic 质量评估，输出应包含 verdict 或修订要求。",
+        highlights=[
+            f"architect_feedback 条数：{len(request.architect_feedback)}",
+            "重点检查测试性、风险和验证步骤是否具体",
+        ],
+    )
 
 
 def _detect_critic_verdict(request: RalplanRequest) -> str:
@@ -75,7 +131,6 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
     critic_verdict = None
     approved_plan_summary = None
     requested_input = None
-    handoff_options = []
     status = ToolStatus.OK
     readiness = "in_progress"
     if phase == "planner_draft":
@@ -110,17 +165,26 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
             phase = "approved"
             readiness = "ready_for_handoff"
             approved_plan_summary = f"已批准计划：{request.task}"
-            requested_input = "选择下一步 workflow：ralph / plan / mempalace_add_drawer；支持 Elicitation 的客户端应由服务器发起表单请求。"
-            handoff_options = HANDOFF_OPTIONS
+            requested_input = "下一步 workflow 选择优先通过 MCP Elicitation 获取；若宿主不支持或 UI 渲染异常，则应回退展示 choice_menu。"
     elif phase == "revise":
         phase = "architect_review"
+        readiness = "needs_revision"
         status = ToolStatus.NEEDS_INPUT
     elif phase in {"approved", "handoff_to_ralph"}:
         phase = "handoff_to_ralph"
         readiness = "ready_for_handoff"
         approved_plan_summary = f"已批准计划：{request.task}"
-        requested_input = "选择下一步 workflow：ralph / plan / mempalace_add_drawer；支持 Elicitation 的客户端应由服务器发起表单请求。"
-        handoff_options = HANDOFF_OPTIONS
+        requested_input = "下一步 workflow 选择优先通过 MCP Elicitation 获取；若宿主不支持或 UI 渲染异常，则应回退展示 choice_menu。"
+    phase_summary = _phase_summary(phase, request, options, critic_verdict, revise)
+    choice_menu = None
+    if phase in {"approved", "handoff_to_ralph"}:
+        choice_menu = WorkflowChoiceMenu(
+            title="请选择 ralplan 批准后的下一步 workflow",
+            prompt="共识规划已批准。即使宿主未正确渲染 Elicitation，也应直接展示以下结构化选项与推荐项，而不是结束对话。",
+            options=CHOICE_OPTIONS,
+            recommended_option_id="ralph",
+            fallback_instructions="selected_next_tool 为空时，宿主应保持会话继续，展示问题总结、优化方案与 options。",
+        )
     state = WorkflowState(
         workflow_name="ralplan",
         current_phase=phase,
@@ -165,9 +229,10 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
             critic_prompt_ref=critic_prompt_ref,
             revise_instructions=revise,
             workflow_state=state,
+            phase_summary=phase_summary,
             critic_verdict=critic_verdict,
             approved_plan_summary=approved_plan_summary,
             requested_input=requested_input,
-            handoff_options=handoff_options,
+            choice_menu=choice_menu,
         ),
     )

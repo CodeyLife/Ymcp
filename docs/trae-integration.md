@@ -151,6 +151,21 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 - `skill_source`
 - `memory_preflight`
 
+### artifacts 中的展示字段
+
+- `phase_summary`
+- `choice_menu`
+
+### 展示兜底要求
+
+当宿主支持 MCP Elicitation 时，优先处理服务器发起的表单/单选请求；但如果 UI 渲染不完整，仍必须直接展示工具返回的结构化展示字段，而不是结束对话：
+
+- `phase_summary`：当前阶段的人类可读摘要与 highlights
+- `choice_menu.options`：下一步可选 workflow 或动作
+- `choice_menu.recommended_option_id`：推荐项
+
+也就是说，即使 Elicitation 只显示了标题、没有显示全部选项，宿主仍应根据结构化结果继续展示菜单并等待选择。
+
 ## 12. Workflow 最佳调用链
 
 ### 链路 A：需求不清晰 → 规划 → 执行验证
@@ -173,7 +188,7 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 
 1. 调用 `ralplan`，`current_phase="planner_draft"`。
 2. 按顺序推进 Architect / Critic 反馈。
-3. 批准后通过 Elicitation 或标准降级结果决定进入 `ralph`、`plan` 或 `mempalace_add_drawer`。
+3. 批准后通过 Elicitation 或标准降级结果中的 `choice_menu` 决定进入 `ralph`、`plan` 或 `mempalace_add_drawer`。
 
 ### 链路 D：长期偏好和项目知识沉淀
 

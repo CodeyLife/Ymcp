@@ -242,6 +242,14 @@ def _supports_form_elicitation(ctx: Context | None) -> bool:
         return False
 
 
+def _format_choice_menu(title: str, options: list[types.AnyUrl | Any] | list[Any]) -> str:
+    rendered = []
+    for option in options:
+        suffix = "（推荐）" if getattr(option, "recommended", False) else ""
+        rendered.append(f"- {option.label}{suffix}: {option.description}")
+    return f"{title}\n" + "\n".join(rendered)
+
+
 def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, request_model: type[BaseModel]) -> None:
     fields = request_model.model_fields
     parameters: list[inspect.Parameter] = []
@@ -324,8 +332,11 @@ async def _maybe_elicit_deep_interview(ctx: Context | None, request: DeepIntervi
         if answer.action == "accept":
             request.prior_rounds.append(InterviewRound(question=result.artifacts.next_question, answer=answer.data.answer))
             result = build_deep_interview(request)
-    if result.artifacts.spec_skeleton is not None and result.artifacts.requested_input:
-        handoff = await ctx.elicit("需求澄清已完成。请选择下一步工作流。", DeepInterviewNextToolInput)
+    if result.artifacts.spec_skeleton is not None and result.artifacts.choice_menu:
+        handoff = await ctx.elicit(
+            _format_choice_menu("需求澄清已完成。请选择下一步工作流。", result.artifacts.choice_menu.options),
+            DeepInterviewNextToolInput,
+        )
         if handoff.action == "accept":
             result.artifacts.selected_next_tool = handoff.data.next_tool
     return result
@@ -351,7 +362,8 @@ async def _maybe_elicit_plan(ctx: Context | None, request: PlanRequest):
                 request.mode = "auto"
                 result = build_plan(request)
     elif phase == "direct_plan":
-        choice = await ctx.elicit("计划已生成。请选择下一步 workflow。", PlanNextToolInput)
+        options = result.artifacts.choice_menu.options if result.artifacts.choice_menu else []
+        choice = await ctx.elicit(_format_choice_menu("计划已生成。请选择下一步 workflow。", options), PlanNextToolInput)
         if choice.action == "accept":
             result.artifacts.selected_next_tool = choice.data.next_tool
     return result
@@ -361,8 +373,9 @@ async def _maybe_elicit_ralplan(ctx: Context | None, request: RalplanRequest):
     result = build_ralplan(request)
     if not _supports_form_elicitation(ctx):
         return result
-    if result.artifacts.requested_input:
-        choice = await ctx.elicit("共识规划已批准。请选择下一步 workflow。", RalplanNextToolInput)
+    if result.artifacts.choice_menu:
+        options = result.artifacts.choice_menu.options
+        choice = await ctx.elicit(_format_choice_menu("共识规划已批准。请选择下一步 workflow。", options), RalplanNextToolInput)
         if choice.action == "accept":
             result.artifacts.selected_next_tool = choice.data.next_tool
     return result
@@ -383,7 +396,8 @@ async def _maybe_elicit_ralph(ctx: Context | None, request: RalphRequest):
             request.verification_commands = verification.data.verification_commands
             result = build_ralph(request)
     if result.artifacts.stop_continue_judgement == "complete":
-        choice = await ctx.elicit("Ralph 已判断当前工作流完成。请选择下一步。", RalphNextToolInput)
+        options = result.artifacts.choice_menu.options if result.artifacts.choice_menu else []
+        choice = await ctx.elicit(_format_choice_menu("Ralph 已判断当前工作流完成。请选择下一步。", options), RalphNextToolInput)
         if choice.action == "accept":
             result.artifacts.selected_next_tool = choice.data.next_tool
     return result

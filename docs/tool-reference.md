@@ -98,7 +98,7 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 - 能力优先按 Tools / Resources / Prompts 三原语组织。
 - 用户输入、选择和表单交互优先使用 MCP 官方 Elicitation。
 - 工具输出优先使用 MCP tools 的标准结构化结果。
-- 不再把自定义 `interaction`、`continuation`、`handoff_options` 作为主协议。
+- 不再把自定义 `interaction`、`continuation` 或重复菜单协议作为主协议。
 
 `workflow_state` 常见字段：
 
@@ -109,6 +109,11 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 - `blocked_reason`
 - `skill_source`
 - `memory_preflight`
+
+workflow artifacts 还会附带两类宿主展示兜底字段：
+
+- `phase_summary`：当前阶段摘要、要点和建议展示内容
+- `choice_menu`：结构化下一步菜单；当 Elicitation 渲染异常时，宿主应直接使用该字段展示选项
 
 ## 推荐组合链路
 

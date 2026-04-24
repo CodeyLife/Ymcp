@@ -20,6 +20,9 @@ def test_plan_engine_direct_mode_requests_standard_next_step_input():
     assert result.status is ToolStatus.OK
     assert result.artifacts.workflow_state.current_phase == "direct_plan"
     assert result.artifacts.requested_input is not None
+    assert result.artifacts.phase_summary is not None
+    assert result.artifacts.choice_menu is not None
+    assert result.artifacts.choice_menu.recommended_option_id == "ralph"
     assert result.artifacts.recommended_next_tool is None
     assert result.artifacts.workflow_state.memory_preflight.required is True
 
@@ -70,8 +73,11 @@ def test_deep_interview_engine_can_crystallize():
     assert result.artifacts.workflow_state.readiness == "needs_user_choice"
     assert result.artifacts.requested_input is not None
     assert result.artifacts.selected_next_tool is None
-    assert {option.id for option in result.artifacts.handoff_options} == {"ralplan", "plan", "ralph", "refine_further"}
-    assert next(option for option in result.artifacts.handoff_options if option.id == "ralplan").recommended is True
+    assert result.artifacts.phase_summary is not None
+    assert result.artifacts.choice_menu is not None
+    assert result.artifacts.choice_menu.recommended_option_id == "ralplan"
+    assert {option.id for option in result.artifacts.choice_menu.options} == {"ralplan", "plan", "ralph", "refine_further"}
+    assert next(option for option in result.artifacts.choice_menu.options if option.id == "ralplan").recommended is True
 
 
 def test_deep_interview_crystallize_does_not_auto_select_next_tool():
@@ -98,6 +104,8 @@ def test_ralplan_engine_returns_architect_review_first():
     assert result.status is ToolStatus.OK
     assert result.artifacts.workflow_state.current_phase == "planner_draft"
     assert result.artifacts.architect_review_prompt
+    assert result.artifacts.phase_summary is not None
+    assert "Planner" in result.artifacts.phase_summary.title
     assert result.artifacts.workflow_state.memory_preflight.required is True
 
 
@@ -105,6 +113,7 @@ def test_ralplan_engine_requires_revision_when_critic_feedback_present():
     result = build_ralplan(RalplanRequest(task="规划 Ymcp workflow refactor", current_phase="critic_review", critic_feedback=["补充测试"]))
     assert result.status is ToolStatus.NEEDS_INPUT
     assert result.artifacts.workflow_state.current_phase == "revise"
+    assert result.artifacts.workflow_state.readiness == "needs_revision"
     assert result.artifacts.critic_verdict == "REVISE"
 
 
@@ -114,8 +123,10 @@ def test_ralplan_engine_approves_and_requests_standard_next_step():
     assert result.artifacts.workflow_state.current_phase == "approved"
     assert result.artifacts.approved_plan_summary is not None
     assert result.artifacts.requested_input is not None
-    assert {option.id for option in result.artifacts.handoff_options} == {"ralph", "plan", "mempalace_add_drawer"}
-    assert next(option for option in result.artifacts.handoff_options if option.id == "ralph").recommended is True
+    assert result.artifacts.phase_summary is not None
+    assert result.artifacts.choice_menu is not None
+    assert result.artifacts.choice_menu.recommended_option_id == "ralph"
+    assert {option.id for option in result.artifacts.choice_menu.options} == {"ralph", "plan", "mempalace_add_drawer"}
 
 
 def test_ralph_engine_requires_evidence_and_verification():
@@ -185,6 +196,36 @@ def test_ralph_engine_complete_requests_next_step_choice():
     assert result.status is ToolStatus.OK
     assert result.artifacts.stop_continue_judgement == "complete"
     assert result.artifacts.requested_input is not None
+    assert result.artifacts.phase_summary is not None
+    assert result.artifacts.choice_menu is not None
+    assert result.artifacts.choice_menu.recommended_option_id == "mempalace_add_drawer"
+    finish = next(option for option in result.artifacts.choice_menu.options if option.id == "finish")
+    assert finish.kind == "host_action"
+    assert finish.action == "finish"
+    assert finish.tool is None
+
+
+def test_workflow_choice_options_use_explicit_kind_semantics():
+    deep = build_deep_interview(
+        DeepInterviewRequest(
+            brief="为 Ymcp 的工作流工具建立状态机投影",
+            prior_rounds=[
+                {"question": "Q1", "answer": "解决宿主难以继续推进的问题"},
+                {"question": "Q2", "answer": "第一版不直接执行命令"},
+                {"question": "Q3", "answer": "输出必须可交给 Trae"},
+            ],
+            non_goals=["不做 agent runtime"],
+            decision_boundaries=["宿主负责循环和执行"],
+            known_context=["当前已有 4 个 workflow tools"],
+            profile="quick",
+        )
+    )
+    assert all(option.kind == "tool" for option in deep.artifacts.choice_menu.options)
+
+    ralph = build_ralph(RalphRequest(approved_plan="Do the plan", current_phase="complete", latest_evidence=["pytest passed"], verification_commands=["pytest"]))
+    kinds = {option.id: option.kind for option in ralph.artifacts.choice_menu.options}
+    assert kinds["mempalace_add_drawer"] == "tool"
+    assert kinds["finish"] == "host_action"
 
 
 

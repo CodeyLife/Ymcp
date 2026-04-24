@@ -47,7 +47,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name="deep_interview",
-        description="需求不明确时通过 MCP Elicitation 收集澄清回答；结晶后返回 handoff_options，宿主必须等待用户选择下一步 workflow。",
+        description="需求不明确时通过 MCP Elicitation 收集澄清回答；结晶后返回 choice_menu，宿主必须等待用户选择下一步 workflow。",
         request_model=DeepInterviewRequest,
         response_model=DeepInterviewResult,
         handler=build_deep_interview,

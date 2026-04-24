@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import MemoryContext, WorkflowChoiceOption, WorkflowState
+from ymcp.contracts.workflow import MemoryContext, WorkflowChoiceMenu, WorkflowPhaseSummary, WorkflowState
 
 
 class InterviewRound(BaseModel):
@@ -52,9 +52,10 @@ class DeepInterviewArtifacts(BaseModel):
     scores: DimensionScores
     transcript_delta: list[InterviewRound]
     workflow_state: WorkflowState
+    phase_summary: WorkflowPhaseSummary | None = None
     requested_input: str | None = None
     selected_next_tool: str | None = None
-    handoff_options: list[WorkflowChoiceOption] = Field(default_factory=list)
+    choice_menu: WorkflowChoiceMenu | None = None
     spec_skeleton: SpecSkeleton | None = None
 
 

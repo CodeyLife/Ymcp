@@ -8,7 +8,7 @@ TRAE_PROJECT_RULE_TEMPLATE = """
 
 ## 对话结束规则
 
-- 当 `deep_interview` 返回 `handoff_options` 时，必须让用户从结构化后续 workflow 选项中做选择。
+- 当 `deep_interview` 返回 `choice_menu` 时，必须让用户从结构化后续 workflow 选项中做选择。
 - 在 `selected_next_tool` 缺失前，禁止宿主自动调用 `plan`、`ralplan`、`ralph`。
 - 禁止用“这个计划是否符合预期”之类普通文本结束对话。
 

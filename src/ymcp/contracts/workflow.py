@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 MEMORY_PROTOCOL_STEPS = [
@@ -37,9 +39,37 @@ class WorkflowChoiceOption(BaseModel):
     id: str
     label: str
     description: str
-    tool: str
+    kind: Literal["tool", "host_action"] = "tool"
+    tool: str | None = None
+    action: str | None = None
     recommended: bool = False
     requires_user_selection: bool = True
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "WorkflowChoiceOption":
+        if self.kind == "tool":
+            if not self.tool:
+                raise ValueError("tool options must define tool")
+            self.action = None
+        else:
+            if not self.action:
+                raise ValueError("host_action options must define action")
+            self.tool = None
+        return self
+
+
+class WorkflowChoiceMenu(BaseModel):
+    title: str
+    prompt: str
+    options: list[WorkflowChoiceOption] = Field(default_factory=list)
+    recommended_option_id: str | None = None
+    fallback_instructions: str | None = None
+
+
+class WorkflowPhaseSummary(BaseModel):
+    title: str
+    summary: str
+    highlights: list[str] = Field(default_factory=list)
 
 
 class WorkflowState(BaseModel):

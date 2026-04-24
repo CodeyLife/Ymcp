@@ -6,7 +6,7 @@
 - Tools 用于执行动作、查询外部系统、产生结构化结果；Resources 用于读取项目原则、规则模板、工具参考和记忆协议；Prompts 用于生成可复用调用模板。
 - 一切流程优先遵守 MCP 官方标准能力；不要为 workflow 自定义宿主私有交互协议。
 - 用户输入、选择和表单交互优先使用 MCP Elicitation；不支持 Elicitation 时，仅返回标准结构化工具结果说明缺失输入。
-- 工具输出使用 MCP tools 的标准结构化结果；不要依赖自定义 `interaction`、`continuation`、`handoff_options` 作为主协议。
+- 工具输出使用 MCP tools 的标准结构化结果；不要依赖自定义 `interaction`、`continuation` 或重复菜单协议作为主协议。
 - 文档型上下文必须同时暴露为 Resource；可复用提示必须同时暴露为 Prompt。
 
 ## 记忆规则

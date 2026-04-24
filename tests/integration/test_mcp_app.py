@@ -100,7 +100,7 @@ def test_deep_interview_accepts_json_string_lists_from_host():
     anyio.run(_run)
 
 
-def test_deep_interview_crystallize_exposes_handoff_options():
+def test_deep_interview_crystallize_exposes_choice_menu():
     async def _run():
         app = create_app()
         result = await app.call_tool(
@@ -123,8 +123,10 @@ def test_deep_interview_crystallize_exposes_handoff_options():
         structured = result[1] if isinstance(result, tuple) else result
         assert structured["status"] == "needs_input"
         assert structured["artifacts"]["workflow_state"]["readiness"] == "needs_user_choice"
-        assert {item["id"] for item in structured["artifacts"]["handoff_options"]} == {"ralplan", "plan", "ralph", "refine_further"}
         assert structured["artifacts"]["selected_next_tool"] is None
+        assert structured["artifacts"]["phase_summary"]["title"]
+        assert structured["artifacts"]["choice_menu"]["recommended_option_id"] == "ralplan"
+        assert {item["id"] for item in structured["artifacts"]["choice_menu"]["options"]} == {"ralplan", "plan", "ralph", "refine_further"}
     anyio.run(_run)
 
 
@@ -138,7 +140,7 @@ def test_deep_interview_elicitation_schema_uses_standard_single_choice_shape():
     assert any(item["title"] == "ralplan（推荐）" for item in next_tool["oneOf"])
 
 
-def test_ralplan_approved_exposes_handoff_options():
+def test_ralplan_approved_exposes_choice_menu():
     async def _run():
         app = create_app()
         result = await app.call_tool(
@@ -150,8 +152,45 @@ def test_ralplan_approved_exposes_handoff_options():
         )
         structured = result[1] if isinstance(result, tuple) else result
         assert structured["artifacts"]["workflow_state"]["current_phase"] == "approved"
-        assert {item["id"] for item in structured["artifacts"]["handoff_options"]} == {"ralph", "plan", "mempalace_add_drawer"}
         assert structured["artifacts"]["selected_next_tool"] is None
+        assert structured["artifacts"]["phase_summary"]["title"]
+        assert structured["artifacts"]["choice_menu"]["recommended_option_id"] == "ralph"
+        assert {item["id"] for item in structured["artifacts"]["choice_menu"]["options"]} == {"ralph", "plan", "mempalace_add_drawer"}
+    anyio.run(_run)
+
+
+def test_plan_direct_and_ralph_complete_expose_fallback_choice_menus():
+    async def _run():
+        app = create_app()
+        plan_result = await app.call_tool(
+            "plan",
+            {
+                "task": "为 Ymcp 工作流提供状态机输出",
+                "mode": "direct",
+                "constraints": ["宿主控制执行"],
+            },
+        )
+        plan_structured = plan_result[1] if isinstance(plan_result, tuple) else plan_result
+        assert plan_structured["artifacts"]["phase_summary"]["title"]
+        assert plan_structured["artifacts"]["choice_menu"]["recommended_option_id"] == "ralph"
+
+        ralph_result = await app.call_tool(
+            "ralph",
+            {
+                "approved_plan": "Implement workflow state machine",
+                "current_phase": "complete",
+                "latest_evidence": ["pytest passed"],
+                "verification_commands": ["python -m pytest"],
+            },
+        )
+        ralph_structured = ralph_result[1] if isinstance(ralph_result, tuple) else ralph_result
+        assert ralph_structured["artifacts"]["phase_summary"]["title"]
+        assert ralph_structured["artifacts"]["choice_menu"]["recommended_option_id"] == "mempalace_add_drawer"
+        finish = next(item for item in ralph_structured["artifacts"]["choice_menu"]["options"] if item["id"] == "finish")
+        assert finish["kind"] == "host_action"
+        assert finish["action"] == "finish"
+        assert finish["tool"] is None
+
     anyio.run(_run)
 
 
