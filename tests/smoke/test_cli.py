@@ -71,6 +71,7 @@ def test_doctor_json_command(capsys):
     assert payload["python"]["supported"] is True
     assert "mcp" in payload["packages"]
     assert payload["mempalace"]["default_wing"] == "personal"
+    assert payload["mempalace"]["wing_resolution"] == "wing → project_id → project_root → YMCP_DEFAULT_WING → personal"
     assert payload["trae"]["recommended_config_command"] == "ymcp print-config --host trae"
 
 

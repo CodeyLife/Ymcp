@@ -18,7 +18,7 @@ Ymcp 的第一原则是 FastMCP-first：所有能力按 **Tools / Resources / Pr
 
 # 记忆工具
 
-默认记忆空间：`wing="personal"`、`room="ymcp"`。
+默认记忆空间解析：优先使用显式 `wing`，否则使用宿主提供的 `project_id`，再退化到 `project_root` 目录名 slug，最后才回退 `wing="personal"`；默认 `room="ymcp"`。
 
 Ymcp 的记忆工具统一通过 MemPalace MCP 服务执行。
 
@@ -32,10 +32,10 @@ Ymcp 的记忆工具统一通过 MemPalace MCP 服务执行。
 - 已保存事实变化时，用 `mempalace_update_drawer`、`mempalace_delete_drawer`、`mempalace_kg_invalidate`、`mempalace_kg_add` 维护一致性。
 
 ## mempalace_add_drawer
-写入一条 MemPalace 长期记忆。
+写入一条 MemPalace 长期记忆。宿主可传 `project_id` / `project_root`，Ymcp 会在 `wing` 缺失时自动解析项目级 wing。
 
 ## mempalace_search
-从 MemPalace 中搜索长期记忆。
+从 MemPalace 中搜索长期记忆。宿主可传 `project_id` / `project_root`，Ymcp 会在 `wing` 缺失时默认按当前项目 wing 过滤。
 
 ## mempalace_get_drawer / mempalace_update_drawer / mempalace_delete_drawer
 通过 `drawer_id` 读取、更新或删除记忆。

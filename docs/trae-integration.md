@@ -84,12 +84,19 @@ Ymcp 不执行命令、不 spawn agent、不修改文件、不持久化循环。
 
 ## 9. 记忆工具使用指南
 
-Ymcp 的记忆工具基于 MemPalace。默认使用 `~/.yjj` 作为记忆库目录，并写入全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
+Ymcp 的记忆工具基于 MemPalace。默认使用 `~/.yjj` 作为记忆库目录。记忆 wing 采用项目感知解析链：显式 `wing` → `project_id` → `project_root` 目录名 slug → `YMCP_DEFAULT_WING` → `personal`；默认 `room="ymcp"`。
 
 当前记忆接入已经统一为 MCP-only：
 
 - Ymcp 通过 `python -m mempalace.mcp_server` 与 MemPalace 通信
 - 所有 `memory_*` 工具都经由 MemPalace MCP tool 调用完成
+
+推荐宿主在记忆工具调用时统一补充：
+
+- `project_id`：稳定项目 ID，优先决定 wing
+- `project_root`：当前工程根目录，作为 `project_id` 缺失时的回退来源
+
+如果宿主不传任何项目上下文，Ymcp 才会回退到 `personal`。
 
 ### Memory Protocol（建议宿主纳入固定协议）
 

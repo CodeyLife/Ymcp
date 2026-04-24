@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from ymcp.contracts.common import ToolStatus
@@ -24,6 +25,11 @@ TRACE_MEMORY_ENV = "YMCP_TRACE_MEMORY"
 MEMPALACE_MCP_TIMEOUT_ENV = "YMCP_MEMPALACE_MCP_TIMEOUT_SECONDS"
 MEMPALACE_MCP_MODULE = "mempalace.mcp_server"
 DEFAULT_MCP_TIMEOUT_SECONDS = 15.0
+DEFAULT_MEMORY_WING = "personal"
+DEFAULT_MEMORY_ROOM = "ymcp"
+DEFAULT_WING_ENV = "YMCP_DEFAULT_WING"
+PROJECT_AWARE_WING_TOOLS = {"mempalace_add_drawer", "mempalace_search", "mempalace_list_drawers", "mempalace_list_rooms"}
+PROJECT_CONTEXT_KEYS = ("project_id", "project_root")
 
 class MempalaceRelayError(RuntimeError):
     """Base error for relay transport failures."""
@@ -223,11 +229,82 @@ def _safe_payload_summary(kwargs: dict[str, Any]) -> dict[str, Any]:
         preview = _preview_text(value)
         if preview is not None:
             payload[f"{key}_preview"] = preview
-    for key in ("limit", "max_distance", "min_similarity", "source_file", "added_by", "drawer_id"):
+    for key in ("limit", "max_distance", "min_similarity", "source_file", "added_by", "drawer_id", "wing", "room", "project_id", "project_root"):
         value = kwargs.get(key)
         if value is not None:
             payload[key] = value
     return payload
+
+
+
+def _slugify_wing(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    parts: list[str] = []
+    previous_dash = False
+    for char in text:
+        if char.isascii() and char.isalnum():
+            parts.append(char)
+            previous_dash = False
+            continue
+        if char in {"-", "_"}:
+            parts.append(char)
+            previous_dash = False
+            continue
+        if previous_dash:
+            continue
+        parts.append("-")
+        previous_dash = True
+    slug = "".join(parts).strip("-_")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug or None
+
+
+
+def _derive_wing_from_project_root(project_root: Any) -> str | None:
+    raw = str(project_root or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    name = path.name or path.resolve().name
+    return _slugify_wing(name)
+
+
+
+def _resolve_memory_wing(tool_name: str, kwargs: dict[str, Any]) -> tuple[str | None, str | None]:
+    explicit_wing = kwargs.get("wing")
+    if explicit_wing is not None and str(explicit_wing).strip():
+        return str(explicit_wing).strip(), "explicit"
+
+    project_id = kwargs.get("project_id")
+    resolved_from_project_id = _slugify_wing(project_id)
+    if resolved_from_project_id:
+        return resolved_from_project_id, "project_id"
+
+    resolved_from_project_root = _derive_wing_from_project_root(kwargs.get("project_root"))
+    if resolved_from_project_root:
+        return resolved_from_project_root, "project_root"
+
+    env_default = _slugify_wing(os.getenv(DEFAULT_WING_ENV, ""))
+    if env_default:
+        return env_default, "env"
+
+    if tool_name in PROJECT_AWARE_WING_TOOLS:
+        return DEFAULT_MEMORY_WING, "fallback"
+    return None, None
+
+
+
+def _prepare_memory_kwargs(tool_name: str, kwargs: dict[str, Any]) -> tuple[dict[str, Any], str | None, str | None]:
+    prepared = dict(kwargs)
+    resolved_wing, wing_source = _resolve_memory_wing(tool_name, prepared)
+    if resolved_wing and tool_name in PROJECT_AWARE_WING_TOOLS and not prepared.get("wing"):
+        prepared["wing"] = resolved_wing
+    for key in PROJECT_CONTEXT_KEYS:
+        prepared.pop(key, None)
+    return prepared, resolved_wing, wing_source
 
 
 
@@ -369,7 +446,7 @@ def memory_result(tool_name: str, operation: str, raw: Any) -> MemoryResult:
     return MemoryResult(
         status=status,
         summary=_summary(operation, raw_dict, status),
-        assumptions=["默认使用全局个人记忆空间。", "宿主负责判断哪些内容适合写入长期记忆。"],
+        assumptions=["Ymcp 会优先使用宿主提供的项目上下文解析 wing，缺失时才回退到 personal。", "宿主负责判断哪些内容适合写入长期记忆。"],
         next_actions=[build_next_action("查看结果", "由宿主展示或继续处理 MemPalace 返回的原始结果。")],
         risks=[build_risk("记忆写入是持久化副作用。", "写入前应避免保存密钥、隐私或未经确认的敏感信息。")],
         meta=build_meta(tool_name, "ymcp.contracts.memory.MemoryResult", host_controls=MEMORY_HOST_CONTROLS),
@@ -421,6 +498,8 @@ def _call_mempalace_tool_via_mcp(
     *args: Any,
     palace_path: str | None = None,
     request_id: str | None = None,
+    resolved_wing: str | None = None,
+    wing_source: str | None = None,
     **kwargs: Any,
 ) -> MemoryResult:
     if args:
@@ -437,6 +516,8 @@ def _call_mempalace_tool_via_mcp(
         request_id=request_id,
         mcp_tool_name=mcp_tool_name,
         palace_path=resolved_palace_path,
+        resolved_wing=resolved_wing,
+        wing_source=wing_source,
     )
     result = client.request("tools/call", {"name": mcp_tool_name, "arguments": tool_args})
     text = _extract_mcp_content_text(result)
@@ -510,6 +591,7 @@ def call_mempalace_tool(
     request_id = request_id or build_memory_request_id()
     pid = os.getpid()
     started_at = time.perf_counter()
+    prepared_kwargs, resolved_wing, wing_source = _prepare_memory_kwargs(tool_name, kwargs)
     memory_log_kv(
         "memory_call_start",
         tool_name=tool_name,
@@ -518,7 +600,9 @@ def call_mempalace_tool(
         request_id=request_id,
         pid=pid,
         palace_path=resolved_palace_path,
-        **_safe_payload_summary(kwargs),
+        resolved_wing=resolved_wing,
+        wing_source=wing_source,
+        **_safe_payload_summary(prepared_kwargs),
     )
 
     try:
@@ -528,7 +612,9 @@ def call_mempalace_tool(
             *args,
             palace_path=palace_path,
             request_id=request_id,
-            **kwargs,
+            resolved_wing=resolved_wing,
+            wing_source=wing_source,
+            **prepared_kwargs,
         )
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         memory_log_kv(
@@ -542,6 +628,8 @@ def call_mempalace_tool(
             status=result.status.value,
             result_count=result.artifacts.count,
             message=result.artifacts.message,
+            resolved_wing=resolved_wing,
+            wing_source=wing_source,
         )
         return result
     except MempalaceRelayProtocolError as exc:

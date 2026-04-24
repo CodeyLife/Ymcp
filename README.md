@@ -14,17 +14,6 @@ pip install -U ymcp
 python -m pip install -e .[dev]
 ```
 
-安装后建议检查：
-
-```powershell
-ymcp doctor
-ymcp --version
-ymcp inspect-tools --json
-ymcp inspect-resources --json
-ymcp inspect-prompts --json
-ymcp inspect-capabilities --json
-```
-
 一键初始化 Trae 与默认记忆库：
 
 ```powershell
@@ -42,31 +31,12 @@ Ymcp 的第一原则是：所有能力优先按 FastMCP / MCP 官方三原语组
 - **Prompts**：暴露可复用调用模板和标准工作流提示；Prompt 不直接执行工具，也不伪造工具结果。
 - **Elicitation**：当 Tool 执行中需要用户输入/选择时，优先使用 MCP 官方 Elicitation；不支持时返回标准 `needs_input` / `blocked` 结构化降级结果。
 
-标准 Resources：
-
-- `resource://ymcp/principles`
-- `resource://ymcp/tool-reference`
-- `resource://ymcp/memory-protocol`
-- `resource://ymcp/project-rule-template`
-- `resource://ymcp/host-integration`
-
-标准 Prompts：
-
-- `deep_interview_clarify`
-- `plan_direct`
-- `ralplan_consensus`
-- `ralplan_planner_pass`
-- `ralplan_architect_pass`
-- `ralplan_critic_pass`
-- `ralph_verify`
-- `memory_store_after_completion`
-
 禁止用自定义宿主协议替代 MCP 原语；禁止把文档型上下文只放在 Markdown 中而不暴露为 Resource；禁止把可复用提示只写在文档中而不暴露为 Prompt。
 
 
 ## 记忆工具
 
-Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用 `~/.yjj` 作为 MemPalace 记忆库目录，并写入全局个人记忆空间：`wing="personal"`、`room="ymcp"`。
+Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用 `~/.yjj` 作为 MemPalace 记忆库目录。记忆 wing 现在按项目上下文解析：优先使用显式 `wing`，否则使用宿主提供的 `project_id`，再退化到 `project_root` 目录名 slug，最后才回退到 `wing="personal"`；默认 `room="ymcp"`。
 
 当前实现已统一为单一路径：
 
@@ -75,6 +45,13 @@ Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用 `~/.yjj` 作为 
 - 所有记忆读写、检索、图谱与 diary 能力都统一经过这条 MCP 调用链
 
 Memory Protocol：回答人物、项目、历史事件或过往决策前先查 `mempalace_search` / `mempalace_get_drawer`，不要凭印象猜；任务结束后把稳定偏好、项目约定、重要决策和踩坑结论写入 `mempalace_add_drawer` 或 `mempalace_diary_write`；事实变化时用更新、删除或 KG 失效工具维护旧记忆。
+
+推荐宿主在记忆工具调用里补充：
+
+- `project_id`：稳定的项目标识，优先用于生成 wing
+- `project_root`：工程根目录，作为 `project_id` 缺失时的回退来源
+
+这样不同工程会自动写入不同的 wing，而不是全部落到 `personal`。
 
 常用工具：
 

@@ -61,6 +61,53 @@ def test_call_mempalace_tool_prefers_mcp_relay(monkeypatch):
     assert result.meta.tool_name == "mempalace_search"
 
 
+def test_call_mempalace_tool_derives_wing_from_project_id(monkeypatch):
+    from ymcp import memory
+
+    captured = {}
+
+    def fake_relay(tool_name, operation, *args, **kwargs):
+        captured.update(kwargs)
+        return memory_result("mempalace_add_drawer", "mempalace_add_drawer", {"saved": True})
+
+    monkeypatch.setattr(memory, "_call_mempalace_tool_via_mcp", fake_relay)
+    monkeypatch.setattr(memory, "mempalace_palace_path", lambda: r"C:\Users\BSTECH05\.yjj")
+
+    memory.call_mempalace_tool(
+        "mempalace_add_drawer",
+        "mempalace_add_drawer",
+        project_id="Team Ymcp",
+        room="decisions",
+        content="kept",
+    )
+
+    assert captured["wing"] == "team-ymcp"
+    assert "project_id" not in captured
+    assert "project_root" not in captured
+
+
+def test_call_mempalace_tool_derives_wing_from_project_root(monkeypatch):
+    from ymcp import memory
+
+    captured = {}
+
+    def fake_relay(tool_name, operation, *args, **kwargs):
+        captured.update(kwargs)
+        return memory_result("mempalace_search", "mempalace_search", {"results": []})
+
+    monkeypatch.setattr(memory, "_call_mempalace_tool_via_mcp", fake_relay)
+    monkeypatch.setattr(memory, "mempalace_palace_path", lambda: r"C:\Users\BSTECH05\.yjj")
+
+    memory.call_mempalace_tool(
+        "mempalace_search",
+        "mempalace_search",
+        query="Ymcp",
+        project_root=r"D:\GithubProject\Ymcp",
+    )
+
+    assert captured["wing"] == "ymcp"
+
+
 def test_call_mempalace_tool_raises_on_relay_error(monkeypatch):
     from ymcp import memory
 
@@ -104,12 +151,14 @@ def test_call_mempalace_tool_emits_trace_logs_when_enabled(monkeypatch, caplog):
             "mempalace_search",
             query="Ymcp 发布流程",
             request_id="req123",
+            project_id="Ymcp Project",
         )
 
     assert result.artifacts.count == 1
     messages = [record.getMessage() for record in caplog.records]
     assert any("event=memory_call_start" in message and "request_id=req123" in message for message in messages)
     assert any("event=memory_call_end" in message and "transport=mcp_relay" in message for message in messages)
+    assert any("resolved_wing=ymcp-project" in message and "wing_source=project_id" in message for message in messages)
 
 
 def test_call_mempalace_tool_trace_logs_are_disabled_by_default(monkeypatch, caplog):

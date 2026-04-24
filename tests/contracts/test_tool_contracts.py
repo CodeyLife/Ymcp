@@ -48,6 +48,9 @@ def test_inspect_schema_matches_mempalace_native_parameter_names():
     assert "room" in payload["mempalace_follow_tunnels"]["request_schema"]["properties"]
     assert "last_n" in payload["mempalace_diary_read"]["request_schema"]["properties"]
     assert "source_closet" in payload["mempalace_kg_add"]["request_schema"]["properties"]
+    assert "project_id" in payload["mempalace_add_drawer"]["request_schema"]["properties"]
+    assert "project_root" in payload["mempalace_search"]["request_schema"]["properties"]
+    assert "wing" not in payload["mempalace_add_drawer"]["request_schema"].get("required", [])
 
 
 def test_docs_do_not_publish_plugin_or_catalog_api():

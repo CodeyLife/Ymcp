@@ -247,7 +247,9 @@ def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, reque
     parameters: list[inspect.Parameter] = []
     annotations: dict[str, Any] = {"return": dict[str, Any]}
 
-    for field_name, field_info in fields.items():
+    ordered_fields = sorted(fields.items(), key=lambda item: (not item[1].is_required(),))
+
+    for field_name, field_info in ordered_fields:
         if field_name == "schema_version":
             continue
         field_dict = field_info.asdict()

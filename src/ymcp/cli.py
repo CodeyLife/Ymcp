@@ -18,7 +18,7 @@ from ymcp.capabilities import get_prompt_specs, get_resource_specs
 from ymcp.fixtures import FIXTURES, fixture_for
 from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 from ymcp.internal_registry import get_tool_specs
-from ymcp.memory import mempalace_palace_path, mempalace_version, memory_log_kv
+from ymcp.memory import DEFAULT_MEMORY_ROOM, DEFAULT_MEMORY_WING, mempalace_palace_path, mempalace_version, memory_log_kv
 from ymcp.server import configure_logging, create_app
 
 
@@ -210,8 +210,9 @@ def doctor_payload() -> dict[str, Any]:
         "mempalace": {
             "version": mempalace_version(),
             "palace_path": mempalace_palace_path(),
-            "default_wing": "personal",
-            "default_room": "ymcp",
+            "default_wing": DEFAULT_MEMORY_WING,
+            "default_room": DEFAULT_MEMORY_ROOM,
+            "wing_resolution": "wing → project_id → project_root → YMCP_DEFAULT_WING → personal",
         },
     }
 

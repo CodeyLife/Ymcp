@@ -25,7 +25,11 @@ MEMPALACE_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     {
         "name": "mempalace_list_rooms",
         "description": "List rooms within a wing (or all rooms if no wing given)",
-        "properties": {"wing": {"type": "string", "description": "Wing to list rooms for (optional)"}},
+        "properties": {
+            "wing": {"type": "string", "description": "Wing to list rooms for (optional)"},
+            "project_id": {"type": "string", "description": "Stable host-provided project ID used to derive a default wing when wing is omitted"},
+            "project_root": {"type": "string", "description": "Host workspace/project root path used to derive a default wing when project_id and wing are omitted"},
+        },
         "required": [],
     },
     {"name": "mempalace_get_taxonomy", "description": "Full taxonomy: wing → room → drawer count", "properties": {}, "required": []},
@@ -139,6 +143,8 @@ MEMPALACE_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "room": {"type": "string", "description": "Filter by room (optional)"},
             "max_distance": {"type": "number", "description": "Max cosine distance threshold (0=identical, 2=opposite). Results further than this are dropped. Lower = stricter. Default 1.5. Set to 0 to disable."},
             "context": {"type": "string", "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking."},
+            "project_id": {"type": "string", "description": "Stable host-provided project ID used to derive a default wing filter when wing is omitted"},
+            "project_root": {"type": "string", "description": "Host workspace/project root path used to derive a default wing filter when project_id and wing are omitted"},
         },
         "required": ["query"],
     },
@@ -153,15 +159,17 @@ MEMPALACE_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "mempalace_add_drawer",
-        "description": "File verbatim content into the palace. Checks for duplicates first.",
+        "description": "File verbatim content into the palace. Checks for duplicates first. If wing is omitted, Ymcp derives it from host project context before falling back to personal.",
         "properties": {
-            "wing": {"type": "string", "description": "Wing (project name)"},
+            "wing": {"type": "string", "description": "Wing (project name). Optional when host supplies project_id/project_root."},
             "room": {"type": "string", "description": "Room (aspect: backend, decisions, meetings...)"},
             "content": {"type": "string", "description": "Verbatim content to store — exact words, never summarized"},
             "source_file": {"type": "string", "description": "Where this came from (optional)"},
             "added_by": {"type": "string", "description": "Who is filing this (default: mcp)"},
+            "project_id": {"type": "string", "description": "Stable host-provided project ID used to derive the wing when wing is omitted"},
+            "project_root": {"type": "string", "description": "Host workspace/project root path used to derive the wing when project_id and wing are omitted"},
         },
-        "required": ["wing", "room", "content"],
+        "required": ["room", "content"],
     },
     {
         "name": "mempalace_delete_drawer",
@@ -183,6 +191,8 @@ MEMPALACE_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "room": {"type": "string", "description": "Filter by room (optional)"},
             "limit": {"type": "integer", "description": "Max results per page (default 20, max 100)", "minimum": 1, "maximum": 100},
             "offset": {"type": "integer", "description": "Offset for pagination (default 0)", "minimum": 0},
+            "project_id": {"type": "string", "description": "Stable host-provided project ID used to derive a default wing filter when wing is omitted"},
+            "project_root": {"type": "string", "description": "Host workspace/project root path used to derive a default wing filter when project_id and wing are omitted"},
         },
         "required": [],
     },
@@ -275,4 +285,3 @@ def _build_request_model(tool_schema: dict[str, Any]) -> type[WorkflowRequestBas
 MEMPALACE_REQUEST_MODELS: dict[str, type[WorkflowRequestBase]] = {
     tool_schema["name"]: _build_request_model(tool_schema) for tool_schema in MEMPALACE_TOOL_SCHEMAS
 }
-
