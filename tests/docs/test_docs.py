@@ -63,10 +63,13 @@ def test_trae_memory_prompt_guide_is_present():
 def test_workflow_state_machine_docs_present():
     trae = Path("docs/trae-integration.md").read_text(encoding="utf-8")
     reference = Path("docs/tool-reference.md").read_text(encoding="utf-8")
+    contract = Path("docs/workflow-contract.md").read_text(encoding="utf-8")
     assert "状态机投影" in trae
     assert "宿主负责循环" in trae
     assert "deep_interview" in trae and "ralplan" in trae and "ralph" in trae
     assert "workflow_state" in reference
+    assert "字段职责分层" in contract
+    assert "summary" in contract and "phase_summary" in contract and "workflow_state" in contract
 
 
 
@@ -100,6 +103,17 @@ def test_memory_preflight_docs_present():
 def test_project_rule_template_contains_memory_protocol_rules():
     template = TRAE_PROJECT_RULE_TEMPLATE
     assert "mempalace_search" in template
-    assert "mempalace_diary_write" in template
-    assert "mempalace_kg_invalidate" in template
+    assert "不要在 Elicitation 节点直接结束对话" in template
+    assert "docs/workflow-contract.md" in template
+
+
+def test_elicitation_docs_require_options_instead_of_ending_conversation():
+    host = Path("docs/host-integration.md").read_text(encoding="utf-8")
+    contract = Path("docs/workflow-contract.md").read_text(encoding="utf-8")
+    guide = Path("docs/host-implementation-guide.md").read_text(encoding="utf-8")
+    assert "不要在 Elicitation 节点直接结束对话" in host
+    assert "展示官方 Elicitation 选项" in host
+    assert "不要在 Elicitation 节点直接结束对话" in guide
+    assert "当前流程停在需要显式选择/输入的节点" in guide
+    assert "不应在 Elicitation 节点直接结束对话" in contract or "不要用结束文案收尾" in contract
 

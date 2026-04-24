@@ -35,6 +35,61 @@ class WorkflowPhaseSummary(BaseModel):
     highlights: list[str] = Field(default_factory=list)
 
 
+class ClarityScore(BaseModel):
+    dimension: str
+    score: float = Field(ge=0.0, le=1.0)
+    justification: str
+    gap: str
+
+
+class ReadinessGates(BaseModel):
+    non_goals_resolved: bool = False
+    decision_boundaries_resolved: bool = False
+    pressure_pass_complete: bool = False
+
+
+class HandoffContract(BaseModel):
+    tool: str
+    input_artifact: str
+    consumer_expectations: list[str] = Field(default_factory=list)
+    already_satisfied_stages: list[str] = Field(default_factory=list)
+    residual_risk: list[str] = Field(default_factory=list)
+
+
+class QualityCheck(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+
+
+class OptionSummary(BaseModel):
+    name: str
+    summary: str
+    pros: list[str] = Field(default_factory=list)
+    cons: list[str] = Field(default_factory=list)
+
+
+class ADRSection(BaseModel):
+    decision: str
+    drivers: list[str] = Field(default_factory=list)
+    alternatives_considered: list[str] = Field(default_factory=list)
+    why_chosen: str
+    consequences: list[str] = Field(default_factory=list)
+    follow_ups: list[str] = Field(default_factory=list)
+
+
+class CompletionGate(BaseModel):
+    name: str
+    satisfied: bool
+    detail: str
+
+
+class HandoffGuidance(BaseModel):
+    summary_to_pass: str
+    constraints_to_preserve: list[str] = Field(default_factory=list)
+    expected_verification_evidence: list[str] = Field(default_factory=list)
+
+
 class WorkflowState(BaseModel):
     workflow_name: str
     current_phase: str
@@ -42,3 +97,4 @@ class WorkflowState(BaseModel):
     evidence_gaps: list[str] = Field(default_factory=list)
     blocked_reason: str | None = None
     memory_preflight: MemoryPreflight | None = None
+    current_focus: str | None = None

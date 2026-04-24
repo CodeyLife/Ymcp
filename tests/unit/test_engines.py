@@ -16,7 +16,7 @@ from ymcp.engine.ralph import build_ralph
 def test_plan_output_is_minimal_and_clear():
     result = build_plan(PlanRequest(task="为 Ymcp 增加状态机工作流输出", constraints=["宿主控制执行"]))
     assert result.status is ToolStatus.OK
-    assert result.artifacts.plan_summary
+    assert result.artifacts.plan_markdown_draft
     assert result.artifacts.selected_next_tool is None
 
 
@@ -25,6 +25,53 @@ def test_deep_interview_output_is_minimal_and_clear():
     assert result.status is ToolStatus.NEEDS_INPUT
     assert result.artifacts.next_question is not None
     assert result.artifacts.spec_skeleton is None
+    assert result.artifacts.ambiguity_score is not None
+    assert result.artifacts.readiness_gates is not None
+
+
+def test_deep_interview_brownfield_requires_host_context_instead_of_user_repo_guessing():
+    result = build_deep_interview(DeepInterviewRequest(brief="Refactor the existing router", context_type="brownfield"))
+    assert result.artifacts.workflow_state.readiness == "needs_host_context"
+    assert result.artifacts.next_question is None
+    assert any("repo_findings" in gap for gap in result.artifacts.workflow_state.evidence_gaps)
+
+
+def test_deep_interview_does_not_crystallize_until_pressure_pass_is_complete():
+    result = build_deep_interview(
+        DeepInterviewRequest(
+            brief="Build MCP workflows",
+            non_goals=["不直接执行命令"],
+            decision_boundaries=["UI 文案可由宿主决定"],
+            prior_rounds=[
+                {"question": "Round 1 | Target: intent | Ambiguity: 80%\n\n你最希望这个需求解决的核心痛点是什么？", "answer": "希望宿主不再误结束。"},
+                {"question": "Round 2 | Target: outcome | Ambiguity: 60%\n\n完成后最小可验证结果是什么？", "answer": "宿主能持续推进到 handoff。"},
+            ],
+        )
+    )
+    assert result.artifacts.readiness_gates.pressure_pass_complete is False
+    assert result.artifacts.spec_skeleton is None
+
+
+def test_deep_interview_can_crystallize_with_execution_spec_and_handoffs():
+    result = build_deep_interview(
+        DeepInterviewRequest(
+            brief="Build MCP workflows",
+            non_goals=["不直接执行命令"],
+            decision_boundaries=["文案细节可由宿主决定"],
+            known_context=["workflow server"],
+            repo_findings=["src/ymcp/server.py exposes elicitation hooks"],
+            prior_rounds=[
+                {"question": "Round 1 | Target: intent | Ambiguity: 80%\n\n你最希望这个需求解决的核心痛点是什么？", "answer": "避免宿主过早结束 workflow。"},
+                {"question": "Round 2 | Target: outcome | Ambiguity: 60%\n\n完成后最小可验证结果是什么？", "answer": "deep_interview 返回可交给后续 workflow 的规格。"},
+                {"question": "Round 3 | Target: success | Ambiguity: 40%\n\n请给出 2-3 条可测试的验收标准。", "answer": "- 返回 execution_spec\n- 返回 handoff_contracts"},
+                {"question": "Round 4 | Target: success | Ambiguity: 30%\n\n请给出 2-3 条可测试的验收标准。", "answer": "- 需要显式用户选择下一步 workflow"},
+            ],
+        )
+    )
+    assert result.artifacts.spec_skeleton is not None
+    assert result.artifacts.execution_spec is not None
+    assert {item.tool for item in result.artifacts.handoff_contracts} == {"ralplan", "plan", "ralph", "refine_further"}
+    assert result.artifacts.selected_next_tool is None
 
 
 def test_ralplan_chain_uses_explicit_handoffs():
@@ -33,13 +80,13 @@ def test_ralplan_chain_uses_explicit_handoffs():
 
     planner = build_ralplan_planner(RalplanPlannerRequest(task="分析 SignalR 推送链路", known_context=["CaseUpdatedHub"]))
     assert planner.meta.selected_next_tool == "ralplan_architect"
-    assert planner.artifacts.planner_draft
+    assert planner.artifacts.planner_markdown_draft
 
-    architect = build_ralplan_architect(RalplanArchitectRequest(task="分析 SignalR 推送链路", planner_draft=planner.artifacts.planner_draft, known_context=["CaseUpdatedHub"]))
+    architect = build_ralplan_architect(RalplanArchitectRequest(task="分析 SignalR 推送链路", planner_draft=planner.artifacts.planner_markdown_draft or "draft", known_context=["CaseUpdatedHub"]))
     assert architect.meta.selected_next_tool == "ralplan_critic"
     assert architect.artifacts.architect_review
 
-    critic = build_ralplan_critic(RalplanCriticRequest(task="分析 SignalR 推送链路", planner_draft=planner.artifacts.planner_draft, architect_review=architect.artifacts.architect_review, known_context=["CaseUpdatedHub"]))
+    critic = build_ralplan_critic(RalplanCriticRequest(task="分析 SignalR 推送链路", planner_draft=planner.artifacts.planner_markdown_draft or "draft", architect_review=architect.artifacts.architect_review, known_context=["CaseUpdatedHub"]))
     assert critic.artifacts.critic_verdict == "APPROVE"
     assert critic.meta.selected_next_tool == "ralplan_handoff"
 

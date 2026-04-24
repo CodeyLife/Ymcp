@@ -154,6 +154,21 @@ class DeepInterviewNextToolInput(BaseModel):
     next_tool: DeepInterviewNextToolChoice
 
 
+def _deep_interview_target_dimension(result) -> str | None:
+    strategy = getattr(result.artifacts, "question_strategy", None)
+    return getattr(strategy, "target_dimension", None)
+
+
+def _merge_deep_interview_answer(request: DeepInterviewRequest, result, answer_text: str) -> None:
+    target = _deep_interview_target_dimension(result)
+    if target == "scope":
+        request.non_goals = _split_lines(answer_text) or [answer_text.strip()]
+    elif target == "decision_boundaries":
+        request.decision_boundaries = _split_lines(answer_text) or [answer_text.strip()]
+    elif target == "context":
+        request.repo_findings = _split_lines(answer_text) or [answer_text.strip()]
+
+
 class PlanClarifyChoiceInput(BaseModel):
     next_action: PlanClarifyChoice
 
@@ -365,6 +380,7 @@ async def _maybe_elicit_deep_interview(ctx: Context | None, request: DeepIntervi
     if result.artifacts.next_question:
         answer = await ctx.elicit(result.artifacts.next_question, DeepInterviewAnswerInput)
         if answer.action == "accept":
+            _merge_deep_interview_answer(request, result, answer.data.answer)
             request.prior_rounds.append(InterviewRound(question=result.artifacts.next_question, answer=answer.data.answer))
             result = build_deep_interview(request)
         else:
@@ -519,23 +535,23 @@ def create_app() -> FastMCP:
         return await _maybe_elicit_plan(ctx, request)
 
     @app.tool(name="ralplan", description=descriptions["ralplan"], structured_output=True)
-    async def ralplan(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanResult:
-        request = RalplanRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), schema_version=schema_version)
+    async def ralplan(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanResult:
+        request = RalplanRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
         return build_ralplan(request)
 
     @app.tool(name="ralplan_planner", description=descriptions["ralplan_planner"], structured_output=True)
-    async def ralplan_planner(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, kickoff_summary: str | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanPlannerResult:
-        request = RalplanPlannerRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), kickoff_summary=kickoff_summary, schema_version=schema_version)
+    async def ralplan_planner(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, kickoff_summary: str | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanPlannerResult:
+        request = RalplanPlannerRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
         return build_ralplan_planner(request)
 
     @app.tool(name="ralplan_architect", description=descriptions["ralplan_architect"], structured_output=True)
-    async def ralplan_architect(task: str, planner_draft: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanArchitectResult:
-        request = RalplanArchitectRequest(task=task, planner_draft=planner_draft, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), schema_version=schema_version)
+    async def ralplan_architect(task: str, planner_draft: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanArchitectResult:
+        request = RalplanArchitectRequest(task=task, planner_draft=planner_draft, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
         return build_ralplan_architect(request)
 
     @app.tool(name="ralplan_critic", description=descriptions["ralplan_critic"], structured_output=True)
-    async def ralplan_critic(task: str, planner_draft: str, architect_review: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanCriticResult:
-        request = RalplanCriticRequest(task=task, planner_draft=planner_draft, architect_review=architect_review, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), schema_version=schema_version)
+    async def ralplan_critic(task: str, planner_draft: str, architect_review: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanCriticResult:
+        request = RalplanCriticRequest(task=task, planner_draft=planner_draft, architect_review=architect_review, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
         return build_ralplan_critic(request)
 
     @app.tool(name="ralplan_handoff", description=descriptions["ralplan_handoff"], structured_output=True)
@@ -544,13 +560,13 @@ def create_app() -> FastMCP:
         return await _maybe_elicit_ralplan_handoff(ctx, request)
 
     @app.tool(name="deep_interview", description=descriptions["deep_interview"], structured_output=True)
-    async def deep_interview(brief: str, prior_rounds: list[InterviewRound] | None = None, target_threshold: float = 0.2, profile: str = "standard", known_context: list[str] | None = None, memory_context: MemoryContext | None = None, non_goals: list[str] | None = None, decision_boundaries: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> DeepInterviewResult:
-        request = DeepInterviewRequest(brief=brief, prior_rounds=prior_rounds or [], target_threshold=target_threshold, profile=profile, known_context=known_context or [], memory_context=memory_context or MemoryContext(), non_goals=non_goals or [], decision_boundaries=decision_boundaries or [], schema_version=schema_version)
+    async def deep_interview(brief: str, prior_rounds: list[InterviewRound] | None = None, target_threshold: float = 0.2, profile: str = "standard", known_context: list[str] | None = None, repo_findings: list[str] | None = None, context_type: str | None = None, round_limit_override: int | None = None, memory_context: MemoryContext | None = None, non_goals: list[str] | None = None, decision_boundaries: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> DeepInterviewResult:
+        request = DeepInterviewRequest(brief=brief, prior_rounds=prior_rounds or [], target_threshold=target_threshold, profile=profile, known_context=known_context or [], repo_findings=repo_findings or [], context_type=context_type, round_limit_override=round_limit_override, memory_context=memory_context or MemoryContext(), non_goals=non_goals or [], decision_boundaries=decision_boundaries or [], schema_version=schema_version)
         return await _maybe_elicit_deep_interview(ctx, request)
 
     @app.tool(name="ralph", description=descriptions["ralph"], structured_output=True)
-    async def ralph(approved_plan: str, latest_evidence: list[str] | None = None, evidence: list[str] | None = None, current_phase: str = "executing", verification_commands: list[str] | None = None, known_failures: list[str] | None = None, iteration: int = 1, schema_version: str = "1.0", ctx: Context | None = None) -> RalphResult:
-        request = RalphRequest(approved_plan=approved_plan, latest_evidence=latest_evidence or evidence or [], current_phase=current_phase, verification_commands=verification_commands or [], known_failures=known_failures or [], iteration=iteration, schema_version=schema_version)
+    async def ralph(approved_plan: str, latest_evidence: list[str] | None = None, evidence: list[str] | None = None, current_phase: str = "executing", verification_commands: list[str] | None = None, verification_results: list[str] | None = None, known_failures: list[str] | None = None, regression_status: str | None = None, architect_review_summary: str | None = None, distillation_status: str | None = None, execution_context_present: bool = False, iteration: int = 1, max_iterations: int = 10, schema_version: str = "1.0", ctx: Context | None = None) -> RalphResult:
+        request = RalphRequest(approved_plan=approved_plan, latest_evidence=latest_evidence or evidence or [], current_phase=current_phase, verification_commands=verification_commands or [], verification_results=verification_results or [], known_failures=known_failures or [], regression_status=regression_status, architect_review_summary=architect_review_summary, distillation_status=distillation_status, execution_context_present=execution_context_present, iteration=iteration, max_iterations=max_iterations, schema_version=schema_version)
         return await _maybe_elicit_ralph(ctx, request)
 
     for tool_schema in MEMPALACE_TOOL_SCHEMAS:

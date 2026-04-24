@@ -29,6 +29,28 @@
 
 所有 workflow tool 都会返回 `status`、`meta` 与 `artifacts.workflow_state`。
 
+## 3.1 字段职责分层
+
+为避免宿主把展示字段当成控制字段，建议按以下层次消费：
+
+- `summary`
+  - **主结果摘要**
+  - 面向宿主主流程与默认展示
+  - 应优先表达“当前节点接下来需要什么动作/输入”
+- `artifacts.phase_summary`
+  - **阶段说明**
+  - 面向 UI / 日志 / richer explanation
+  - 适合解释“当前 phase 在做什么、为什么会停在这里”
+  - 不应替代 `meta.required_host_action`
+- `artifacts.workflow_state`
+  - **状态机投影**
+  - 面向宿主控制逻辑与状态记录
+  - 应优先读取 `readiness`、`evidence_gaps`、`blocked_reason`
+- `artifacts`
+  - **该 phase 的结构化产物**
+  - 例如 `plan_markdown_draft`、`approved_plan_markdown`、`completion_gates`
+  - 宿主可展示、保存、交接，但不应仅凭这些字段自动切换 workflow
+
 ### `status`
 
 - `ok`：当前 phase 结构化结果可被消费
@@ -65,6 +87,8 @@
 
 ## 4. Elicitation 规则
 
+这一节是 Elicitation 语义的**规范来源**；`docs/host-integration.md` 与 `docs/host-implementation-guide.md` 只保留压缩版摘要。
+
 ### 必须使用 Elicitation 的场景
 
 - `deep_interview` 多轮问答
@@ -83,6 +107,10 @@
 - 宿主可以展示当前结构化结果
 - 但 **不得伪造 workflow 继续所需的用户选择**
 - 对明确依赖用户选择的节点，应视为 workflow 交互无法继续
+- 宿主不应在 Elicitation 节点直接结束对话；应明确告诉用户：
+  - 当前卡在需要显式选择/输入的节点
+  - 如果宿主支持 Elicitation，应展示官方选项
+  - 如果宿主不支持 Elicitation，应说明“当前无法继续该 workflow 交互”，而不是伪造继续或静默结束
 
 ## 5. Tool 语义澄清
 
@@ -97,12 +125,15 @@
 - 生成直接计划或判断任务是否过于模糊
 - `mode="auto"` 可能转入澄清路径
 - 它返回的是结构化计划结果，不执行实现
+- direct 模式会返回 `plan_markdown_draft`、implementation steps、verification plan
+- review 模式会返回 `review_verdict`、`review_findings`、`required_revisions`
 
 ### `ralplan`
 
 - 是 **共识规划状态机**
 - Ymcp 不会替宿主自动完成 Planner / Architect / Critic 三个写作 pass
-- 宿主必须按 `planner_draft → architect_review → critic_review` 顺序推进，并将真实结果回传
+- 宿主必须按 `planner artifact → architect_review → critic_review` 顺序推进，并将真实结果回传
+- planner / architect / critic / handoff 会分别返回结构化 RALPLAN-DR、Architect review、Critic quality checks、ADR 与 ralph handoff guidance
 
 ### `ralph`
 
@@ -114,6 +145,8 @@
   - 需要更多证据
   - 需要验证计划
   - 已完成
+- `complete` 必须建立在 completion gates 满足的前提上，而不是单靠 phase 文本
+- `execution_context_present` 表示宿主是否已经提供足够的执行上下文，而不要求特定文件化快照存在
 
 ## 6. `memory_preflight` 语义
 
@@ -138,7 +171,7 @@
 
 ### 高风险/架构型任务
 
-`ralplan(planner_draft → architect_review → critic_review) → ralph`
+`ralplan(planner artifact → architect_review → critic_review) → ralph`
 
 ### 经验沉淀
 
@@ -150,4 +183,5 @@
 - 任何自动继续都必须建立在 `meta.required_host_action` 明确允许的前提上
 - `current_phase` 适合展示，不应替代 `required_host_action`
 - 需要历史事实、约定、偏好时先查 MemPalace，再作答
+- 遇到 Elicitation 节点时，不要用结束文案收尾；优先展示选项/表单，或明确说明“当前宿主不支持该交互，因此流程停在这里”
 

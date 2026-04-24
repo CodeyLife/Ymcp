@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import ADRSection, HandoffGuidance, MemoryContext, OptionSummary, QualityCheck, WorkflowPhaseSummary, WorkflowState
 
 
 class RalplanRequest(WorkflowRequestBase):
@@ -10,6 +10,9 @@ class RalplanRequest(WorkflowRequestBase):
     known_context: list[str] = Field(default_factory=list)
     memory_context: MemoryContext = Field(default_factory=MemoryContext)
     deliberate: bool = False
+    review_iteration: int = Field(default=1, ge=1, le=12)
+    max_iterations: int = Field(default=5, ge=1, le=12)
+    feedback_bundle: list[str] = Field(default_factory=list)
 
 
 class RalplanArtifacts(BaseModel):
@@ -28,10 +31,20 @@ class RalplanPlannerRequest(WorkflowRequestBase):
     known_context: list[str] = Field(default_factory=list)
     memory_context: MemoryContext = Field(default_factory=MemoryContext)
     deliberate: bool = False
+    review_iteration: int = Field(default=1, ge=1, le=12)
+    max_iterations: int = Field(default=5, ge=1, le=12)
+    feedback_bundle: list[str] = Field(default_factory=list)
 
 
 class RalplanPlannerArtifacts(BaseModel):
-    planner_draft: str
+    principles: list[str] = Field(default_factory=list)
+    decision_drivers: list[str] = Field(default_factory=list)
+    viable_options: list[OptionSummary] = Field(default_factory=list)
+    recommended_option: str | None = None
+    option_invalidation_rationale: list[str] = Field(default_factory=list)
+    planner_markdown_draft: str | None = None
+    premortem_scenarios: list[str] = Field(default_factory=list)
+    expanded_test_plan: list[str] = Field(default_factory=list)
     workflow_state: WorkflowState
     phase_summary: WorkflowPhaseSummary | None = None
     selected_next_tool: str | None = None
@@ -48,10 +61,18 @@ class RalplanArchitectRequest(WorkflowRequestBase):
     known_context: list[str] = Field(default_factory=list)
     memory_context: MemoryContext = Field(default_factory=MemoryContext)
     deliberate: bool = False
+    review_iteration: int = Field(default=1, ge=1, le=12)
+    max_iterations: int = Field(default=5, ge=1, le=12)
+    feedback_bundle: list[str] = Field(default_factory=list)
 
 
 class RalplanArchitectArtifacts(BaseModel):
     architect_review: str
+    steelman_counterargument: str | None = None
+    tradeoff_tensions: list[str] = Field(default_factory=list)
+    synthesis_path: str | None = None
+    principle_violations: list[str] = Field(default_factory=list)
+    architect_review_markdown: str | None = None
     workflow_state: WorkflowState
     phase_summary: WorkflowPhaseSummary | None = None
     selected_next_tool: str | None = None
@@ -69,12 +90,19 @@ class RalplanCriticRequest(WorkflowRequestBase):
     known_context: list[str] = Field(default_factory=list)
     memory_context: MemoryContext = Field(default_factory=MemoryContext)
     deliberate: bool = False
+    review_iteration: int = Field(default=1, ge=1, le=12)
+    max_iterations: int = Field(default=5, ge=1, le=12)
+    feedback_bundle: list[str] = Field(default_factory=list)
 
 
 class RalplanCriticArtifacts(BaseModel):
     critic_verdict: str
     approved_plan_summary: str | None = None
-    revise_instructions: list[str] = Field(default_factory=list)
+    quality_checks: list[QualityCheck] = Field(default_factory=list)
+    approval_reasons: list[str] = Field(default_factory=list)
+    rejection_reasons: list[str] = Field(default_factory=list)
+    required_revisions: list[str] = Field(default_factory=list)
+    critic_review_markdown: str | None = None
     workflow_state: WorkflowState
     phase_summary: WorkflowPhaseSummary | None = None
     selected_next_tool: str | None = None
@@ -94,6 +122,9 @@ class RalplanHandoffRequest(WorkflowRequestBase):
 
 class RalplanHandoffArtifacts(BaseModel):
     approved_plan_summary: str
+    approved_plan_markdown: str | None = None
+    adr: ADRSection | None = None
+    ralph_handoff_guidance: HandoffGuidance | None = None
     workflow_state: WorkflowState
     phase_summary: WorkflowPhaseSummary | None = None
     selected_next_tool: str | None = None

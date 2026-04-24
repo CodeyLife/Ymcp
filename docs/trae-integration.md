@@ -70,10 +70,11 @@ Trae 应该能发现以下 workflow 工具：
 
 ## 6. Trae 调用示例
 
-- 调用 Ymcp 的 `plan` 工具，为当前任务返回阶段计划和验收标准。
+- 调用 Ymcp 的 `plan` 工具，为当前任务返回阶段计划、`plan_markdown_draft`、验收标准和验证计划。
 - 调用 Ymcp 的 `deep_interview` 工具，通过 MCP Elicitation 收集澄清回答。
-- 调用 Ymcp 的 `ralplan` 工具，获取共识流总入口；再按 `selected_next_tool` 顺序调用 `ralplan_planner`、`ralplan_architect`、`ralplan_critic`、`ralplan_handoff`。
-- 调用 Ymcp 的 `ralph` 工具，根据当前证据判断下一步是继续、修复还是完成；`ralph` 本身不执行任务。
+- `deep_interview` 结果中的 `context_snapshot_draft`、`execution_spec`、`handoff_contracts` 由宿主决定是否落盘；Ymcp 只返回结构化草稿，不直接写 `.omx/*` 文件。
+- 调用 Ymcp 的 `ralplan` 工具，获取共识流总入口；再按 `selected_next_tool` 顺序调用 `ralplan_planner`、`ralplan_architect`、`ralplan_critic`、`ralplan_handoff`，并消费其结构化 RALPLAN-DR / ADR / handoff guidance 产物。
+- 调用 Ymcp 的 `ralph` 工具，根据当前证据、completion gates 和验证结果判断下一步是继续、修复还是完成；`execution_context_present` 用来表达是否已提供足够执行上下文；`ralph` 本身不执行任务。
 
 ## 7. 宿主边界
 
@@ -161,6 +162,9 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 
 - `phase_summary`
 - `selected_next_tool`（仅在 Elicitation 已接受后出现）
+- `plan_markdown_draft` / `review_verdict`
+- `approved_plan_markdown` / `adr` / `ralph_handoff_guidance`
+- `completion_gates` / `verification_summary`
 
 `selected_next_tool` 的含义是：**用户已经通过服务器发起的 Elicitation 显式完成选择**。Trae 不得把推荐项、默认项或 phase 推断结果当成 `selected_next_tool`。
 
@@ -179,23 +183,24 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 
 1. 调用 `deep_interview`。
 2. 由服务器通过 Elicitation 收集回答；不支持 Elicitation 的宿主不应继续该 workflow。
-3. 当需求达到可结晶状态时，进入 `ralplan`。
-4. `ralplan` 先返回总入口 handoff；Trae 再按 `ralplan_planner → ralplan_architect → ralplan_critic → ralplan_handoff` 顺序推进。
-5. 批准后进入 `ralph` 或由用户选择 `plan / mempalace_add_drawer`。
-6. `ralph` 根据证据返回继续、修复或完成状态；真正的执行、修复、验证命令仍由 Trae 或其上层 agent 执行。
-7. 完成后调用 `mempalace_add_drawer` 保存稳定偏好、项目约定或踩坑结论。
+3. 如果 `workflow_state.readiness == "needs_host_context"`，宿主应先补 `repo_findings` / `known_context`，不要改成向用户追问代码库内部事实。
+4. 当需求达到可结晶状态时，进入 `ralplan`。
+5. `ralplan` 先返回总入口 handoff；Trae 再按 `ralplan_planner → ralplan_architect → ralplan_critic → ralplan_handoff` 顺序推进。
+6. 批准后进入 `ralph` 或由用户选择 `plan / mempalace_add_drawer`。
+7. `ralph` 根据证据返回继续、修复或完成状态；真正的执行、修复、验证命令仍由 Trae 或其上层 agent 执行。
+8. 完成后调用 `mempalace_add_drawer` 保存稳定偏好、项目约定或踩坑结论。
 
 ### 链路 B：需求已清楚 → 直接计划 → Ralph 循环
 
 1. 调用 `plan`，传入 `mode="direct"`。
 2. 如需用户选择下一步，优先通过 Elicitation 获取。
-3. 每轮执行后调用 `ralph`，传入 `latest_evidence` 和 `verification_commands`。
+3. 每轮执行后调用 `ralph`，传入 `latest_evidence`、`verification_commands`，以及可用时的 `verification_results` / `regression_status`。
 
 ### 链路 C：高风险或架构选择 → Ralplan 共识
 
 1. 调用 `ralplan` 总入口。
 2. 按 `selected_next_tool` 顺序调用 `ralplan_planner`、`ralplan_architect`、`ralplan_critic`。
-3. `ralplan_critic` 批准后再调用 `ralplan_handoff`，并只通过 Elicitation 决定进入 `ralph`、`plan` 或 `mempalace_add_drawer`。
+3. `ralplan_critic` 批准后再调用 `ralplan_handoff`，消费 `approved_plan_markdown`、`adr`、`ralph_handoff_guidance`，并只通过 Elicitation 决定进入 `ralph`、`plan` 或 `mempalace_add_drawer`。
 
 ### 链路 D：长期偏好和项目知识沉淀
 
@@ -227,7 +232,7 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 ```text
 先调用 Ymcp 的 ralplan。
 再按返回的 `selected_next_tool` 调用 `ralplan_planner`。
-Planner 结果会直接包含 `planner_draft`、方案选项和 ADR 草案。
+Planner 结果会直接包含结构化规划草案、方案选项和 ADR 草案。
 ```
 
 ### ralplan Architect → Critic 阶段模板

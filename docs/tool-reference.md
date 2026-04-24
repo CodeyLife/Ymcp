@@ -5,28 +5,28 @@ Ymcp 的第一原则是 FastMCP-first：所有能力按 **Tools / Resources / Pr
 # Tools
 
 ## plan
-返回 MCP 标准结构化计划结果；需要用户选择或补充输入时，优先通过官方 Elicitation 获取。`plan` 不执行实现。
+返回 MCP 标准结构化计划结果；直接模式会产出 `plan_markdown_draft`、implementation steps、verification plan，review 模式会产出 `review_verdict` 与修订建议。需要用户选择或补充输入时，优先通过官方 Elicitation 获取。`plan` 不执行实现。
 
 ## ralplan
-作为共识规划总入口，返回首个应调用的子工具。宿主只按显式 handoff 串联，不再自己猜 phase。
+作为共识规划总入口，返回首个应调用的子工具。宿主只按显式 handoff 串联，不再自己猜 phase；后续子工具返回结构化的 RALPLAN-DR summary、Architect 审查、Critic 质量门禁和最终 handoff guidance。
 
 ## ralplan_planner
-Ymcp 直接产出 Planner 草案、候选方案、ADR 草案和测试策略，并显式 handoff 到 `ralplan_architect`。
+Ymcp 直接产出 Planner 结构化草案、principles、decision drivers、viable options、recommended option；deliberate 模式还会补 pre-mortem 与 expanded test plan，并显式 handoff 到 `ralplan_architect`。
 
 ## ralplan_architect
-Ymcp 直接产出 Architect 审查结果，包括边界、反例、tradeoff 和 synthesis，并显式 handoff 到 `ralplan_critic`。
+Ymcp 直接产出 Architect 审查结果，包括 steelman counterargument、tradeoff tensions、synthesis path，并显式 handoff 到 `ralplan_critic`。
 
 ## ralplan_critic
-Ymcp 直接产出 Critic verdict；批准时显式 handoff 到 `ralplan_handoff`，未批准时返回修订指令。
+Ymcp 直接产出 Critic verdict、quality checks、approval/rejection reasons；批准时显式 handoff 到 `ralplan_handoff`，未批准时返回 `required_revisions`。
 
 ## ralplan_handoff
-只在 Critic 批准后收集下一步 workflow 选择。该阶段依赖官方 Elicitation；宿主不支持时会被阻断。
+只在 Critic 批准后收集下一步 workflow 选择。该阶段会返回 `approved_plan_markdown`、`adr`、`ralph_handoff_guidance`；依赖官方 Elicitation，宿主不支持时会被阻断。
 
 ## deep_interview
-用于逐步澄清需求边界与意图。提问与下一步选择优先通过官方 Elicitation 获取，而不是自定义宿主协议。
+用于逐步澄清需求边界与意图。它会返回 `ambiguity_score`、`clarity_breakdown`、`readiness_gates`、`context_snapshot_draft`、`execution_spec` 和 `handoff_contracts`；提问与下一步选择优先通过官方 Elicitation 获取，而不是自定义宿主协议。
 
 ## ralph
-返回执行/验证状态、证据缺口和完成摘要。缺证据或完成后的下一步选择优先通过官方 Elicitation 获取。`ralph` 是证据驱动的执行闭环判断工具，不是执行器。
+返回执行/验证状态、completion gates、证据缺口和完成摘要。缺证据、缺验证结果或完成后的下一步选择优先通过官方 Elicitation 获取。`ralph` 使用 `execution_context_present` 表达是否已提供足够执行上下文。`ralph` 是证据驱动的执行闭环判断工具，不是执行器。
 
 # 记忆工具
 
@@ -128,6 +128,11 @@ workflow artifacts 还会附带宿主可展示字段：
 
 - `phase_summary`：当前阶段摘要、要点和建议展示内容
 - `selected_next_tool`：仅当服务器发起的 Elicitation 被接受后才会出现
+- `clarity_breakdown` / `readiness_gates`：deep_interview 的多维澄清评分与 readiness gate
+- `context_snapshot_draft` / `execution_spec` / `handoff_contracts`：deep_interview 的结构化产物草稿，供宿主保存或交接
+- `plan_markdown_draft` / `review_verdict`：plan 的直接规划与评审产物
+- `approved_plan_markdown` / `adr` / `ralph_handoff_guidance`：ralplan 的批准态与执行交接产物
+- `completion_gates` / `verification_summary`：ralph 的执行闭环门禁投影；阻塞原因通过 `workflow_state.blocked_reason` 表达
 
 宿主不得自己猜测 `selected_next_tool`，也不得把推荐项当成用户已确认选择。
 

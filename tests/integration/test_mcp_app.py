@@ -73,6 +73,19 @@ def test_deep_interview_requests_host_elicitation_without_capability_support():
         assert structured["meta"]["required_host_action"] == "await_input"
         assert structured["meta"]["requires_elicitation"] is True
         assert "宿主应通过 MCP Elicitation 展示下一问并收集用户回答" in structured["summary"]
+        assert "clarity_breakdown" in structured["artifacts"]
+        assert "readiness_gates" in structured["artifacts"]
+    anyio.run(_run)
+
+
+def test_deep_interview_brownfield_without_repo_findings_requests_host_context():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool("deep_interview", {"brief": "Refactor existing workflow", "context_type": "brownfield"})
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured["artifacts"]["workflow_state"]["readiness"] == "needs_host_context"
+        assert structured["artifacts"]["next_question"] is None
+        assert "repo_findings" in "\n".join(structured["artifacts"]["workflow_state"]["evidence_gaps"])
     anyio.run(_run)
 
 

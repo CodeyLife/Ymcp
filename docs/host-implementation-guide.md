@@ -11,7 +11,15 @@
 5. 如需用户输入，仅通过 MCP Elicitation 继续
 6. 如 `meta.selected_next_tool` 已写回，再调用该 tool
 
-不要只根据 `current_phase` 猜测控制流。
+不要只根据 `current_phase` 猜测控制流。字段职责分层（`summary` / `phase_summary` / `workflow_state` / `artifacts`）统一以 `docs/workflow-contract.md` 为准。
+
+如果当前节点依赖显式用户选择：
+
+- **不要在 Elicitation 节点直接结束对话**
+- 应优先展示服务器要求的 Elicitation 选项
+- 若宿主不支持 Elicitation，应明确说明“当前流程停在需要显式选择/输入的节点”，而不是改写成普通结束文案
+
+其余 Elicitation 禁止行为与控制字段规则不要在此重复展开，统一遵循 `docs/workflow-contract.md` 和 `docs/host-integration.md`。
 
 ## 2. 通用字段速查
 
@@ -23,6 +31,8 @@
 | `artifacts.phase_summary` | 展示给用户/日志 |
 | `artifacts.workflow_state` | 记录 workflow 名称、phase、readiness、证据缺口 |
 | `workflow_state.memory_preflight` | 决定是否先调 `mempalace_search` |
+
+这里只保留“怎么用”的速查，不重复定义字段规范本身。
 
 ## 3. 每个 Tool 的宿主义务
 
