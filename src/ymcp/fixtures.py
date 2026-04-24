@@ -10,7 +10,29 @@ FIXTURES: dict[str, dict[str, Any]] = {
     },
     "ralplan": {
         "task": "Create an implementation plan for a Python MCP workflow server",
-        "constraints": ["Exactly four v1 tools", "No agent runtime inside the server"],
+        "constraints": ["Host drives the chain", "No agent runtime inside the server"],
+    },
+    "ralplan_planner": {
+        "task": "Create an implementation plan for a Python MCP workflow server",
+        "constraints": ["Host drives the chain"],
+        "known_context": ["workflow server contract exists"],
+    },
+    "ralplan_architect": {
+        "task": "Create an implementation plan for a Python MCP workflow server",
+        "planner_draft": "Draft: inspect host contract, preserve MCP-first boundary.",
+        "known_context": ["workflow server contract exists"],
+    },
+    "ralplan_critic": {
+        "task": "Create an implementation plan for a Python MCP workflow server",
+        "planner_draft": "Draft: inspect host contract, preserve MCP-first boundary.",
+        "architect_review": "Review: ensure host never guesses next tool and explicit handoff is enforced.",
+        "known_context": ["workflow server contract exists"],
+    },
+    "ralplan_handoff": {
+        "task": "Create an implementation plan for a Python MCP workflow server",
+        "critic_verdict": "APPROVE",
+        "approved_plan_summary": "Approved: host-controlled MCP workflow refactor.",
+        "known_context": ["workflow server contract exists"],
     },
     "deep_interview": {
         "brief": "Need a Python MCP workflow library for Trae tool calls",
@@ -20,7 +42,6 @@ FIXTURES: dict[str, dict[str, Any]] = {
         "approved_plan": "Implement the approved Ymcp PRD with tests and docs",
         "latest_evidence": ["package scaffolding exists", "contract tests pass"],
         "verification_commands": ["python -m pytest"],
-        "current_status": "implementation in progress",
     },
     "mempalace_status": {},
     "mempalace_search": {"query": "Ymcp 发布流程", "limit": 3},

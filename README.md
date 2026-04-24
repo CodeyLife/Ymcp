@@ -29,14 +29,14 @@ Ymcp 的第一原则是：所有能力优先按 FastMCP / MCP 官方三原语组
 - **Tools**：执行动作、查询外部系统、产生结构化结果。
 - **Resources**：暴露可读取上下文、项目原则、规则模板、工具参考、记忆协议。
 - **Prompts**：暴露可复用调用模板和标准工作流提示；Prompt 不直接执行工具，也不伪造工具结果。
-- **Elicitation**：当 Tool 执行中需要用户输入/选择时，优先使用 MCP 官方 Elicitation；不支持时返回标准 `needs_input` / `blocked` 结构化降级结果。
+- **Elicitation**：当 Tool 执行中需要用户输入/选择时，只通过 MCP 官方 Elicitation 收集；不支持或渲染异常的不应继续 workflow 交互。
 
-禁止用自定义宿主协议替代 MCP 原语；禁止把文档型上下文只放在 Markdown 中而不暴露为 Resource；禁止把可复用提示只写在文档中而不暴露为 Prompt。
+禁止用自定义协议替代 MCP 原语；禁止把文档型上下文只放在 Markdown 中而不暴露为 Resource；禁止把可复用提示只写在文档中而不暴露为 Prompt。
 
 
 ## 记忆工具
 
-Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用 `~/.yjj` 作为 MemPalace 记忆库目录。记忆 wing 现在按项目上下文解析：优先使用显式 `wing`，否则使用宿主提供的 `project_id`，再退化到 `project_root` 目录名 slug，最后才回退到 `wing="personal"`；默认 `room="ymcp"`。
+Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用 `~/.yjj` 作为 MemPalace 记忆库目录。记忆 wing 现在按项目上下文解析：优先使用显式 `wing`，否则使用提供的 `project_id`，再退化到 `project_root` 目录名 slug，最后才回退到 `wing="personal"`；默认 `room="ymcp"`。
 
 当前实现已统一为单一路径：
 
@@ -46,7 +46,7 @@ Ymcp 依赖 `mempalace` 提供长期记忆能力，默认使用 `~/.yjj` 作为 
 
 Memory Protocol：回答人物、项目、历史事件或过往决策前先查 `mempalace_search` / `mempalace_get_drawer`，不要凭印象猜；任务结束后把稳定偏好、项目约定、重要决策和踩坑结论写入 `mempalace_add_drawer` 或 `mempalace_diary_write`；事实变化时用更新、删除或 KG 失效工具维护旧记忆。
 
-推荐宿主在记忆工具调用里补充：
+推荐在记忆工具调用里补充：
 
 - `project_id`：稳定的项目标识，优先用于生成 wing
 - `project_root`：工程根目录，作为 `project_id` 缺失时的回退来源
@@ -61,7 +61,7 @@ Memory Protocol：回答人物、项目、历史事件或过往决策前先查 `
 - `mempalace_status` / `mempalace_list_wings` / `mempalace_list_rooms` / `mempalace_get_taxonomy`：查看记忆空间状态
 - `mempalace_kg_*`、`mempalace_graph_*`、`mempalace_*tunnel*`、`mempalace_diary_*`：通过 MemPalace MCP 服务暴露图谱、关系和日记能力
 
-记忆写入是持久化副作用。请不要保存密钥、隐私或未经确认的敏感信息。
+记忆写入是持久化副作用。
 
 
 ## Trae 中常用记忆 prompt
@@ -81,9 +81,11 @@ Memory Protocol：回答人物、项目、历史事件或过往决策前先查 `
 
 推荐链路：`deep_interview → ralplan → ralph → mempalace_add_drawer`。
 
-- 需求不清晰：先调用 `deep_interview`，按 `next_question` 多轮澄清。
-- 需要共识规划：调用 `ralplan`，按 `planner_draft → architect_review → critic_review` 推进。
-- 执行验证：调用 `ralph`，根据 `stop_continue_judgement` 继续、修复或完成。
+这条链路中的**循环、执行、验证与状态保存都由宿主控制**；Ymcp 只提供 MCP Tools / Resources / Prompts、结构化 workflow 状态，以及在需要用户输入时发起 Elicitation。Ymcp 不是 agent runtime，不会自动执行命令、修改文件或持续运行 loop。
+
+- 需求不清晰：先调用 `deep_interview`，按服务器发起的 Elicitation 多轮澄清。
+- 需要共识规划：调用 `ralplan`，由宿主按 `planner_draft → architect_review → critic_review` 顺序推进，并把真实评审结果回传给工具。
+- 执行验证：调用 `ralph`，根据 `stop_continue_judgement` 判断继续、修复或完成；`ralph` 是证据驱动的闭环判断工具，不是执行器。
 - 完成沉淀：调用 `mempalace_search` 查重，再用 `mempalace_add_drawer` 保存稳定经验。
 
-完整 prompt 模板见 `docs/trae-integration.md`。
+权威接入契约见 `docs/workflow-contract.md`，实现细则见 `docs/host-implementation-guide.md`，完整 prompt 模板见 `docs/trae-integration.md`。

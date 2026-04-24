@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import MemoryContext, WorkflowChoiceMenu, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
 
 
 class PlanRequest(WorkflowRequestBase):
@@ -16,18 +16,10 @@ class PlanRequest(WorkflowRequestBase):
 
 
 class PlanArtifacts(BaseModel):
-    requirements_summary: list[str]
-    implementation_steps: list[str]
-    acceptance_criteria: list[str]
-    risks_and_mitigations: list[str]
-    verification_steps: list[str]
-    evidence_gaps: list[str] = Field(default_factory=list)
+    plan_summary: str
+    acceptance_criteria: list[str] = Field(default_factory=list)
     workflow_state: WorkflowState
     phase_summary: WorkflowPhaseSummary | None = None
-    choice_menu: WorkflowChoiceMenu | None = None
-    recommended_next_tool: str | None = None
-    review_verdict: str | None = None
-    requested_input: str | None = None
     selected_next_tool: str | None = None
 
 

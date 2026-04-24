@@ -1,6 +1,6 @@
 from ymcp.cli import inspect_tools_payload
 
-WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
+WORKFLOW_NAMES = {"plan", "ralplan", "ralplan_planner", "ralplan_architect", "ralplan_critic", "ralplan_handoff", "deep_interview", "ralph"}
 REQUIRED_WORKFLOW_FIELDS = {"workflow_state"}
 
 
@@ -12,12 +12,16 @@ def test_workflow_tools_expose_state_machine_metadata():
         assert REQUIRED_WORKFLOW_FIELDS <= set(artifacts_schema["properties"])
         assert "interaction" not in artifacts_schema["properties"]
         assert "continuation" not in artifacts_schema["properties"]
+        assert "choice_menu" not in artifacts_schema["properties"]
+        assert "requested_input" not in artifacts_schema["properties"]
 
 
 def test_workflow_descriptions_are_mcp_first_and_host_controlled():
     payload = {item["name"]: item for item in inspect_tools_payload()}
     assert "MCP" in payload["plan"]["description"]
-    assert "Elicitation" in payload["ralplan"]["description"]
+    assert "handoff" in payload["ralplan"]["description"] or "Handoff" in payload["ralplan"]["description"] or "子工具" in payload["ralplan"]["description"]
+    assert "Planner" in payload["ralplan_planner"]["description"]
+    assert "Elicitation" in payload["ralplan_handoff"]["description"]
     assert "Elicitation" in payload["deep_interview"]["description"]
     assert "Elicitation" in payload["ralph"]["description"]
 
@@ -26,6 +30,8 @@ def test_tool_call_template_contract_removed_from_main_workflow_protocol():
     import ymcp.contracts.workflow as workflow
     assert not hasattr(workflow, "WorkflowInteraction")
     assert not hasattr(workflow, "ContinuationContract")
+    assert not hasattr(workflow, "WorkflowChoiceOption")
+    assert not hasattr(workflow, "WorkflowChoiceMenu")
 
 
 def test_workflow_state_exposes_memory_preflight():
@@ -48,12 +54,11 @@ def test_memory_context_contract_exists():
     assert {"searched", "hits", "failed", "query"} <= set(MemoryContext.model_fields)
 
 
-def test_workflow_state_exposes_memory_protocol():
+def test_workflow_state_keeps_minimal_host_fields():
     from ymcp.contracts.workflow import WorkflowState
     fields = set(WorkflowState.model_fields)
-    assert {"memory_protocol_summary", "memory_protocol"} <= fields
+    assert {"workflow_name", "current_phase", "readiness", "evidence_gaps", "blocked_reason", "memory_preflight"} <= fields
+    assert "skill_source" not in fields
+    assert "memory_protocol_summary" not in fields
+    assert "memory_protocol" not in fields
 
-
-def test_workflow_choice_option_contract_exists():
-    from ymcp.contracts.workflow import WorkflowChoiceOption
-    assert {"id", "label", "description", "tool", "recommended", "requires_user_selection"} <= set(WorkflowChoiceOption.model_fields)

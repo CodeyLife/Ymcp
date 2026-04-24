@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import anyio
 import pytest
@@ -181,6 +182,19 @@ def test_mempalace_tool_name_maps_internal_functions_to_mcp_tools():
 
     assert _mempalace_tool_name("tool_search") == "mempalace_search"
     assert _mempalace_tool_name("tool_add_drawer") == "mempalace_add_drawer"
+
+
+def test_mempalace_relay_client_forces_utf8_mode(monkeypatch):
+    from ymcp.memory import _MempalaceMcpRelayClient
+
+    monkeypatch.setattr(_MempalaceMcpRelayClient, "_start", lambda self: None)
+
+    client = _MempalaceMcpRelayClient()
+
+    assert client._command() == [sys.executable, "-X", "utf8", "-m", "mempalace.mcp_server"]
+    env = client._env()
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
 
 
 def test_mempalace_status_handler_emits_trace_logs(monkeypatch, caplog):

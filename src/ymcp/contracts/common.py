@@ -26,10 +26,24 @@ class Risk(BaseModel):
     mitigation: str | None = None
 
 
+class HostActionType(str, Enum):
+    DISPLAY_ONLY = "display_only"
+    AWAIT_INPUT = "await_input"
+    CALL_SELECTED_TOOL = "call_selected_tool"
+    CONTINUE_EXECUTION = "continue_execution"
+    STOP = "stop"
+    FINISH = "finish"
+
+
 class ResultMeta(BaseModel):
     tool_name: str
     contract: str
     host_controls: list[str] = Field(default_factory=list)
+    required_host_action: HostActionType = HostActionType.DISPLAY_ONLY
+    safe_to_auto_continue: bool = False
+    requires_elicitation: bool = False
+    requires_explicit_user_choice: bool = False
+    selected_next_tool: str | None = None
 
 
 ArtifactT = TypeVar("ArtifactT", bound=BaseModel)

@@ -3,7 +3,7 @@ from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
 from ymcp.core.versioning import SCHEMA_VERSION
 from ymcp.internal_registry import get_tool_specs
 
-WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
+WORKFLOW_NAMES = {"plan", "ralplan", "ralplan_planner", "ralplan_architect", "ralplan_critic", "ralplan_handoff", "deep_interview", "ralph"}
 MEMORY_NAMES = {tool["name"] for tool in MEMPALACE_TOOL_SCHEMAS}
 EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
 COMMON_FIELDS = {"schema_version", "status", "summary", "assumptions", "next_actions", "risks", "meta", "artifacts"}
@@ -17,6 +17,8 @@ def test_tool_descriptions_include_boundaries():
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
     assert "不执行命令" in descriptions["ralph"]
     assert "宿主" in descriptions["deep_interview"]
+    assert "子工具" in descriptions["ralplan"]
+    assert "Planner" in descriptions["ralplan_planner"]
     assert "palace" in descriptions["mempalace_add_drawer"].lower()
     assert "search" in descriptions["mempalace_search"].lower()
 

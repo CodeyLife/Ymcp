@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
-
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 MEMORY_PROTOCOL_STEPS = [
@@ -11,10 +9,6 @@ MEMORY_PROTOCOL_STEPS = [
     "任务或会话结束后，将稳定偏好、项目约定、重要决策和踩坑结论写入 mempalace_add_drawer 或 mempalace_diary_write。",
     "当已保存事实发生变化时，用 mempalace_update_drawer、mempalace_delete_drawer、mempalace_kg_invalidate 和 mempalace_kg_add 维护一致性。",
 ]
-
-
-def default_memory_protocol() -> list[str]:
-    return list(MEMORY_PROTOCOL_STEPS)
 
 
 class MemoryPreflight(BaseModel):
@@ -35,37 +29,6 @@ class MemoryContext(BaseModel):
     query: str | None = None
 
 
-class WorkflowChoiceOption(BaseModel):
-    id: str
-    label: str
-    description: str
-    kind: Literal["tool", "host_action"] = "tool"
-    tool: str | None = None
-    action: str | None = None
-    recommended: bool = False
-    requires_user_selection: bool = True
-
-    @model_validator(mode="after")
-    def validate_target(self) -> "WorkflowChoiceOption":
-        if self.kind == "tool":
-            if not self.tool:
-                raise ValueError("tool options must define tool")
-            self.action = None
-        else:
-            if not self.action:
-                raise ValueError("host_action options must define action")
-            self.tool = None
-        return self
-
-
-class WorkflowChoiceMenu(BaseModel):
-    title: str
-    prompt: str
-    options: list[WorkflowChoiceOption] = Field(default_factory=list)
-    recommended_option_id: str | None = None
-    fallback_instructions: str | None = None
-
-
 class WorkflowPhaseSummary(BaseModel):
     title: str
     summary: str
@@ -78,7 +41,4 @@ class WorkflowState(BaseModel):
     readiness: str
     evidence_gaps: list[str] = Field(default_factory=list)
     blocked_reason: str | None = None
-    skill_source: str
-    memory_protocol_summary: str | None = "先核验记忆，再作答；先维护旧事实，再沉淀新事实。"
-    memory_protocol: list[str] = Field(default_factory=default_memory_protocol)
     memory_preflight: MemoryPreflight | None = None

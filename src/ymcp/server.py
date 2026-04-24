@@ -11,16 +11,34 @@ import mcp.types as types
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field, WithJsonSchema
 
-from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS
-from ymcp.contracts.deep_interview import DeepInterviewRequest, InterviewRound
-from ymcp.contracts.plan import PlanRequest
-from ymcp.contracts.ralplan import RalplanRequest
-from ymcp.contracts.ralph import RalphRequest
-from ymcp.contracts.workflow import MemoryContext
+from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS, MemoryResult
+from ymcp.contracts.deep_interview import DeepInterviewRequest, DeepInterviewResult, InterviewRound
+from ymcp.contracts.plan import PlanRequest, PlanResult
+from ymcp.contracts.ralplan import (
+    RalplanArchitectRequest,
+    RalplanArchitectResult,
+    RalplanCriticRequest,
+    RalplanCriticResult,
+    RalplanHandoffRequest,
+    RalplanHandoffResult,
+    RalplanPlannerRequest,
+    RalplanPlannerResult,
+    RalplanRequest,
+    RalplanResult,
+)
+from ymcp.contracts.ralph import RalphRequest, RalphResult
+from ymcp.contracts.common import HostActionType, ToolStatus
+from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary
 from ymcp.capabilities import get_prompt_specs, get_resource_specs, prompt_template
 from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.plan import build_plan
-from ymcp.engine.ralplan import build_ralplan
+from ymcp.engine.ralplan import (
+    build_ralplan,
+    build_ralplan_architect,
+    build_ralplan_critic,
+    build_ralplan_handoff,
+    build_ralplan_planner,
+)
 from ymcp.engine.ralph import build_ralph
 from ymcp.memory import (
     build_memory_request_id,
@@ -30,6 +48,7 @@ from ymcp.memory import (
     mempalace_palace_path,
 )
 from ymcp.internal_registry import get_tool_specs
+from ymcp.core.result import apply_selected_tool_handoff, build_next_action
 
 LOGGER = logging.getLogger("ymcp")
 
@@ -40,8 +59,8 @@ def _single_choice_schema(title: str, description: str, options: list[tuple[str,
         "title": title,
         "description": description,
         "oneOf": [
-            {"const": value, "title": option_title, "description": option_description}
-            for value, option_title, option_description in options
+            {"const": value, "title": option_title}
+            for value, option_title, _option_description in options
         ],
     }
 
@@ -135,9 +154,12 @@ class DeepInterviewNextToolInput(BaseModel):
     next_tool: DeepInterviewNextToolChoice
 
 
-class PlanClarifyInput(BaseModel):
+class PlanClarifyChoiceInput(BaseModel):
     next_action: PlanClarifyChoice
-    task_details: str | None = None
+
+
+class PlanTaskDetailsInput(BaseModel):
+    task_details: str
 
 
 class PlanNextToolInput(BaseModel):
@@ -153,11 +175,11 @@ class RalplanNextToolInput(BaseModel):
 
 
 class RalphEvidenceInput(BaseModel):
-    latest_evidence: list[str]
+    latest_evidence_text: str
 
 
 class RalphVerificationInput(BaseModel):
-    verification_commands: list[str]
+    verification_commands_text: str
 
 
 class RalphNextToolInput(BaseModel):
@@ -233,27 +255,38 @@ def _supports_form_elicitation(ctx: Context | None) -> bool:
     if ctx is None:
         return False
     try:
-        return ctx.session.check_client_capability(
-            types.ClientCapabilities(
-                elicitation=types.ElicitationCapability(form=types.FormElicitationCapability())
-            )
-        )
+        if not ctx.session.check_client_capability(types.ClientCapabilities(elicitation=types.ElicitationCapability())):
+            return False
+        client_params = getattr(ctx.session, "_client_params", None)
+        client_caps = getattr(client_params, "capabilities", None)
+        elicitation = getattr(client_caps, "elicitation", None)
+        if elicitation is None:
+            return False
+        form_mode = getattr(elicitation, "form", None)
+        url_mode = getattr(elicitation, "url", None)
+        return form_mode is not None or (form_mode is None and url_mode is None)
     except ValueError:
         return False
 
 
-def _format_choice_menu(title: str, options: list[types.AnyUrl | Any] | list[Any]) -> str:
-    rendered = []
-    for option in options:
-        suffix = "（推荐）" if getattr(option, "recommended", False) else ""
-        rendered.append(f"- {option.label}{suffix}: {option.description}")
-    return f"{title}\n" + "\n".join(rendered)
+def _split_lines(value: str) -> list[str]:
+    return [line.strip() for line in value.splitlines() if line.strip()]
+
+
+def _handle_elicitation_non_accept(result, action: str, message: str):
+    action_label = "拒绝" if action == "decline" else "取消"
+    result.summary = f"{message}（用户已{action_label}）"
+    result.next_actions = [build_next_action("下一步", "宿主可展示当前状态，并在用户愿意时重新发起 MCP Elicitation。")]
+    result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+    result.meta.safe_to_auto_continue = False
+    result.meta.selected_next_tool = None
+    return result
 
 
 def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, request_model: type[BaseModel]) -> None:
     fields = request_model.model_fields
     parameters: list[inspect.Parameter] = []
-    annotations: dict[str, Any] = {"return": dict[str, Any]}
+    annotations: dict[str, Any] = {"return": MEMPALACE_REQUEST_MODELS.get(name, BaseModel)}
 
     ordered_fields = sorted(fields.items(), key=lambda item: (not item[1].is_required(),))
 
@@ -280,9 +313,9 @@ def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, reque
         )
         annotations[field_name] = annotation
 
-    signature = inspect.Signature(parameters=parameters, return_annotation=dict[str, Any])
+    signature = inspect.Signature(parameters=parameters, return_annotation=MemoryResult)
 
-    def _tool_impl(**kwargs: Any) -> dict[str, Any]:
+    def _tool_impl(**kwargs: Any) -> MemoryResult:
         request_id = build_memory_request_id()
         started_at = time.perf_counter()
         memory_log_kv(
@@ -297,12 +330,13 @@ def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, reque
                 name,
                 **validated.model_dump(exclude={"schema_version"}, exclude_none=True),
             )
-            return memory_result_to_mcp_payload(
+            payload = memory_result_to_mcp_payload(
                 result,
                 handler_name=f"{name}_handler",
                 request_id=request_id,
                 started_at=started_at,
             )
+            return MemoryResult.model_validate(payload)
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
             memory_log_kv(
@@ -318,6 +352,7 @@ def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, reque
     _tool_impl.__name__ = name
     _tool_impl.__qualname__ = name
     _tool_impl.__doc__ = description
+    annotations["return"] = MemoryResult
     _tool_impl.__annotations__ = annotations
     _tool_impl.__signature__ = signature
     app.add_tool(_tool_impl, name=name, description=description, structured_output=True)
@@ -332,13 +367,14 @@ async def _maybe_elicit_deep_interview(ctx: Context | None, request: DeepIntervi
         if answer.action == "accept":
             request.prior_rounds.append(InterviewRound(question=result.artifacts.next_question, answer=answer.data.answer))
             result = build_deep_interview(request)
-    if result.artifacts.spec_skeleton is not None and result.artifacts.choice_menu:
-        handoff = await ctx.elicit(
-            _format_choice_menu("需求澄清已完成。请选择下一步工作流。", result.artifacts.choice_menu.options),
-            DeepInterviewNextToolInput,
-        )
+        else:
+            return _handle_elicitation_non_accept(result, answer.action, "用户未回答当前澄清问题，本轮 deep_interview 保持等待输入。")
+    if result.artifacts.spec_skeleton is not None:
+        handoff = await ctx.elicit("需求澄清已完成。请选择下一步工作流。", DeepInterviewNextToolInput)
         if handoff.action == "accept":
-            result.artifacts.selected_next_tool = handoff.data.next_tool
+            apply_selected_tool_handoff(result, handoff.data.next_tool)
+        else:
+            return _handle_elicitation_non_accept(result, handoff.action, "用户未选择下一步 workflow，本轮 deep_interview 保持等待输入。")
     return result
 
 
@@ -347,37 +383,48 @@ async def _maybe_elicit_plan(ctx: Context | None, request: PlanRequest):
     if not _supports_form_elicitation(ctx):
         return result
     phase = result.artifacts.workflow_state.current_phase
-    if phase == "review" and result.artifacts.requested_input:
+    if phase == "review" and not request.review_target:
         review = await ctx.elicit("请提供 review_target。", PlanReviewTargetInput)
         if review.action == "accept":
             request.review_target = review.data.review_target
             result = build_plan(request)
+        else:
+            return _handle_elicitation_non_accept(result, review.action, "用户未提供 review_target，本轮 plan 保持等待输入。")
     elif phase == "interview_required":
-        choice = await ctx.elicit("当前任务过于模糊。请选择进入 deep_interview，或直接补充更具体任务。", PlanClarifyInput)
+        choice = await ctx.elicit("当前任务过于模糊。请选择进入 deep_interview，或直接补充更具体任务。", PlanClarifyChoiceInput)
         if choice.action == "accept":
             if choice.data.next_action == "deep_interview":
-                result.artifacts.selected_next_tool = "deep_interview"
-            elif choice.data.task_details:
-                request.task = choice.data.task_details
-                request.mode = "auto"
-                result = build_plan(request)
+                apply_selected_tool_handoff(result, "deep_interview")
+            else:
+                details = await ctx.elicit("请补充更具体的任务描述。", PlanTaskDetailsInput)
+                if details.action == "accept":
+                    request.task = details.data.task_details
+                    request.mode = "auto"
+                    result = build_plan(request)
+                else:
+                    return _handle_elicitation_non_accept(result, details.action, "用户未补充更具体的任务描述，本轮 plan 保持等待输入。")
+        else:
+            return _handle_elicitation_non_accept(result, choice.action, "用户未选择下一步动作，本轮 plan 保持等待输入。")
     elif phase == "direct_plan":
-        options = result.artifacts.choice_menu.options if result.artifacts.choice_menu else []
-        choice = await ctx.elicit(_format_choice_menu("计划已生成。请选择下一步 workflow。", options), PlanNextToolInput)
+        choice = await ctx.elicit("计划已生成。请选择下一步 workflow。", PlanNextToolInput)
         if choice.action == "accept":
-            result.artifacts.selected_next_tool = choice.data.next_tool
+            apply_selected_tool_handoff(result, choice.data.next_tool)
+        else:
+            return _handle_elicitation_non_accept(result, choice.action, "用户未选择下一步 workflow，本轮 plan 保持等待输入。")
     return result
 
 
-async def _maybe_elicit_ralplan(ctx: Context | None, request: RalplanRequest):
-    result = build_ralplan(request)
+async def _maybe_elicit_ralplan_handoff(ctx: Context | None, request: RalplanHandoffRequest):
+    result = build_ralplan_handoff(request)
+    if result.status != ToolStatus.NEEDS_INPUT:
+        return result
     if not _supports_form_elicitation(ctx):
         return result
-    if result.artifacts.choice_menu:
-        options = result.artifacts.choice_menu.options
-        choice = await ctx.elicit(_format_choice_menu("共识规划已批准。请选择下一步 workflow。", options), RalplanNextToolInput)
-        if choice.action == "accept":
-            result.artifacts.selected_next_tool = choice.data.next_tool
+    choice = await ctx.elicit("共识规划已批准。请选择下一步 workflow。", RalplanNextToolInput)
+    if choice.action == "accept":
+        apply_selected_tool_handoff(result, choice.data.next_tool)
+    else:
+        return _handle_elicitation_non_accept(result, choice.action, "用户未选择下一步 workflow，本轮 ralplan_handoff 保持等待输入。")
     return result
 
 
@@ -388,18 +435,23 @@ async def _maybe_elicit_ralph(ctx: Context | None, request: RalphRequest):
     if result.artifacts.stop_continue_judgement == "needs_more_evidence":
         evidence = await ctx.elicit("请补充 latest_evidence。", RalphEvidenceInput)
         if evidence.action == "accept":
-            request.latest_evidence = evidence.data.latest_evidence
+            request.latest_evidence = _split_lines(evidence.data.latest_evidence_text)
             result = build_ralph(request)
+        else:
+            return _handle_elicitation_non_accept(result, evidence.action, "用户未补充 latest_evidence，本轮 ralph 保持等待输入。")
     if result.artifacts.stop_continue_judgement == "needs_verification_plan":
         verification = await ctx.elicit("请补充 verification_commands。", RalphVerificationInput)
         if verification.action == "accept":
-            request.verification_commands = verification.data.verification_commands
+            request.verification_commands = _split_lines(verification.data.verification_commands_text)
             result = build_ralph(request)
+        else:
+            return _handle_elicitation_non_accept(result, verification.action, "用户未补充 verification_commands，本轮 ralph 保持等待输入。")
     if result.artifacts.stop_continue_judgement == "complete":
-        options = result.artifacts.choice_menu.options if result.artifacts.choice_menu else []
-        choice = await ctx.elicit(_format_choice_menu("Ralph 已判断当前工作流完成。请选择下一步。", options), RalphNextToolInput)
+        choice = await ctx.elicit("Ralph 已判断当前工作流完成。请选择下一步。", RalphNextToolInput)
         if choice.action == "accept":
-            result.artifacts.selected_next_tool = choice.data.next_tool
+            apply_selected_tool_handoff(result, choice.data.next_tool)
+        else:
+            return _handle_elicitation_non_accept(result, choice.action, "用户未选择下一步动作，本轮 ralph 保持等待输入。")
     return result
 
 
@@ -461,26 +513,45 @@ def create_app() -> FastMCP:
         return prompt_template("memory_store_after_completion", summary=summary)
 
     @app.tool(name="plan", description=descriptions["plan"], structured_output=True)
-    async def plan(task: str | None = None, problem: str | None = None, mode: str = "auto", constraints: Any = None, known_context: Any = None, memory_context: Any = None, acceptance_criteria: Any = None, review_target: str | None = None, desired_outcome: str | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> dict[str, Any]:
+    async def plan(task: str | None = None, problem: str | None = None, mode: str = "auto", constraints: list[str] | None = None, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, acceptance_criteria: list[str] | None = None, review_target: str | None = None, desired_outcome: str | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> PlanResult:
         task_value = task or problem or ""
-        request = PlanRequest(task=task_value, mode=mode, constraints=_coerce_str_list(constraints), known_context=_known_context(known_context), memory_context=_memory_context(memory_context), acceptance_criteria=_coerce_str_list(acceptance_criteria), review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
-        return (await _maybe_elicit_plan(ctx, request)).to_mcp_result()
+        request = PlanRequest(task=task_value, mode=mode, constraints=constraints or [], known_context=known_context or [], memory_context=memory_context or MemoryContext(), acceptance_criteria=acceptance_criteria or [], review_target=review_target, desired_outcome=desired_outcome, schema_version=schema_version)
+        return await _maybe_elicit_plan(ctx, request)
 
     @app.tool(name="ralplan", description=descriptions["ralplan"], structured_output=True)
-    async def ralplan(task: str, constraints: Any = None, deliberate: bool = False, interactive: bool = False, current_phase: str = "planner_draft", planner_draft: str | None = None, architect_feedback: Any = None, critic_feedback: Any = None, critic_verdict: str | None = None, known_context: Any = None, memory_context: Any = None, iteration: int = 1, schema_version: str = "1.0", ctx: Context | None = None) -> dict[str, Any]:
-        request = RalplanRequest(task=task, constraints=_coerce_str_list(constraints), deliberate=deliberate, interactive=interactive, current_phase=current_phase, planner_draft=planner_draft, architect_feedback=_coerce_str_list(architect_feedback), critic_feedback=_coerce_str_list(critic_feedback), critic_verdict_input=critic_verdict, known_context=_known_context(known_context), memory_context=_memory_context(memory_context), iteration=iteration, schema_version=schema_version)
-        return (await _maybe_elicit_ralplan(ctx, request)).to_mcp_result()
+    async def ralplan(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanResult:
+        request = RalplanRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), schema_version=schema_version)
+        return build_ralplan(request)
+
+    @app.tool(name="ralplan_planner", description=descriptions["ralplan_planner"], structured_output=True)
+    async def ralplan_planner(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, kickoff_summary: str | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanPlannerResult:
+        request = RalplanPlannerRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), kickoff_summary=kickoff_summary, schema_version=schema_version)
+        return build_ralplan_planner(request)
+
+    @app.tool(name="ralplan_architect", description=descriptions["ralplan_architect"], structured_output=True)
+    async def ralplan_architect(task: str, planner_draft: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanArchitectResult:
+        request = RalplanArchitectRequest(task=task, planner_draft=planner_draft, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), schema_version=schema_version)
+        return build_ralplan_architect(request)
+
+    @app.tool(name="ralplan_critic", description=descriptions["ralplan_critic"], structured_output=True)
+    async def ralplan_critic(task: str, planner_draft: str, architect_review: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanCriticResult:
+        request = RalplanCriticRequest(task=task, planner_draft=planner_draft, architect_review=architect_review, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), schema_version=schema_version)
+        return build_ralplan_critic(request)
+
+    @app.tool(name="ralplan_handoff", description=descriptions["ralplan_handoff"], structured_output=True)
+    async def ralplan_handoff(task: str, approved_plan_summary: str, critic_verdict: str, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanHandoffResult:
+        request = RalplanHandoffRequest(task=task, approved_plan_summary=approved_plan_summary, critic_verdict=critic_verdict, known_context=known_context or [], memory_context=memory_context or MemoryContext(), schema_version=schema_version)
+        return await _maybe_elicit_ralplan_handoff(ctx, request)
 
     @app.tool(name="deep_interview", description=descriptions["deep_interview"], structured_output=True)
-    async def deep_interview(brief: str, prior_rounds: Any = None, target_threshold: float = 0.2, profile: str = "standard", known_context: Any = None, memory_context: Any = None, non_goals: Any = None, decision_boundaries: Any = None, schema_version: str = "1.0", ctx: Context | None = None) -> dict[str, Any]:
-        rounds = _coerce_rounds(prior_rounds)
-        request = DeepInterviewRequest(brief=brief, prior_rounds=rounds, target_threshold=target_threshold, profile=profile, known_context=_known_context(known_context), memory_context=_memory_context(memory_context), non_goals=_coerce_str_list(non_goals), decision_boundaries=_coerce_str_list(decision_boundaries), schema_version=schema_version)
-        return (await _maybe_elicit_deep_interview(ctx, request)).to_mcp_result()
+    async def deep_interview(brief: str, prior_rounds: list[InterviewRound] | None = None, target_threshold: float = 0.2, profile: str = "standard", known_context: list[str] | None = None, memory_context: MemoryContext | None = None, non_goals: list[str] | None = None, decision_boundaries: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> DeepInterviewResult:
+        request = DeepInterviewRequest(brief=brief, prior_rounds=prior_rounds or [], target_threshold=target_threshold, profile=profile, known_context=known_context or [], memory_context=memory_context or MemoryContext(), non_goals=non_goals or [], decision_boundaries=decision_boundaries or [], schema_version=schema_version)
+        return await _maybe_elicit_deep_interview(ctx, request)
 
     @app.tool(name="ralph", description=descriptions["ralph"], structured_output=True)
-    async def ralph(approved_plan: str, latest_evidence: Any = None, evidence: Any = None, current_phase: str = "executing", todo_status: Any = None, verification_commands: Any = None, known_failures: Any = None, iteration: int = 1, current_status: str | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> dict[str, Any]:
-        request = RalphRequest(approved_plan=approved_plan, latest_evidence=_coerce_str_list(latest_evidence or evidence), current_phase=current_phase, todo_status=_coerce_str_list(todo_status), verification_commands=_coerce_str_list(verification_commands), known_failures=_coerce_str_list(known_failures), iteration=iteration, current_status=current_status, schema_version=schema_version)
-        return (await _maybe_elicit_ralph(ctx, request)).to_mcp_result()
+    async def ralph(approved_plan: str, latest_evidence: list[str] | None = None, evidence: list[str] | None = None, current_phase: str = "executing", verification_commands: list[str] | None = None, known_failures: list[str] | None = None, iteration: int = 1, schema_version: str = "1.0", ctx: Context | None = None) -> RalphResult:
+        request = RalphRequest(approved_plan=approved_plan, latest_evidence=latest_evidence or evidence or [], current_phase=current_phase, verification_commands=verification_commands or [], known_failures=known_failures or [], iteration=iteration, schema_version=schema_version)
+        return await _maybe_elicit_ralph(ctx, request)
 
     for tool_schema in MEMPALACE_TOOL_SCHEMAS:
         _register_mempalace_tool(

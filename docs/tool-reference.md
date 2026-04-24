@@ -5,16 +5,28 @@ Ymcp 的第一原则是 FastMCP-first：所有能力按 **Tools / Resources / Pr
 # Tools
 
 ## plan
-返回 MCP 标准结构化计划结果；需要用户选择或补充输入时，优先通过官方 Elicitation 获取。
+返回 MCP 标准结构化计划结果；需要用户选择或补充输入时，优先通过官方 Elicitation 获取。`plan` 不执行实现。
 
 ## ralplan
-返回 MCP 标准结构化共识规划结果；批准后的下一步选择优先通过官方 Elicitation 获取。
+作为共识规划总入口，返回首个应调用的子工具。宿主只按显式 handoff 串联，不再自己猜 phase。
+
+## ralplan_planner
+Ymcp 直接产出 Planner 草案、候选方案、ADR 草案和测试策略，并显式 handoff 到 `ralplan_architect`。
+
+## ralplan_architect
+Ymcp 直接产出 Architect 审查结果，包括边界、反例、tradeoff 和 synthesis，并显式 handoff 到 `ralplan_critic`。
+
+## ralplan_critic
+Ymcp 直接产出 Critic verdict；批准时显式 handoff 到 `ralplan_handoff`，未批准时返回修订指令。
+
+## ralplan_handoff
+只在 Critic 批准后收集下一步 workflow 选择。该阶段依赖官方 Elicitation；宿主不支持时会被阻断。
 
 ## deep_interview
 用于逐步澄清需求边界与意图。提问与下一步选择优先通过官方 Elicitation 获取，而不是自定义宿主协议。
 
 ## ralph
-返回执行/验证状态、证据缺口和完成摘要。缺证据或完成后的下一步选择优先通过官方 Elicitation 获取。
+返回执行/验证状态、证据缺口和完成摘要。缺证据或完成后的下一步选择优先通过官方 Elicitation 获取。`ralph` 是证据驱动的执行闭环判断工具，不是执行器。
 
 # 记忆工具
 
@@ -93,6 +105,8 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 
 `plan`、`ralplan`、`deep_interview`、`ralph` 均返回 `workflow_state`。这表示工具不会直接执行 workflow，而是把当前阶段、readiness、证据缺口和记忆预检结果投影给客户端。
 
+权威解释顺序：Tool contract → runtime behavior → MCP Resources → MCP Prompts → `docs/*.md` → `skills/*.md`。
+
 ## MCP 第一规范
 
 - 能力优先按 Tools / Resources / Prompts 三原语组织。
@@ -110,16 +124,18 @@ Prompts 只生成可复用调用模板，不直接执行工具，也不伪造工
 - `skill_source`
 - `memory_preflight`
 
-workflow artifacts 还会附带两类宿主展示兜底字段：
+workflow artifacts 还会附带宿主可展示字段：
 
 - `phase_summary`：当前阶段摘要、要点和建议展示内容
-- `choice_menu`：结构化下一步菜单；当 Elicitation 渲染异常时，宿主应直接使用该字段展示选项
+- `selected_next_tool`：仅当服务器发起的 Elicitation 被接受后才会出现
+
+宿主不得自己猜测 `selected_next_tool`，也不得把推荐项当成用户已确认选择。
 
 ## 推荐组合链路
 
-- `deep_interview → ralplan → ralph`：从模糊需求到批准计划再到执行验证。
+- `deep_interview → ralplan → ralplan_planner → ralplan_architect → ralplan_critic → ralplan_handoff → ralph`：从模糊需求到批准计划再到执行验证。
 - `plan(mode="direct") → ralph`：明确任务的快速计划与验证循环。
-- `ralplan(current_phase="planner_draft") → ralplan(current_phase="architect_review") → ralplan(current_phase="critic_review")`：顺序模拟 Planner / Architect / Critic 视角。
+- `ralplan → ralplan_planner → ralplan_architect → ralplan_critic → ralplan_handoff`：按显式 handoff 顺序完成三角色共识与收尾选择。
 - `mempalace_search → mempalace_add_drawer`：任务完成后先查重再沉淀长期记忆。
 
 ## memory_preflight

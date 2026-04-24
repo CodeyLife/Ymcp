@@ -6,7 +6,7 @@ from pathlib import Path
 from ymcp.cli import doctor_payload, main, resolve_mempalace_dir
 from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
 
-WORKFLOW_NAMES = {"plan", "ralplan", "deep_interview", "ralph"}
+WORKFLOW_NAMES = {"plan", "ralplan", "ralplan_planner", "ralplan_architect", "ralplan_critic", "ralplan_handoff", "deep_interview", "ralph"}
 MEMORY_NAMES = {tool["name"] for tool in MEMPALACE_TOOL_SCHEMAS}
 EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
 RESOURCE_URIS = {
@@ -83,7 +83,7 @@ def test_print_config_for_trae(capsys):
 
 
 def test_call_fixture_json_for_all_tools(capsys):
-    for tool_name in ["plan", "ralplan", "deep_interview", "ralph", "mempalace_status", "mempalace_search"]:
+    for tool_name in ["plan", "ralplan", "ralplan_planner", "ralplan_architect", "ralplan_critic", "ralplan_handoff", "deep_interview", "ralph", "mempalace_status", "mempalace_search"]:
         assert main(["call-fixture", tool_name, "--json"]) == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["meta"]["tool_name"] == tool_name

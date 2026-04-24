@@ -57,10 +57,14 @@ ymcp init-trae
 
 ## 5. 预期工具
 
-Trae 应该能发现以下四个工具：
+Trae 应该能发现以下 workflow 工具：
 
 - `plan`
 - `ralplan`
+- `ralplan_planner`
+- `ralplan_architect`
+- `ralplan_critic`
+- `ralplan_handoff`
 - `deep_interview`
 - `ralph`
 
@@ -68,12 +72,14 @@ Trae 应该能发现以下四个工具：
 
 - 调用 Ymcp 的 `plan` 工具，为当前任务返回阶段计划和验收标准。
 - 调用 Ymcp 的 `deep_interview` 工具，通过 MCP Elicitation 收集澄清回答。
-- 调用 Ymcp 的 `ralplan` 工具，总结方案选项、推荐方案、ADR 和测试策略。
-- 调用 Ymcp 的 `ralph` 工具，根据当前证据判断下一步是继续还是验证。
+- 调用 Ymcp 的 `ralplan` 工具，获取共识流总入口；再按 `selected_next_tool` 顺序调用 `ralplan_planner`、`ralplan_architect`、`ralplan_critic`、`ralplan_handoff`。
+- 调用 Ymcp 的 `ralph` 工具，根据当前证据判断下一步是继续、修复还是完成；`ralph` 本身不执行任务。
 
 ## 7. 宿主边界
 
 Ymcp 不执行命令、不 spawn agent、不修改文件、不持久化循环。用户输入、选择与表单交互优先通过 MCP 官方 Elicitation 完成；若客户端不支持 Elicitation，则工具只返回标准结构化结果和缺失输入说明。
+
+如果当前 workflow 节点依赖显式用户选择，Trae 应停止 workflow 交互，而不是改用私有菜单协议或自动代选推荐项。
 
 ## 8. 故障排查
 
@@ -154,28 +160,29 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 ### artifacts 中的展示字段
 
 - `phase_summary`
-- `choice_menu`
+- `selected_next_tool`（仅在 Elicitation 已接受后出现）
 
-### 展示兜底要求
+`selected_next_tool` 的含义是：**用户已经通过服务器发起的 Elicitation 显式完成选择**。Trae 不得把推荐项、默认项或 phase 推断结果当成 `selected_next_tool`。
 
-当宿主支持 MCP Elicitation 时，优先处理服务器发起的表单/单选请求；但如果 UI 渲染不完整，仍必须直接展示工具返回的结构化展示字段，而不是结束对话：
+### 展示要求
+
+当宿主支持 MCP Elicitation 时，优先处理服务器发起的表单/单选请求；如果 UI 渲染不完整，也不要改成宿主私有菜单或自动选择默认项：
 
 - `phase_summary`：当前阶段的人类可读摘要与 highlights
-- `choice_menu.options`：下一步可选 workflow 或动作
-- `choice_menu.recommended_option_id`：推荐项
+- `selected_next_tool`：仅当服务器发起的 Elicitation 被接受后才会出现
 
-也就是说，即使 Elicitation 只显示了标题、没有显示全部选项，宿主仍应根据结构化结果继续展示菜单并等待选择。
+也就是说，宿主不应自己渲染私有菜单、猜测默认项、自动继续，或把推荐语义重新包装成普通文本问题。
 
 ## 12. Workflow 最佳调用链
 
 ### 链路 A：需求不清晰 → 规划 → 执行验证
 
 1. 调用 `deep_interview`。
-2. 由服务器通过 Elicitation 收集回答，或在不支持 Elicitation 时返回标准 `needs_input`。
+2. 由服务器通过 Elicitation 收集回答；不支持 Elicitation 的宿主不应继续该 workflow。
 3. 当需求达到可结晶状态时，进入 `ralplan`。
-4. `ralplan` 按 `planner_draft → architect_review → critic_review` 顺序推进。
+4. `ralplan` 先返回总入口 handoff；Trae 再按 `ralplan_planner → ralplan_architect → ralplan_critic → ralplan_handoff` 顺序推进。
 5. 批准后进入 `ralph` 或由用户选择 `plan / mempalace_add_drawer`。
-6. `ralph` 根据证据返回继续、修复或完成状态。
+6. `ralph` 根据证据返回继续、修复或完成状态；真正的执行、修复、验证命令仍由 Trae 或其上层 agent 执行。
 7. 完成后调用 `mempalace_add_drawer` 保存稳定偏好、项目约定或踩坑结论。
 
 ### 链路 B：需求已清楚 → 直接计划 → Ralph 循环
@@ -186,9 +193,9 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 
 ### 链路 C：高风险或架构选择 → Ralplan 共识
 
-1. 调用 `ralplan`，`current_phase="planner_draft"`。
-2. 按顺序推进 Architect / Critic 反馈。
-3. 批准后通过 Elicitation 或标准降级结果中的 `choice_menu` 决定进入 `ralph`、`plan` 或 `mempalace_add_drawer`。
+1. 调用 `ralplan` 总入口。
+2. 按 `selected_next_tool` 顺序调用 `ralplan_planner`、`ralplan_architect`、`ralplan_critic`。
+3. `ralplan_critic` 批准后再调用 `ralplan_handoff`，并只通过 Elicitation 决定进入 `ralph`、`plan` 或 `mempalace_add_drawer`。
 
 ### 链路 D：长期偏好和项目知识沉淀
 
@@ -204,7 +211,7 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 ```text
 调用 Ymcp 的 deep_interview。
 如果客户端支持 MCP Elicitation，请直接处理 elicitation；
-否则根据标准 structured result 中的 requested_input 再继续。
+如果客户端不支持或未正确渲染 Elicitation，应停止 workflow 交互；不要改用宿主私有交互协议。
 ```
 
 ### plan 直接规划模板
@@ -218,16 +225,16 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 ### ralplan Planner 阶段模板
 
 ```text
-调用 Ymcp 的 ralplan。
-输入：task, current_phase="planner_draft"。
-读取 principles、decision_drivers、viable_options 和 ADR 草案，再继续 Architect 审查。
+先调用 Ymcp 的 ralplan。
+再按返回的 `selected_next_tool` 调用 `ralplan_planner`。
+Planner 结果会直接包含 `planner_draft`、方案选项和 ADR 草案。
 ```
 
 ### ralplan Architect → Critic 阶段模板
 
 ```text
-调用 Ymcp 的 ralplan。
-按 architect_review → critic_review 顺序推进，并把反馈回传给工具。
+按 `selected_next_tool` 顺序调用 `ralplan_architect` 与 `ralplan_critic`。
+不要跳过子工具，也不要根据 phase 名称猜下一步。
 ```
 
 ### ralph 执行验证模板
@@ -235,7 +242,7 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 ```text
 调用 Ymcp 的 ralph。
 输入：approved_plan、latest_evidence、verification_commands。
-如果缺失用户输入，优先通过 Elicitation 补齐。
+如果缺失用户输入，优先通过 Elicitation 补齐。不要把 ralph 当作执行器；它只对真实证据做 continue/fix/complete 判断。
 ```
 
 ### 完成后记忆沉淀模板
@@ -269,3 +276,5 @@ Ymcp 会把 workflow 当前阶段与结构化结果投影给客户端。Trae 宿
 ```
 
 旧版宿主也可以传 `known_context` 文本摘要；新宿主优先使用结构化 `memory_context`。
+
+更多协议细节见 `docs/workflow-contract.md`，逐工具实现指南见 `docs/host-implementation-guide.md`。

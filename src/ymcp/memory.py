@@ -52,12 +52,14 @@ class _MempalaceMcpRelayClient:
 
     def _env(self) -> dict[str, str]:
         env = os.environ.copy()
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
         if self.palace_path:
             env["MEMPALACE_PALACE_PATH"] = self.palace_path
         return env
 
     def _command(self) -> list[str]:
-        return [sys.executable, "-m", MEMPALACE_MCP_MODULE]
+        return [sys.executable, "-X", "utf8", "-m", MEMPALACE_MCP_MODULE]
 
     def _timeout_seconds(self) -> float:
         raw = os.getenv(MEMPALACE_MCP_TIMEOUT_ENV, "").strip()

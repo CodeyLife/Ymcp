@@ -3,6 +3,8 @@ name: ralplan
 description: Alias for $plan --consensus
 ---
 
+> Boundary note: This skill describes how an upper-layer agent/host can consume Ymcp workflow outputs. It does **not** mean the Ymcp MCP server will directly execute every action described below.
+
 # Ralplan (Consensus Planning Alias)
 
 Ralplan is a shorthand alias for `$plan --consensus`. It triggers iterative planning with Planner, Architect, and Critic agents until consensus is reached, with **RALPLAN-DR structured deliberation** (short mode by default, deliberate mode for high-risk work).

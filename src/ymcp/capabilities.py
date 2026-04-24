@@ -108,12 +108,17 @@ Ymcp 默认使用 stdio 传输，并以 MCP-first 能力边界集成到 Trae、C
 
 ## MCP-first 使用约束
 
+- 权威解释顺序：Tool contract / runtime behavior → Resources → Prompts → `docs/*.md` → `skills/*.md`
+- `skills/*.md` 是上层 agent / 宿主消费 Ymcp 工具结果的 workflow 提示，不等于 Ymcp server 会直接执行其中动作。
+- Ymcp 只负责暴露结构化 workflow 结果与 Elicitation；循环控制、执行、验证、状态保存由宿主负责。
+- `ralplan` 是共识规划总入口；真实的 Planner / Architect / Critic 结果由 `ralplan_planner`、`ralplan_architect`、`ralplan_critic` 直接产出，宿主只按显式 handoff 串联。
+- `ralph` 是证据驱动的执行闭环判断工具，不是执行器。
 - 宿主应优先发现并消费 Tools / Resources / Prompts 三类能力，而不是只读取 Markdown 文档。
 - 规则、参考和协议上下文从 `resource://ymcp/*` 读取。
-- 可复用 workflow 话术从 Prompt 获取，再由宿主决定是否展示或调用 Tool；例如 `ralplan_consensus` 用于总入口，`ralplan_planner_pass` / `ralplan_architect_pass` / `ralplan_critic_pass` 用于三角色 phase prompt。
+- 可复用 workflow 话术从 Prompt 获取，再由宿主决定是否展示或调用 Tool；例如 `ralplan_consensus` 解释总入口，三角色 Prompt 仅作参考，不替代 `ralplan_planner` / `ralplan_architect` / `ralplan_critic` 的结构化输出。
 - 如果客户端支持 Elicitation，必须处理服务器发起的表单/选择请求。
-- 如果客户端不支持 Elicitation，不要伪造用户输入；只根据 Tool 返回的标准结构化结果继续。
-- 如果 Elicitation UI 渲染不完整，必须退回使用 `phase_summary`、`choice_menu` 展示当前阶段结论与下一步菜单，不能直接结束对话。
+- 如果客户端不支持 Elicitation，不要伪造用户输入；应将该宿主视为不支持 workflow 交互。
+- 如果 Elicitation UI 渲染不完整，不要自动选择推荐项，也不要降级到宿主私有菜单协议。
 """
 
 
@@ -199,7 +204,7 @@ def prompt_template(name: str, **kwargs: Any) -> str:
 
 brief: {brief}
 
-规则：先读取 `resource://ymcp/principles`；如涉及历史项目事实，先调用 `mempalace_search` 并把结果作为 memory_context。不要伪造用户回答；需要继续提问时使用工具返回的 next_question 或 MCP Elicitation。需求结晶后必须根据 `choice_menu` 展示结构化下一步菜单；在 `selected_next_tool` 缺失前不得自动调用 plan、ralplan 或 ralph，也不要用普通结束文案替代菜单。"""
+规则：先读取 `resource://ymcp/principles`；如涉及历史项目事实，先调用 `mempalace_search` 并把结果作为 memory_context。不要伪造用户回答；需要继续提问或选择下一步时，只能使用 MCP Elicitation。在 `selected_next_tool` 缺失前不得自动调用 plan、ralplan 或 ralph，也不要用普通结束文案替代 Elicitation。"""
     if name == "plan_direct":
         task = kwargs.get("task") or "{task}"
         return f"""请使用 Ymcp 的 `plan` 工具生成直接计划：
@@ -207,7 +212,7 @@ brief: {brief}
 task: {task}
 mode: direct
 
-要求：计划只产生结构化结果，不执行文件修改；如工具返回 requested_input，优先使用 MCP Elicitation 或按 needs_input 降级结果向用户索取缺失信息。"""
+要求：计划只产生结构化结果，不执行文件修改；任何缺失输入或下一步选择都只通过 MCP Elicitation 获取。"""
     if name == "ralplan_consensus":
         task = kwargs.get("task") or "{task}"
         return f"""请使用 Ymcp 的 `ralplan` 工具推进共识规划：
@@ -215,7 +220,7 @@ mode: direct
 task: {task}
 current_phase: planner_draft
 
-流程：planner_draft → architect_review → critic_review。每轮只把真实评审结论传回工具；批准后再让用户选择 ralph / plan / mempalace_add_drawer。"""
+流程：先调用 `ralplan` 总入口，再按 `selected_next_tool` 顺序调用 `ralplan_planner` → `ralplan_architect` → `ralplan_critic` → `ralplan_handoff`。只有 handoff 阶段才选择 ralph / plan / mempalace_add_drawer。"""
     if name == "ralplan_planner_pass":
         task = kwargs.get("task") or "{task}"
         deliberate = kwargs.get("deliberate")
