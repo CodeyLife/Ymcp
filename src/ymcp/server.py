@@ -288,6 +288,38 @@ def _split_lines(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
+async def _emit_ralplan_progress(ctx: Context | None, phase_key: str, result: Any) -> None:
+    if ctx is None:
+        return
+    phase_map = {
+        "kickoff": (1, 5, "进入 ralplan，总入口已就绪，下一步是 Planner。"),
+        "planner": (2, 5, "Planner 草案已生成，正在准备 Architect 审查。"),
+        "architect": (3, 5, "Architect 审查已完成，下一步是 Critic。"),
+        "critic_approved": (4, 5, "Critic 已批准当前规划，正在准备 handoff。"),
+        "critic_needs_revision": (4, 5, "Critic 要求修订，当前不会继续自动 handoff。"),
+        "handoff": (5, 5, "已到达 handoff，等待宿主展示下一步 workflow 选择。"),
+        "handoff_blocked": (5, 5, "handoff 被阻断：critic verdict 未批准。"),
+    }
+    progress, total, base_message = phase_map[phase_key]
+    phase_summary = getattr(getattr(result, "artifacts", None), "phase_summary", None)
+    phase_title = getattr(phase_summary, "title", None)
+    summary = getattr(result, "summary", None)
+    selected_next_tool = getattr(getattr(result, "meta", None), "selected_next_tool", None)
+    message_parts = [base_message]
+    if phase_title:
+        message_parts.append(f"阶段：{phase_title}。")
+    if summary:
+        message_parts.append(f"结果：{summary}")
+    if selected_next_tool:
+        message_parts.append(f"建议下一工具：{selected_next_tool}。")
+    message = " ".join(message_parts)
+    try:
+        await ctx.info(message, logger_name="ymcp.ralplan")
+        await ctx.report_progress(progress, total, base_message)
+    except Exception:  # pragma: no cover - host transport failures should not break tool results
+        LOGGER.debug("Failed to emit ralplan MCP progress notification.", exc_info=True)
+
+
 def _handle_elicitation_non_accept(result, action: str, message: str):
     action_label = "拒绝" if action == "decline" else "取消"
     result.summary = f"{message}（用户已{action_label}）"
@@ -432,6 +464,7 @@ async def _maybe_elicit_plan(ctx: Context | None, request: PlanRequest):
 
 async def _maybe_elicit_ralplan_handoff(ctx: Context | None, request: RalplanHandoffRequest):
     result = build_ralplan_handoff(request)
+    await _emit_ralplan_progress(ctx, "handoff" if result.status == ToolStatus.NEEDS_INPUT else "handoff_blocked", result)
     if result.status != ToolStatus.NEEDS_INPUT:
         return result
     if not _supports_form_elicitation(ctx):
@@ -537,22 +570,31 @@ def create_app() -> FastMCP:
     @app.tool(name="ralplan", description=descriptions["ralplan"], structured_output=True)
     async def ralplan(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanResult:
         request = RalplanRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
-        return build_ralplan(request)
+        result = build_ralplan(request)
+        await _emit_ralplan_progress(ctx, "kickoff", result)
+        return result
 
     @app.tool(name="ralplan_planner", description=descriptions["ralplan_planner"], structured_output=True)
     async def ralplan_planner(task: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, kickoff_summary: str | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanPlannerResult:
         request = RalplanPlannerRequest(task=task, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
-        return build_ralplan_planner(request)
+        result = build_ralplan_planner(request)
+        await _emit_ralplan_progress(ctx, "planner", result)
+        return result
 
     @app.tool(name="ralplan_architect", description=descriptions["ralplan_architect"], structured_output=True)
     async def ralplan_architect(task: str, planner_draft: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanArchitectResult:
         request = RalplanArchitectRequest(task=task, planner_draft=planner_draft, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
-        return build_ralplan_architect(request)
+        result = build_ralplan_architect(request)
+        await _emit_ralplan_progress(ctx, "architect", result)
+        return result
 
     @app.tool(name="ralplan_critic", description=descriptions["ralplan_critic"], structured_output=True)
     async def ralplan_critic(task: str, planner_draft: str, architect_review: str, constraints: list[str] | None = None, deliberate: bool = False, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, review_iteration: int = 1, max_iterations: int = 5, feedback_bundle: list[str] | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanCriticResult:
         request = RalplanCriticRequest(task=task, planner_draft=planner_draft, architect_review=architect_review, constraints=constraints or [], deliberate=deliberate, known_context=known_context or [], memory_context=memory_context or MemoryContext(), review_iteration=review_iteration, max_iterations=max_iterations, feedback_bundle=feedback_bundle or [], schema_version=schema_version)
-        return build_ralplan_critic(request)
+        result = build_ralplan_critic(request)
+        phase_key = "critic_approved" if result.artifacts.critic_verdict == "APPROVE" else "critic_needs_revision"
+        await _emit_ralplan_progress(ctx, phase_key, result)
+        return result
 
     @app.tool(name="ralplan_handoff", description=descriptions["ralplan_handoff"], structured_output=True)
     async def ralplan_handoff(task: str, approved_plan_summary: str, critic_verdict: str, known_context: list[str] | None = None, memory_context: MemoryContext | None = None, schema_version: str = "1.0", ctx: Context | None = None) -> RalplanHandoffResult:

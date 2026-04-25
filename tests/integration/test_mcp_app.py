@@ -9,6 +9,7 @@ from ymcp.server import (
     RalphEvidenceInput,
     RalphVerificationInput,
     RalplanNextToolInput,
+    _emit_ralplan_progress,
     _split_lines,
     create_app,
 )
@@ -169,4 +170,33 @@ def test_memory_result_limits_are_enforced(monkeypatch):
         result = await app.call_tool("mempalace_search", {"query": "ymcp", "limit": 2})
         structured = result[1] if isinstance(result, tuple) else result
         assert structured["artifacts"]["count"] == 2
+    anyio.run(_run)
+
+
+def test_ralplan_progress_notifications_use_standard_mcp_log_methods():
+    class FakeContext:
+        def __init__(self):
+            self.info_calls = []
+            self.progress_calls = []
+
+        async def info(self, message, **extra):
+            self.info_calls.append((message, extra))
+
+        async def report_progress(self, progress, total=None, message=None):
+            self.progress_calls.append((progress, total, message))
+
+    async def _run():
+        from ymcp.contracts.ralplan import RalplanPlannerRequest
+        from ymcp.engine.ralplan import build_ralplan_planner
+
+        ctx = FakeContext()
+        result = build_ralplan_planner(RalplanPlannerRequest(task="规划 Ymcp 状态机 refactor", known_context=["workflow server"]))
+        await _emit_ralplan_progress(ctx, "planner", result)
+        assert len(ctx.info_calls) == 1
+        message, extra = ctx.info_calls[0]
+        assert "Planner 草案已生成" in message
+        assert "ralplan_architect" in message
+        assert extra["logger_name"] == "ymcp.ralplan"
+        assert ctx.progress_calls == [(2, 5, "Planner 草案已生成，正在准备 Architect 审查。")]
+
     anyio.run(_run)
