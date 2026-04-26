@@ -9,9 +9,9 @@ description: Pure MCP host architecture review perspective for plans and designs
 Use this role to review a plan for architecture, boundaries, tradeoffs, and feasibility inside the same MCP host context.
 
 ## MCP Host Assumptions
-- Do not assume `ask_codex`, Architect subagents, `Read`, `Grep`, `Glob`, or `Bash` are Hermes MCP tools.
+- Do not assume Architect subagents or shell/search helpers are exposed by the MCP server.
 - Use available host-native inspection tools when present.
-- Use Hermes MCP context tools such as `task_context_bundle`, `session_recall_search`, `memory_read`, `skills_list`, and `skill_view_safe` when relevant.
+- Use Ymcp resources/prompts and `mempalace_*` tools when relevant.
 - If evidence is unavailable, state the evidence gap instead of inventing file facts.
 
 ## Steps

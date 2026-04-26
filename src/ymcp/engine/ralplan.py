@@ -1,252 +1,231 @@
 from __future__ import annotations
 
 from ymcp.capabilities import prompt_content
-from ymcp.contracts.common import HostActionType, ToolStatus
+from ymcp.contracts.common import Handoff, HostActionType, ToolStatus
 from ymcp.contracts.ralplan import (
     RalplanArchitectArtifacts,
     RalplanArchitectRequest,
     RalplanArchitectResult,
+    RalplanArtifacts,
     RalplanCompleteArtifacts,
     RalplanCompleteRequest,
     RalplanCompleteResult,
     RalplanCriticArtifacts,
     RalplanCriticRequest,
     RalplanCriticResult,
-    RalplanArtifacts,
     RalplanRequest,
     RalplanResult,
 )
-from ymcp.contracts.workflow import HandoffOption, MemoryPreflight, WorkflowPhaseSummary, WorkflowState
-from ymcp.core.result import build_meta, build_next_action
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowPhaseSummary, WorkflowState
+from ymcp.core.result import build_handoff_option, build_meta, build_next_action
 from ymcp.engine.memory_preflight import analyze_memory_context
-
-
-def _normalize_critic_verdict(value: str) -> str:
-    text = (value or '').strip().upper()
-    if not text:
-        return 'REVISE'
-    first_token = text.split()[0]
-    if first_token in {'APPROVE', 'REVISE', 'REJECT'}:
-        return first_token
-    first_line = text.splitlines()[0].strip()
-    if first_line in {'APPROVE', 'REVISE', 'REJECT'}:
-        return first_line
-    return 'REVISE'
 
 
 def _memory_preflight(query: str, known_context: list[str], memory_context):
     search_performed, retrieved_count, retrieved_context = analyze_memory_context(known_context, memory_context)
-    return (
-        search_performed,
-        retrieved_count,
-        retrieved_context,
-        MemoryPreflight(
-            required=not bool(known_context),
-            reason='共识规划前建议读取相关历史决策与项目记忆。',
-            query=query,
-            already_satisfied=bool(known_context),
-            search_performed=search_performed,
-            retrieved_count=retrieved_count,
-            retrieved_context=retrieved_context,
-        ),
+    return MemoryPreflight(
+        required=not bool(known_context),
+        reason='共识规划前建议读取相关历史决策与项目记忆。',
+        query=query,
+        already_satisfied=bool(known_context),
+        search_performed=search_performed,
+        retrieved_count=retrieved_count,
+        retrieved_context=retrieved_context,
     )
 
 
 def build_ralplan(request: RalplanRequest) -> RalplanResult:
-    _, _, _, memory_preflight = _memory_preflight(request.task, request.known_context, request.memory_context)
-    skill_content = prompt_content('planner', request.task)
+    task, known_context, memory_context = request.task.strip(), request.known_context, request.memory_context
+    memory_preflight = _memory_preflight(task, known_context, memory_context)
+    skill_content = prompt_content('planner', task)
+    handoff = Handoff(
+        recommended_next_action='yplan_architect',
+        options=[
+            build_handoff_option(
+                'yplan_architect',
+                '进入 yplan_architect',
+                '完成 planner 阶段后调用 yplan_architect。',
+                recommended=True,
+            )
+        ],
+    )
     return RalplanResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请先阅读并使用返回的 skill_content 完成 planner 阶段并输出总结文案；最后必须调用 yplan_architect。',
+        summary='请将 skill_content 作为推理指导完成 planner 阶段；产出初版方案后调用 `yplan_architect`。当前阶段只有一个合法下一步：进入 architect 阶段。`handoff.options` 由服务端生成，应直接使用，不要自行构造新的选项对象。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '先消费返回的 skill_content 完成 planner 阶段并输出总结文案；最后调用 yplan_architect。')],
+        next_actions=[build_next_action('下一步', '先完成 planner 阶段输出；完成后调用 yplan_architect。不要跳过 architect 阶段直接 complete。')],
         risks=[],
         meta=build_meta(
             'yplan',
             'ymcp.contracts.ralplan.RalplanResult',
             host_controls=['display', 'prompt guidance', 'memory lookup'],
             required_host_action=HostActionType.AWAIT_INPUT,
+            handoff=handoff,
         ),
         artifacts=RalplanArtifacts(
             skill_content=skill_content,
-            readiness_verdict='prompt_required',
             workflow_state=WorkflowState(
                 workflow_name='yplan',
-                current_phase='planner',
+                current_phase='planning',
                 readiness='needs_input',
                 evidence_gaps=[],
                 memory_preflight=memory_preflight,
+                current_focus='plan_summary',
             ),
             phase_summary=WorkflowPhaseSummary(
-                title='Ralplan Planner Start',
-                summary='tool 负责返回 planner 阶段所需的 skill_content，并把下一步固定到 yplan_architect。',
-                highlights=['suggested_prompt=planner', 'next_tool=yplan_architect'],
+                title='Plan Start',
+                summary='tool 只返回 planner 阶段的 skill_content 与下一步 handoff；workflow_state 仅描述当前阶段，不承担跨阶段状态保存。',
+                highlights=['suggested_prompt=planner', 'handoff=yplan_architect', 'workflow_state_is_phase_local=true'],
             ),
         ),
     )
 
 
 def build_ralplan_architect(request: RalplanArchitectRequest) -> RalplanArchitectResult:
-    _, _, _, memory_preflight = _memory_preflight(request.task, request.known_context, request.memory_context)
-    skill_content = prompt_content('architect', request.plan_summary.strip() or request.task)
+    skill_content = prompt_content('architect')
+    handoff = Handoff(
+        recommended_next_action='yplan_critic',
+        options=[
+            build_handoff_option(
+                'yplan_critic',
+                '进入 yplan_critic',
+                '完成 architect 阶段后调用 yplan_critic。',
+                recommended=True,
+            )
+        ],
+    )
     return RalplanArchitectResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请阅读并使用返回的 skill_content 完成 architect 阶段并输出总结文案；最后必须调用 yplan_critic。',
+        summary='请将 skill_content 作为推理指导完成 architect 阶段；补强边界、接口与风险后调用 `yplan_critic`。当前阶段只有一个合法下一步：进入 critic 阶段。`handoff.options` 由服务端生成，应直接使用，不要自行构造新的选项对象。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '先消费返回的 skill_content 完成 architect 阶段并输出总结文案；最后调用 yplan_critic。')],
+        next_actions=[build_next_action('下一步', '完成 architect 阶段后调用 yplan_critic。')],
         risks=[],
         meta=build_meta(
             'yplan_architect',
             'ymcp.contracts.ralplan.RalplanArchitectResult',
-            host_controls=['display', 'prompt guidance', 'memory lookup'],
+            host_controls=['display', 'prompt guidance'],
             required_host_action=HostActionType.AWAIT_INPUT,
+            handoff=handoff,
         ),
         artifacts=RalplanArchitectArtifacts(
             skill_content=skill_content,
-            plan_summary=request.plan_summary.strip() or None,
-            planner_notes=request.planner_notes,
-            readiness_verdict='prompt_required',
             workflow_state=WorkflowState(
                 workflow_name='yplan_architect',
                 current_phase='architect',
                 readiness='needs_input',
                 evidence_gaps=[],
-                memory_preflight=memory_preflight,
+                current_focus='architecture_review',
             ),
             phase_summary=WorkflowPhaseSummary(
                 title='Ralplan Architect',
-                summary='tool 负责返回 architect 阶段所需的 skill_content，并把下一步固定到 yplan_critic。',
-                highlights=['suggested_prompt=architect', 'next_tool=yplan_critic'],
+                summary='tool 只返回 architect 阶段的 skill_content 与下一步 handoff；workflow_state 仅描述当前阶段，不承担跨阶段状态保存。',
+                highlights=['suggested_prompt=architect', 'handoff=yplan_critic', 'workflow_state_is_phase_local=true'],
             ),
         ),
     )
 
 
 def build_ralplan_critic(request: RalplanCriticRequest) -> RalplanCriticResult:
-    _, _, _, memory_preflight = _memory_preflight(request.task, request.known_context, request.memory_context)
-    skill_content = prompt_content('critic', request.plan_summary.strip() or request.task)
-    critic_verdict = _normalize_critic_verdict(request.critic_verdict)
-    approved = critic_verdict == 'APPROVE'
+    skill_content = prompt_content('critic')
+    handoff = Handoff(
+        recommended_next_action=None,
+        options=[
+            build_handoff_option(
+                'yplan_critic',
+                '继续 yplan_critic',
+                '若方案仍需补强或补证，继续留在 critic 阶段迭代。',
+            ),
+            build_handoff_option(
+                'yplan_complete',
+                '进入 yplan_complete',
+                '若 critic 认为方案已可执行，则调用 yplan_complete 完成共识收口。',
+            ),
+        ],
+    )
     return RalplanCriticResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请阅读并使用返回的 skill_content 完成 critic 阶段并输出总结文案；仅当 Critic 判定为 APPROVE 时，最后才允许调用 yplan_complete。' if approved else '当前 Critic 判定为 REVISE；请继续修订方案并输出更新后的总结文案，不要调用 yplan_complete。',
+        summary='请将 skill_content 作为推理指导完成 critic 阶段。若你认为方案已经足够清晰、完整且可执行，选择 `yplan_complete` 收口；若仍需补强或补证，选择 `yplan_critic` 继续批评和收敛。不要依赖固定 verdict 协议。`handoff.options` 由服务端生成，应直接使用，不要自行构造新的选项对象。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '先消费返回的 skill_content 完成 critic 阶段并输出总结文案；若 verdict=APPROVE，再调用 yplan_complete。' if approved else '根据当前 REVISE 结论继续修订方案并重新进入后续评审，不要调用 yplan_complete。')],
+        next_actions=[
+            build_next_action('方案通过', '若当前方案已足够清晰、完整、可执行，则调用 yplan_complete。'),
+            build_next_action('继续收敛', '若仍有缺口或风险，继续调用 yplan_critic。不要依赖固定 verdict 协议。'),
+        ],
         risks=[],
         meta=build_meta(
             'yplan_critic',
             'ymcp.contracts.ralplan.RalplanCriticResult',
-            host_controls=['display', 'prompt guidance', 'memory lookup'],
+            host_controls=['display', 'prompt guidance'],
             required_host_action=HostActionType.AWAIT_INPUT,
+            handoff=handoff,
         ),
         artifacts=RalplanCriticArtifacts(
             skill_content=skill_content,
-            next_tool='yplan_complete' if approved else None,
-            plan_summary=request.plan_summary.strip() or None,
-            planner_notes=request.planner_notes,
-            architect_notes=request.architect_notes,
-            critic_verdict=critic_verdict,
-            critic_notes=request.critic_notes,
-            acceptance_criteria=request.acceptance_criteria,
-            readiness_verdict='approved' if approved else 'needs_revision',
             workflow_state=WorkflowState(
                 workflow_name='yplan_critic',
                 current_phase='critic',
                 readiness='needs_input',
-                evidence_gaps=[] if approved else ['critic_verdict=APPROVE required before yplan_complete'],
-                blocked_reason=None if approved else 'Critic 判定为 REVISE，需先修订方案。',
-                memory_preflight=memory_preflight,
+                evidence_gaps=[],
+                current_focus='critic_verdict',
             ),
             phase_summary=WorkflowPhaseSummary(
                 title='Ralplan Critic',
-                summary='tool 负责返回 critic 阶段所需的 skill_content，并根据 Critic 结论决定是否允许进入 yplan_complete。',
-                highlights=['suggested_prompt=critic', f'critic_verdict={critic_verdict}', 'next_tool=yplan_complete' if approved else 'revision_required=true'],
+                summary='tool 只返回 critic 阶段的 skill_content 与合法下一跳白名单；workflow_state 仅描述当前阶段，不承担跨阶段状态保存。',
+                highlights=['suggested_prompt=critic', 'handoff=yplan_critic|yplan_complete', 'verdict_protocol=llm_decides', 'workflow_state_is_phase_local=true'],
             ),
         ),
     )
 
 
 def build_ralplan_complete(request: RalplanCompleteRequest) -> RalplanCompleteResult:
-    _, _, _, memory_preflight = _memory_preflight(request.task, request.known_context, request.memory_context)
-    critic_verdict = _normalize_critic_verdict(request.critic_verdict)
-    if critic_verdict != 'APPROVE':
-        return RalplanCompleteResult(
-            status=ToolStatus.BLOCKED,
-            summary='当前 Critic 结论不是 APPROVE，不能进入 yplan_complete；请先继续修订方案。',
-            assumptions=[],
-            next_actions=[build_next_action('下一步', '根据 Critic 的 REVISE 结论继续修订方案，并在再次获得 APPROVE 后再调用 yplan_complete。')],
-            risks=[],
-            meta=build_meta(
-                'yplan_complete',
-                'ymcp.contracts.ralplan.RalplanCompleteResult',
-                host_controls=['display', 'memory lookup'],
-                required_host_action=HostActionType.STOP,
-            ),
-            artifacts=RalplanCompleteArtifacts(
-                received_summary=request.summary.strip(),
-                critic_verdict=critic_verdict,
-                consensus_verdict='needs_revision',
-                approved_plan_summary=request.plan_summary.strip() or None,
-                planner_notes=request.planner_notes,
-                architect_notes=request.architect_notes,
-                critic_notes=request.critic_notes,
-                acceptance_criteria=request.acceptance_criteria,
-                handoff_options=[],
-                workflow_state=WorkflowState(
-                    workflow_name='yplan_complete',
-                    current_phase='handoff',
-                    readiness='needs_input',
-                    evidence_gaps=['critic_verdict=APPROVE required'],
-                    blocked_reason='Critic 判定为 REVISE，禁止进入完成态交接。',
-                    memory_preflight=memory_preflight,
-                ),
-                phase_summary=WorkflowPhaseSummary(
-                    title='Ralplan Complete Blocked',
-                    summary='只有 Critic 判定为 APPROVE 时，yplan_complete 才能触发 Elicitation。',
-                    highlights=[f'critic_verdict={critic_verdict}'],
-                ),
-            ),
-        )
     handoff_options = [
-        HandoffOption(value='ydo', title='使用 ydo 执行任务', description='按当前批准方案进入执行与验证。', recommended=True),
-        HandoffOption(value='restart', title='重新开始规划', description='回到 yplan，从 planner 阶段重开整轮规划。'),
-        HandoffOption(value='memory_store', title='保存规划到记忆', description='将当前规划摘要沉淀为长期记忆。'),
+        build_handoff_option(
+            'ydo',
+            '使用 ydo 执行任务',
+            '规划阶段已经结束，直接进入执行与验证阶段。',
+            recommended=True,
+        ),
+        build_handoff_option(
+            'restart',
+            '重新开始规划',
+            '由宿主重启规划流程，并回到 yplan。',
+        ),
+        build_handoff_option(
+            'memory_store',
+            '保存规划到记忆',
+            '由宿主将当前规划摘要沉淀为长期记忆。',
+        ),
     ]
+    handoff = Handoff(
+        recommended_next_action='ydo',
+        options=handoff_options,
+    )
     return RalplanCompleteResult(
-        status=ToolStatus.NEEDS_INPUT,
-        summary='共识规划已结束；现在必须通过 Elicitation 选择下一步 workflow。',
+        status=ToolStatus.OK,
+        summary='共识规划已结束。若要开始执行，选择 `ydo` 进入执行阶段；若要从头再规划，选择 `restart`；若只想把当前结论沉淀到记忆，选择 `memory_store`。本阶段是纯收口阶段，不再要求任何输入摘要。现在必须通过 Elicitation 向用户展示这些菜单选项，并等待用户选择；不要自动继续。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '调用 yplan_complete 后，必须通过 Elicitation 展示 ydo / restart / memory_store 选项。')],
+        next_actions=[build_next_action('下一步', '读取 handoff.options；通常直接按 recommended_next_action 进入 ydo。不要在此阶段重新展开长篇规划。')],
         risks=[],
         meta=build_meta(
             'yplan_complete',
             'ymcp.contracts.ralplan.RalplanCompleteResult',
-            host_controls=['display', 'MCP Elicitation', 'memory lookup'],
+            host_controls=['display', 'memory lookup', 'MCP Elicitation'],
             required_host_action=HostActionType.AWAIT_INPUT,
-            requires_elicitation=True,
-            requires_explicit_user_choice=True,
+            handoff=handoff,
         ),
         artifacts=RalplanCompleteArtifacts(
-            received_summary=request.summary.strip(),
-            critic_verdict=critic_verdict,
-            consensus_verdict='approved',
-            approved_plan_summary=request.plan_summary.strip() or None,
-            planner_notes=request.planner_notes,
-            architect_notes=request.architect_notes,
-            critic_notes=request.critic_notes,
-            acceptance_criteria=request.acceptance_criteria,
+            selected_option=None,
             handoff_options=handoff_options,
             workflow_state=WorkflowState(
                 workflow_name='yplan_complete',
                 current_phase='handoff',
-                readiness='needs_user_choice',
+                readiness='ready',
                 evidence_gaps=[],
-                memory_preflight=memory_preflight,
+                current_focus='choose_next_workflow',
             ),
             phase_summary=WorkflowPhaseSummary(
                 title='Ralplan Complete',
-                summary='tool 在 ralplan 收口时触发 Elicitation，向用户展示执行、重开或记忆沉淀选项。',
-                highlights=['handoff_options=ydo,restart,memory_store'],
+                summary='tool 在 ralplan 收口时只提供 handoff 选项，不再要求 summary 或构造中间 artifact；workflow_state 仅描述当前阶段。',
+                highlights=['handoff=ydo,restart,memory_store', 'input=none', 'workflow_state_is_phase_local=true'],
             ),
         ),
     )

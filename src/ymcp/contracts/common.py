@@ -4,6 +4,8 @@ from enum import Enum
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
+from pydantic import computed_field
+from pydantic import model_validator
 
 from ymcp.core.versioning import SCHEMA_VERSION
 
@@ -29,10 +31,37 @@ class Risk(BaseModel):
 class HostActionType(str, Enum):
     DISPLAY_ONLY = "display_only"
     AWAIT_INPUT = "await_input"
-    CALL_SELECTED_TOOL = "call_selected_tool"
-    CONTINUE_EXECUTION = "continue_execution"
     STOP = "stop"
     FINISH = "finish"
+
+
+class HandoffOption(BaseModel):
+    value: str
+    title: str
+    description: str
+    recommended: bool = False
+
+
+class Handoff(BaseModel):
+    recommended_next_action: str | None = None
+    options: list[HandoffOption] = Field(default_factory=list)
+
+    @computed_field(return_type=list[str])
+    @property
+    def allowed_next_actions(self) -> list[str]:
+        return [item.value for item in self.options]
+
+    @model_validator(mode="after")
+    def validate_handoff(self) -> "Handoff":
+        if self.recommended_next_action and self.recommended_next_action not in set(self.allowed_next_actions):
+            raise ValueError("recommended_next_action must be included in options[*].value")
+        return self
+
+
+class ArtifactRef(BaseModel):
+    ref: str
+    kind: str
+    summary: str | None = None
 
 
 class ResultMeta(BaseModel):
@@ -40,10 +69,7 @@ class ResultMeta(BaseModel):
     contract: str
     host_controls: list[str] = Field(default_factory=list)
     required_host_action: HostActionType = HostActionType.DISPLAY_ONLY
-    safe_to_auto_continue: bool = False
-    requires_elicitation: bool = False
-    requires_explicit_user_choice: bool = False
-    selected_next_tool: str | None = None
+    handoff: Handoff | None = None
 
 
 ArtifactT = TypeVar("ArtifactT", bound=BaseModel)

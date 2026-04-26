@@ -44,6 +44,72 @@ PRINCIPLES_CONTENT = """# Ymcp FastMCP 第一原则
 - 运行时硬约束以 prompts、tool descriptions 和 tool contract 为准。
 """
 
+WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
+
+## ydeep
+
+- `ydeep` returns `skill_content` and a single next-step option: `ydeep_complete`
+- `ydeep_complete` returns `clarified_artifact` plus two Elicitation options:
+  - `yplan`
+  - `refine_further`
+- Host convention:
+  - when the user/model chooses `yplan`, convert `clarified_artifact.summary` into the plain `task` input expected by `yplan`
+  - when the user/model chooses `refine_further`, stay in the same interview loop and call `ydeep_complete` again after more thinking
+
+## yplan
+
+- `yplan` accepts only:
+  - `task`
+- `yplan` returns planner `skill_content` and a single next-step option: `yplan_architect`
+- `yplan_architect` returns architect `skill_content` and a single next-step option: `yplan_critic`
+- `yplan_critic` returns critic `skill_content` and exactly two legal next-step options:
+  - `yplan_critic`
+  - `yplan_complete`
+- Host convention:
+  - the host converts upstream artifacts into a plain planning task before calling `yplan`
+    - from `ydeep_complete`, use `clarified_artifact.summary` as `task`
+    - from execution/replanning, use the new planning brief or execution findings as a fresh plain `task`
+  - the model finishes the planner stage, then calls `yplan_architect`
+  - the model finishes the architect stage, then calls `yplan_critic`
+  - inside `yplan_critic`, the model decides for itself whether the plan is ready:
+    - if ready, call `yplan_complete`
+    - if not ready, revise the plan and call `yplan_critic` again
+  - Ymcp does not require a fixed critic verdict schema such as `APPROVE/REVISE`; the legal next-step options are the contract
+  - `yplan_complete` is a no-input completion gate; calling it means the model believes planning is complete
+  - `yplan_complete` does not validate or collect a summary; it only returns the legal next-step options
+
+## ydo
+
+- `yplan_complete` returns `ydo` as a legal next step
+- `ydo` returns execution `skill_content` and the next-step option `ydo_complete`
+- `ydo_complete` returns four Elicitation options:
+  - `finish`
+  - `memory_store`
+  - `yplan`
+  - `continue_execution`
+- Host convention:
+  - `ydo` is entered directly from the current conversation context; it no longer requires an `approved_plan_artifact` input
+  - when the user/model chooses `yplan` after execution, restart planning by passing a fresh plain `task`
+  - `ydo_complete` is also a no-input completion gate; `continue_execution` means stay in the execution loop and call `ydo_complete` again after more work
+
+## Design rule
+
+Ymcp is a lightweight skill-flow server. The tool contract only declares:
+- the current phase skill guidance
+- the legal next-step options
+- the recommended next step
+
+`handoff.options` should be treated as a server-provided action menu, not a route object the model is expected to construct.
+
+The intended interaction is:
+1. tool returns `skill_content`
+2. model thinks and outputs
+3. host calls the matching `*_complete`
+4. for complete stages, host should use `handoff.options` as the Elicitation menu source and wait for user choice
+
+The host owns the fixed calling convention between stages. Ymcp does not try to be a fully automatic workflow state machine.
+"""
+
 
 def _parse_skill_frontmatter(text: str, fallback_name: str) -> tuple[str, str]:
     if not text.startswith("---"):
@@ -90,6 +156,7 @@ def get_resource_specs() -> tuple[ResourceSpec, ...]:
     return (
         ResourceSpec("resource://ymcp/principles", "ymcp_principles", "Ymcp FastMCP 第一原则", "Workflow tool 与 prompt 的边界说明。", "text/markdown", PRINCIPLES_CONTENT),
         ResourceSpec("resource://ymcp/memory-protocol", "ymcp_memory_protocol", "Ymcp Memory Protocol", "记忆核验、写入、更新、失效和安全规则。", "text/markdown", _memory_protocol_content()),
+        ResourceSpec("resource://ymcp/workflow-contracts", "ymcp_workflow_contracts", "Ymcp Workflow Contracts", "三条 workflow 的 artifact 流转与 handoff 参数绑定说明。", "text/markdown", WORKFLOW_CONTRACTS_CONTENT),
         ResourceSpec("resource://ymcp/project-rule-template", "ymcp_project_rule_template", "Ymcp Project Rule Template", "Trae / LLM 宿主项目规则模板。", "text/markdown", TRAE_PROJECT_RULE_TEMPLATE),
     )
 

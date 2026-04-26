@@ -2,37 +2,31 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import HandoffOption, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.common import HandoffOption, ToolResultBase, WorkflowRequestBase
+from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
 
 
 class RalphRequest(WorkflowRequestBase):
-    approved_plan: str = Field(..., min_length=1)
+    memory_context: MemoryContext = Field(default_factory=MemoryContext)
 
 
 class RalphCompleteRequest(WorkflowRequestBase):
-    approved_plan: str = Field(..., min_length=1)
-    summary: str = Field(..., min_length=1)
+    memory_context: MemoryContext = Field(default_factory=MemoryContext)
 
 
 class RalphArtifacts(BaseModel):
     suggested_prompt: str = 'ralph'
     skill_content: str
-    completion_tool: str = 'ydo_complete'
-    readiness_verdict: str
     workflow_state: WorkflowState
     phase_summary: WorkflowPhaseSummary
-    selected_next_tool: str | None = None
 
 
 class RalphCompleteArtifacts(BaseModel):
-    suggested_prompt: str = 'ralph'
-    received_summary: str
     execution_verdict: str
+    selected_option: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)
     workflow_state: WorkflowState
     phase_summary: WorkflowPhaseSummary
-    selected_next_tool: str | None = None
 
 
 class RalphResult(ToolResultBase[RalphArtifacts]):

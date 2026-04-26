@@ -4,26 +4,49 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
 
 ## 核心模型
 
-- **tool 负责 gate**：阶段完成态、下一步约束、Elicitation 选项
+- **tool 负责轻 gate**：阶段入口、统一 handoff、Elicitation 选项、必要时产出最终交接 artifact
 - **skill 负责思考**：具体推理过程由 LLM 自主完成
-- **LLM 自主循环**：不再由 MCP 逐步编排内部思考
+- **LLM 自主循环**：Ymcp 不维护重型服务端状态机，只提供关键流转约束
+- **中间阶段不回灌复杂状态**：同一调用链内由 LLM 自己承接上下文
+- **handoff.options 更接近菜单项**：重点是 `value`、`title`、`description`、`recommended`
 
 ## 当前 workflow tools
 
 - `ydeep`
   - 对应 prompt：`deep-interview`
-  - 调用时应明确要求模型使用 `deep-interview` prompt 做需求调研
   - 输入核心：`brief`
-  - 返回 `completion_tool=ydeep_complete`
-  - 同时直接返回 `skill_content`
+  - 输出核心：`skill_content`、统一 `handoff`
 - `yplan`
-  - 对应 prompt：`planner`
-  - 返回 `next_tool=yplan_architect`
-  - 同时直接返回 `skill_content`
+  - 对应 prompts：`planner` → `architect` → `critic`
+  - 输入核心：`task`
+  - 输出核心：阶段 `skill_content`、统一 `handoff`
+  - 阶段链路：`yplan -> yplan_architect -> yplan_critic -> yplan_complete`
 - `ydo`
   - 对应 prompt：`ralph`
-  - 返回 `completion_tool=ydo_complete`
-  - 同时直接返回 `skill_content`
+  - 输入核心：无业务输入（依赖当前调用链上下文）
+  - 输出核心：`skill_content`、统一 `handoff`
+
+## Handoff contract
+
+- `handoff.options` 是下一步动作的唯一权威源
+- tool 只声明“有哪些下一步选项”，不声明自动参数映射协议
+- 推荐宿主按固定约定串联阶段，而不是让 LLM 或 tool 维护复杂路由协议
+- `ydeep_complete` 默认只进入 `yplan`，不再直接跳到 `ydo`
+- `yplan` 只接受 `task`；如果来源是 `clarified_artifact`，应由宿主先转换为普通 `task`
+- `yplan_critic` 只声明两个合法下一步：`yplan_critic` 或 `yplan_complete`
+- `yplan_critic` 不强制固定 `APPROVE/REVISE` 协议；由 LLM 自行判断继续评审还是完成收口
+- `yplan_complete` / `ydo_complete` 现在是更彻底的无输入收口阶段：调用它本身就表示 LLM 认为当前阶段已结束
+- 只有 `ydeep_complete` 仍产出 `clarified_artifact`；planning / execution 的 complete 阶段不再要求输入摘要或构造中间 artifact
+
+## 设计边界
+
+- MCP tool 提供结构化阶段边界与下一步选项
+- LLM 先完整思考与输出，再由宿主点击 complete / next-step 进入下一个 workflow
+- complete 类工具（`ydeep_complete` / `yplan_complete` / `ydo_complete`）在关键节点提供 handoff 选项，并应通过 **Elicitation** 向用户展示菜单
+- `host_controls` 仅表达当前返回实际依赖的宿主能力
+- `status` 表示当前 tool 调用结果；`meta.required_host_action` 只表达宿主当前是“继续思考”还是“展示并收口”
+- `handoff.options` 是下一步动作的**唯一权威源**；`allowed_next_actions` 仅为派生兼容视图
+- `handoff.options` 应被视为服务端给出的菜单，而不是让 LLM 自己构造的路由对象
 
 ## 安装
 

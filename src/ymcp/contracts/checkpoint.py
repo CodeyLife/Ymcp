@@ -4,8 +4,20 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ymcp.contracts.common import ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import CompletionGate, MemoryContext, QualityCheck, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.common import HandoffOption, ToolResultBase, WorkflowRequestBase
+from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
+
+
+class QualityCheck(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+
+
+class CompletionGate(BaseModel):
+    name: str
+    satisfied: bool
+    detail: str
 
 
 class WorkflowCheckpointRequest(WorkflowRequestBase):
@@ -20,11 +32,8 @@ class WorkflowCheckpointRequest(WorkflowRequestBase):
     artifact_payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class ChoiceOption(BaseModel):
-    value: str = Field(..., min_length=1)
-    title: str = Field(..., min_length=1)
-    description: str = Field(..., min_length=1)
-    recommended: bool = False
+class ChoiceOption(HandoffOption):
+    pass
 
 
 class UserChoiceCheckpointRequest(WorkflowRequestBase):

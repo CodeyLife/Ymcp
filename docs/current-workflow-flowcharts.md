@@ -1,318 +1,125 @@
 # 当前 MCP 工作流流程图
 
-> 以下内容基于当前仓库实现：
+> 以下内容基于当前仓库实现（`src/ymcp/engine/*.py` 与 `tests/unit/test_engines.py`）：
 >
 > - workflow tools：`ydeep`、`ydeep_complete`、`yplan`、`yplan_architect`、`yplan_critic`、`yplan_complete`、`ydo`、`ydo_complete`
 > - role / reasoning prompts：`deep-interview`、`planner`、`architect`、`critic`、`ralph`
-> - tool 负责 **gate / handoff / Elicitation 约束**
-> - LLM 负责 **内部思考与推进**
+> - tool 负责 **下发当前阶段 skill_content、声明合法下一跳；complete 阶段主要作为收口 gate**
+> - LLM 负责 **持有同一调用链上下文、完成思考、选择合法下一步**
 
 ***
 
 ## 1. `ydeep` 当前流程
 
-### 作用
-
-- 启动需求澄清 workflow
-- 直接返回当前阶段需要消费的 `skill_content`
-- 在启动阶段同时给出收口入口 `ydeep_complete`
-
 ```mermaid
 flowchart TD
-    A[用户需求模糊] --> B[调用 ydeep tool]
-    B --> C[返回 skill_content]
-    C --> D[返回 completion_tool=ydeep_complete]
-    D --> E[LLM 消费 skill_content 完成完整需求调研]
-    E --> F[输出总结文案]
-    F --> G[最后调用 ydeep_complete]
+    A[用户需求模糊] --> B[调用 ydeep]
+    B --> C[返回 suggested_prompt=deep-interview]
+    B --> D[返回 skill_content]
+    B --> E[返回 workflow_state<br/>memory_preflight / phase_summary]
+    B --> F[返回 handoff: ydeep_complete]
+    F --> G[LLM 消费 skill_content 完成需求调研]
+    G --> H[调用 ydeep_complete<br/>summary]
 ```
 
-### 当前出口约束
-
-- 调用 `ydeep` 后，LLM 应先消费返回的 `skill_content`
-- 完成完整需求调研并输出总结文案后，最后必须调用 `ydeep_complete`
+- `status=needs_input`，`required_host_action=await_input`
+- `ydeep` 不要求回传中间 artifact
+- 同一调用链内由 LLM 自己承接澄清上下文
 
 ***
 
 ## 2. `ydeep_complete` 当前流程
 
-### 作用
-
-- 作为 `ydeep` 的专用结束工具
-- 接收当前阶段总结文案
-- 结束后由 tool 统一提供下一步 workflow 选项
-
 ```mermaid
 flowchart TD
-    A[LLM 已完成需求调研] --> B[调用 ydeep_complete tool]
-    B --> C[返回 needs_input + requires_elicitation=true]
-    C --> D[handoff_options]
+    A[LLM 已完成需求调研] --> B[调用 ydeep_complete]
+    B --> C[返回 clarified_artifact]
+    B --> D[返回 handoff.options]
     D --> E[yplan]
-    D --> F[ydo]
-    D --> G[refine_further]
+    D --> F[refine_further]
 ```
 
-### 当前出口约束
-
-- `ydeep_complete` 调用后，必须由 tool 触发 **Elicitation** 提供下一步选项
+- `status=ok`，`required_host_action=await_input`
+- 只有收口阶段才产出 `clarified_artifact`
+- `handoff.options` 是下一步动作的唯一权威源，应被理解为菜单项，而不是路由协议对象
+- 宿主应通过 Elicitation 展示这些菜单项，并等待用户选择
 
 ***
 
-## 3. `yplan` 当前流程
-
-### 作用
-
-- 启动共识规划 workflow
-- 直接返回当前阶段需要消费的 `skill_content`
-- 在启动阶段同时给出下一步入口 `yplan_architect`
+## 3. `yplan` / `yplan_architect` / `yplan_critic`
 
 ```mermaid
 flowchart TD
-    A[进入方案 / 架构 / 共识规划] --> B[调用 yplan tool]
-    B --> C[返回 skill_content]
-    C --> D[返回 next_tool=yplan_architect]
-    D --> E[LLM 消费 skill_content 完成 planner 阶段]
-    E --> F[输出总结文案]
-    F --> G[最后调用 yplan_architect]
+    A[进入规划] --> B[调用 yplan]
+    B --> C[返回 planner skill_content]
+    B --> D[handoff: yplan_architect]
+    D --> E[LLM 完成 planner 阶段]
+    E --> F[调用 yplan_architect]
+    F --> G[返回 architect skill_content]
+    F --> H[handoff: yplan_critic]
+    H --> I[LLM 完成 architect 阶段]
+    I --> J[调用 yplan_critic]
+    J --> K[返回 critic skill_content]
+    J --> L[handoff.options]
+    L --> M[yplan_critic<br/>继续批评/收敛]
+    L --> N[yplan_complete<br/>方案通过]
 ```
 
-### 当前出口约束
-
-- 调用 `yplan` 后，LLM 应先消费返回的 `skill_content`
-- 完成 planner 阶段并输出总结文案后，最后必须调用 `yplan_architect`
+- `yplan` 只负责 planner 入口
+- `yplan_architect` 只负责 architect 入口
+- `yplan_critic` 只声明两个合法下一步：`yplan_critic`、`yplan_complete`
+- 中间阶段不要求回传 `planning_artifact`、`planner_summary`、`architect_notes` 等结构化状态
+- 同一调用链内由 LLM 自己承接规划上下文
 
 ***
 
-## 4. `yplan_architect` 当前流程
-
-### 作用
-
-- 承接 planner 阶段产物
-- 直接返回当前阶段需要消费的 `skill_content`
-- 在本阶段结束后把下一步固定为 `yplan_critic`
+## 4. `yplan_complete` 当前流程
 
 ```mermaid
 flowchart TD
-    A[LLM 已完成 planner 阶段] --> B[调用 yplan_architect tool]
-    B --> C[返回 skill_content]
-    C --> D[返回 next_tool=yplan_critic]
-    D --> E[LLM 消费 skill_content 完成 architect 阶段]
-    E --> F[输出总结文案]
-    F --> G[最后调用 yplan_critic]
+    A[LLM 认为方案已通过] --> B[调用 yplan_complete]
+    B --> C[返回 handoff.options]
+    C --> D[ydo]
+    C --> E[restart]
+    C --> F[memory_store]
 ```
 
-### 当前出口约束
-
-- 调用 `yplan_architect` 后，LLM 应先消费返回的 `skill_content`
-- 完成 architect 阶段并输出总结文案后，最后必须调用 `yplan_critic`
+- `status=ok`，`required_host_action=await_input`
+- `yplan_complete` 是无输入收口 gate
+- 调用它本身就表示 LLM 认为 planning 阶段已结束
+- 宿主应通过 Elicitation 展示这些菜单项，并等待用户选择
 
 ***
 
-## 5. `yplan_critic` 当前流程
-
-### 作用
-
-- 承接 architect 阶段产物
-- 直接返回当前阶段需要消费的 `skill_content`
-- 作为共识规划的质量门，决定是否允许进入完成态交接
+## 5. `ydo` / `ydo_complete`
 
 ```mermaid
 flowchart TD
-    A[LLM 已完成 architect 阶段] --> B[调用 yplan_critic tool]
-    B --> C[返回 skill_content]
-    C --> D[LLM 消费 skill_content 完成 critic 阶段]
-    D --> E[输出总结文案]
-    E --> F{critic_verdict == APPROVE?}
-    F -- 是 --> G[最后调用 yplan_complete]
-    F -- 否 --> H[继续修订方案]
+    A[进入执行阶段] --> B[调用 ydo]
+    B --> C[返回 suggested_prompt=ralph]
+    B --> D[返回 skill_content]
+    B --> E[返回 handoff: ydo_complete]
+    E --> F[LLM 完成执行 / 修复 / 验证]
+    F --> G[调用 ydo_complete]
+    G --> H[返回 handoff.options]
+    H --> I[finish]
+    H --> J[memory_store]
+    H --> K[yplan]
+    H --> L[continue_execution]
 ```
 
-### 当前出口约束
-
-- 调用 `yplan_critic` 后，LLM 应先消费返回的 `skill_content`
-- 若 Critic 判定为 `APPROVE`，完成 critic 阶段并输出总结文案后，最后才允许调用 `yplan_complete`
-- 若 Critic 判定为 `REVISE`，继续修订方案，不允许调用 `yplan_complete`
-
-***
-
-## 6. `yplan_complete` 当前流程
-
-### 作用
-
-- 作为 `yplan` 的专用结束工具
-- 接收当前阶段总结文案
-- 在共识规划结束后统一触发下一步 Elicitation
-- 向用户展示执行、重开或记忆沉淀选项
-
-```mermaid
-flowchart TD
-    A[LLM 已完成 critic 阶段] --> B[调用 yplan_complete tool]
-    B --> C[返回 needs_input + requires_elicitation=true]
-    C --> D[handoff_options]
-    D --> E[ydo]
-    D --> F[restart]
-    D --> G[memory_store]
-```
-
-### 当前出口约束
-
-- 只有 Critic 判定为 `APPROVE` 时，`yplan_complete` 才能触发 **Elicitation** 提供下一步选项
+- `ydo` 不要求业务输入，直接依赖当前调用链上下文
+- `ydo_complete` 是无输入收口 gate，只负责执行阶段收口与下一步选择
+- `continue_execution` 表示继续当前执行循环，完成更多实现或验证后再回到 `ydo_complete`
+- 宿主应通过 Elicitation 展示这些菜单项，并等待用户选择
 
 ***
 
-## 7. `ydo` 当前流程
+## 6. 总结
 
-### 作用
+当前实现的核心边界是：
 
-- 启动执行验证 workflow
-- 直接返回当前阶段需要消费的 `skill_content`
-- 在启动阶段同时给出收口入口 `ydo_complete`
-
-```mermaid
-flowchart TD
-    A[进入执行阶段] --> B[调用 ydo tool]
-    B --> C[返回 skill_content]
-    C --> D[返回 completion_tool=ydo_complete]
-    D --> E[LLM 消费 skill_content 完成执行 / 修复 / 验证流程]
-    E --> F[输出总结文案]
-    F --> G[最后调用 ydo_complete]
-```
-
-### 当前出口约束
-
-- 调用 `ydo` 后，LLM 应先消费返回的 `skill_content`
-- 完成执行 / 修复 / 验证流程并输出总结文案后，最后必须调用 `ydo_complete`
-
-***
-
-## 8. `ydo_complete` 当前流程
-
-### 作用
-
-- 作为 `ydo` 的专用结束工具
-- 接收当前阶段总结文案
-- 在执行阶段结束后统一触发下一步 Elicitation
-- 向用户展示结束、记忆沉淀、回规划或继续增强选项
-
-```mermaid
-flowchart TD
-    A[LLM 已完成 ralph 执行循环] --> B[调用 ydo_complete tool]
-    B --> C[返回 needs_input + requires_elicitation=true]
-    C --> D[handoff_options]
-    D --> E[finish]
-    D --> F[memory_store]
-    D --> G[yplan]
-    D --> H[continue_execution]
-```
-
-### 当前出口约束
-
-- `ydo_complete` 调用后，必须由 tool 触发 **Elicitation** 提供下一步选项
-
-***
-
-## 9. 当前总关系图
-
-```mermaid
-flowchart LR
-    A[ydeep] --> B[skill_content]
-    B --> C[ydeep_complete]
-    C --> D[yplan]
-    D --> E[skill_content]
-    E --> F[yplan_architect]
-    F --> G[skill_content]
-    G --> H[yplan_critic]
-    H --> I[skill_content]
-    I --> J[yplan_complete]
-    J --> K[ydo]
-    J --> L[memory_store]
-    J --> M[restart]
-    K --> N[skill_content]
-    N --> O[ydo_complete]
-    O --> P[finish]
-    O --> Q[memory_store]
-    O --> R[yplan]
-    O --> S[continue_execution]
-```
-
-***
-
-## 10. 当前实现要点
-
-### `ydeep`
-
-- 输入核心：`brief`
-- 输出核心：
-  - `suggested_prompt=deep-interview`
-  - `skill_content`
-  - `completion_tool=ydeep_complete`
-  - `readiness_verdict`
-
-### `ydeep_complete`
-
-- 输入核心：`brief`、`summary`
-- 输出核心：
-  - `suggested_prompt=deep-interview`
-  - `received_summary`
-  - `readiness_verdict`
-  - `handoff_options`
-
-### `yplan`
-
-- 输入核心：`task`
-- 输出核心：
-  - `suggested_prompt=planner`
-  - `skill_content`
-  - `next_tool=yplan_architect`
-
-### `yplan_architect`
-
-- 输入核心：`task`、`plan_summary`、`planner_notes`
-- 输出核心：
-  - `suggested_prompt=architect`
-  - `skill_content`
-  - `next_tool=yplan_critic`
-
-### `yplan_critic`
-
-- 输入核心：`task`、`plan_summary`、`planner_notes`、`architect_notes`、`critic_verdict`、`critic_notes`
-- 输出核心：
-  - `suggested_prompt=critic`
-  - `skill_content`
-  - `critic_verdict`
-  - `next_tool=yplan_complete`（仅 APPROVE 时）
-
-### `yplan_complete`
-
-- 输入核心：`task`、`summary`、`critic_verdict`、`plan_summary`、`planner_notes`、`architect_notes`、`critic_notes`、`acceptance_criteria`
-- 输出核心：
-  - `received_summary`
-  - `critic_verdict`
-  - `consensus_verdict=approved`（仅 APPROVE 时）
-  - `handoff_options=[ydo, restart, memory_store]`
-
-### `ydo`
-
-- 输入核心：`approved_plan`
-- 输出核心：
-  - `suggested_prompt=ralph`
-  - `skill_content`
-  - `completion_tool=ydo_complete`
-
-### `ydo_complete`
-
-- 输入核心：`approved_plan`、`summary`
-- 输出核心：
-  - `received_summary`
-  - `execution_verdict=complete`
-  - `handoff_options=[finish, memory_store, yplan, continue_execution]`
-
-***
-
-## 11. 一句话总结
-
-当前流程不是“tool 编排思考”，而是：
-
-- **skill_content 负责思考输入**
-- **tool 负责逐步发放 skill_content、串联阶段和下一步强约束**
-- **Elicitation 只出现在 tool 判定完成后的关键流转点**
+- **中间阶段只返回 skill 和下一跳**
+- **同一调用链上下文由 LLM 自己承接**
+- **complete 阶段本身就是阶段已结束的信号，不再要求回灌摘要输入**
+- **tool 不替 LLM 编排思考，只限制合法流转**

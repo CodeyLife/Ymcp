@@ -5,11 +5,11 @@ import json
 import logging
 import os
 import time
-from typing import Annotated, Any
+from typing import Any
+from typing import Literal
 
-import mcp.types as types
 from mcp.server.fastmcp import Context, FastMCP
-from pydantic import BaseModel, Field, WithJsonSchema
+from pydantic import BaseModel, create_model
 
 from ymcp.capabilities import get_prompt_specs, get_resource_specs, prompt_template
 from ymcp.contracts.common import HostActionType, ToolStatus
@@ -31,7 +31,7 @@ from ymcp.contracts.ralplan import (
     RalplanRequest,
     RalplanResult,
 )
-from ymcp.core.result import apply_selected_tool_handoff
+from ymcp.core.versioning import SCHEMA_VERSION
 from ymcp.engine.deep_interview import build_deep_interview, build_deep_interview_complete
 from ymcp.engine.ralph import build_ralph, build_ralph_complete
 from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ralplan_complete, build_ralplan_critic
@@ -41,61 +41,42 @@ from ymcp.memory import build_memory_request_id, execute_memory_operation, memor
 LOGGER = logging.getLogger('ymcp')
 
 
-def _single_choice_schema(title: str, description: str, options: list[tuple[str, str, str]]) -> dict[str, Any]:
-    return {
-        'type': 'string',
-        'title': title,
-        'description': description,
-        'oneOf': [{'const': value, 'title': option_title} for value, option_title, _ in options],
-    }
+async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, message_prefix: str) -> Any:
+    if ctx is None or result.meta.handoff is None or not result.meta.handoff.options:
+        return result
 
+    options = result.meta.handoff.options
+    values = tuple(option.value for option in options)
+    if not values:
+        return result
 
-DeepInterviewNextChoice = Annotated[str, Field(description='ydeep_complete 完成后的下一步 workflow。'), WithJsonSchema(_single_choice_schema('下一步工作流', '请选择 ydeep_complete 完成后的下一步 workflow。', [('yplan', '进入 yplan', ''), ('ydo', '使用 ydo 执行任务', ''), ('refine_further', '继续澄清', '')]))]
-RalplanNextChoice = Annotated[str, Field(description='yplan_complete 完成后的下一步 workflow。'), WithJsonSchema(_single_choice_schema('下一步工作流', '请选择 yplan_complete 完成后的下一步 workflow。', [('ydo', '使用 ydo 执行任务', ''), ('restart', '重新开始规划', ''), ('memory_store', '保存规划到记忆', '')]))]
-RalphNextChoice = Annotated[str, Field(description='ydo_complete 完成后的下一步动作。'), WithJsonSchema(_single_choice_schema('下一步动作', '请选择 ydo_complete 完成后的下一步动作。', [('finish', '结束当前任务', ''), ('memory_store', '保存结果到记忆', ''), ('yplan', '回到 yplan', ''), ('continue_execution', '继续增强', '')]))]
+    ChoiceLiteral = Literal.__getitem__(values)
+    ChoiceSchema = create_model('YmcpHandoffChoice', choice=(ChoiceLiteral, ...))
+    menu_lines = '\n'.join(f"- {option.title} (`{option.value}`): {option.description}" for option in options)
+    message = f"{message_prefix}\n\n请选择以下菜单项之一：\n{menu_lines}"
 
+    try:
+        elicitation = await ctx.elicit(message, ChoiceSchema)
+    except Exception:
+        return result
 
-class DeepInterviewNextInput(BaseModel):
-    next_tool: DeepInterviewNextChoice
+    if getattr(elicitation, 'action', None) == 'accept':
+        selected = elicitation.data.choice
+        result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+        result.summary = f"{result.summary}\n\nElicitation 已完成，用户选择了 `{selected}`。"
+        if hasattr(result.artifacts, 'selected_option'):
+            result.artifacts.selected_option = selected
+        return result
 
-
-class RalplanNextInput(BaseModel):
-    next_tool: RalplanNextChoice
-
-
-class RalphNextInput(BaseModel):
-    next_tool: RalphNextChoice
+    result.status = ToolStatus.NEEDS_INPUT
+    result.summary = f"{result.summary}\n\nElicitation 未完成（{elicitation.action}）。请继续向用户展示菜单并等待选择。"
+    return result
 
 
 def configure_logging(level: int = logging.INFO) -> None:
     if logging.getLogger().handlers:
         return
     logging.basicConfig(level=level, format='%(levelname)s %(name)s: %(message)s')
-
-
-def _supports_form_elicitation(ctx: Context | None) -> bool:
-    if ctx is None:
-        return False
-    try:
-        if not ctx.session.check_client_capability(types.ClientCapabilities(elicitation=types.ElicitationCapability())):
-            return False
-        client_params = getattr(ctx.session, '_client_params', None)
-        client_caps = getattr(client_params, 'capabilities', None)
-        elicitation = getattr(client_caps, 'elicitation', None)
-        if elicitation is None:
-            return False
-        form_mode = getattr(elicitation, 'form', None)
-        url_mode = getattr(elicitation, 'url', None)
-        return form_mode is not None or (form_mode is None and url_mode is None)
-    except ValueError:
-        return False
-
-
-def _finalize_selected(result, selected: str):
-    apply_selected_tool_handoff(result, selected)
-    result.status = ToolStatus.OK
-    result.summary = f'已确认下一步：{selected}。'
-    return result
 
 
 def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, request_model: type[BaseModel]) -> None:
@@ -130,7 +111,7 @@ def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, reque
 
 
 def create_app() -> FastMCP:
-    app = FastMCP(name='ymcp', instructions='Workflow tools ydeep / ydeep_complete / yplan / yplan_architect / yplan_critic / yplan_complete / ydo / ydo_complete with skill-guided reasoning and tool-enforced next-step gates.', log_level='ERROR')
+    app = FastMCP(name='ymcp', instructions='Workflow tools ydeep / ydeep_complete / yplan / yplan_architect / yplan_critic / yplan_complete / ydo / ydo_complete with skill-guided reasoning and lightweight Elicitation-oriented handoff options.', log_level='ERROR')
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
 
     for resource_spec in get_resource_specs():
@@ -151,62 +132,50 @@ def create_app() -> FastMCP:
         app.prompt(name=prompt_spec.name, title=prompt_spec.title, description=prompt_descriptions[prompt_spec.name])(_make_prompt(prompt_spec.name))
 
     @app.tool(name='ydeep', description=descriptions['ydeep'], structured_output=True)
-    async def deep_interview(brief: str, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = '1.0', ctx: Context | None = None) -> DeepInterviewResult:
+    async def deep_interview(brief: str, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> DeepInterviewResult:
         request = DeepInterviewRequest(brief=brief, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
         result = build_deep_interview(request)
         return result
 
     @app.tool(name='ydeep_complete', description=descriptions['ydeep_complete'], structured_output=True)
-    async def deep_interview_complete(brief: str, summary: str, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = '1.0', ctx: Context | None = None) -> DeepInterviewCompleteResult:
-        request = DeepInterviewCompleteRequest(brief=brief, summary=summary, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
+    async def deep_interview_complete(summary: str, brief: str | None = None, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> DeepInterviewCompleteResult:
+        request = DeepInterviewCompleteRequest(summary=summary, brief=brief, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
         result = build_deep_interview_complete(request)
-        if result.meta.requires_elicitation and _supports_form_elicitation(ctx):
-            choice = await ctx.elicit('需求澄清已完成。请选择下一步 workflow。', DeepInterviewNextInput)
-            if choice.action == 'accept':
-                return _finalize_selected(result, choice.data.next_tool)
-        return result
+        return await _maybe_elicit_handoff_choice(ctx, result, message_prefix='需求澄清阶段已完成，必须向用户展示下一步菜单。')
 
     @app.tool(name='yplan', description=descriptions['yplan'], structured_output=True)
-    async def ralplan(task: str, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = '1.0', ctx: Context | None = None) -> RalplanResult:
+    async def ralplan(task: str, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanResult:
         request = RalplanRequest(task=task, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
         result = build_ralplan(request)
         return result
 
     @app.tool(name='yplan_architect', description=descriptions['yplan_architect'], structured_output=True)
-    async def ralplan_architect(task: str, plan_summary: str = '', planner_notes: list[str] | None = None, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = '1.0', ctx: Context | None = None) -> RalplanArchitectResult:
-        request = RalplanArchitectRequest(task=task, plan_summary=plan_summary, planner_notes=planner_notes or [], known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
+    async def ralplan_architect(schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanArchitectResult:
+        request = RalplanArchitectRequest(schema_version=schema_version)
         return build_ralplan_architect(request)
 
     @app.tool(name='yplan_critic', description=descriptions['yplan_critic'], structured_output=True)
-    async def ralplan_critic(task: str, plan_summary: str = '', planner_notes: list[str] | None = None, architect_notes: list[str] | None = None, critic_verdict: str = '', critic_notes: list[str] | None = None, acceptance_criteria: list[str] | None = None, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = '1.0', ctx: Context | None = None) -> RalplanCriticResult:
-        request = RalplanCriticRequest(task=task, plan_summary=plan_summary, planner_notes=planner_notes or [], architect_notes=architect_notes or [], critic_verdict=critic_verdict, critic_notes=critic_notes or [], acceptance_criteria=acceptance_criteria or [], known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
+    async def ralplan_critic(schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanCriticResult:
+        request = RalplanCriticRequest(schema_version=schema_version)
         return build_ralplan_critic(request)
 
     @app.tool(name='yplan_complete', description=descriptions['yplan_complete'], structured_output=True)
-    async def ralplan_complete(task: str, summary: str, critic_verdict: str, plan_summary: str = '', planner_notes: list[str] | None = None, architect_notes: list[str] | None = None, critic_notes: list[str] | None = None, acceptance_criteria: list[str] | None = None, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = '1.0', ctx: Context | None = None) -> RalplanCompleteResult:
-        request = RalplanCompleteRequest(task=task, summary=summary, critic_verdict=critic_verdict, plan_summary=plan_summary, planner_notes=planner_notes or [], architect_notes=architect_notes or [], critic_notes=critic_notes or [], acceptance_criteria=acceptance_criteria or [], known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
+    async def ralplan_complete(schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanCompleteResult:
+        request = RalplanCompleteRequest(schema_version=schema_version)
         result = build_ralplan_complete(request)
-        if result.meta.requires_elicitation and _supports_form_elicitation(ctx):
-            choice = await ctx.elicit('共识规划已完成。请选择下一步 workflow。', RalplanNextInput)
-            if choice.action == 'accept':
-                return _finalize_selected(result, choice.data.next_tool)
-        return result
+        return await _maybe_elicit_handoff_choice(ctx, result, message_prefix='规划阶段已完成，必须向用户展示下一步菜单。')
 
     @app.tool(name='ydo', description=descriptions['ydo'], structured_output=True)
-    async def ralph(approved_plan: str, schema_version: str = '1.0', ctx: Context | None = None) -> RalphResult:
-        request = RalphRequest(approved_plan=approved_plan, schema_version=schema_version)
+    async def ralph(memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalphResult:
+        request = RalphRequest(memory_context=memory_context or {}, schema_version=schema_version)
         result = build_ralph(request)
         return result
 
     @app.tool(name='ydo_complete', description=descriptions['ydo_complete'], structured_output=True)
-    async def ralph_complete(approved_plan: str, summary: str, schema_version: str = '1.0', ctx: Context | None = None) -> RalphCompleteResult:
-        request = RalphCompleteRequest(approved_plan=approved_plan, summary=summary, schema_version=schema_version)
+    async def ralph_complete(memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalphCompleteResult:
+        request = RalphCompleteRequest(memory_context=memory_context or {}, schema_version=schema_version)
         result = build_ralph_complete(request)
-        if result.meta.requires_elicitation and _supports_form_elicitation(ctx):
-            choice = await ctx.elicit('执行已完成。请选择下一步。', RalphNextInput)
-            if choice.action == 'accept':
-                return _finalize_selected(result, choice.data.next_tool)
-        return result
+        return await _maybe_elicit_handoff_choice(ctx, result, message_prefix='执行阶段当前一轮已结束，必须向用户展示下一步菜单。')
 
     for tool_schema in MEMPALACE_TOOL_SCHEMAS:
         _register_mempalace_tool(app, name=tool_schema['name'], description=descriptions[tool_schema['name']], request_model=MEMPALACE_REQUEST_MODELS[tool_schema['name']])

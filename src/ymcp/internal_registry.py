@@ -41,56 +41,56 @@ class ToolSpec:
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name='ydeep',
-        description='需求澄清启动 tool。它要求模型使用返回的 deep-interview skill_content 完成完整需求调研并输出总结文案；最后必须调用 `ydeep_complete`，由完成 tool 触发下一步 Elicitation。',
+        description='需求澄清启动 tool。模型应使用返回的 deep-interview skill_content 完成调研；tool 只提供下一步 handoff，不要求回传中间 artifact。',
         request_model=DeepInterviewRequest,
         response_model=DeepInterviewResult,
         handler=build_deep_interview,
     ),
     ToolSpec(
         name='ydeep_complete',
-        description='需求澄清完成 tool。模型在使用 prompt `deep-interview` 完成调研后必须调用本 tool；调用后应立即通过 Elicitation 提供下一步 workflow 选项。',
+        description='需求澄清完成 tool。模型在完成 deep-interview 调研后调用本 tool；tool 产出 clarified_artifact，并返回统一 handoff 选项，由宿主按固定约定决定如何进入 yplan 或继续澄清。',
         request_model=DeepInterviewCompleteRequest,
         response_model=DeepInterviewCompleteResult,
         handler=build_deep_interview_complete,
     ),
     ToolSpec(
         name='yplan',
-        description='共识规划启动 tool。它要求模型使用返回的 planner skill_content 完成 planner 阶段并输出总结文案；最后必须调用 `yplan_architect`。',
+        description='共识规划启动 tool。模型应使用返回的 planner skill_content 完成 planner 阶段；tool 强约束下一步只能进入 yplan_architect。输入只保留 task，其他来源转换由宿主完成。',
         request_model=RalplanRequest,
         response_model=RalplanResult,
         handler=build_ralplan,
     ),
     ToolSpec(
         name='yplan_architect',
-        description='共识规划 architect 阶段 tool。模型在进入本阶段后，应使用返回的 architect skill_content 完成 architect 阶段并输出总结文案；最后调用 `yplan_critic`。',
+        description='共识规划 architect 阶段 tool。模型在进入本阶段后，使用 architect skill_content 继续推理；tool 只负责提供下一步 handoff，不要求回传中间 planning artifact。',
         request_model=RalplanArchitectRequest,
         response_model=RalplanArchitectResult,
         handler=build_ralplan_architect,
     ),
     ToolSpec(
         name='yplan_critic',
-        description='共识规划 critic 阶段 tool。模型在进入本阶段后，应使用返回的 critic skill_content 完成 critic 阶段并输出总结文案；最后调用 `yplan_complete`。',
+        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是继续调用 yplan_critic 迭代，还是调用 yplan_complete 收口；tool 不强制固定 verdict 协议，也不要求回传中间 artifact。',
         request_model=RalplanCriticRequest,
         response_model=RalplanCriticResult,
         handler=build_ralplan_critic,
     ),
     ToolSpec(
         name='yplan_complete',
-        description='共识规划完成 tool。模型在完成 critic 评估后必须调用本 tool；调用后应立即通过 Elicitation 提供 `ydo`、`restart`、`memory_store` 选项。',
+        description='共识规划完成 tool。模型在完成 critic 评估后调用本 tool；本 tool 是无输入收口阶段，只返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store，不再要求 summary 或构造交接 artifact。',
         request_model=RalplanCompleteRequest,
         response_model=RalplanCompleteResult,
         handler=build_ralplan_complete,
     ),
     ToolSpec(
         name='ydo',
-        description='执行验证启动 tool。它要求模型使用返回的 ralph skill_content 完成执行、修复、验证流程并输出总结文案；最后必须调用 `ydo_complete`。',
+        description='执行验证启动 tool。模型应使用返回的 ralph skill_content 完成执行、修复、验证流程；本 tool 不再要求 approved_plan_artifact 输入，而是依赖当前调用链上下文继续执行。',
         request_model=RalphRequest,
         response_model=RalphResult,
         handler=build_ralph,
     ),
     ToolSpec(
         name='ydo_complete',
-        description='执行验证完成 tool。模型在完成 ralph 执行循环后必须调用本 tool；调用后应立即通过 Elicitation 提供 `finish`、`memory_store`、`yplan`、`continue_execution` 选项。',
+        description='执行验证完成 tool。模型在完成 ralph 执行循环后调用本 tool；本 tool 是无输入收口阶段，会返回统一 handoff 选项（如 finish / memory_store / yplan / continue_execution），由宿主按固定约定决定是收尾、重规划还是继续执行。',
         request_model=RalphCompleteRequest,
         response_model=RalphCompleteResult,
         handler=build_ralph_complete,
@@ -119,3 +119,5 @@ TOOL_SPECS = TOOL_SPECS + tuple(
 
 def get_tool_specs() -> tuple[ToolSpec, ...]:
     return TOOL_SPECS
+
+

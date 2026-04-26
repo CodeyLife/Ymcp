@@ -11,8 +11,9 @@ from ymcp.contracts.checkpoint import (
     WorkflowCheckpointRequest,
     WorkflowCheckpointResult,
 )
-from ymcp.contracts.common import HostActionType, ToolStatus
-from ymcp.contracts.workflow import CompletionGate, MemoryPreflight, QualityCheck, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.checkpoint import CompletionGate, QualityCheck
+from ymcp.contracts.common import Handoff, HostActionType, ToolStatus
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowPhaseSummary, WorkflowState
 from ymcp.core.result import build_meta, build_next_action
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -122,8 +123,8 @@ def build_user_choice_checkpoint(request: UserChoiceCheckpointRequest) -> UserCh
 
     summary = '需要用户显式选择下一步。' if awaiting_choice else f'已记录用户选择：{selected}。'
     evidence_gaps = ['尚未收到用户显式选择。'] if selected is None else ([f'无效选项：{selected}'] if invalid_selection else [])
-    status = ToolStatus.NEEDS_INPUT if awaiting_choice else ToolStatus.OK
-    required_action = HostActionType.AWAIT_INPUT if awaiting_choice else HostActionType.CALL_SELECTED_TOOL
+    status = ToolStatus.BLOCKED if awaiting_choice else ToolStatus.OK
+    required_action = HostActionType.AWAIT_INPUT if awaiting_choice else HostActionType.DISPLAY_ONLY
 
     return UserChoiceCheckpointResult(
         status=status,
@@ -136,10 +137,10 @@ def build_user_choice_checkpoint(request: UserChoiceCheckpointRequest) -> UserCh
             'ymcp.contracts.checkpoint.UserChoiceCheckpointResult',
             host_controls=['MCP Elicitation', 'display'],
             required_host_action=required_action,
-            safe_to_auto_continue=not awaiting_choice,
-            requires_elicitation=awaiting_choice,
-            requires_explicit_user_choice=True,
-            selected_next_tool=None if awaiting_choice else selected,
+            handoff=Handoff(
+                recommended_next_action=selected,
+                options=request.options,
+            ),
         ),
         artifacts=UserChoiceCheckpointArtifacts(
             stage=request.stage,

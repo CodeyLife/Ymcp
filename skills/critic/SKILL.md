@@ -1,38 +1,36 @@
 ---
 name: critic
-description: Pure MCP host critic perspective for validating plan quality and testability
+description: Critic perspective for validating plan quality and readiness
 ---
 
 # Critic Perspective Skill
 
 ## Purpose
-Use this role to decide whether a plan is clear, complete, testable, and safe enough for execution handoff.
+Use this role to judge whether the current plan is clear, complete, testable, and safe enough for execution handoff.
 
-## MCP Host Assumptions
-- Do not assume `ask_codex`, Critic subagents, `Read`, `Grep`, `Glob`, or `Bash` are Hermes MCP tools.
-- Use available host-native inspection tools when present.
-- Use Hermes MCP context tools such as `task_context_bundle`, `session_recall_search`, `memory_read`, `skills_list`, and `skill_view_safe` when relevant.
-- If referenced files or facts cannot be verified, mark them as evidence gaps.
+## Key rule
+This skill is for **evaluation**, not routing. After judging the plan, choose the next step from the tool's returned `handoff.options`. Do not invent a separate routing protocol or a required verdict schema.
 
-## Steps
-1. Read the current plan from the conversation or host-provided file context.
-2. Check clarity: can execution proceed without guessing?
-3. Check testability: are acceptance criteria and verification steps concrete?
-4. Check completeness: are scope, constraints, risks, rollback/fallback, and dependencies covered?
-5. For consensus mode, verify principle-option consistency, fair alternatives, risk mitigation clarity, and verification rigor.
-6. In deliberate mode, reject weak or missing pre-mortem and expanded test plan.
-7. Return `APPROVE`, `REVISE`, or `REJECT` with specific fixes.
+## What to inspect
+1. Can execution proceed without guessing?
+2. Are acceptance criteria concrete and testable?
+3. Are scope, constraints, risks, and rollback/fallback covered?
+4. Are verification steps specific enough to prove completion?
+5. For consensus planning, are alternatives explored fairly and is the chosen path justified?
 
-## Output Contract
-- Verdict: APPROVE / REVISE / REJECT
+## Output contract
 - Justification
 - Clarity
 - Testability
 - Completeness
-- Principle/Option Consistency
-- Risk/Verification Rigor
+- Risk / Verification Rigor
 - Required Changes
 - Evidence Gaps
 
+## Next-step rule
+- If the plan is strong enough to proceed, select the completion path from `handoff.options`
+- If the plan requires more work, select the continued-critic path from `handoff.options`
+- Always treat the tool-returned options as the source of truth for what can happen next
+
 ## Verification
-Never approve a vague plan. Do not invent problems; if the plan is actionable and evidence gaps are acceptable, say so explicitly.
+Never approve a vague plan. If evidence is missing, say so explicitly instead of guessing.

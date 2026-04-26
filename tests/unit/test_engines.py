@@ -13,81 +13,104 @@ from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ra
 def test_deep_interview_start_returns_prompt_guidance():
     result = build_deep_interview(DeepInterviewRequest(brief='收敛需求'))
     assert result.status is ToolStatus.NEEDS_INPUT
-    assert result.artifacts.readiness_verdict == 'prompt_required'
-    assert result.artifacts.completion_tool == 'ydeep_complete'
+    assert result.meta.handoff.recommended_next_action == 'ydeep_complete'
+    assert result.meta.handoff.options[0].value == 'ydeep_complete'
     assert 'Task / Arguments:' in result.artifacts.skill_content
 
 
-def test_deep_interview_complete_ready_requires_user_choice():
-    result = build_deep_interview_complete(DeepInterviewCompleteRequest(brief='收敛需求', summary='已完成需求调研总结'))
-    assert result.status is ToolStatus.NEEDS_INPUT
+def test_deep_interview_complete_returns_clarified_artifact_and_handoff():
+    result = build_deep_interview_complete(
+        DeepInterviewCompleteRequest(
+            summary='已完成需求调研总结',
+            brief='收敛需求',
+        )
+    )
+    assert result.status is ToolStatus.OK
     assert result.meta.required_host_action is HostActionType.AWAIT_INPUT
-    assert result.meta.requires_explicit_user_choice is True
+    assert result.artifacts.clarified_artifact.summary == '已完成需求调研总结'
+    assert result.artifacts.selected_option is None
+    assert {item.value for item in result.artifacts.handoff_options} == {'yplan', 'refine_further'}
 
 
 def test_ralplan_start_returns_planner_prompt():
     result = build_ralplan(RalplanRequest(task='恢复架构'))
     assert result.artifacts.suggested_prompt == 'planner'
-    assert result.artifacts.next_tool == 'yplan_architect'
+    assert result.meta.handoff.recommended_next_action == 'yplan_architect'
     assert 'Task / Arguments:' in result.artifacts.skill_content
+
+
+def test_ralplan_can_start_from_task_derived_from_clarified_artifact():
+    interview = build_deep_interview_complete(
+        DeepInterviewCompleteRequest(summary='从澄清结果进入规划', brief='从需求澄清开始')
+    )
+    result = build_ralplan(RalplanRequest(task=interview.artifacts.clarified_artifact.summary))
+    assert '从澄清结果进入规划' in result.artifacts.skill_content
+
+
+def test_ralplan_can_restart_from_fresh_plain_task():
+    result = build_ralplan(RalplanRequest(task='执行后重规划'))
+    assert '执行后重规划' in result.artifacts.skill_content
+
+
+def test_ralplan_complete_summary_explains_each_option():
+    result = build_ralplan_complete(RalplanCompleteRequest())
+    assert 'ydo' in result.summary
+    assert 'restart' in result.summary
+    assert 'memory_store' in result.summary
+
+
+def test_ralph_start_summary_explains_context_based_execution():
+    result = build_ralph(RalphRequest())
+    assert '不再要求' in result.summary
+    assert '当前调用链上下文' in result.summary
+
+
+def test_ralph_complete_summary_explains_each_option():
+    result = build_ralph_complete(RalphCompleteRequest())
+    assert 'finish' in result.summary
+    assert 'memory_store' in result.summary
+    assert 'yplan' in result.summary
+    assert 'continue_execution' in result.summary
 
 
 def test_ralplan_architect_returns_architect_prompt():
-    result = build_ralplan_architect(RalplanArchitectRequest(task='恢复架构', plan_summary='方案草案', planner_notes=['规划完成']))
+    result = build_ralplan_architect(RalplanArchitectRequest())
     assert result.artifacts.suggested_prompt == 'architect'
-    assert result.artifacts.next_tool == 'yplan_critic'
-    assert 'Task / Arguments:' in result.artifacts.skill_content
+    assert result.meta.handoff.recommended_next_action == 'yplan_critic'
 
 
-def test_ralplan_critic_returns_critic_prompt():
-    result = build_ralplan_critic(RalplanCriticRequest(task='恢复架构', plan_summary='方案草案', planner_notes=['规划完成'], architect_notes=['架构审查完成'], critic_verdict='APPROVE'))
+def test_ralplan_critic_returns_self_loop_and_complete_options():
+    result = build_ralplan_critic(RalplanCriticRequest())
     assert result.artifacts.suggested_prompt == 'critic'
-    assert result.artifacts.next_tool == 'yplan_complete'
-    assert 'Task / Arguments:' in result.artifacts.skill_content
+    assert result.meta.handoff.recommended_next_action is None
+    assert {item.value for item in result.meta.handoff.options} == {'yplan_critic', 'yplan_complete'}
 
 
-def test_ralplan_critic_accepts_multiline_approve_verdict():
-    result = build_ralplan_critic(RalplanCriticRequest(task='恢复架构', plan_summary='方案草案', planner_notes=['规划完成'], architect_notes=['架构审查完成'], critic_verdict='APPROVE\n\n详细评审内容'))
-    assert result.artifacts.readiness_verdict == 'approved'
-    assert result.artifacts.next_tool == 'yplan_complete'
-
-
-def test_ralplan_critic_revise_does_not_allow_complete():
-    result = build_ralplan_critic(RalplanCriticRequest(task='恢复架构', plan_summary='方案草案', planner_notes=['规划完成'], architect_notes=['架构审查完成'], critic_verdict='REVISE', critic_notes=['需补充缓存失效策略']))
-    assert result.artifacts.readiness_verdict == 'needs_revision'
-    assert result.artifacts.next_tool is None
-
-
-def test_ralplan_complete_exposes_ralph_restart_and_memory_options():
-    result = build_ralplan_complete(RalplanCompleteRequest(task='恢复架构', summary='已完成方案总结', critic_verdict='APPROVE', plan_summary='方案已完成'))
-    assert result.meta.requires_explicit_user_choice is True
+def test_ralplan_complete_exposes_handoff_options():
+    result = build_ralplan_complete(RalplanCompleteRequest())
+    assert result.status is ToolStatus.OK
+    assert result.meta.required_host_action is HostActionType.AWAIT_INPUT
     assert {item.value for item in result.artifacts.handoff_options} >= {'ydo', 'restart', 'memory_store'}
+    assert result.artifacts.selected_option is None
+    assert result.artifacts.workflow_state.readiness == 'ready'
 
 
-def test_ralplan_complete_accepts_multiline_approve_verdict():
-    result = build_ralplan_complete(RalplanCompleteRequest(task='恢复架构', summary='已完成方案总结', critic_verdict='APPROVE\n\n详细评审内容', plan_summary='方案已完成'))
-    assert result.status is ToolStatus.NEEDS_INPUT
-    assert result.artifacts.consensus_verdict == 'approved'
-
-
-def test_ralplan_complete_blocks_non_approved_critic():
-    result = build_ralplan_complete(RalplanCompleteRequest(task='恢复架构', summary='仍需修订', critic_verdict='REVISE', plan_summary='方案未完成'))
-    assert result.status is ToolStatus.BLOCKED
-    assert result.artifacts.consensus_verdict == 'needs_revision'
-
-
-def test_ralph_start_returns_completion_tool():
-    result = build_ralph(RalphRequest(approved_plan='执行'))
+def test_ralph_start_returns_prompt_guidance():
+    result = build_ralph(RalphRequest())
     assert result.artifacts.suggested_prompt == 'ralph'
-    assert result.artifacts.completion_tool == 'ydo_complete'
+    assert result.meta.handoff.recommended_next_action == 'ydo_complete'
+    assert result.meta.handoff.options[0].value == 'ydo_complete'
     assert 'Task / Arguments:' in result.artifacts.skill_content
 
 
 def test_ralph_complete_exposes_finish_memory_plan_and_continue():
-    result = build_ralph_complete(RalphCompleteRequest(approved_plan='执行', summary='已完成执行总结'))
+    result = build_ralph_complete(RalphCompleteRequest())
     assert result.artifacts.execution_verdict == 'complete'
-    assert result.meta.requires_explicit_user_choice is True
+    assert result.status is ToolStatus.OK
+    assert result.meta.required_host_action is HostActionType.AWAIT_INPUT
     assert {item.value for item in result.artifacts.handoff_options} >= {'finish', 'memory_store', 'yplan', 'continue_execution'}
+    assert result.artifacts.selected_option is None
+    assert {item.value for item in result.artifacts.handoff_options} == {'finish', 'memory_store', 'yplan', 'continue_execution'}
 
 
 def test_engines_do_not_use_subprocess_or_file_mutation_calls():

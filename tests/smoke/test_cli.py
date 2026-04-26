@@ -12,6 +12,7 @@ EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
 RESOURCE_URIS = {
     'resource://ymcp/principles',
     'resource://ymcp/memory-protocol',
+    'resource://ymcp/workflow-contracts',
     'resource://ymcp/project-rule-template',
 }
 PROMPT_NAMES = {
