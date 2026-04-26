@@ -5,36 +5,27 @@ from typing import Callable, Type
 
 from pydantic import BaseModel
 
-from ymcp.contracts.deep_interview import DeepInterviewRequest, DeepInterviewResult
-from ymcp.contracts.memory import (
-    MEMPALACE_REQUEST_MODELS,
-    MEMPALACE_TOOL_SCHEMAS,
-    MemoryResult,
+from ymcp.contracts.deep_interview import (
+    DeepInterviewCompleteRequest,
+    DeepInterviewCompleteResult,
+    DeepInterviewRequest,
+    DeepInterviewResult,
 )
-from ymcp.contracts.plan import PlanRequest, PlanResult
+from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS, MemoryResult
+from ymcp.contracts.ralph import RalphCompleteRequest, RalphCompleteResult, RalphRequest, RalphResult
 from ymcp.contracts.ralplan import (
     RalplanArchitectRequest,
     RalplanArchitectResult,
+    RalplanCompleteRequest,
+    RalplanCompleteResult,
     RalplanCriticRequest,
     RalplanCriticResult,
-    RalplanHandoffRequest,
-    RalplanHandoffResult,
-    RalplanPlannerRequest,
-    RalplanPlannerResult,
     RalplanRequest,
     RalplanResult,
 )
-from ymcp.contracts.ralph import RalphRequest, RalphResult
-from ymcp.engine.deep_interview import build_deep_interview
-from ymcp.engine.plan import build_plan
-from ymcp.engine.ralplan import (
-    build_ralplan,
-    build_ralplan_architect,
-    build_ralplan_critic,
-    build_ralplan_handoff,
-    build_ralplan_planner,
-)
-from ymcp.engine.ralph import build_ralph
+from ymcp.engine.deep_interview import build_deep_interview, build_deep_interview_complete
+from ymcp.engine.ralph import build_ralph, build_ralph_complete
+from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ralplan_complete, build_ralplan_critic
 from ymcp.memory import execute_memory_operation
 
 
@@ -49,60 +40,60 @@ class ToolSpec:
 
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
-        name="plan",
-        description="根据模式输出 MCP 标准结构化计划结果；direct 模式返回 plan 草稿，review 模式返回 reviewer verdict；需要用户输入时优先使用 MCP Elicitation。",
-        request_model=PlanRequest,
-        response_model=PlanResult,
-        handler=build_plan,
-    ),
-    ToolSpec(
-        name="ralplan",
-        description="作为 ralplan 共识流程总入口，返回首个应调用的子工具并要求宿主按显式 handoff 串联。",
-        request_model=RalplanRequest,
-        response_model=RalplanResult,
-        handler=build_ralplan,
-    ),
-    ToolSpec(
-        name="ralplan_planner",
-        description="Ymcp 直接产出 Planner 结构化 RALPLAN-DR 草案（principles / drivers / options），并显式 handoff 到 ralplan_architect。",
-        request_model=RalplanPlannerRequest,
-        response_model=RalplanPlannerResult,
-        handler=build_ralplan_planner,
-    ),
-    ToolSpec(
-        name="ralplan_architect",
-        description="Ymcp 直接产出 Architect 审查结果（steelman / tradeoff / synthesis），并显式 handoff 到 ralplan_critic。",
-        request_model=RalplanArchitectRequest,
-        response_model=RalplanArchitectResult,
-        handler=build_ralplan_architect,
-    ),
-    ToolSpec(
-        name="ralplan_critic",
-        description="Ymcp 直接产出 Critic verdict 与结构化质量检查；批准时显式 handoff 到 ralplan_handoff。",
-        request_model=RalplanCriticRequest,
-        response_model=RalplanCriticResult,
-        handler=build_ralplan_critic,
-    ),
-    ToolSpec(
-        name="ralplan_handoff",
-        description="只在 Critic 批准后收集下一步 workflow 选择，并返回 approved plan / ADR / ralph handoff guidance；需要 MCP Elicitation，不支持时阻断。",
-        request_model=RalplanHandoffRequest,
-        response_model=RalplanHandoffResult,
-        handler=build_ralplan_handoff,
-    ),
-    ToolSpec(
-        name="deep_interview",
-        description="需求不明确时通过 MCP Elicitation 推进多轮澄清状态机；宿主消费 ambiguity、readiness gates、artifact draft 和显式 handoff。",
+        name='ydeep',
+        description='需求澄清启动 tool。它要求模型使用返回的 deep-interview skill_content 完成完整需求调研并输出总结文案；最后必须调用 `ydeep_complete`，由完成 tool 触发下一步 Elicitation。',
         request_model=DeepInterviewRequest,
         response_model=DeepInterviewResult,
         handler=build_deep_interview,
     ),
     ToolSpec(
-        name="ralph",
-        description="根据计划、证据与 completion gates 返回 MCP 标准结构化验证状态；不执行命令；缺证据或完成选择优先使用 MCP Elicitation。",
+        name='ydeep_complete',
+        description='需求澄清完成 tool。模型在使用 prompt `deep-interview` 完成调研后必须调用本 tool；调用后应立即通过 Elicitation 提供下一步 workflow 选项。',
+        request_model=DeepInterviewCompleteRequest,
+        response_model=DeepInterviewCompleteResult,
+        handler=build_deep_interview_complete,
+    ),
+    ToolSpec(
+        name='yplan',
+        description='共识规划启动 tool。它要求模型使用返回的 planner skill_content 完成 planner 阶段并输出总结文案；最后必须调用 `yplan_architect`。',
+        request_model=RalplanRequest,
+        response_model=RalplanResult,
+        handler=build_ralplan,
+    ),
+    ToolSpec(
+        name='yplan_architect',
+        description='共识规划 architect 阶段 tool。模型在进入本阶段后，应使用返回的 architect skill_content 完成 architect 阶段并输出总结文案；最后调用 `yplan_critic`。',
+        request_model=RalplanArchitectRequest,
+        response_model=RalplanArchitectResult,
+        handler=build_ralplan_architect,
+    ),
+    ToolSpec(
+        name='yplan_critic',
+        description='共识规划 critic 阶段 tool。模型在进入本阶段后，应使用返回的 critic skill_content 完成 critic 阶段并输出总结文案；最后调用 `yplan_complete`。',
+        request_model=RalplanCriticRequest,
+        response_model=RalplanCriticResult,
+        handler=build_ralplan_critic,
+    ),
+    ToolSpec(
+        name='yplan_complete',
+        description='共识规划完成 tool。模型在完成 critic 评估后必须调用本 tool；调用后应立即通过 Elicitation 提供 `ydo`、`restart`、`memory_store` 选项。',
+        request_model=RalplanCompleteRequest,
+        response_model=RalplanCompleteResult,
+        handler=build_ralplan_complete,
+    ),
+    ToolSpec(
+        name='ydo',
+        description='执行验证启动 tool。它要求模型使用返回的 ralph skill_content 完成执行、修复、验证流程并输出总结文案；最后必须调用 `ydo_complete`。',
         request_model=RalphRequest,
         response_model=RalphResult,
         handler=build_ralph,
+    ),
+    ToolSpec(
+        name='ydo_complete',
+        description='执行验证完成 tool。模型在完成 ralph 执行循环后必须调用本 tool；调用后应立即通过 Elicitation 提供 `finish`、`memory_store`、`yplan`、`continue_execution` 选项。',
+        request_model=RalphCompleteRequest,
+        response_model=RalphCompleteResult,
+        handler=build_ralph_complete,
     ),
 )
 
@@ -110,17 +101,17 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 def _memory_handler(tool_name: str):
     return lambda request: execute_memory_operation(
         tool_name,
-        **request.model_dump(exclude={"schema_version"}, exclude_none=True),
+        **request.model_dump(exclude={'schema_version'}, exclude_none=True),
     )
 
 
 TOOL_SPECS = TOOL_SPECS + tuple(
     ToolSpec(
-        name=tool_schema["name"],
-        description=tool_schema["description"],
-        request_model=MEMPALACE_REQUEST_MODELS[tool_schema["name"]],
+        name=tool_schema['name'],
+        description=tool_schema['description'],
+        request_model=MEMPALACE_REQUEST_MODELS[tool_schema['name']],
         response_model=MemoryResult,
-        handler=_memory_handler(tool_schema["name"]),
+        handler=_memory_handler(tool_schema['name']),
     )
     for tool_schema in MEMPALACE_TOOL_SCHEMAS
 )

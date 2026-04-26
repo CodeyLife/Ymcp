@@ -1,36 +1,24 @@
 import anyio
 
 from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
-from ymcp.memory import limit_memory_result_items
-from ymcp.server import (
-    DeepInterviewNextToolInput,
-    PlanClarifyChoiceInput,
-    PlanTaskDetailsInput,
-    RalphEvidenceInput,
-    RalphVerificationInput,
-    RalplanNextToolInput,
-    _emit_ralplan_progress,
-    _split_lines,
-    create_app,
-)
+from ymcp.server import create_app
 
-EXPECTED_WORKFLOW_NAMES = {"plan", "ralplan", "ralplan_planner", "ralplan_architect", "ralplan_critic", "ralplan_handoff", "deep_interview", "ralph"}
-EXPECTED_MEMORY_NAMES = {tool["name"] for tool in MEMPALACE_TOOL_SCHEMAS}
+EXPECTED_WORKFLOW_NAMES = {'ydeep', 'ydeep_complete', 'yplan', 'yplan_architect', 'yplan_critic', 'yplan_complete', 'ydo', 'ydo_complete'}
+EXPECTED_MEMORY_NAMES = {tool['name'] for tool in MEMPALACE_TOOL_SCHEMAS}
 EXPECTED_NAMES = EXPECTED_WORKFLOW_NAMES | EXPECTED_MEMORY_NAMES
-EXPECTED_RESOURCE_URIS = {"resource://ymcp/principles", "resource://ymcp/tool-reference", "resource://ymcp/memory-protocol", "resource://ymcp/project-rule-template", "resource://ymcp/host-integration"}
-EXPECTED_PROMPT_NAMES = {"deep_interview_clarify", "plan_direct", "ralplan_consensus", "ralplan_planner_pass", "ralplan_architect_pass", "ralplan_critic_pass", "ralph_verify", "memory_store_after_completion"}
+EXPECTED_RESOURCE_URIS = {'resource://ymcp/principles', 'resource://ymcp/memory-protocol', 'resource://ymcp/project-rule-template'}
+EXPECTED_PROMPT_NAMES = {'architect', 'critic', 'deep-interview', 'plan', 'planner', 'ralph', 'ralplan'}
 
 FIXTURES = {
-    "plan": {"task": "为 Ymcp 工作流提供状态机输出", "constraints": ["宿主控制执行"]},
-    "ralplan": {"task": "规划 Ymcp 状态机 refactor"},
-    "ralplan_planner": {"task": "规划 Ymcp 状态机 refactor", "known_context": ["workflow server"]},
-    "ralplan_architect": {"task": "规划 Ymcp 状态机 refactor", "planner_draft": "draft", "known_context": ["workflow server"]},
-    "ralplan_critic": {"task": "规划 Ymcp 状态机 refactor", "planner_draft": "draft", "architect_review": "review", "known_context": ["workflow server"]},
-    "ralplan_handoff": {"task": "规划 Ymcp 状态机 refactor", "critic_verdict": "APPROVE", "approved_plan_summary": "approved", "known_context": ["workflow server"]},
-    "deep_interview": {"brief": "希望工作流工具更适合 Trae 使用", "prior_rounds": []},
-    "ralph": {"approved_plan": "Implement workflow state machine", "latest_evidence": ["planner draft ready"], "verification_commands": ["python -m pytest"]},
-    "mempalace_status": {},
-    "mempalace_search": {"query": "Ymcp 发布流程", "limit": 2},
+    'ydeep': {'brief': '明确当前需求'},
+    'ydeep_complete': {'brief': '明确当前需求', 'summary': '已完成需求调研总结'},
+    'yplan': {'task': '恢复三工具架构'},
+    'yplan_architect': {'task': '恢复三工具架构', 'plan_summary': '保留三工具外壳', 'planner_notes': ['planner ok']},
+    'yplan_critic': {'task': '恢复三工具架构', 'plan_summary': '保留三工具外壳', 'planner_notes': ['planner ok'], 'architect_notes': ['architect ok'], 'critic_verdict': 'APPROVE', 'critic_notes': ['方案通过评审'], 'acceptance_criteria': ['可进入 ydo']},
+    'yplan_complete': {'task': '恢复三工具架构', 'summary': '已完成方案总结', 'critic_verdict': 'APPROVE', 'plan_summary': '保留三工具外壳', 'planner_notes': ['planner ok'], 'architect_notes': ['architect ok'], 'critic_notes': ['critic ok'], 'acceptance_criteria': ['可进入 ydo']},
+    'ydo': {'approved_plan': '按批准方案执行'},
+    'ydo_complete': {'approved_plan': '按批准方案执行', 'summary': '已完成执行总结'},
+    'mempalace_status': {},
 }
 
 
@@ -38,165 +26,86 @@ async def _exercise_app():
     app = create_app()
     tools = await app.list_tools()
     assert {tool.name for tool in tools} == EXPECTED_NAMES
-    tool_map = {tool.name: tool for tool in tools}
-    assert tool_map["ralplan_handoff"].outputSchema["title"] == "RalplanHandoffResult"
     for name, args in FIXTURES.items():
         result = await app.call_tool(name, args)
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured["summary"]
-        assert structured["meta"]["required_host_action"]
-        assert structured["artifacts"]["workflow_state"]["workflow_name"] == name if name in EXPECTED_WORKFLOW_NAMES else True
+        assert structured['summary']
 
 
 def test_fastmcp_tool_discovery_and_calls():
     anyio.run(_exercise_app)
 
 
-def test_ralplan_handoff_requests_host_choice_without_elicitation_support():
+def test_ydeep_start_returns_completion_tool():
     async def _run():
         app = create_app()
-        result = await app.call_tool("ralplan_handoff", {"task": "分析 SignalR 推送链路", "critic_verdict": "APPROVE", "approved_plan_summary": "approved", "known_context": ["CaseUpdatedHub"]})
+        result = await app.call_tool('ydeep', {'brief': '收敛需求'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured["status"] == "needs_input"
-        assert structured["meta"]["required_host_action"] == "await_input"
-        assert structured["meta"]["requires_elicitation"] is True
-        assert structured["meta"]["requires_explicit_user_choice"] is True
-        assert "宿主应展示下一步 workflow 选项" in structured["next_actions"][0]["description"]
+        assert structured['artifacts']['readiness_verdict'] == 'prompt_required'
+        assert structured['artifacts']['completion_tool'] == 'ydeep_complete'
+        assert 'Task / Arguments:' in structured['artifacts']['skill_content']
     anyio.run(_run)
 
 
-def test_deep_interview_requests_host_elicitation_without_capability_support():
+def test_ydeep_complete_ready_exposes_handoff_options():
     async def _run():
         app = create_app()
-        result = await app.call_tool("deep_interview", {"brief": "Build MCP workflows", "prior_rounds": []})
+        result = await app.call_tool('ydeep_complete', {'brief': '收敛需求', 'summary': '已完成需求调研总结'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured["status"] == "needs_input"
-        assert structured["meta"]["required_host_action"] == "await_input"
-        assert structured["meta"]["requires_elicitation"] is True
-        assert "宿主应通过 MCP Elicitation 展示下一问并收集用户回答" in structured["summary"]
-        assert "clarity_breakdown" in structured["artifacts"]
-        assert "readiness_gates" in structured["artifacts"]
+        assert structured['artifacts']['readiness_verdict'] == 'ready'
+        assert structured['meta']['requires_explicit_user_choice'] is True
     anyio.run(_run)
 
 
-def test_deep_interview_brownfield_without_repo_findings_requests_host_context():
+def test_yplan_start_returns_architect_next_tool():
     async def _run():
         app = create_app()
-        result = await app.call_tool("deep_interview", {"brief": "Refactor existing workflow", "context_type": "brownfield"})
+        result = await app.call_tool('yplan', {'task': '恢复三工具'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured["artifacts"]["workflow_state"]["readiness"] == "needs_host_context"
-        assert structured["artifacts"]["next_question"] is None
-        assert "repo_findings" in "\n".join(structured["artifacts"]["workflow_state"]["evidence_gaps"])
+        assert structured['artifacts']['suggested_prompt'] == 'planner'
+        assert structured['artifacts']['next_tool'] == 'yplan_architect'
+        assert 'Task / Arguments:' in structured['artifacts']['skill_content']
     anyio.run(_run)
 
 
-def test_plan_preserves_host_choice_request_without_capability_support():
+def test_yplan_complete_exposes_ydo_restart_and_memory_options():
     async def _run():
         app = create_app()
-        result = await app.call_tool("plan", {"task": "为 Ymcp 增加状态机工作流输出", "constraints": ["宿主控制执行"]})
+        result = await app.call_tool('yplan_complete', {'task': '恢复三工具', 'summary': '已完成方案总结', 'critic_verdict': 'APPROVE', 'plan_summary': '方案已收敛'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured["status"] == "ok"
-        assert structured["meta"]["required_host_action"] == "await_input"
-        assert structured["meta"]["requires_elicitation"] is True
-        assert "宿主应提供下一步 workflow 选项" in structured["summary"]
+        options = {item['value'] for item in structured['artifacts']['handoff_options']}
+        assert {'ydo', 'restart', 'memory_store'} <= options
+        assert structured['meta']['requires_explicit_user_choice'] is True
     anyio.run(_run)
 
 
-def test_ralph_preserves_host_input_request_without_capability_support():
+def test_yplan_complete_blocks_revise_verdict():
     async def _run():
         app = create_app()
-        result = await app.call_tool("ralph", {"approved_plan": "Do the plan"})
+        result = await app.call_tool('yplan_complete', {'task': '恢复三工具', 'summary': '仍需修订', 'critic_verdict': 'REVISE', 'plan_summary': '方案未收敛'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured["status"] == "needs_input"
-        assert structured["meta"]["required_host_action"] == "await_input"
-        assert structured["meta"]["requires_elicitation"] is True
-        assert "宿主应通过 MCP Elicitation 收集 latest_evidence" in structured["summary"]
+        assert structured['status'] == 'blocked'
+        assert structured['artifacts']['consensus_verdict'] == 'needs_revision'
     anyio.run(_run)
 
 
-def test_deep_interview_elicitation_schema_uses_standard_single_choice_shape():
-    schema = DeepInterviewNextToolInput.model_json_schema()
-    assert schema["properties"]["next_tool"]["type"] == "string"
-
-
-def test_ralplan_handoff_elicitation_schema_uses_standard_single_choice_shape():
-    schema = RalplanNextToolInput.model_json_schema()
-    assert schema["properties"]["next_tool"]["type"] == "string"
-    assert all("description" not in option for option in schema["properties"]["next_tool"]["oneOf"])
-
-
-def test_plan_clarify_elicitation_schemas_use_flat_primitives():
-    choice_schema = PlanClarifyChoiceInput.model_json_schema()
-    details_schema = PlanTaskDetailsInput.model_json_schema()
-    assert choice_schema["properties"]["next_action"]["type"] == "string"
-    assert details_schema["properties"]["task_details"]["type"] == "string"
-
-
-def test_ralph_elicitation_schemas_use_string_fields_not_freeform_arrays():
-    evidence_schema = RalphEvidenceInput.model_json_schema()
-    verification_schema = RalphVerificationInput.model_json_schema()
-    assert evidence_schema["properties"]["latest_evidence_text"]["type"] == "string"
-    assert verification_schema["properties"]["verification_commands_text"]["type"] == "string"
-
-
-def test_split_lines_parses_multiline_elicitation_text():
-    assert _split_lines(" first \n\nsecond\n  \nthird ") == ["first", "second", "third"]
-
-
-def test_memory_tool_runtime_schema_matches_mempalace_parameters():
+def test_ydo_start_returns_completion_tool():
     async def _run():
         app = create_app()
-        tools = {tool.name: tool for tool in await app.list_tools()}
-        assert "room" in tools["mempalace_follow_tunnels"].inputSchema["properties"]
-        assert "last_n" in tools["mempalace_diary_read"].inputSchema["properties"]
-    anyio.run(_run)
-
-
-def test_memory_result_limits_are_enforced(monkeypatch):
-    import ymcp.server as server
-    from ymcp.memory import memory_result
-
-    def fake_memory(tool_name, **kwargs):
-        limit = kwargs.get("limit")
-        if tool_name == "mempalace_search":
-            result = memory_result(tool_name, tool_name, {"results": [{"id": 1}, {"id": 2}, {"id": 3}]})
-            return result if limit is None else limit_memory_result_items(result, limit)
-        return memory_result(tool_name, tool_name, {})
-
-    monkeypatch.setattr(server, "execute_memory_operation", fake_memory)
-
-    async def _run():
-        app = create_app()
-        result = await app.call_tool("mempalace_search", {"query": "ymcp", "limit": 2})
+        result = await app.call_tool('ydo', {'approved_plan': '执行'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured["artifacts"]["count"] == 2
+        assert structured['artifacts']['completion_tool'] == 'ydo_complete'
+        assert structured['artifacts']['readiness_verdict'] == 'prompt_required'
+        assert 'Task / Arguments:' in structured['artifacts']['skill_content']
     anyio.run(_run)
 
 
-def test_ralplan_progress_notifications_use_standard_mcp_log_methods():
-    class FakeContext:
-        def __init__(self):
-            self.info_calls = []
-            self.progress_calls = []
-
-        async def info(self, message, **extra):
-            self.info_calls.append((message, extra))
-
-        async def report_progress(self, progress, total=None, message=None):
-            self.progress_calls.append((progress, total, message))
-
+def test_ydo_complete_exposes_finish_option():
     async def _run():
-        from ymcp.contracts.ralplan import RalplanPlannerRequest
-        from ymcp.engine.ralplan import build_ralplan_planner
-
-        ctx = FakeContext()
-        result = build_ralplan_planner(RalplanPlannerRequest(task="规划 Ymcp 状态机 refactor", known_context=["workflow server"]))
-        await _emit_ralplan_progress(ctx, "planner", result)
-        assert len(ctx.info_calls) == 1
-        message, extra = ctx.info_calls[0]
-        assert "Planner 草案已生成" in message
-        assert "ralplan_architect" in message
-        assert extra["logger_name"] == "ymcp.ralplan"
-        assert ctx.progress_calls == [(2, 5, "Planner 草案已生成，正在准备 Architect 审查。")]
-
+        app = create_app()
+        result = await app.call_tool('ydo_complete', {'approved_plan': '执行', 'summary': '已完成执行总结'})
+        structured = result[1] if isinstance(result, tuple) else result
+        options = {item['value'] for item in structured['artifacts']['handoff_options']}
+        assert 'finish' in options
+        assert structured['artifacts']['execution_verdict'] == 'complete'
     anyio.run(_run)

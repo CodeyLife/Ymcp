@@ -90,6 +90,13 @@ class HandoffGuidance(BaseModel):
     expected_verification_evidence: list[str] = Field(default_factory=list)
 
 
+class HandoffOption(BaseModel):
+    value: str
+    title: str
+    description: str
+    recommended: bool = False
+
+
 class WorkflowState(BaseModel):
     workflow_name: str
     current_phase: str
