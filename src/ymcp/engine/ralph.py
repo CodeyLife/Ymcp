@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from ymcp.capabilities import prompt_content
+from ymcp.complete_copy import with_handoff_menu_requirement
 from ymcp.contracts.common import Handoff, HostActionType, ToolStatus
 from ymcp.contracts.ralph import RalphArtifacts, RalphCompleteArtifacts, RalphCompleteRequest, RalphCompleteResult, RalphRequest, RalphResult
-from ymcp.contracts.workflow import WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import WorkflowState
 from ymcp.core.result import build_handoff_option, build_meta, build_next_action
 
 
@@ -42,11 +43,6 @@ def build_ralph(request: RalphRequest) -> RalphResult:
                 evidence_gaps=[],
                 current_focus='execution_summary',
             ),
-            phase_summary=WorkflowPhaseSummary(
-                title='Ralph Start',
-                summary='tool 只返回执行阶段所需的 skill_content 与下一步 handoff。',
-                highlights=['suggested_prompt=ralph', 'handoff=ydo_complete', 'input=none'],
-            ),
         ),
     )
 
@@ -81,7 +77,11 @@ def build_ralph_complete(request: RalphCompleteRequest) -> RalphCompleteResult:
     )
     return RalphCompleteResult(
         status=ToolStatus.OK,
-        summary='执行阶段当前一轮已结束。若验证充分且没有未解决问题，选择 `finish` 结束流程；若要沉淀结论，选择 `memory_store`；若执行暴露出新需求或方案失配，选择 `yplan` 重新规划；若还要继续实现或补验证，选择 `continue_execution`。本阶段是纯收口阶段，不再要求执行摘要输入。宿主现在必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增，也不得自动结束或自动继续。',
+        summary=with_handoff_menu_requirement(
+            '执行阶段当前一轮已结束。若验证充分且没有未解决问题，选择 `finish` 结束流程；若要沉淀结论，选择 `memory_store`；若执行暴露出新需求或方案失配，选择 `yplan` 重新规划；若还要继续实现或补验证，选择 `continue_execution`。',
+            '本阶段是纯收口阶段，不再要求执行摘要输入。',
+            closing='不得自动结束或自动继续',
+        ),
         assumptions=[],
         next_actions=[build_next_action('下一步', '若验证未完成或仍有失败项，不要选择 finish。只有此阶段才可建议工作流完成。')],
         risks=[],
@@ -98,15 +98,10 @@ def build_ralph_complete(request: RalphCompleteRequest) -> RalphCompleteResult:
             handoff_options=handoff_options,
             workflow_state=WorkflowState(
                 workflow_name='ydo_complete',
-                current_phase='handoff',
-                readiness='ready',
+                current_phase='ready_for_handoff',
+                readiness='ready_for_handoff',
                 evidence_gaps=[],
-                current_focus='choose_next_action',
-            ),
-            phase_summary=WorkflowPhaseSummary(
-                title='Ralph Complete',
-                summary='tool 在执行收口时只提供 handoff 选项，不接管后续流程。',
-                highlights=['handoff=finish,memory_store,yplan,continue_execution'],
+                current_focus='elicitation_requested',
             ),
         ),
     )

@@ -35,9 +35,56 @@ from ymcp.engine.deep_interview import build_deep_interview, build_deep_intervie
 from ymcp.engine.ralph import build_ralph, build_ralph_complete
 from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ralplan_complete, build_ralplan_critic
 from ymcp.internal_registry import get_tool_specs
+from ymcp.core.result import build_next_action
 from ymcp.memory import build_memory_request_id, execute_memory_operation, memory_log_kv, memory_result_to_mcp_payload, mempalace_palace_path
 
 LOGGER = logging.getLogger('ymcp')
+
+
+def _handoff_menu_lines(options: tuple[Any, ...] | list[Any]) -> str:
+    lines: list[str] = []
+    for option in options:
+        recommended = " [recommended]" if getattr(option, 'recommended', False) else ""
+        lines.append(f"- {option.title} (`{option.value}`){recommended}: {option.description}")
+    return '\n'.join(lines)
+
+
+def _update_workflow_state(result: Any, *, current_phase: str, readiness: str, current_focus: str, blocked_reason: str | None = None, selected_option: str | None = None) -> None:
+    artifacts = getattr(result, 'artifacts', None)
+    workflow_state = getattr(artifacts, 'workflow_state', None)
+    if workflow_state is None:
+        return
+    workflow_state.current_phase = current_phase
+    workflow_state.readiness = readiness
+    workflow_state.current_focus = current_focus
+    workflow_state.blocked_reason = blocked_reason
+    if selected_option and hasattr(artifacts, 'selected_option'):
+        artifacts.selected_option = selected_option
+
+
+def _apply_manual_handoff_fallback(result: Any, *, reason: str, menu_lines: str) -> Any:
+    result.status = ToolStatus.BLOCKED
+    result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+    _update_workflow_state(
+        result,
+        current_phase='awaiting_user_selection',
+        readiness='awaiting_user_selection',
+        current_focus='elicitation_failed_fallback_to_manual',
+        blocked_reason='manual_menu_required',
+    )
+    result.next_actions = [
+        build_next_action(
+            '展示菜单并等待用户选择',
+            '宿主或 LLM 必须以 handoff.options 作为唯一菜单数据源，逐项展示 value、title、description，并等待用户明确选择；不得省略、改写、新增，也不得自动继续。',
+        )
+    ]
+    result.summary = (
+        f"{result.summary}\n\n{reason}。当前轮必须进入手动菜单展示兜底："
+        'LLM 必须直接读取 handoff.options，完整展示全部菜单项的 value、title、description，提供菜单选项供用户选择，'
+        f'并等待用户在这些选项中明确选择；不得自动选择、不得继续分析、不得跳过本次选择。\n\n'
+        f'请按以下菜单原样展示：\n{menu_lines}'
+    )
+    return result
 
 
 async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, message_prefix: str) -> Any:
@@ -51,9 +98,15 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         return result
 
     ChoiceSchema = create_model('YmcpHandoffChoice', choice=(str, ...))
-    menu_lines = '\n'.join(f"- {option.title} (`{option.value}`): {option.description}" for option in options)
+    menu_lines = _handoff_menu_lines(options)
     contract_note = '必须完整展示 handoff.options 中的全部菜单项，逐项提供标题与描述；不得省略、改写、新增，也不得自动继续。'
     message = f"{message_prefix}\n\n{contract_note}\n\n请选择以下菜单项之一：\n{menu_lines}"
+    _update_workflow_state(
+        result,
+        current_phase='elicitation_requested',
+        readiness='elicitation_requested',
+        current_focus='elicitation_requested',
+    )
 
     try:
         request_context = ctx.request_context
@@ -61,36 +114,44 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         request_context = None
 
     if request_context is None:
-        result.status = ToolStatus.BLOCKED
-        result.meta.required_host_action = HostActionType.DISPLAY_ONLY
         result.meta.elicitation_state = ElicitationState.UNSUPPORTED
-        result.summary = f"{result.summary}\n\n当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成 complete 阶段所要求的菜单选择。请在支持 Elicitation 的宿主中重新调用，并使用 handoff.options 作为唯一菜单数据源。"
-        return result
+        return _apply_manual_handoff_fallback(
+            result,
+            reason='当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成 complete 阶段所要求的菜单选择',
+            menu_lines=menu_lines,
+        )
 
     try:
         elicitation = await ctx.elicit(message, ChoiceSchema)
     except Exception as exc:
-        result.status = ToolStatus.BLOCKED
-        result.meta.required_host_action = HostActionType.DISPLAY_ONLY
         result.meta.elicitation_state = ElicitationState.FAILED
-        result.summary = f"{result.summary}\n\nElicitation 调用失败（{type(exc).__name__}: {exc}）。complete 阶段必须通过 Elicitation 完成选择，并且必须完整展示 handoff.options 中的全部菜单项；请修复宿主支持后重试。"
-        return result
+        return _apply_manual_handoff_fallback(
+            result,
+            reason=f'Elicitation 调用失败（{type(exc).__name__}: {exc}）',
+            menu_lines=menu_lines,
+        )
 
     action = getattr(elicitation, 'action', None)
     if action == 'accept':
         selected = elicitation.data.choice
         if selected not in values:
-            result.status = ToolStatus.BLOCKED
-            result.meta.required_host_action = HostActionType.DISPLAY_ONLY
             result.meta.elicitation_state = ElicitationState.FAILED
-            result.summary = f"{result.summary}\n\nElicitation 返回了非法选项 `{selected}`。合法选项只能来自 handoff.options：{', '.join(values)}。"
-            return result
+            return _apply_manual_handoff_fallback(
+                result,
+                reason=f'Elicitation 返回了非法选项 `{selected}`。合法选项只能来自 handoff.options：{", ".join(values)}',
+                menu_lines=menu_lines,
+            )
         result.meta.required_host_action = HostActionType.DISPLAY_ONLY
         result.meta.elicitation_state = ElicitationState.ACCEPTED
         result.meta.elicitation_selected_option = selected
+        _update_workflow_state(
+            result,
+            current_phase='selection_confirmed',
+            readiness='selection_confirmed',
+            current_focus=f'selected:{selected}',
+            selected_option=selected,
+        )
         result.summary = f"{result.summary}\n\nElicitation 已完成，用户选择了 `{selected}`。"
-        if hasattr(result.artifacts, 'selected_option'):
-            result.artifacts.selected_option = selected
         return result
 
     result.status = ToolStatus.NEEDS_INPUT
@@ -101,6 +162,13 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         result.meta.elicitation_state = ElicitationState.CANCELLED
     else:
         result.meta.elicitation_state = ElicitationState.FAILED
+    _update_workflow_state(
+        result,
+        current_phase='awaiting_user_selection',
+        readiness='awaiting_user_selection',
+        current_focus='awaiting_user_selection',
+        blocked_reason='user_choice_pending',
+    )
     result.summary = f"{result.summary}\n\nElicitation 未完成（{action}）。请继续完整展示 handoff.options 中的全部菜单项，并等待用户选择。"
     return result
 

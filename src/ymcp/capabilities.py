@@ -55,6 +55,7 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 - Host convention:
   - when the user/model chooses `yplan`, convert `clarified_artifact.summary` into the plain `task` input expected by `yplan`
   - when the user/model chooses `refine_further`, stay in the same interview loop and call `ydeep_complete` again after more thinking
+  - `recommended_next_action` is only a recommendation; the host / model must not auto-select it
   - if the host cannot execute MCP Elicitation, `ydeep_complete` should block rather than silently succeeding
 
 ## yplan
@@ -108,6 +109,7 @@ The intended interaction is:
 3. host calls the matching `*_complete`
 4. for complete stages, host should use `handoff.options` as the Elicitation menu source and wait for user choice; the model should stop analysis and treat that menu as authoritative
 5. if Elicitation is unavailable or fails, complete stages should return `blocked`; `handoff.options` remains the authoritative menu payload, not a silent-success fallback
+6. complete-stage `workflow_state` should move through explicit handoff statuses such as `ready_for_handoff`, `elicitation_requested`, `awaiting_user_selection`, and `selection_confirmed`
 
 The host owns the fixed calling convention between stages. Ymcp does not try to be a fully automatic workflow state machine.
 """

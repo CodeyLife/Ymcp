@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import HandoffOption, ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import MemoryContext, WorkflowState
 
 
 class RalphRequest(WorkflowRequestBase):
@@ -18,7 +18,6 @@ class RalphArtifacts(BaseModel):
     suggested_prompt: str = 'ralph'
     skill_content: str
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class RalphCompleteArtifacts(BaseModel):
@@ -26,7 +25,6 @@ class RalphCompleteArtifacts(BaseModel):
     selected_option: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class RalphResult(ToolResultBase[RalphArtifacts]):

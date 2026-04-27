@@ -5,6 +5,7 @@ from typing import Callable, Type
 
 from pydantic import BaseModel
 
+from ymcp.complete_copy import with_blocked_on_unsupported_elicitation
 from ymcp.contracts.deep_interview import (
     DeepInterviewCompleteRequest,
     DeepInterviewCompleteResult,
@@ -48,7 +49,9 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='ydeep_complete',
-        description='需求澄清完成 tool。模型在完成 deep-interview 调研后调用本 tool；tool 产出 clarified_artifact，并通过强制 Elicitation 返回统一 handoff 选项，由宿主按固定约定决定如何进入 yplan 或继续澄清。若宿主不支持 Elicitation，则本 tool 应返回 blocked。',
+        description=with_blocked_on_unsupported_elicitation(
+            '需求澄清完成 tool。模型在完成 deep-interview 调研后调用本 tool；tool 产出 clarified_artifact，并通过强制 Elicitation 返回统一 handoff 选项，由宿主按固定约定决定如何进入 yplan 或继续澄清。'
+        ),
         request_model=DeepInterviewCompleteRequest,
         response_model=DeepInterviewCompleteResult,
         handler=build_deep_interview_complete,
@@ -76,7 +79,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='yplan_complete',
-        description='共识规划完成 tool。模型在完成 critic 评估后调用本 tool；本 tool 是 handoff-only 的无输入收口阶段，只负责结束规划并通过强制 Elicitation 返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store。它不会继续分析、不会生成最终业务结论、不会自动推进到下一阶段，也不再要求 summary 或构造交接 artifact。若宿主不支持 Elicitation，则本 tool 应返回 blocked。',
+        description=with_blocked_on_unsupported_elicitation(
+            '共识规划完成 tool。模型在完成 critic 评估后调用本 tool；本 tool 是 handoff-only 的无输入收口阶段，只负责结束规划并通过强制 Elicitation 返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store。',
+            '它不会继续分析、不会生成最终业务结论、不会自动推进到下一阶段，也不再要求 summary 或构造交接 artifact。',
+        ),
         request_model=RalplanCompleteRequest,
         response_model=RalplanCompleteResult,
         handler=build_ralplan_complete,
@@ -90,7 +96,9 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='ydo_complete',
-        description='执行验证完成 tool。模型在完成 ralph 执行循环后调用本 tool；本 tool 是无输入收口阶段，会通过强制 Elicitation 返回统一 handoff 选项（如 finish / memory_store / yplan / continue_execution），由宿主按固定约定决定是收尾、重规划还是继续执行。若宿主不支持 Elicitation，则本 tool 应返回 blocked。',
+        description=with_blocked_on_unsupported_elicitation(
+            '执行验证完成 tool。模型在完成 ralph 执行循环后调用本 tool；本 tool 是无输入收口阶段，会通过强制 Elicitation 返回统一 handoff 选项（如 finish / memory_store / yplan / continue_execution），由宿主按固定约定决定是收尾、重规划还是继续执行。'
+        ),
         request_model=RalphCompleteRequest,
         response_model=RalphCompleteResult,
         handler=build_ralph_complete,

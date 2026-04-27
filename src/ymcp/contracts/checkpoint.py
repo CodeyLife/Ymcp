@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import HandoffOption, ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import MemoryContext, WorkflowState
 
 
 class QualityCheck(BaseModel):
@@ -61,7 +61,6 @@ class WorkflowCheckpointArtifacts(BaseModel):
     quality_checks: list[QualityCheck] = Field(default_factory=list)
     recommended_next_steps: list[str] = Field(default_factory=list)
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class UserChoiceCheckpointArtifacts(BaseModel):
@@ -70,7 +69,6 @@ class UserChoiceCheckpointArtifacts(BaseModel):
     options: list[ChoiceOption] = Field(default_factory=list)
     selected_option: str | None = None
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class VerificationCheckpointArtifacts(BaseModel):
@@ -79,7 +77,6 @@ class VerificationCheckpointArtifacts(BaseModel):
     missing_evidence: list[str] = Field(default_factory=list)
     recommended_next_steps: list[str] = Field(default_factory=list)
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class WorkflowCheckpointResult(ToolResultBase[WorkflowCheckpointArtifacts]):

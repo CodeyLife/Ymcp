@@ -13,7 +13,7 @@ from ymcp.contracts.checkpoint import (
 )
 from ymcp.contracts.checkpoint import CompletionGate, QualityCheck
 from ymcp.contracts.common import Handoff, HostActionType, ToolStatus
-from ymcp.contracts.workflow import MemoryPreflight, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowState
 from ymcp.core.result import build_meta, build_next_action
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -110,7 +110,6 @@ def build_workflow_checkpoint(request: WorkflowCheckpointRequest) -> WorkflowChe
             quality_checks=checks,
             recommended_next_steps=next_steps,
             workflow_state=state,
-            phase_summary=WorkflowPhaseSummary(title=label, summary='Ymcp 只做阶段检查，不接管 LLM 的常规推理循环。'),
         ),
     )
 
@@ -154,7 +153,6 @@ def build_user_choice_checkpoint(request: UserChoiceCheckpointRequest) -> UserCh
                 evidence_gaps=evidence_gaps,
                 blocked_reason='所选值不在 options 中。' if invalid_selection else None,
             ),
-            phase_summary=WorkflowPhaseSummary(title='用户选择检查点', summary='Ymcp 仅在必须由用户确认的节点介入。'),
         ),
     )
 
@@ -232,6 +230,5 @@ def build_verification_checkpoint(request: VerificationCheckpointRequest) -> Ver
                 evidence_gaps=missing,
                 blocked_reason='；'.join(request.known_failures) if request.known_failures else None,
             ),
-            phase_summary=WorkflowPhaseSummary(title='验证检查点', summary='Ymcp 只负责判断证据与完成态，不接管执行循环。'),
         ),
     )

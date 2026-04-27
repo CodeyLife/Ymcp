@@ -43,11 +43,13 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
 - MCP tool 提供结构化阶段边界与下一步选项
 - LLM 先完整思考与输出，再由宿主点击 complete / next-step 进入下一个 workflow
 - complete 类工具（`ydeep_complete` / `yplan_complete` / `ydo_complete`）在关键节点提供 handoff 选项，并**必须**通过 **Elicitation** 向用户展示菜单
-- 若当前宿主不支持 MCP Elicitation，complete 类工具应返回 `blocked`，而不是静默降级为“只返回菜单但仍算成功”
+- 若当前宿主不支持 MCP Elicitation，或 Elicitation 调用失败，complete 类工具应返回 `blocked`，并明确进入“手动展示 `handoff.options` 菜单并等待用户选择”的兜底模式，而不是静默降级为“只返回菜单但仍算成功”
 - `host_controls` 仅表达当前返回实际依赖的宿主能力
 - `status` 表示当前 tool 调用结果；`meta.required_host_action` 只表达宿主当前是“继续思考”还是“展示并收口”
 - `handoff.options` 是下一步动作的**唯一权威源**；`allowed_next_actions` 仅为派生兼容视图
 - `handoff.options` 应被视为服务端给出的菜单，而不是让 LLM 自己构造的路由对象
+- `recommended_next_action` 只是推荐，不代表授权自动执行；必须先完成用户选择
+- complete 类 tool 的 `workflow_state` 会显式表达 handoff 状态流转，例如 `ready_for_handoff`、`elicitation_requested`、`awaiting_user_selection`、`selection_confirmed`
 
 ## 安装
 

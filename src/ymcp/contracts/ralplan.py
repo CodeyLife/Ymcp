@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import HandoffOption, ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import MemoryContext, WorkflowState
 
 
 class RalplanRequest(WorkflowRequestBase):
@@ -28,28 +28,24 @@ class RalplanArtifacts(BaseModel):
     suggested_prompt: str = 'planner'
     skill_content: str
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class RalplanArchitectArtifacts(BaseModel):
     suggested_prompt: str = 'architect'
     skill_content: str
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class RalplanCriticArtifacts(BaseModel):
     suggested_prompt: str = 'critic'
     skill_content: str
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class RalplanCompleteArtifacts(BaseModel):
     selected_option: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class RalplanResult(ToolResultBase[RalplanArtifacts]):

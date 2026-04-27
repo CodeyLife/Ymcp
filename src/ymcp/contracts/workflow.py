@@ -29,12 +29,6 @@ class MemoryContext(BaseModel):
     query: str | None = None
 
 
-class WorkflowPhaseSummary(BaseModel):
-    title: str
-    summary: str
-    highlights: list[str] = Field(default_factory=list)
-
-
 class WorkflowState(BaseModel):
     workflow_name: str
     current_phase: str

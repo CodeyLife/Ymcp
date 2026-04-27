@@ -53,9 +53,14 @@ def test_ydeep_complete_ready_exposes_handoff_options():
         assert structured['meta']['elicitation_required'] is True
         assert structured['meta']['elicitation_state'] == 'unsupported'
         assert structured['artifacts']['clarified_artifact']['summary'] == '已完成需求调研总结'
+        assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
+        assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
+        assert structured['artifacts']['workflow_state']['current_focus'] == 'elicitation_failed_fallback_to_manual'
         assert 'yplan' in structured['summary']
         assert 'refine_further' in structured['summary']
         assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
+        assert '手动菜单展示兜底' in structured['summary']
+        assert structured['next_actions'][0]['label'] == '展示菜单并等待用户选择'
         assert {item['value'] for item in structured['artifacts']['handoff_options']} == {'yplan', 'refine_further'}
     anyio.run(_run)
 
@@ -87,8 +92,12 @@ def test_yplan_chain_returns_handoffs_and_complete_artifact():
         assert structured['meta']['required_host_action'] == 'display_only'
         assert structured['meta']['elicitation_required'] is True
         assert structured['meta']['elicitation_state'] == 'unsupported'
-        assert structured['artifacts']['workflow_state']['readiness'] == 'ready'
+        assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
+        assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
+        assert structured['artifacts']['workflow_state']['current_focus'] == 'elicitation_failed_fallback_to_manual'
         assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
+        assert '手动菜单展示兜底' in structured['summary']
+        assert structured['next_actions'][0]['label'] == '展示菜单并等待用户选择'
         assert 'restart' in structured['summary']
     anyio.run(_run)
 
@@ -116,6 +125,11 @@ def test_ydo_complete_exposes_finish_option():
         assert structured['meta']['required_host_action'] == 'display_only'
         assert structured['meta']['elicitation_required'] is True
         assert structured['meta']['elicitation_state'] == 'unsupported'
+        assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
+        assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
+        assert structured['artifacts']['workflow_state']['current_focus'] == 'elicitation_failed_fallback_to_manual'
         assert 'continue_execution' in structured['summary']
         assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
+        assert '手动菜单展示兜底' in structured['summary']
+        assert structured['next_actions'][0]['label'] == '展示菜单并等待用户选择'
     anyio.run(_run)

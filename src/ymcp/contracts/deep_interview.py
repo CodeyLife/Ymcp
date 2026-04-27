@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from ymcp.contracts.common import ArtifactRef, HandoffOption, ToolResultBase, WorkflowRequestBase
-from ymcp.contracts.workflow import MemoryContext, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import MemoryContext, WorkflowState
 
 
 class DeepInterviewRequest(WorkflowRequestBase):
@@ -31,7 +31,6 @@ class DeepInterviewArtifacts(BaseModel):
     suggested_prompt: str = 'deep-interview'
     skill_content: str
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class DeepInterviewCompleteArtifacts(BaseModel):
@@ -40,7 +39,6 @@ class DeepInterviewCompleteArtifacts(BaseModel):
     selected_option: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)
     workflow_state: WorkflowState
-    phase_summary: WorkflowPhaseSummary
 
 
 class DeepInterviewResult(ToolResultBase[DeepInterviewArtifacts]):

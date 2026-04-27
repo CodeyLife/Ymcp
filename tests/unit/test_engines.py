@@ -30,6 +30,9 @@ def test_deep_interview_complete_returns_clarified_artifact_and_handoff():
     assert result.artifacts.clarified_artifact.summary == '已完成需求调研总结'
     assert result.artifacts.selected_option is None
     assert {item.value for item in result.artifacts.handoff_options} == {'yplan', 'refine_further'}
+    assert result.artifacts.workflow_state.current_phase == 'ready_for_handoff'
+    assert result.artifacts.workflow_state.readiness == 'ready_for_handoff'
+    assert result.artifacts.workflow_state.current_focus == 'elicitation_requested'
 
 
 def test_ralplan_start_returns_planner_prompt():
@@ -100,7 +103,9 @@ def test_ralplan_complete_exposes_handoff_options():
     assert result.meta.required_host_action is HostActionType.AWAIT_INPUT
     assert {item.value for item in result.artifacts.handoff_options} >= {'ydo', 'restart', 'memory_store'}
     assert result.artifacts.selected_option is None
-    assert result.artifacts.workflow_state.readiness == 'ready'
+    assert result.artifacts.workflow_state.current_phase == 'ready_for_handoff'
+    assert result.artifacts.workflow_state.readiness == 'ready_for_handoff'
+    assert result.artifacts.workflow_state.current_focus == 'elicitation_requested'
 
 
 def test_ralph_start_returns_prompt_guidance():
@@ -119,6 +124,9 @@ def test_ralph_complete_exposes_finish_memory_plan_and_continue():
     assert {item.value for item in result.artifacts.handoff_options} >= {'finish', 'memory_store', 'yplan', 'continue_execution'}
     assert result.artifacts.selected_option is None
     assert {item.value for item in result.artifacts.handoff_options} == {'finish', 'memory_store', 'yplan', 'continue_execution'}
+    assert result.artifacts.workflow_state.current_phase == 'ready_for_handoff'
+    assert result.artifacts.workflow_state.readiness == 'ready_for_handoff'
+    assert result.artifacts.workflow_state.current_focus == 'elicitation_requested'
 
 
 def test_engines_do_not_use_subprocess_or_file_mutation_calls():

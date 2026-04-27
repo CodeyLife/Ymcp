@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ymcp.capabilities import prompt_content
+from ymcp.complete_copy import with_handoff_menu_requirement
 from ymcp.contracts.common import Handoff, HostActionType, ToolStatus
 from ymcp.contracts.deep_interview import (
     DeepInterviewArtifacts,
@@ -11,7 +12,7 @@ from ymcp.contracts.deep_interview import (
     DeepInterviewRequest,
     DeepInterviewResult,
 )
-from ymcp.contracts.workflow import MemoryPreflight, WorkflowPhaseSummary, WorkflowState
+from ymcp.contracts.workflow import MemoryPreflight, WorkflowState
 from ymcp.core.result import build_artifact_ref, build_handoff_option, build_meta, build_next_action
 from ymcp.engine.memory_preflight import analyze_memory_context
 
@@ -63,11 +64,6 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
         artifacts=DeepInterviewArtifacts(
             skill_content=skill_content,
             workflow_state=state,
-            phase_summary=WorkflowPhaseSummary(
-                title='Deep Interview Start',
-                summary='tool 只返回需求调研阶段的 skill_content 与下一步 handoff。',
-                highlights=['suggested_prompt=deep-interview', 'handoff=ydeep_complete'],
-            ),
         ),
     )
 
@@ -86,13 +82,12 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
             '继续由 LLM 深化边界、约束或验收标准。',
         ),
     ]
-    summary = '需求澄清已完成。若需求已经足够清晰，选择 `yplan` 进入规划；若仍需补充边界、约束或验收标准，选择 `refine_further` 继续澄清。'
     state = WorkflowState(
         workflow_name='ydeep_complete',
-        current_phase='handoff',
-        readiness='ready',
+        current_phase='ready_for_handoff',
+        readiness='ready_for_handoff',
         evidence_gaps=[],
-        current_focus='choose_next_workflow',
+        current_focus='elicitation_requested',
     )
     handoff = Handoff(
         recommended_next_action='yplan',
@@ -107,7 +102,7 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
     )
     return DeepInterviewCompleteResult(
         status=ToolStatus.OK,
-        summary=f'{summary} 宿主现在必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增，也不得自动跳过选择阶段。',
+        summary=with_handoff_menu_requirement(closing='不得自动跳过选择阶段'),
         assumptions=[],
         next_actions=[build_next_action('下一步', '若准备进入规划则选择 yplan；若仍需澄清则选择 refine_further。')],
         risks=[],
@@ -124,10 +119,5 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
             selected_option=None,
             handoff_options=handoff_options,
             workflow_state=state,
-            phase_summary=WorkflowPhaseSummary(
-                title='Deep Interview Complete',
-                summary='tool 在需求澄清收口时提供跨 workflow 交接用的 clarified_artifact 与 handoff 选项。',
-                highlights=['handoff=yplan,refine_further', 'artifact=clarified_artifact'],
-            ),
         ),
     )
