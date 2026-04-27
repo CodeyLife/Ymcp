@@ -6,13 +6,12 @@ import logging
 import os
 import time
 from typing import Any
-from typing import Literal
 
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, create_model
 
 from ymcp.capabilities import get_prompt_specs, get_resource_specs, prompt_template
-from ymcp.contracts.common import HostActionType, ToolStatus
+from ymcp.contracts.common import ElicitationState, HostActionType, ToolStatus
 from ymcp.contracts.deep_interview import (
     DeepInterviewCompleteRequest,
     DeepInterviewCompleteResult,
@@ -45,31 +44,64 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
     if ctx is None or result.meta.handoff is None or not result.meta.handoff.options:
         return result
 
+    result.meta.elicitation_required = True
     options = result.meta.handoff.options
     values = tuple(option.value for option in options)
     if not values:
         return result
 
-    ChoiceLiteral = Literal.__getitem__(values)
-    ChoiceSchema = create_model('YmcpHandoffChoice', choice=(ChoiceLiteral, ...))
+    ChoiceSchema = create_model('YmcpHandoffChoice', choice=(str, ...))
     menu_lines = '\n'.join(f"- {option.title} (`{option.value}`): {option.description}" for option in options)
-    message = f"{message_prefix}\n\n请选择以下菜单项之一：\n{menu_lines}"
+    contract_note = '必须完整展示 handoff.options 中的全部菜单项，逐项提供标题与描述；不得省略、改写、新增，也不得自动继续。'
+    message = f"{message_prefix}\n\n{contract_note}\n\n请选择以下菜单项之一：\n{menu_lines}"
+
+    try:
+        request_context = ctx.request_context
+    except Exception:
+        request_context = None
+
+    if request_context is None:
+        result.status = ToolStatus.BLOCKED
+        result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+        result.meta.elicitation_state = ElicitationState.UNSUPPORTED
+        result.summary = f"{result.summary}\n\n当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成 complete 阶段所要求的菜单选择。请在支持 Elicitation 的宿主中重新调用，并使用 handoff.options 作为唯一菜单数据源。"
+        return result
 
     try:
         elicitation = await ctx.elicit(message, ChoiceSchema)
-    except Exception:
+    except Exception as exc:
+        result.status = ToolStatus.BLOCKED
+        result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+        result.meta.elicitation_state = ElicitationState.FAILED
+        result.summary = f"{result.summary}\n\nElicitation 调用失败（{type(exc).__name__}: {exc}）。complete 阶段必须通过 Elicitation 完成选择，并且必须完整展示 handoff.options 中的全部菜单项；请修复宿主支持后重试。"
         return result
 
-    if getattr(elicitation, 'action', None) == 'accept':
+    action = getattr(elicitation, 'action', None)
+    if action == 'accept':
         selected = elicitation.data.choice
+        if selected not in values:
+            result.status = ToolStatus.BLOCKED
+            result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+            result.meta.elicitation_state = ElicitationState.FAILED
+            result.summary = f"{result.summary}\n\nElicitation 返回了非法选项 `{selected}`。合法选项只能来自 handoff.options：{', '.join(values)}。"
+            return result
         result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+        result.meta.elicitation_state = ElicitationState.ACCEPTED
+        result.meta.elicitation_selected_option = selected
         result.summary = f"{result.summary}\n\nElicitation 已完成，用户选择了 `{selected}`。"
         if hasattr(result.artifacts, 'selected_option'):
             result.artifacts.selected_option = selected
         return result
 
     result.status = ToolStatus.NEEDS_INPUT
-    result.summary = f"{result.summary}\n\nElicitation 未完成（{elicitation.action}）。请继续向用户展示菜单并等待选择。"
+    result.meta.required_host_action = HostActionType.AWAIT_INPUT
+    if action == 'decline':
+        result.meta.elicitation_state = ElicitationState.DECLINED
+    elif action == 'cancel':
+        result.meta.elicitation_state = ElicitationState.CANCELLED
+    else:
+        result.meta.elicitation_state = ElicitationState.FAILED
+    result.summary = f"{result.summary}\n\nElicitation 未完成（{action}）。请继续完整展示 handoff.options 中的全部菜单项，并等待用户选择。"
     return result
 
 

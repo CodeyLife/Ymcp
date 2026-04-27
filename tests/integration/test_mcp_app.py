@@ -48,12 +48,14 @@ def test_ydeep_complete_ready_exposes_handoff_options():
         app = create_app()
         result = await app.call_tool('ydeep_complete', {'summary': '已完成需求调研总结', 'brief': '收敛需求'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured['status'] == 'ok'
-        assert structured['meta']['required_host_action'] == 'await_input'
+        assert structured['status'] == 'blocked'
+        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['elicitation_required'] is True
+        assert structured['meta']['elicitation_state'] == 'unsupported'
         assert structured['artifacts']['clarified_artifact']['summary'] == '已完成需求调研总结'
         assert 'yplan' in structured['summary']
         assert 'refine_further' in structured['summary']
-        assert 'Elicitation' in structured['summary']
+        assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
         assert {item['value'] for item in structured['artifacts']['handoff_options']} == {'yplan', 'refine_further'}
     anyio.run(_run)
 
@@ -73,16 +75,19 @@ def test_yplan_chain_returns_handoffs_and_complete_artifact():
         critic = await app.call_tool('yplan_critic', {})
         critic_structured = critic[1] if isinstance(critic, tuple) else critic
         assert critic_structured['meta']['handoff']['recommended_next_action'] is None
-        assert {item['value'] for item in critic_structured['meta']['handoff']['options']} == {'yplan_critic', 'yplan_complete'}
+        assert {item['value'] for item in critic_structured['meta']['handoff']['options']} == {'yplan', 'yplan_complete'}
+        assert '必须选择 `yplan` 重开规划' in critic_structured['summary']
 
         complete = await app.call_tool('yplan_complete', {})
         structured = complete[1] if isinstance(complete, tuple) else complete
         options = {item['value'] for item in structured['artifacts']['handoff_options']}
         assert {'ydo', 'restart', 'memory_store'} <= options
-        assert structured['status'] == 'ok'
-        assert structured['meta']['required_host_action'] == 'await_input'
+        assert structured['status'] == 'blocked'
+        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['elicitation_required'] is True
+        assert structured['meta']['elicitation_state'] == 'unsupported'
         assert structured['artifacts']['workflow_state']['readiness'] == 'ready'
-        assert 'Elicitation' in structured['summary']
+        assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
         assert 'restart' in structured['summary']
     anyio.run(_run)
 
@@ -106,7 +111,10 @@ def test_ydo_complete_exposes_finish_option():
         options = {item['value'] for item in structured['artifacts']['handoff_options']}
         assert 'finish' in options
         assert structured['artifacts']['execution_verdict'] == 'complete'
-        assert structured['meta']['required_host_action'] == 'await_input'
+        assert structured['status'] == 'blocked'
+        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['elicitation_required'] is True
+        assert structured['meta']['elicitation_state'] == 'unsupported'
         assert 'continue_execution' in structured['summary']
-        assert 'Elicitation' in structured['summary']
+        assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
     anyio.run(_run)

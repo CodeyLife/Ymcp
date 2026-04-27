@@ -21,9 +21,9 @@ Ymcp planning is a lightweight skill-flow:
 3. `yplan_architect` returns architect `skill_content`
 4. the model completes the architect stage and calls `yplan_critic`
 5. `yplan_critic` returns critic `skill_content` plus the only two legal next steps:
-   - `yplan_critic`
+   - `yplan`
    - `yplan_complete`
-6. the model decides whether to keep refining or to complete planning
+6. the model decides whether to restart planning or to complete planning
 7. `yplan_complete` is a no-input completion gate that closes the planning phase and returns the next workflow options
 
 The tool is responsible for stage boundaries and legal next steps.  
@@ -39,11 +39,18 @@ Ymcp does not require the model to round-trip a mid-plan state object between `y
 ## Stage reasoning shape
 - **Planner / `yplan`** drafts the initial plan
 - **Architect / `yplan_architect`** challenges boundaries and feasibility
-- **Critic / `yplan_critic`** judges readiness and decides whether to continue iterating or complete
+- **Critic / `yplan_critic`** judges readiness and decides whether to approve or force a full restart at `yplan`
 
 ## Important rule
 Do not invent a separate routing protocol inside the skill.  
-Follow the tool-returned next-step boundary at each phase. In `yplan_critic`, do not rely on a fixed `APPROVE/REVISE` schema; decide whether the plan is ready and choose between `yplan_critic` and `yplan_complete` from the returned options.
+Follow the tool-returned next-step boundary at each phase. In `yplan_critic`, do not rely on a fixed `APPROVE/REVISE` schema; decide whether the plan is ready and choose between `yplan` and `yplan_complete` from the returned options.
+
+If the critic path concludes that the plan is ready, you may call `yplan_complete` directly.
+If the critic path concludes that the plan is not ready, you must restart planning at `yplan`.
+Do not continue inside `yplan_critic` after rejection.
+Do not route rejection back to `yplan_architect`.
+Do not invent a mandatory pre-complete summary protocol.
+If you emit a short approval note before `yplan_complete`, keep it concise and useful, but treat the tool call itself as the signal that planning is done.
 
 ## Typical outputs
 - Requirements summary
@@ -57,10 +64,11 @@ Follow the tool-returned next-step boundary at each phase. In `yplan_critic`, do
 When planning reaches the `yplan_complete` stage, the model is no longer drafting or debating the plan. It is only closing the planning phase and handing off.
 
 ### Allowed at `yplan_complete`
-- Summarize the approved plan briefly
+- Optionally summarize the approved plan briefly
 - Point to the returned `handoff.options`
 - Recommend `ydo` when execution should begin
 - Treat the act of calling `yplan_complete` itself as the signal that planning is done; do not expect the tool to validate a summary payload
+- Require the host to use `handoff.options` as the only menu source and to show every option with its title and description
 
 ### Forbidden at `yplan_complete`
 - Do not restate the full business analysis
@@ -72,7 +80,7 @@ When planning reaches the `yplan_complete` stage, the model is no longer draftin
 ```md
 # Planning Complete
 
-## Approved Plan Summary
+## Optional Approved Plan Note
 - Goal: <one sentence>
 - Chosen approach: <one sentence>
 - Key constraints: <1-3 bullets>
@@ -87,4 +95,5 @@ Use the returned `handoff.options` to choose the next action.
 - The plan is complete
 - The overall task is not complete yet
 - Execution should continue through the workflow options, not by inventing a new branch
+- The host must present every menu option from `handoff.options`; do not omit or rewrite them
 ```

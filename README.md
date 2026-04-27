@@ -33,8 +33,8 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
 - 推荐宿主按固定约定串联阶段，而不是让 LLM 或 tool 维护复杂路由协议
 - `ydeep_complete` 默认只进入 `yplan`，不再直接跳到 `ydo`
 - `yplan` 只接受 `task`；如果来源是 `clarified_artifact`，应由宿主先转换为普通 `task`
-- `yplan_critic` 只声明两个合法下一步：`yplan_critic` 或 `yplan_complete`
-- `yplan_critic` 不强制固定 `APPROVE/REVISE` 协议；由 LLM 自行判断继续评审还是完成收口
+- `yplan_critic` 只声明两个合法下一步：`yplan` 或 `yplan_complete`
+- `yplan_critic` 不强制固定 `APPROVE/REVISE` 协议；由 LLM 自行判断是批准收口，还是强制回到 `yplan` 重开规划
 - `yplan_complete` / `ydo_complete` 现在是更彻底的无输入收口阶段：调用它本身就表示 LLM 认为当前阶段已结束
 - 只有 `ydeep_complete` 仍产出 `clarified_artifact`；planning / execution 的 complete 阶段不再要求输入摘要或构造中间 artifact
 
@@ -42,7 +42,8 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
 
 - MCP tool 提供结构化阶段边界与下一步选项
 - LLM 先完整思考与输出，再由宿主点击 complete / next-step 进入下一个 workflow
-- complete 类工具（`ydeep_complete` / `yplan_complete` / `ydo_complete`）在关键节点提供 handoff 选项，并应通过 **Elicitation** 向用户展示菜单
+- complete 类工具（`ydeep_complete` / `yplan_complete` / `ydo_complete`）在关键节点提供 handoff 选项，并**必须**通过 **Elicitation** 向用户展示菜单
+- 若当前宿主不支持 MCP Elicitation，complete 类工具应返回 `blocked`，而不是静默降级为“只返回菜单但仍算成功”
 - `host_controls` 仅表达当前返回实际依赖的宿主能力
 - `status` 表示当前 tool 调用结果；`meta.required_host_action` 只表达宿主当前是“继续思考”还是“展示并收口”
 - `handoff.options` 是下一步动作的**唯一权威源**；`allowed_next_actions` 仅为派生兼容视图

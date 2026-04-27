@@ -81,7 +81,7 @@ def build_ralph_complete(request: RalphCompleteRequest) -> RalphCompleteResult:
     )
     return RalphCompleteResult(
         status=ToolStatus.OK,
-        summary='执行阶段当前一轮已结束。若验证充分且没有未解决问题，选择 `finish` 结束流程；若要沉淀结论，选择 `memory_store`；若执行暴露出新需求或方案失配，选择 `yplan` 重新规划；若还要继续实现或补验证，选择 `continue_execution`。本阶段是纯收口阶段，不再要求执行摘要输入。现在必须通过 Elicitation 向用户展示这些菜单选项，并等待用户选择；不要自动结束或自动继续。',
+        summary='执行阶段当前一轮已结束。若验证充分且没有未解决问题，选择 `finish` 结束流程；若要沉淀结论，选择 `memory_store`；若执行暴露出新需求或方案失配，选择 `yplan` 重新规划；若还要继续实现或补验证，选择 `continue_execution`。本阶段是纯收口阶段，不再要求执行摘要输入。宿主现在必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增，也不得自动结束或自动继续。',
         assumptions=[],
         next_actions=[build_next_action('下一步', '若验证未完成或仍有失败项，不要选择 finish。只有此阶段才可建议工作流完成。')],
         risks=[],

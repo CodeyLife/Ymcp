@@ -35,6 +35,15 @@ class HostActionType(str, Enum):
     FINISH = "finish"
 
 
+class ElicitationState(str, Enum):
+    NOT_APPLICABLE = "not_applicable"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+
+
 class HandoffOption(BaseModel):
     value: str
     title: str
@@ -70,6 +79,9 @@ class ResultMeta(BaseModel):
     host_controls: list[str] = Field(default_factory=list)
     required_host_action: HostActionType = HostActionType.DISPLAY_ONLY
     handoff: Handoff | None = None
+    elicitation_required: bool = False
+    elicitation_state: ElicitationState = ElicitationState.NOT_APPLICABLE
+    elicitation_selected_option: str | None = None
 
 
 ArtifactT = TypeVar("ArtifactT", bound=BaseModel)

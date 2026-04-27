@@ -57,6 +57,8 @@ def test_ralplan_complete_summary_explains_each_option():
     assert 'ydo' in result.summary
     assert 'restart' in result.summary
     assert 'memory_store' in result.summary
+    assert '唯一权威菜单数据源' in result.summary
+    assert '不得省略、改写、新增' in result.summary
 
 
 def test_ralph_start_summary_explains_context_based_execution():
@@ -71,6 +73,7 @@ def test_ralph_complete_summary_explains_each_option():
     assert 'memory_store' in result.summary
     assert 'yplan' in result.summary
     assert 'continue_execution' in result.summary
+    assert '唯一权威菜单数据源' in result.summary
 
 
 def test_ralplan_architect_returns_architect_prompt():
@@ -79,11 +82,12 @@ def test_ralplan_architect_returns_architect_prompt():
     assert result.meta.handoff.recommended_next_action == 'yplan_critic'
 
 
-def test_ralplan_critic_returns_self_loop_and_complete_options():
+def test_ralplan_critic_returns_restart_and_complete_options():
     result = build_ralplan_critic(RalplanCriticRequest())
     assert result.artifacts.suggested_prompt == 'critic'
     assert result.meta.handoff.recommended_next_action is None
-    assert {item.value for item in result.meta.handoff.options} == {'yplan_critic', 'yplan_complete'}
+    assert {item.value for item in result.meta.handoff.options} == {'yplan', 'yplan_complete'}
+    assert '必须选择 `yplan` 重开规划' in result.summary
 
 
 def test_ralplan_complete_exposes_handoff_options():

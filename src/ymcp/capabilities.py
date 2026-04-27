@@ -55,6 +55,7 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 - Host convention:
   - when the user/model chooses `yplan`, convert `clarified_artifact.summary` into the plain `task` input expected by `yplan`
   - when the user/model chooses `refine_further`, stay in the same interview loop and call `ydeep_complete` again after more thinking
+  - if the host cannot execute MCP Elicitation, `ydeep_complete` should block rather than silently succeeding
 
 ## yplan
 
@@ -63,7 +64,7 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 - `yplan` returns planner `skill_content` and a single next-step option: `yplan_architect`
 - `yplan_architect` returns architect `skill_content` and a single next-step option: `yplan_critic`
 - `yplan_critic` returns critic `skill_content` and exactly two legal next-step options:
-  - `yplan_critic`
+  - `yplan`
   - `yplan_complete`
 - Host convention:
   - the host converts upstream artifacts into a plain planning task before calling `yplan`
@@ -73,7 +74,7 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
   - the model finishes the architect stage, then calls `yplan_critic`
   - inside `yplan_critic`, the model decides for itself whether the plan is ready:
     - if ready, call `yplan_complete`
-    - if not ready, revise the plan and call `yplan_critic` again
+    - if not ready, restart planning by calling `yplan`
   - Ymcp does not require a fixed critic verdict schema such as `APPROVE/REVISE`; the legal next-step options are the contract
   - `yplan_complete` is a no-input completion gate; calling it means the model believes planning is complete
   - `yplan_complete` does not validate or collect a summary; it only returns the legal next-step options
@@ -106,6 +107,7 @@ The intended interaction is:
 2. model thinks and outputs
 3. host calls the matching `*_complete`
 4. for complete stages, host should use `handoff.options` as the Elicitation menu source and wait for user choice
+5. if Elicitation is unavailable or fails, complete stages should return `blocked`; `handoff.options` remains the authoritative menu payload, not a silent-success fallback
 
 The host owns the fixed calling convention between stages. Ymcp does not try to be a fully automatic workflow state machine.
 """

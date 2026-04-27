@@ -39,10 +39,10 @@ flowchart TD
     D --> F[refine_further]
 ```
 
-- `status=ok`，`required_host_action=await_input`
+- `status=ok` 仅在 Elicitation 成功 accept 后成立；否则应返回 `needs_input` 或 `blocked`
 - 只有收口阶段才产出 `clarified_artifact`
 - `handoff.options` 是下一步动作的唯一权威源，应被理解为菜单项，而不是路由协议对象
-- 宿主应通过 Elicitation 展示这些菜单项，并等待用户选择
+- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation，本阶段应返回 `blocked`
 
 ***
 
@@ -61,13 +61,14 @@ flowchart TD
     I --> J[调用 yplan_critic]
     J --> K[返回 critic skill_content]
     J --> L[handoff.options]
-    L --> M[yplan_critic<br/>继续批评/收敛]
+    L --> M[yplan<br/>critic 否决后重开规划]
     L --> N[yplan_complete<br/>方案通过]
 ```
 
 - `yplan` 只负责 planner 入口
 - `yplan_architect` 只负责 architect 入口
-- `yplan_critic` 只声明两个合法下一步：`yplan_critic`、`yplan_complete`
+- `yplan_critic` 只声明两个合法下一步：`yplan`、`yplan_complete`
+- `yplan_critic` 否决时必须强制回到 `yplan`；不得继续停留在 critic 阶段，也不得回退到 architect 阶段
 - 中间阶段不要求回传 `planning_artifact`、`planner_summary`、`architect_notes` 等结构化状态
 - 同一调用链内由 LLM 自己承接规划上下文
 
@@ -84,10 +85,10 @@ flowchart TD
     C --> F[memory_store]
 ```
 
-- `status=ok`，`required_host_action=await_input`
+- `status=ok` 仅在 Elicitation 成功 accept 后成立；否则应返回 `needs_input` 或 `blocked`
 - `yplan_complete` 是无输入收口 gate
 - 调用它本身就表示 LLM 认为 planning 阶段已结束
-- 宿主应通过 Elicitation 展示这些菜单项，并等待用户选择
+- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation，本阶段应返回 `blocked`
 
 ***
 
@@ -111,7 +112,7 @@ flowchart TD
 - `ydo` 不要求业务输入，直接依赖当前调用链上下文
 - `ydo_complete` 是无输入收口 gate，只负责执行阶段收口与下一步选择
 - `continue_execution` 表示继续当前执行循环，完成更多实现或验证后再回到 `ydo_complete`
-- 宿主应通过 Elicitation 展示这些菜单项，并等待用户选择
+- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation，本阶段应返回 `blocked`
 
 ***
 

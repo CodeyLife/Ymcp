@@ -131,24 +131,24 @@ def build_ralplan_critic(request: RalplanCriticRequest) -> RalplanCriticResult:
         recommended_next_action=None,
         options=[
             build_handoff_option(
-                'yplan_critic',
-                '继续 yplan_critic',
-                '若方案仍需补强或补证，继续留在 critic 阶段迭代。',
+                'yplan',
+                '返回 yplan 重开规划',
+                '若 critic 认为方案仍不可执行，必须回到 yplan 重新开始规划。',
             ),
             build_handoff_option(
                 'yplan_complete',
                 '进入 yplan_complete',
-                '若 critic 认为方案已可执行，则调用 yplan_complete 完成共识收口。',
+                '若 critic 认为方案已可执行，则先输出总结文案，再调用 yplan_complete 完成共识收口。',
             ),
         ],
     )
     return RalplanCriticResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请将 skill_content 作为推理指导完成 critic 阶段。若你认为方案已经足够清晰、完整且可执行，选择 `yplan_complete` 收口；若仍需补强或补证，选择 `yplan_critic` 继续批评和收敛。不要依赖固定 verdict 协议。`handoff.options` 由服务端生成，应直接使用，不要自行构造新的选项对象。',
+        summary='请将 skill_content 作为推理指导完成 critic 阶段。若你认为方案已经足够清晰、完整且可执行，必须先输出总结文案，再调用 `yplan_complete` 收口；若你认为方案仍不可执行，必须选择 `yplan` 重开规划。不要依赖固定 verdict 协议。`handoff.options` 由服务端生成，应直接使用，不要自行构造新的选项对象。',
         assumptions=[],
         next_actions=[
             build_next_action('方案通过', '若当前方案已足够清晰、完整、可执行，则调用 yplan_complete。'),
-            build_next_action('继续收敛', '若仍有缺口或风险，继续调用 yplan_critic。不要依赖固定 verdict 协议。'),
+            build_next_action('方案驳回', '若仍有缺口或风险，必须回到 yplan 重开规划，不要继续调用 yplan_critic。'),
         ],
         risks=[],
         meta=build_meta(
@@ -170,7 +170,7 @@ def build_ralplan_critic(request: RalplanCriticRequest) -> RalplanCriticResult:
             phase_summary=WorkflowPhaseSummary(
                 title='Ralplan Critic',
                 summary='tool 只返回 critic 阶段的 skill_content 与合法下一跳白名单；workflow_state 仅描述当前阶段，不承担跨阶段状态保存。',
-                highlights=['suggested_prompt=critic', 'handoff=yplan_critic|yplan_complete', 'verdict_protocol=llm_decides', 'workflow_state_is_phase_local=true'],
+                highlights=['suggested_prompt=critic', 'handoff=yplan|yplan_complete', 'verdict_protocol=llm_decides', 'workflow_state_is_phase_local=true'],
             ),
         ),
     )
@@ -201,7 +201,7 @@ def build_ralplan_complete(request: RalplanCompleteRequest) -> RalplanCompleteRe
     )
     return RalplanCompleteResult(
         status=ToolStatus.OK,
-        summary='共识规划已结束。若要开始执行，选择 `ydo` 进入执行阶段；若要从头再规划，选择 `restart`；若只想把当前结论沉淀到记忆，选择 `memory_store`。本阶段是纯收口阶段，不再要求任何输入摘要。现在必须通过 Elicitation 向用户展示这些菜单选项，并等待用户选择；不要自动继续。',
+        summary='共识规划已结束。若要开始执行，选择 `ydo` 进入执行阶段；若要从头再规划，选择 `restart`；若只想把当前结论沉淀到记忆，选择 `memory_store`。本阶段是纯收口阶段，不再要求任何输入摘要。宿主现在必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增，也不得自动继续。',
         assumptions=[],
         next_actions=[build_next_action('下一步', '读取 handoff.options；通常直接按 recommended_next_action 进入 ydo。不要在此阶段重新展开长篇规划。')],
         risks=[],

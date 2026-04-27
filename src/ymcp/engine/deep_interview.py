@@ -107,7 +107,7 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
     )
     return DeepInterviewCompleteResult(
         status=ToolStatus.OK,
-        summary=f'{summary} 现在必须通过 Elicitation 向用户展示这些菜单选项，并等待用户选择；不要自动跳过选择阶段。',
+        summary=f'{summary} 宿主现在必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增，也不得自动跳过选择阶段。',
         assumptions=[],
         next_actions=[build_next_action('下一步', '若准备进入规划则选择 yplan；若仍需澄清则选择 refine_further。')],
         risks=[],
