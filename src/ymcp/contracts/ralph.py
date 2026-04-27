@@ -11,6 +11,7 @@ class RalphRequest(WorkflowRequestBase):
 
 
 class RalphCompleteRequest(WorkflowRequestBase):
+    selected_option: str | None = None
     memory_context: MemoryContext = Field(default_factory=MemoryContext)
 
 

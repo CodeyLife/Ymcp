@@ -17,11 +17,12 @@ class RalplanArchitectRequest(WorkflowRequestBase):
 
 
 class RalplanCriticRequest(WorkflowRequestBase):
-    pass
+    architect_summary: str | None = None
 
 
 class RalplanCompleteRequest(WorkflowRequestBase):
-    pass
+    critic_summary: str | None = None
+    selected_option: str | None = None
 
 
 class RalplanArtifacts(BaseModel):
@@ -37,12 +38,14 @@ class RalplanArchitectArtifacts(BaseModel):
 
 
 class RalplanCriticArtifacts(BaseModel):
+    architect_summary: str | None = None
     suggested_prompt: str = 'critic'
     skill_content: str
     workflow_state: WorkflowState
 
 
 class RalplanCompleteArtifacts(BaseModel):
+    critic_summary: str | None = None
     selected_option: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)
     workflow_state: WorkflowState

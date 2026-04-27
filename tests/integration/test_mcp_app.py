@@ -9,6 +9,28 @@ EXPECTED_NAMES = EXPECTED_WORKFLOW_NAMES | EXPECTED_MEMORY_NAMES
 EXPECTED_RESOURCE_URIS = {'resource://ymcp/principles', 'resource://ymcp/memory-protocol', 'resource://ymcp/workflow-contracts', 'resource://ymcp/project-rule-template'}
 
 
+def _assert_host_ui_fallback(structured):
+    assert structured['summary'] == 'WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION'
+    assert structured['meta']['assistant_response_policy'] == 'stop_after_tool_result'
+    assert structured['meta']['assistant_visible_response_allowed'] is False
+    assert structured['meta']['host_ui_required'] is False
+    assert structured['meta']['text_menu_forbidden'] is True
+    assert structured['meta']['host_controls'] == []
+    assert structured['meta']['ui_request']['kind'] == 'await_selected_option'
+    assert structured['meta']['ui_request']['selected_option_param'] == 'selected_option'
+    assert structured['meta']['ui_request']['failure_semantics'] == 'not_a_tool_failure'
+    assert structured['meta']['ui_request']['assistant_instruction'] == 'STOP'
+    assert set(structured['meta']['ui_request']) == {
+        'kind',
+        'selected_option_param',
+        'failure_semantics',
+        'assistant_instruction',
+    }
+    assert structured['meta']['handoff']['recommended_next_action'] is None
+    assert structured['meta']['handoff']['options'] == []
+    assert structured['next_actions'] == []
+
+
 async def _exercise_app():
     app = create_app()
     tools = await app.list_tools()
@@ -56,12 +78,22 @@ def test_ydeep_complete_ready_exposes_handoff_options():
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
-        assert 'yplan' in structured['summary']
-        assert 'refine_further' in structured['summary']
-        assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
-        assert '可交互菜单 fallback' in structured['summary']
-        assert structured['next_actions'][0]['label'] == '渲染可交互菜单并等待用户选择'
-        assert {item['value'] for item in structured['artifacts']['handoff_options']} == {'yplan', 'refine_further'}
+        _assert_host_ui_fallback(structured)
+        assert structured['artifacts']['handoff_options'] == []
+    anyio.run(_run)
+
+
+def test_ydeep_complete_accepts_selected_option_without_elicitation():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool('ydeep_complete', {'summary': '已完成需求调研总结', 'selected_option': 'refine_further'})
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured['status'] == 'ok'
+        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['elicitation_required'] is False
+        assert structured['meta']['elicitation_selected_option'] == 'refine_further'
+        assert structured['artifacts']['selected_option'] == 'refine_further'
+        assert structured['artifacts']['workflow_state']['current_phase'] == 'selection_confirmed'
     anyio.run(_run)
 
 
@@ -79,15 +111,27 @@ def test_yplan_chain_returns_handoffs_and_complete_artifact():
 
         critic = await app.call_tool('yplan_critic', {})
         critic_structured = critic[1] if isinstance(critic, tuple) else critic
+        assert critic_structured['status'] == 'blocked'
+        assert critic_structured['artifacts']['workflow_state']['current_phase'] == 'architect_summary_required'
+        assert '不能空参进入' in critic_structured['summary']
+
+        critic = await app.call_tool('yplan_critic', {'architect_summary': '架构评估已完成，边界、tradeoff、风险明确'})
+        critic_structured = critic[1] if isinstance(critic, tuple) else critic
         assert critic_structured['meta']['handoff']['recommended_next_action'] is None
         assert {item['value'] for item in critic_structured['meta']['handoff']['options']} == {'yplan', 'yplan_complete'}
         assert '必须选择 `yplan` 重开规划' in critic_structured['summary']
-        assert '不要在写完批准结论后直接结束当前轮' in critic_structured['summary']
+        assert 'critic_summary' in critic_structured['summary']
+        assert '不要空参调用 `yplan_complete`' in critic_structured['summary']
 
-        complete = await app.call_tool('yplan_complete', {})
+        empty_complete = await app.call_tool('yplan_complete', {})
+        empty_structured = empty_complete[1] if isinstance(empty_complete, tuple) else empty_complete
+        assert empty_structured['status'] == 'blocked'
+        assert empty_structured['artifacts']['workflow_state']['current_phase'] == 'critic_summary_required'
+        assert '不能空参收口' in empty_structured['summary']
+
+        complete = await app.call_tool('yplan_complete', {'critic_summary': 'critic 已批准，验收和验证路径明确'})
         structured = complete[1] if isinstance(complete, tuple) else complete
-        options = {item['value'] for item in structured['artifacts']['handoff_options']}
-        assert {'ydo', 'restart', 'memory_store'} <= options
+        assert structured['artifacts']['handoff_options'] == []
         assert structured['status'] == 'blocked'
         assert structured['meta']['required_host_action'] == 'await_input'
         assert structured['meta']['elicitation_required'] is True
@@ -95,10 +139,21 @@ def test_yplan_chain_returns_handoffs_and_complete_artifact():
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
-        assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
-        assert '可交互菜单 fallback' in structured['summary']
-        assert structured['next_actions'][0]['label'] == '渲染可交互菜单并等待用户选择'
-        assert 'restart' in structured['summary']
+        _assert_host_ui_fallback(structured)
+    anyio.run(_run)
+
+
+def test_yplan_complete_accepts_selected_option_without_elicitation():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool('yplan_complete', {'critic_summary': 'critic 已批准', 'selected_option': 'memory_store'})
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured['status'] == 'ok'
+        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['elicitation_required'] is False
+        assert structured['meta']['elicitation_selected_option'] == 'memory_store'
+        assert structured['artifacts']['selected_option'] == 'memory_store'
+        assert structured['artifacts']['workflow_state']['current_phase'] == 'selection_confirmed'
     anyio.run(_run)
 
 
@@ -118,8 +173,7 @@ def test_ydo_complete_exposes_finish_option():
         app = create_app()
         result = await app.call_tool('ydo_complete', {})
         structured = result[1] if isinstance(result, tuple) else result
-        options = {item['value'] for item in structured['artifacts']['handoff_options']}
-        assert 'finish' in options
+        assert structured['artifacts']['handoff_options'] == []
         assert structured['artifacts']['execution_verdict'] == 'complete'
         assert structured['status'] == 'blocked'
         assert structured['meta']['required_host_action'] == 'await_input'
@@ -128,8 +182,19 @@ def test_ydo_complete_exposes_finish_option():
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
-        assert 'continue_execution' in structured['summary']
-        assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
-        assert '可交互菜单 fallback' in structured['summary']
-        assert structured['next_actions'][0]['label'] == '渲染可交互菜单并等待用户选择'
+        _assert_host_ui_fallback(structured)
+    anyio.run(_run)
+
+
+def test_ydo_complete_accepts_selected_option_without_elicitation():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool('ydo_complete', {'selected_option': 'finish'})
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured['status'] == 'ok'
+        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['elicitation_required'] is False
+        assert structured['meta']['elicitation_selected_option'] == 'finish'
+        assert structured['artifacts']['selected_option'] == 'finish'
+        assert structured['artifacts']['workflow_state']['current_phase'] == 'selection_confirmed'
     anyio.run(_run)

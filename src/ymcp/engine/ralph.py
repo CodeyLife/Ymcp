@@ -5,7 +5,7 @@ from ymcp.complete_copy import with_handoff_menu_requirement
 from ymcp.contracts.common import Handoff, HostActionType, ToolStatus
 from ymcp.contracts.ralph import RalphArtifacts, RalphCompleteArtifacts, RalphCompleteRequest, RalphCompleteResult, RalphRequest, RalphResult
 from ymcp.contracts.workflow import WorkflowState
-from ymcp.core.result import build_handoff_option, build_meta, build_next_action
+from ymcp.core.result import apply_selected_handoff_option, build_handoff_option, build_meta, build_next_action
 
 
 def build_ralph(request: RalphRequest) -> RalphResult:
@@ -75,10 +75,10 @@ def build_ralph_complete(request: RalphCompleteRequest) -> RalphCompleteResult:
         recommended_next_action='finish',
         options=handoff_options,
     )
-    return RalphCompleteResult(
+    result = RalphCompleteResult(
         status=ToolStatus.OK,
         summary=with_handoff_menu_requirement(
-            '执行阶段当前一轮已结束。若验证充分且没有未解决问题，选择 `finish` 结束流程；若要沉淀结论，选择 `memory_store`；若执行暴露出新需求或方案失配，选择 `yplan` 重新规划；若还要继续实现或补验证，选择 `continue_execution`。',
+            '执行阶段当前一轮已结束。下一步只能由宿主基于 handoff.options 渲染真实交互控件并收集 selected_option；assistant 不得用自然语言或 markdown 列表代渲染选项。',
             '本阶段是纯收口阶段，不再要求执行摘要输入。',
             closing='不得自动结束或自动继续',
         ),
@@ -105,3 +105,4 @@ def build_ralph_complete(request: RalphCompleteRequest) -> RalphCompleteResult:
             ),
         ),
     )
+    return apply_selected_handoff_option(result, request.selected_option)

@@ -14,6 +14,7 @@ class DeepInterviewRequest(WorkflowRequestBase):
 
 class DeepInterviewCompleteRequest(WorkflowRequestBase):
     summary: str = Field(..., min_length=1)
+    selected_option: str | None = None
     brief: str | None = None
     known_context: list[str] = Field(default_factory=list)
     memory_context: MemoryContext = Field(default_factory=MemoryContext)

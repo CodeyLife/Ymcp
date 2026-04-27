@@ -65,14 +65,14 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='yplan_architect',
-        description='共识规划 architect 阶段 tool。模型在进入本阶段后，使用 architect skill_content 继续推理；tool 只负责提供下一步 handoff，不要求回传中间 planning artifact。',
+        description='共识规划 architect 阶段 tool。模型在进入本阶段后，使用 architect skill_content 继续推理；必须先输出 architecture review 摘要，再在同一轮携带 architect_summary 调用 yplan_critic，不能空参进入 critic，也不能只输出摘要后停止。',
         request_model=RalplanArchitectRequest,
         response_model=RalplanArchitectResult,
         handler=build_ralplan_architect,
     ),
     ToolSpec(
         name='yplan_critic',
-        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是调用 yplan_complete 收口，还是在否决后强制回到 yplan 重开规划；若已批准，则必须在同一流程里继续调用 yplan_complete，不能在输出批准结论后直接结束。tool 不强制固定 verdict 协议，也不要求回传中间 artifact。',
+        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是调用 yplan_complete 收口，还是在否决后强制回到 yplan 重开规划；若已批准，则必须先输出 critic 评估与批准摘要，再携带 critic_summary 调用 yplan_complete，不能空参调用 complete，也不能在输出批准结论后直接结束。tool 不强制固定 verdict 协议。',
         request_model=RalplanCriticRequest,
         response_model=RalplanCriticResult,
         handler=build_ralplan_critic,

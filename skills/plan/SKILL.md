@@ -19,7 +19,7 @@ Ymcp planning is a lightweight skill-flow:
 1. `yplan` returns planner `skill_content`
 2. the model completes the planner stage and calls `yplan_architect`
 3. `yplan_architect` returns architect `skill_content`
-4. the model completes the architect stage and calls `yplan_critic`
+4. the model completes the architect stage, outputs an architecture review summary, and calls `yplan_critic` with `architect_summary`
 5. `yplan_critic` returns critic `skill_content` plus the only two legal next steps:
    - `yplan`
    - `yplan_complete`
@@ -43,6 +43,8 @@ Ymcp does not require the model to round-trip a mid-plan state object between `y
 ## Core rules
 - Do not invent a separate routing protocol inside the skill.
 - Follow the tool-returned next-step boundary at each phase.
+- Do not call `yplan_critic` with only `schema_version`; first output the architect review and pass it as `architect_summary`.
+- Do not stop after `yplan_architect` produces the architecture review. The same turn must call `yplan_critic` with `architect_summary`.
 - In `yplan_critic`, decide between `yplan` and `yplan_complete` from the returned options.
 - If the critic concludes that the plan is not ready, restart planning at `yplan`.
 - If the plan is rejected, you must restart planning at `yplan`.
@@ -51,10 +53,10 @@ Ymcp does not require the model to round-trip a mid-plan state object between `y
 - `yplan_complete` closes the planning phase, not the overall task.
 - Do not say the task is complete; only the planning phase is complete.
 - Do not treat `yplan_complete` as a final analysis, final report, or execution step.
-- When `yplan_critic` approves the plan, do not end the conversation at the approval text; you must continue by calling `yplan_complete`.
-- Do not invent a mandatory pre-complete summary protocol. If you choose to emit an approval summary before `yplan_complete`, keep it brief and treat it as a handoff note rather than the final answer.
-- The host must present every menu option from `handoff.options` as the only next-step menu source.
-- If `handoff.options` is present, stop planning and use those options verbatim instead of paraphrasing, merging, or auto-selecting.
+- When `yplan_critic` approves the plan, do not end the conversation at the approval text; continue by calling `yplan_complete` with `critic_summary`.
+- Do not call `yplan_complete` with only `schema_version`; it requires a brief `critic_summary` handoff note proving critic approval before it can expose the final handoff menu.
+- The host must render a real interactive control from `handoff.options` as the only next-step menu source.
+- If `handoff.options` is present, stop planning; do not paraphrase, merge, auto-select, or render a markdown/text menu as assistant output.
 
 ## Expected plan contents
 - Requirements summary
@@ -79,4 +81,4 @@ After `yplan_complete` returns:
 - preserve all returned options
 - preserve recommendation markers
 - do not omit, rewrite, merge, reorder, invent, or auto-select options
-- if host-side elicitation is unavailable, report that limitation and still display the returned menu faithfully
+- if host-side elicitation is unavailable, do not render a text menu; stop assistant output and require host UI or an explicit selected_option tool call

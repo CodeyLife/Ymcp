@@ -13,7 +13,7 @@ from ymcp.contracts.deep_interview import (
     DeepInterviewResult,
 )
 from ymcp.contracts.workflow import MemoryPreflight, WorkflowState
-from ymcp.core.result import build_artifact_ref, build_handoff_option, build_meta, build_next_action
+from ymcp.core.result import apply_selected_handoff_option, build_artifact_ref, build_handoff_option, build_meta, build_next_action
 from ymcp.engine.memory_preflight import analyze_memory_context
 
 
@@ -100,9 +100,12 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
         known_context=request.known_context,
         memory_context=request.memory_context,
     )
-    return DeepInterviewCompleteResult(
+    result = DeepInterviewCompleteResult(
         status=ToolStatus.OK,
-        summary=with_handoff_menu_requirement(closing='不得自动跳过选择阶段'),
+        summary=with_handoff_menu_requirement(
+            '需求澄清阶段已收口；下一步只能由宿主基于 handoff.options 渲染真实交互控件并收集 selected_option；assistant 不得用自然语言或 markdown 列表代渲染选项。',
+            closing='不得自动跳过选择阶段',
+        ),
         assumptions=[],
         next_actions=[build_next_action('下一步', '若准备进入规划则选择 yplan；若仍需澄清则选择 refine_further。')],
         risks=[],
@@ -121,3 +124,4 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
             workflow_state=state,
         ),
     )
+    return apply_selected_handoff_option(result, request.selected_option)

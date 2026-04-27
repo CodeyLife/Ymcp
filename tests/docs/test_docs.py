@@ -51,12 +51,15 @@ def test_plan_and_ralph_skills_include_phase_boundary_templates():
     ralph = Path('skills/ralph/SKILL.md').read_text(encoding='utf-8')
     assert '# Planning Complete' in plan
     assert 'Do not say the task is complete; only the planning phase is complete' in plan
-    assert 'Do not invent a mandatory pre-complete summary protocol' in plan
-    assert 'The host must present every menu option from `handoff.options`' in plan
+    assert 'Do not call `yplan_complete` with only `schema_version`' in plan
+    assert 'The host must render a real interactive control from `handoff.options`' in plan
     assert 'you must restart planning at `yplan`' in plan
     assert 'If you judge the plan as ready, you must do the approved path in this order' in critic
     assert 'choose `yplan` from the returned `handoff.options`' in critic
-    assert 'Do not invent a mandatory natural-language pre-complete summary protocol' in critic
+    assert 'Do not call `yplan_complete` with only `schema_version`' in critic
+    architect = Path('skills/architect/SKILL.md').read_text(encoding='utf-8')
+    assert 'Do not stop after writing the architecture review' in architect
+    assert 'immediately call `yplan_critic` with `architect_summary`' in architect
     assert '# Execution Start' in ralph
     assert '# Execution Complete' in ralph
     assert 'Do not recommend `finish` if failures remain or verification is incomplete' in ralph
