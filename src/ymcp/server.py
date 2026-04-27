@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, Field, create_model
 
 from ymcp.capabilities import get_prompt_specs, get_resource_specs, prompt_template
 from ymcp.contracts.common import ElicitationState, HostActionType, ToolStatus
@@ -49,6 +49,24 @@ def _handoff_menu_lines(options: tuple[Any, ...] | list[Any]) -> str:
     return '\n'.join(lines)
 
 
+def _handoff_choice_schema(options: tuple[Any, ...] | list[Any]) -> type[BaseModel]:
+    values = tuple(option.value for option in options)
+    default = next((option.value for option in options if getattr(option, 'recommended', False)), values[0])
+    description = '；'.join(f'{option.value} = {option.title}：{option.description}' for option in options)
+    return create_model(
+        'YmcpHandoffChoice',
+        choice=(
+            str,
+            Field(
+                default=default,
+                title='下一步',
+                description=description,
+                json_schema_extra={'enum': list(values)},
+            ),
+        ),
+    )
+
+
 def _update_workflow_state(result: Any, *, current_phase: str, readiness: str, current_focus: str, blocked_reason: str | None = None, selected_option: str | None = None) -> None:
     artifacts = getattr(result, 'artifacts', None)
     workflow_state = getattr(artifacts, 'workflow_state', None)
@@ -62,27 +80,30 @@ def _update_workflow_state(result: Any, *, current_phase: str, readiness: str, c
         artifacts.selected_option = selected_option
 
 
-def _apply_manual_handoff_fallback(result: Any, *, reason: str, menu_lines: str) -> Any:
+def _apply_interactive_handoff_fallback(result: Any, *, reason: str, menu_lines: str) -> Any:
     result.status = ToolStatus.BLOCKED
-    result.meta.required_host_action = HostActionType.DISPLAY_ONLY
+    result.meta.required_host_action = HostActionType.AWAIT_INPUT
     _update_workflow_state(
         result,
         current_phase='awaiting_user_selection',
         readiness='awaiting_user_selection',
-        current_focus='elicitation_failed_fallback_to_manual',
-        blocked_reason='manual_menu_required',
+        current_focus='fallback_requires_interactive_menu',
+        blocked_reason='interactive_menu_required',
     )
     result.next_actions = [
         build_next_action(
-            '展示菜单并等待用户选择',
-            '宿主或 LLM 必须以 handoff.options 作为唯一菜单数据源，逐项展示 value、title、description，并等待用户明确选择；不得省略、改写、新增，也不得自动继续。',
+            '渲染可交互菜单并等待用户选择',
+            '宿主必须以 handoff.options 作为唯一菜单数据源，提供可点击或可选择的交互菜单，并逐项展示 value、title、description；不得省略、改写、新增，不得让 LLM 代选或仅以普通文本继续。',
         )
     ]
+    values = tuple(option.value for option in result.meta.handoff.options) if result.meta.handoff else ()
+    value_list = '、'.join(f'`{value}`' for value in values)
     result.summary = (
-        f"{result.summary}\n\n{reason}。当前轮必须进入手动菜单展示兜底："
-        'LLM 必须直接读取 handoff.options，完整展示全部菜单项的 value、title、description，提供菜单选项供用户选择，'
-        f'并等待用户在这些选项中明确选择；不得自动选择、不得继续分析、不得跳过本次选择。\n\n'
-        f'请按以下菜单原样展示：\n{menu_lines}'
+        f"{result.summary}\n\n{reason}。当前 complete 阶段已阻塞，必须进入可交互菜单 fallback："
+        '宿主必须直接读取 handoff.options，并使用自身 UI 或等价机制渲染为可点击或可选择的菜单；'
+        f'正在等待用户选择以下 value 之一：{value_list}。'
+        '不得自动选择 recommended 项，不得让 LLM 代选，不得仅以普通文本菜单继续，不得继续分析、跳过本次选择或宣称流程已经结束。\n\n'
+        f'可交互菜单必须包含以下全部选项：\n{menu_lines}'
     )
     return result
 
@@ -97,7 +118,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
     if not values:
         return result
 
-    ChoiceSchema = create_model('YmcpHandoffChoice', choice=(str, ...))
+    ChoiceSchema = _handoff_choice_schema(options)
     menu_lines = _handoff_menu_lines(options)
     contract_note = '必须完整展示 handoff.options 中的全部菜单项，逐项提供标题与描述；不得省略、改写、新增，也不得自动继续。'
     message = f"{message_prefix}\n\n{contract_note}\n\n请选择以下菜单项之一：\n{menu_lines}"
@@ -115,7 +136,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
 
     if request_context is None:
         result.meta.elicitation_state = ElicitationState.UNSUPPORTED
-        return _apply_manual_handoff_fallback(
+        return _apply_interactive_handoff_fallback(
             result,
             reason='当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成 complete 阶段所要求的菜单选择',
             menu_lines=menu_lines,
@@ -125,7 +146,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         elicitation = await ctx.elicit(message, ChoiceSchema)
     except Exception as exc:
         result.meta.elicitation_state = ElicitationState.FAILED
-        return _apply_manual_handoff_fallback(
+        return _apply_interactive_handoff_fallback(
             result,
             reason=f'Elicitation 调用失败（{type(exc).__name__}: {exc}）',
             menu_lines=menu_lines,
@@ -136,7 +157,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         selected = elicitation.data.choice
         if selected not in values:
             result.meta.elicitation_state = ElicitationState.FAILED
-            return _apply_manual_handoff_fallback(
+            return _apply_interactive_handoff_fallback(
                 result,
                 reason=f'Elicitation 返回了非法选项 `{selected}`。合法选项只能来自 handoff.options：{", ".join(values)}',
                 menu_lines=menu_lines,

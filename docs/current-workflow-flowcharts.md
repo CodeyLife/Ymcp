@@ -39,10 +39,10 @@ flowchart TD
     D --> F[refine_further]
 ```
 
-- `status=ok` 仅在 Elicitation 成功 accept 后成立；否则应返回 `needs_input` 或 `blocked`
+- `status=ok` 仅在 Elicitation 成功 accept 后成立；Elicitation unsupported / failed / invalid selection 时应返回 `blocked`；用户主动 decline / cancel 时可返回 `needs_input` 继续等待选择
 - 只有收口阶段才产出 `clarified_artifact`
 - `handoff.options` 是下一步动作的唯一权威源，应被理解为菜单项，而不是路由协议对象
-- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation 或调用失败，本阶段应返回 `blocked`，并进入“手动展示 handoff.options 并等待用户选择”的兜底模式
+- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 或等价交互控件完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation 或调用失败，本阶段应返回 `blocked`，并进入“宿主必须用 handoff.options 渲染可交互菜单并等待用户选择”的兜底模式；不得退化为普通文本菜单、LLM 代选或自动继续
 
 ***
 
@@ -85,10 +85,10 @@ flowchart TD
     C --> F[memory_store]
 ```
 
-- `status=ok` 仅在 Elicitation 成功 accept 后成立；否则应返回 `needs_input` 或 `blocked`
+- `status=ok` 仅在 Elicitation 成功 accept 后成立；Elicitation unsupported / failed / invalid selection 时应返回 `blocked`；用户主动 decline / cancel 时可返回 `needs_input` 继续等待选择
 - `yplan_complete` 是无输入收口 gate
 - 调用它本身就表示 LLM 认为 planning 阶段已结束
-- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation 或调用失败，本阶段应返回 `blocked`，并进入“手动展示 handoff.options 并等待用户选择”的兜底模式
+- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 或等价交互控件完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation 或调用失败，本阶段应返回 `blocked`，并进入“宿主必须用 handoff.options 渲染可交互菜单并等待用户选择”的兜底模式；不得退化为普通文本菜单、LLM 代选或自动继续
 
 ***
 
@@ -112,7 +112,7 @@ flowchart TD
 - `ydo` 不要求业务输入，直接依赖当前调用链上下文
 - `ydo_complete` 是无输入收口 gate，只负责执行阶段收口与下一步选择
 - `continue_execution` 表示继续当前执行循环，完成更多实现或验证后再回到 `ydo_complete`
-- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation 或调用失败，本阶段应返回 `blocked`，并进入“手动展示 handoff.options 并等待用户选择”的兜底模式
+- 宿主必须以 `handoff.options` 作为唯一权威菜单数据源，通过 Elicitation 或等价交互控件完整展示全部菜单项，并逐项提供标题与描述；不得省略、改写、新增；若宿主不支持 Elicitation 或调用失败，本阶段应返回 `blocked`，并进入“宿主必须用 handoff.options 渲染可交互菜单并等待用户选择”的兜底模式；不得退化为普通文本菜单、LLM 代选或自动继续
 
 ***
 

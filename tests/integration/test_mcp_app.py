@@ -49,18 +49,18 @@ def test_ydeep_complete_ready_exposes_handoff_options():
         result = await app.call_tool('ydeep_complete', {'summary': '已完成需求调研总结', 'brief': '收敛需求'})
         structured = result[1] if isinstance(result, tuple) else result
         assert structured['status'] == 'blocked'
-        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['required_host_action'] == 'await_input'
         assert structured['meta']['elicitation_required'] is True
         assert structured['meta']['elicitation_state'] == 'unsupported'
         assert structured['artifacts']['clarified_artifact']['summary'] == '已完成需求调研总结'
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
-        assert structured['artifacts']['workflow_state']['current_focus'] == 'elicitation_failed_fallback_to_manual'
+        assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
         assert 'yplan' in structured['summary']
         assert 'refine_further' in structured['summary']
         assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
-        assert '手动菜单展示兜底' in structured['summary']
-        assert structured['next_actions'][0]['label'] == '展示菜单并等待用户选择'
+        assert '可交互菜单 fallback' in structured['summary']
+        assert structured['next_actions'][0]['label'] == '渲染可交互菜单并等待用户选择'
         assert {item['value'] for item in structured['artifacts']['handoff_options']} == {'yplan', 'refine_further'}
     anyio.run(_run)
 
@@ -89,15 +89,15 @@ def test_yplan_chain_returns_handoffs_and_complete_artifact():
         options = {item['value'] for item in structured['artifacts']['handoff_options']}
         assert {'ydo', 'restart', 'memory_store'} <= options
         assert structured['status'] == 'blocked'
-        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['required_host_action'] == 'await_input'
         assert structured['meta']['elicitation_required'] is True
         assert structured['meta']['elicitation_state'] == 'unsupported'
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
-        assert structured['artifacts']['workflow_state']['current_focus'] == 'elicitation_failed_fallback_to_manual'
+        assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
         assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
-        assert '手动菜单展示兜底' in structured['summary']
-        assert structured['next_actions'][0]['label'] == '展示菜单并等待用户选择'
+        assert '可交互菜单 fallback' in structured['summary']
+        assert structured['next_actions'][0]['label'] == '渲染可交互菜单并等待用户选择'
         assert 'restart' in structured['summary']
     anyio.run(_run)
 
@@ -122,14 +122,14 @@ def test_ydo_complete_exposes_finish_option():
         assert 'finish' in options
         assert structured['artifacts']['execution_verdict'] == 'complete'
         assert structured['status'] == 'blocked'
-        assert structured['meta']['required_host_action'] == 'display_only'
+        assert structured['meta']['required_host_action'] == 'await_input'
         assert structured['meta']['elicitation_required'] is True
         assert structured['meta']['elicitation_state'] == 'unsupported'
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
-        assert structured['artifacts']['workflow_state']['current_focus'] == 'elicitation_failed_fallback_to_manual'
+        assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
         assert 'continue_execution' in structured['summary']
         assert '未提供可用的 MCP Elicitation 上下文' in structured['summary']
-        assert '手动菜单展示兜底' in structured['summary']
-        assert structured['next_actions'][0]['label'] == '展示菜单并等待用户选择'
+        assert '可交互菜单 fallback' in structured['summary']
+        assert structured['next_actions'][0]['label'] == '渲染可交互菜单并等待用户选择'
     anyio.run(_run)
