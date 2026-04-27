@@ -73,11 +73,11 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
   - the model finishes the planner stage, then calls `yplan_architect`
   - the model finishes the architect stage, then calls `yplan_critic`
   - inside `yplan_critic`, the model decides for itself whether the plan is ready:
-    - if ready, call `yplan_complete`
+    - if ready, make approval explicit and then call `yplan_complete` in the same flow; do not stop at the approval text
     - if not ready, restart planning by calling `yplan`
   - Ymcp does not require a fixed critic verdict schema such as `APPROVE/REVISE`; the legal next-step options are the contract
-  - `yplan_complete` is a no-input completion gate; calling it means the model believes planning is complete
-  - `yplan_complete` does not validate or collect a summary; it only returns the legal next-step options
+  - `yplan_complete` is a handoff-only, no-input completion gate; calling it means the model believes planning is complete
+  - `yplan_complete` does not validate or collect a summary, does not produce the final business conclusion, and does not auto-start execution; it only returns the legal next-step options
 
 ## ydo
 
@@ -106,7 +106,7 @@ The intended interaction is:
 1. tool returns `skill_content`
 2. model thinks and outputs
 3. host calls the matching `*_complete`
-4. for complete stages, host should use `handoff.options` as the Elicitation menu source and wait for user choice
+4. for complete stages, host should use `handoff.options` as the Elicitation menu source and wait for user choice; the model should stop analysis and treat that menu as authoritative
 5. if Elicitation is unavailable or fails, complete stages should return `blocked`; `handoff.options` remains the authoritative menu payload, not a silent-success fallback
 
 The host owns the fixed calling convention between stages. Ymcp does not try to be a fully automatic workflow state machine.

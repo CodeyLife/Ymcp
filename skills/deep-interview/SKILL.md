@@ -1,7 +1,7 @@
 ---
 name: deep-interview
 description: Intent-first clarification before planning or execution
-argument-hint: "<idea or vague request>"
+argument-hint: "<brief>"
 ---
 
 # Deep Interview
@@ -17,13 +17,11 @@ In Ymcp:
 ## Design model
 Ymcp uses a lightweight skill-flow:
 1. `ydeep` returns `skill_content`
-2. the model performs clarification using the skill guidance and outputs the result
+2. the model performs clarification using the skill guidance
 3. the host calls `ydeep_complete`
-4. `ydeep_complete` returns `clarified_artifact` plus the next-step options
-5. the user/model chooses the next step through Elicitation or equivalent host UI
+4. `ydeep_complete` returns the clarified artifact plus the legal next-step options
 
-The tool provides phase boundaries and legal next steps.  
-The skill provides the thinking method for the current phase.
+The skill governs the clarification method. The tool/host govern completion and next-step selection.
 
 ## What to clarify
 - Why the user wants the change
@@ -48,22 +46,9 @@ After clarification, use the returned options as the only legal next steps:
 
 Do not invent a direct execution jump unless the tool explicitly offers it.
 
-## Completion-stage output template
-```md
-# Clarification Complete
-
-## Clarified Summary
-- Goal: <one sentence>
-- Scope: <one sentence>
-- Constraints: <1-3 bullets>
-
-## Next Step
-Use the returned `handoff.options` to choose the next action.
-
-**Recommended:** `yplan`
-
-## Important
-- Clarification is complete
-- The overall task is not complete
-- Do not jump to a new workflow until `ydeep_complete` has been called
-```
+## Optional completion note
+May include:
+- clarified goal
+- scope
+- constraints
+- a reminder that the next action must come from `handoff.options`

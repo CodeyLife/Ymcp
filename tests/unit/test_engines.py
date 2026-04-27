@@ -57,6 +57,8 @@ def test_ralplan_complete_summary_explains_each_option():
     assert 'ydo' in result.summary
     assert 'restart' in result.summary
     assert 'memory_store' in result.summary
+    assert '不继续分析' in result.summary
+    assert '不生成最终业务结论' in result.summary
     assert '唯一权威菜单数据源' in result.summary
     assert '不得省略、改写、新增' in result.summary
 
@@ -88,6 +90,8 @@ def test_ralplan_critic_returns_restart_and_complete_options():
     assert result.meta.handoff.recommended_next_action is None
     assert {item.value for item in result.meta.handoff.options} == {'yplan', 'yplan_complete'}
     assert '必须选择 `yplan` 重开规划' in result.summary
+    assert '不要在写完批准结论后直接结束当前轮' in result.summary
+    assert '不要把 `yplan_complete` 当成最终分析结论步骤' in result.summary
 
 
 def test_ralplan_complete_exposes_handoff_options():

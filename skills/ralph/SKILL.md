@@ -20,82 +20,50 @@ Ralph is the execution phase. Its job is to finish the task, verify it with fres
 - Scope and non-goals are still unclear
 - You still need a planning pass before execution
 
-## Core behavior
-1. Read the approved plan or execution brief
-2. Implement / fix / verify
-3. Gather fresh evidence
-4. Call `ydo_complete`
-5. Choose the next step from `handoff.options`
+## Core loop
+1. Read the approved plan or execution brief.
+2. Implement / fix / verify.
+3. Gather fresh evidence.
+4. Call `ydo_complete`.
+5. Choose the next step from `handoff.options`.
 
 Within the same execution call chain, do not invent or depend on a mid-execution artifact round-trip unless the tool explicitly asks for one.
 `ydo` now starts without a business payload, and `ydo_complete` is a no-input completion gate.
 
-## Execution-stage output templates
+## Minimal response shape
+For `ydo`, the response may include:
+- goal
+- approved plan or brief reference
+- key constraints to preserve
+- expected verification evidence
 
-### Recommended output shape for `ydo`
-```md
-# Execution Start
-
-## Execution Brief
-- Goal: <one sentence>
-- Approved plan: <one sentence>
-- Constraints to preserve: <1-3 bullets>
-- Verification expectation: <1-3 bullets>
-
-## Next Step
-Complete the implementation / fix / verification work, then call `ydo_complete`.
-
-**Recommended:** `ydo_complete`
-
-## Important
-- This stage starts execution
-- Do not reopen planning unless a real blocker or mismatch appears
-- Do not stop at partial progress and call it done
-```
-
-### Recommended output shape for `ydo_complete`
-```md
-# Execution Complete
-
-## Execution Summary
-- Implemented: <1-3 bullets>
-- Verified with: <tests / build / lint / diagnostics>
-- Remaining issues: <or none>
-
-## Next Step
-Use the returned `handoff.options` to choose how to close or continue.
-
-**Recommended:** `finish`
-
-## Important
-- Only this stage may recommend workflow completion
-- Do not recommend `finish` if failures remain or verification is incomplete
-- Use `yplan` only for real replanning
-- Use `continue_execution` when more implementation or verification is still needed
-```
+For `ydo_complete`, the response may include:
+- what changed
+- what evidence proves it
+- remaining blockers or follow-up needs
 
 ## Verification standard
-- Prefer real test / build / lint / diagnostic evidence
-- Do not claim completion based on guesses
-- If verification fails, continue fixing instead of stopping early
+- Prefer real test / build / lint / diagnostic evidence.
+- Do not claim completion based on guesses.
+- If verification fails, continue fixing instead of stopping early.
 
-## Output expectations
-- What changed
-- What evidence proves it
-- What, if anything, is still blocked
+# Execution Start
+
+At `ydo`, begin from the current approved plan or execution brief, preserve the active constraints, and aim to produce fresh verification evidence before attempting to close the loop.
 
 ## Next-step rule
-After finishing a Ralph iteration, do **not** invent your own routing rules. Use the tool-returned options:
+After a Ralph iteration, do not invent your own routing rules. Use the tool-returned options:
 - `finish`
 - `memory_store`
 - `yplan`
 - `continue_execution`
 
-## Notes
-- `yplan` means “go back to planning because execution revealed new needs”
-- `continue_execution` means “stay in the current execution loop and keep working”
+# Execution Complete
 
-## Hard constraints
-- Do not ask for permission to proceed when the workflow already has a recommended next option
-- Do not collapse execution completion into workflow completion unless `finish` is actually the correct next step
-- Do not invent routing outside `handoff.options`
+`ydo_complete` is a handoff gate, not a substitute for verification. Use it only after a real execution pass, and interpret its returned menu as the only authoritative source for how the workflow should continue.
+
+## Guardrails
+- Do not reopen planning unless execution reveals a real blocker or mismatch.
+- Do not recommend `finish` without fresh verification evidence.
+- Do not recommend `finish` if failures remain or verification is incomplete.
+- Do not invent routing outside `handoff.options`.

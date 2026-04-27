@@ -77,6 +77,7 @@ def test_yplan_chain_returns_handoffs_and_complete_artifact():
         assert critic_structured['meta']['handoff']['recommended_next_action'] is None
         assert {item['value'] for item in critic_structured['meta']['handoff']['options']} == {'yplan', 'yplan_complete'}
         assert '必须选择 `yplan` 重开规划' in critic_structured['summary']
+        assert '不要在写完批准结论后直接结束当前轮' in critic_structured['summary']
 
         complete = await app.call_tool('yplan_complete', {})
         structured = complete[1] if isinstance(complete, tuple) else complete

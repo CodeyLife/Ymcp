@@ -21,6 +21,9 @@ def test_tool_descriptions_include_skill_and_gate_constraints():
     assert 'architect' in descriptions['yplan_architect']
     assert 'critic' in descriptions['yplan_critic']
     assert 'ydo' in descriptions['yplan_complete']
+    assert 'handoff-only' in descriptions['yplan_complete']
+    assert '不会继续分析' in descriptions['yplan_complete']
+    assert '不会生成最终业务结论' in descriptions['yplan_complete']
     assert 'ralph' in descriptions['ydo']
     assert 'finish' in descriptions['ydo_complete']
 

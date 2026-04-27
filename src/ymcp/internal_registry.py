@@ -69,14 +69,14 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='yplan_critic',
-        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是调用 yplan_complete 收口，还是在否决后强制回到 yplan 重开规划；tool 不强制固定 verdict 协议，也不要求回传中间 artifact。',
+        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是调用 yplan_complete 收口，还是在否决后强制回到 yplan 重开规划；若已批准，则必须在同一流程里继续调用 yplan_complete，不能在输出批准结论后直接结束。tool 不强制固定 verdict 协议，也不要求回传中间 artifact。',
         request_model=RalplanCriticRequest,
         response_model=RalplanCriticResult,
         handler=build_ralplan_critic,
     ),
     ToolSpec(
         name='yplan_complete',
-        description='共识规划完成 tool。模型在完成 critic 评估后调用本 tool；本 tool 是无输入收口阶段，通过强制 Elicitation 返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store，不再要求 summary 或构造交接 artifact。若宿主不支持 Elicitation，则本 tool 应返回 blocked。',
+        description='共识规划完成 tool。模型在完成 critic 评估后调用本 tool；本 tool 是 handoff-only 的无输入收口阶段，只负责结束规划并通过强制 Elicitation 返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store。它不会继续分析、不会生成最终业务结论、不会自动推进到下一阶段，也不再要求 summary 或构造交接 artifact。若宿主不支持 Elicitation，则本 tool 应返回 blocked。',
         request_model=RalplanCompleteRequest,
         response_model=RalplanCompleteResult,
         handler=build_ralplan_complete,

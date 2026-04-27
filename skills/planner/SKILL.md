@@ -24,9 +24,9 @@ In Ymcp terminology:
 1. Restate the task, desired outcome, constraints, and known evidence.
 2. Gather missing codebase/project facts using available host tools and Ymcp resources / `mempalace_*` tools.
 3. Draft a plan with requirements summary, testable acceptance criteria, right-sized implementation steps, risks, and verification steps.
-4. For consensus planning, include RALPLAN-DR principles, decision drivers, viable options, and alternative invalidation rationale when needed.
+4. For consensus planning, include decision drivers, viable options, tradeoff comparison, and rejection rationale when needed.
 5. In deliberate mode, add a pre-mortem and expanded test plan covering unit, integration, e2e, and observability.
-6. If file-write capability is available, save under `.omx/plans/`; otherwise keep the plan in the conversation output.
+6. If the host/environment supports file writes, an OMX-style plan artifact may be saved under `.omx/plans/`; otherwise keep the plan in the conversation output.
 
 ## Output Contract
 - Requirements Summary
@@ -34,7 +34,7 @@ In Ymcp terminology:
 - Implementation Steps
 - Risks and Mitigations
 - Verification Steps
-- RALPLAN-DR Summary when in consensus mode
+- Consensus-planning summary when applicable
 - ADR when a final decision is chosen
 - Ralph MCP handoff guidance: approved plan artifact or equivalent structured summary, constraints to preserve, and expected verification evidence
 
