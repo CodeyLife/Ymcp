@@ -24,11 +24,11 @@ Ralph is the execution phase. Its job is to finish the task, verify it with fres
 1. Read the approved plan or execution brief.
 2. Implement / fix / verify.
 3. Gather fresh evidence.
-4. Call `ydo_complete`.
+4. Call `ydo_menu`.
 5. Choose the next step from `handoff.options`.
 
 Within the same execution call chain, do not invent or depend on a mid-execution artifact round-trip unless the tool explicitly asks for one.
-`ydo` now starts without a business payload, and `ydo_complete` is a no-input completion gate.
+`ydo` now starts without a business payload, and `ydo_menu` is a no-input workflow menu gate.
 
 ## Minimal response shape
 For `ydo`, the response may include:
@@ -37,7 +37,7 @@ For `ydo`, the response may include:
 - key constraints to preserve
 - expected verification evidence
 
-For `ydo_complete`, the response may include:
+For `ydo_menu`, the response may include:
 - what changed
 - what evidence proves it
 - remaining blockers or follow-up needs
@@ -60,7 +60,7 @@ After a Ralph iteration, do not invent your own routing rules. Use the tool-retu
 
 # Execution Complete
 
-`ydo_complete` is a handoff gate, not a substitute for verification. Use it only after a real execution pass, and interpret its returned menu as the only authoritative source for how the workflow should continue.
+`ydo_menu` is a handoff gate, not a substitute for verification. Use it only after a real execution pass, and interpret its returned menu as the only authoritative source for how the workflow should continue.
 
 ## Guardrails
 - Do not reopen planning unless execution reveals a real blocker or mismatch.

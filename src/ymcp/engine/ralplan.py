@@ -54,7 +54,7 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
         status=ToolStatus.NEEDS_INPUT,
         summary='请将 skill_content 作为推理指导完成 planner 阶段；产出初版方案后调用 `yplan_architect`。当前阶段只有一个合法下一步：进入 architect 阶段。`handoff.options` 由服务端生成，应直接使用，不要自行构造新的选项对象。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '先完成 planner 阶段输出；完成后调用 yplan_architect。不要跳过 architect 阶段直接 complete。')],
+        next_actions=[build_next_action('下一步', '先完成 planner 阶段输出；完成后调用 yplan_architect。不要跳过 architect 阶段直接进入流程菜单。')],
         risks=[],
         meta=build_meta(
             'yplan',
@@ -121,7 +121,7 @@ def build_ralplan_critic(request: RalplanCriticRequest) -> RalplanCriticResult:
     if not architect_summary:
         return RalplanCriticResult(
             status=ToolStatus.BLOCKED,
-            summary='yplan_critic 不能空参进入。请先完成 yplan_architect 的可见 architecture review 输出，并再次调用 yplan_critic 时传入 architect_summary；该字段应简要包含架构评估、steelman 反论点、tradeoff、综合建议、风险或证据缺口。当前不会进入 critic 判断，也不会继续到 yplan_complete。',
+            summary='yplan_critic 不能空参进入。请先完成 yplan_architect 的可见 architecture review 输出，并再次调用 yplan_critic 时传入 architect_summary；该字段应简要包含架构评估、steelman 反论点、tradeoff、综合建议、风险或证据缺口。当前不会进入 critic 判断，也不会继续到 yplan_menu。',
             assumptions=[],
             next_actions=[
                 build_next_action(
@@ -170,18 +170,18 @@ def build_ralplan_critic(request: RalplanCriticRequest) -> RalplanCriticResult:
                 '若 critic 认为方案仍不可执行，必须回到 yplan 重新开始规划。',
             ),
             build_handoff_option(
-                'yplan_complete',
-                '进入 yplan_complete',
-                '若 critic 认为方案已可执行，先输出 critic 评估与批准摘要，再调用 yplan_complete 并传入 critic_summary；不要空参调用 complete。',
+                'yplan_menu',
+                '进入 yplan_menu',
+                '若 critic 认为方案已可执行，先输出 critic 评估与批准摘要，再调用 yplan_menu 并传入 critic_summary；不要空参调用菜单工具。',
             ),
         ],
     )
     return RalplanCriticResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请将 skill_content 作为推理指导完成 critic 阶段。若你认为方案已经足够清晰、完整且可执行，必须先在对话中输出 critic 评估、批准理由、关键约束、风险与验证摘要；然后才可调用 `yplan_complete`，并必须把该摘要作为 `critic_summary` 传入。不要空参调用 `yplan_complete`，不要把 complete 当成生成最终分析结论的步骤。若你认为方案仍不可执行，必须选择 `yplan` 重开规划。不要依赖固定 verdict 协议。',
+        summary='请将 skill_content 作为推理指导完成 critic 阶段。若你认为方案已经足够清晰、完整且可执行，必须先在对话中输出 critic 评估、批准理由、关键约束、风险与验证摘要；然后才可调用 `yplan_menu`，并必须把该摘要作为 `critic_summary` 传入。不要空参调用 `yplan_menu`，不要把流程菜单工具当成生成最终分析结论的步骤。若你认为方案仍不可执行，必须选择 `yplan` 重开规划。不要依赖固定 verdict 协议。',
         assumptions=[],
         next_actions=[
-            build_next_action('方案通过', '若当前方案已足够清晰、完整、可执行，则先输出 critic 评估和批准摘要，再调用 yplan_complete，并传入 critic_summary；不要空参调用 complete。'),
+            build_next_action('方案通过', '若当前方案已足够清晰、完整、可执行，则先输出 critic 评估和批准摘要，再调用 yplan_menu，并传入 critic_summary；不要空参调用菜单工具。'),
             build_next_action('方案驳回', '若仍有缺口或风险，必须回到 yplan 重开规划'),
         ],
         risks=[],
@@ -207,6 +207,7 @@ def build_ralplan_critic(request: RalplanCriticRequest) -> RalplanCriticResult:
 
 
 def build_ralplan_complete(request: RalplanCompleteRequest) -> RalplanCompleteResult:
+    skill_content = prompt_content('workflow-menu', 'yplan_menu')
     handoff_options = [
         build_handoff_option(
             'ydo',
@@ -233,17 +234,17 @@ def build_ralplan_complete(request: RalplanCompleteRequest) -> RalplanCompleteRe
     if not critic_summary and request.selected_option is None:
         return RalplanCompleteResult(
             status=ToolStatus.BLOCKED,
-            summary='yplan_complete 不能空参收口。请先完成 yplan_critic 的可见评估输出，并再次调用 yplan_complete 时传入 critic_summary；该字段应简要包含批准理由、关键约束、风险、验收/验证要点。当前不会进入执行菜单，也不会宣称规划已结束。',
+            summary='yplan_menu 不能空参收口。请先完成 yplan_critic 的可见评估输出，并再次调用 yplan_menu 时传入 critic_summary；该字段应简要包含批准理由、关键约束、风险、验收/验证要点。当前不会进入执行菜单，也不会宣称规划已结束。',
             assumptions=[],
             next_actions=[
                 build_next_action(
                     '补充 critic_summary',
-                    '回到 critic 阶段输出评估与批准摘要；若方案已批准，再调用 yplan_complete，并传入 critic_summary。',
+                    '回到 critic 阶段输出评估与批准摘要；若方案已批准，再调用 yplan_menu，并传入 critic_summary。',
                 )
             ],
             risks=[],
             meta=build_meta(
-                'yplan_complete',
+                'yplan_menu',
                 'ymcp.contracts.ralplan.RalplanCompleteResult',
                 host_controls=['display', 'prompt guidance'],
                 required_host_action=HostActionType.AWAIT_INPUT,
@@ -253,18 +254,19 @@ def build_ralplan_complete(request: RalplanCompleteRequest) -> RalplanCompleteRe
                         build_handoff_option(
                             'yplan_critic',
                             '返回 yplan_critic 补充评估',
-                            '先输出 critic 评估与批准摘要，再携带 critic_summary 调用 yplan_complete。',
+                            '先输出 critic 评估与批准摘要，再携带 critic_summary 调用 yplan_menu。',
                             recommended=True,
                         )
                     ],
                 ),
             ),
             artifacts=RalplanCompleteArtifacts(
+                skill_content=skill_content,
                 critic_summary=None,
                 selected_option=None,
                 handoff_options=[],
                 workflow_state=WorkflowState(
-                    workflow_name='yplan_complete',
+                    workflow_name='yplan_menu',
                     current_phase='critic_summary_required',
                     readiness='needs_input',
                     evidence_gaps=['缺少 critic_summary，无法证明 critic 阶段已完成可见评估输出。'],
@@ -284,18 +286,19 @@ def build_ralplan_complete(request: RalplanCompleteRequest) -> RalplanCompleteRe
         next_actions=[build_next_action('HOST_UI_REQUIRED', '宿主读取 handoff.options 渲染真实交互控件并等待 selected_option；assistant 不得输出文本菜单、开放式询问或继续分析。')],
         risks=[],
         meta=build_meta(
-            'yplan_complete',
+            'yplan_menu',
             'ymcp.contracts.ralplan.RalplanCompleteResult',
             host_controls=['display', 'memory lookup', 'MCP Elicitation'],
             required_host_action=HostActionType.AWAIT_INPUT,
             handoff=handoff,
         ),
         artifacts=RalplanCompleteArtifacts(
+            skill_content=skill_content,
             critic_summary=critic_summary,
             selected_option=None,
             handoff_options=handoff_options,
             workflow_state=WorkflowState(
-                workflow_name='yplan_complete',
+                workflow_name='yplan_menu',
                 current_phase='ready_for_handoff',
                 readiness='ready_for_handoff',
                 evidence_gaps=[],

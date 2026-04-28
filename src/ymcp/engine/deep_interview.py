@@ -20,7 +20,7 @@ from ymcp.engine.memory_preflight import analyze_memory_context
 def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
     search_performed, retrieved_count, retrieved_context = analyze_memory_context(request.known_context, request.memory_context)
     skill_content = prompt_content('deep-interview', request.brief)
-    summary = '请将 skill_content 作为推理指导完成需求调研。完成后调用 ydeep_complete；无需回传中间 artifact。'
+    summary = '请将 skill_content 作为推理指导完成需求调研。完成后调用 ydeep_menu；无需回传中间 artifact。'
     state = WorkflowState(
         workflow_name='ydeep',
         current_phase='start',
@@ -38,12 +38,12 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
         current_focus='consume_skill_content',
     )
     handoff = Handoff(
-        recommended_next_action='ydeep_complete',
+        recommended_next_action='ydeep_menu',
         options=[
             build_handoff_option(
-                'ydeep_complete',
-                '进入 ydeep_complete',
-                '完成调研后调用 ydeep_complete。',
+                'ydeep_menu',
+                '进入 ydeep_menu',
+                '完成调研后调用 ydeep_menu。',
                 recommended=True,
             )
         ],
@@ -52,7 +52,7 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
         status=ToolStatus.NEEDS_INPUT,
         summary=summary,
         assumptions=[],
-        next_actions=[build_next_action('下一步', '先消费 skill_content 完成需求调研，再调用 ydeep_complete。')],
+        next_actions=[build_next_action('下一步', '先消费 skill_content 完成需求调研，再调用 ydeep_menu。')],
         risks=[],
         meta=build_meta(
             'ydeep',
@@ -69,6 +69,7 @@ def build_deep_interview(request: DeepInterviewRequest) -> DeepInterviewResult:
 
 
 def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> DeepInterviewCompleteResult:
+    skill_content = prompt_content('workflow-menu', 'ydeep_menu')
     handoff_options = [
         build_handoff_option(
             'yplan',
@@ -83,7 +84,7 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
         ),
     ]
     state = WorkflowState(
-        workflow_name='ydeep_complete',
+        workflow_name='ydeep_menu',
         current_phase='ready_for_handoff',
         readiness='ready_for_handoff',
         evidence_gaps=[],
@@ -110,13 +111,14 @@ def build_deep_interview_complete(request: DeepInterviewCompleteRequest) -> Deep
         next_actions=[build_next_action('下一步', '若准备进入规划则选择 yplan；若仍需澄清则选择 refine_further。')],
         risks=[],
         meta=build_meta(
-            'ydeep_complete',
+            'ydeep_menu',
             'ymcp.contracts.deep_interview.DeepInterviewCompleteResult',
             host_controls=['display', 'memory lookup', 'MCP Elicitation'],
             required_host_action=HostActionType.AWAIT_INPUT,
             handoff=handoff,
         ),
         artifacts=DeepInterviewCompleteArtifacts(
+            skill_content=skill_content,
             received_summary=request.summary.strip(),
             clarified_artifact=clarified_artifact,
             selected_option=None,

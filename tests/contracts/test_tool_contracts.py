@@ -3,7 +3,7 @@ from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
 from ymcp.core.versioning import SCHEMA_VERSION
 from ymcp.internal_registry import get_tool_specs
 
-WORKFLOW_NAMES = {'ydeep', 'ydeep_complete', 'yplan', 'yplan_architect', 'yplan_critic', 'yplan_complete', 'ydo', 'ydo_complete'}
+WORKFLOW_NAMES = {'ydeep', 'ydeep_menu', 'yplan', 'yplan_architect', 'yplan_critic', 'yplan_menu', 'ydo', 'ydo_menu', 'yimggen'}
 MEMORY_NAMES = {tool['name'] for tool in MEMPALACE_TOOL_SCHEMAS}
 EXPECTED_NAMES = WORKFLOW_NAMES | MEMORY_NAMES
 COMMON_FIELDS = {'schema_version', 'status', 'summary', 'assumptions', 'next_actions', 'risks', 'meta', 'artifacts'}
@@ -16,16 +16,19 @@ def test_canonical_tool_names():
 def test_tool_descriptions_include_skill_and_gate_constraints():
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
     assert 'deep-interview' in descriptions['ydeep']
-    assert 'deep-interview' in descriptions['ydeep_complete']
+    assert 'deep-interview' in descriptions['ydeep_menu']
     assert 'planner' in descriptions['yplan']
     assert 'architect' in descriptions['yplan_architect']
     assert 'critic' in descriptions['yplan_critic']
-    assert 'ydo' in descriptions['yplan_complete']
-    assert 'handoff-only' in descriptions['yplan_complete']
-    assert '不会继续分析' in descriptions['yplan_complete']
-    assert '不会生成最终业务结论' in descriptions['yplan_complete']
+    assert 'ydo' in descriptions['yplan_menu']
+    assert 'handoff-only' in descriptions['yplan_menu']
+    assert '不会继续分析' in descriptions['yplan_menu']
+    assert '不会生成最终业务结论' in descriptions['yplan_menu']
     assert 'ralph' in descriptions['ydo']
-    assert 'finish' in descriptions['ydo_complete']
+    assert 'finish' in descriptions['ydo_menu']
+    assert 'imagegen' in descriptions['yimggen']
+    assert 'Pillow' in descriptions['yimggen']
+    assert '不调用远程图片 API' in descriptions['yimggen']
 
 
 def test_response_models_include_common_fields_and_v1_schema():

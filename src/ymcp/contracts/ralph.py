@@ -22,6 +22,8 @@ class RalphArtifacts(BaseModel):
 
 
 class RalphCompleteArtifacts(BaseModel):
+    suggested_prompt: str = 'workflow-menu'
+    skill_content: str
     execution_verdict: str
     selected_option: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)

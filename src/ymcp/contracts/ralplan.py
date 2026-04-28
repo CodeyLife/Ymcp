@@ -45,6 +45,8 @@ class RalplanCriticArtifacts(BaseModel):
 
 
 class RalplanCompleteArtifacts(BaseModel):
+    suggested_prompt: str = 'workflow-menu'
+    skill_content: str = ''
     critic_summary: str | None = None
     selected_option: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)

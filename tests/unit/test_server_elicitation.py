@@ -6,10 +6,12 @@ from ymcp.engine.ralplan import build_ralplan_complete
 from ymcp.server import _maybe_elicit_handoff_choice
 
 
-def _assert_host_ui_fallback(result):
-    assert result.summary == 'WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION'
+def _assert_host_ui_fallback(result, expected_values=('ydo', 'restart', 'memory_store')):
+    assert result.summary.startswith('WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION')
+    assert 'meta.handoff.options' in result.summary
+    assert 'selected_option' in result.summary
     assert result.meta.interaction_kind == 'awaiting_selected_option'
-    assert result.meta.menu_authority == 'not_exposed_to_assistant'
+    assert result.meta.menu_authority == 'meta.handoff.options'
     assert result.meta.assistant_response_policy == 'stop_after_tool_result'
     assert result.meta.auto_continue_forbidden is True
     assert result.meta.assistant_visible_response_allowed is False
@@ -26,8 +28,8 @@ def _assert_host_ui_fallback(result):
         'failure_semantics',
         'assistant_instruction',
     }
-    assert result.meta.handoff.options == []
-    assert result.meta.handoff.recommended_next_action is None
+    assert [option.value for option in result.meta.handoff.options] == list(expected_values)
+    assert result.meta.handoff.recommended_next_action in expected_values
     assert result.next_actions == []
 
 

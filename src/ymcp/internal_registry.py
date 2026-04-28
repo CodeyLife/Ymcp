@@ -12,6 +12,7 @@ from ymcp.contracts.deep_interview import (
     DeepInterviewRequest,
     DeepInterviewResult,
 )
+from ymcp.contracts.imagegen import ImagegenRequest, ImagegenResult
 from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS, MemoryResult
 from ymcp.contracts.ralph import RalphCompleteRequest, RalphCompleteResult, RalphRequest, RalphResult
 from ymcp.contracts.ralplan import (
@@ -25,6 +26,7 @@ from ymcp.contracts.ralplan import (
     RalplanResult,
 )
 from ymcp.engine.deep_interview import build_deep_interview, build_deep_interview_complete
+from ymcp.engine.imagegen import build_imagegen
 from ymcp.engine.ralph import build_ralph, build_ralph_complete
 from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ralplan_complete, build_ralplan_critic
 from ymcp.memory import execute_memory_operation
@@ -48,9 +50,9 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         handler=build_deep_interview,
     ),
     ToolSpec(
-        name='ydeep_complete',
+        name='ydeep_menu',
         description=with_blocked_on_unsupported_elicitation(
-            '需求澄清完成 tool。模型在完成 deep-interview 调研后调用本 tool；tool 产出 clarified_artifact，并通过强制 Elicitation 返回统一 handoff 选项，由宿主按固定约定决定如何进入 yplan 或继续澄清。'
+            '需求澄清后的流程菜单 tool。模型在完成 deep-interview 调研后调用本 tool；tool 产出 clarified_artifact，并通过 workflow-menu 指导与强制 Elicitation 返回统一 handoff 选项，由宿主按固定约定决定如何进入 yplan 或继续澄清。'
         ),
         request_model=DeepInterviewCompleteRequest,
         response_model=DeepInterviewCompleteResult,
@@ -72,15 +74,15 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='yplan_critic',
-        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是调用 yplan_complete 收口，还是在否决后强制回到 yplan 重开规划；若已批准，则必须先输出 critic 评估与批准摘要，再携带 critic_summary 调用 yplan_complete，不能空参调用 complete，也不能在输出批准结论后直接结束。tool 不强制固定 verdict 协议。',
+        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是调用 yplan_menu 收口，还是在否决后强制回到 yplan 重开规划；若已批准，则必须先输出 critic 评估与批准摘要，再携带 critic_summary 调用 yplan_menu，不能空参调用菜单工具，也不能在输出批准结论后直接结束。tool 不强制固定 verdict 协议。',
         request_model=RalplanCriticRequest,
         response_model=RalplanCriticResult,
         handler=build_ralplan_critic,
     ),
     ToolSpec(
-        name='yplan_complete',
+        name='yplan_menu',
         description=with_blocked_on_unsupported_elicitation(
-            '共识规划完成 tool。模型在完成 critic 评估后调用本 tool；本 tool 是 handoff-only 的无输入收口阶段，只负责结束规划并通过强制 Elicitation 返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store。',
+            '共识规划后的流程菜单 tool。模型在完成 critic 评估后调用本 tool；本 tool 是 handoff-only 的下一步流程选择阶段，只负责暂停规划并通过 workflow-menu 指导与强制 Elicitation 返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store。',
             '它不会继续分析、不会生成最终业务结论、不会自动推进到下一阶段，也不再要求 summary 或构造交接 artifact。',
         ),
         request_model=RalplanCompleteRequest,
@@ -95,9 +97,16 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         handler=build_ralph,
     ),
     ToolSpec(
-        name='ydo_complete',
+        name='yimggen',
+        description='本地图片/序列帧生成启动 tool。模型应使用返回的 imagegen skill_content 编写或调整 Python/Pillow 脚本，在本地生成 frames、sprite、preview 等产物；本 tool 不调用远程图片 API、不使用外部模型、不执行任意脚本。',
+        request_model=ImagegenRequest,
+        response_model=ImagegenResult,
+        handler=build_imagegen,
+    ),
+    ToolSpec(
+        name='ydo_menu',
         description=with_blocked_on_unsupported_elicitation(
-            '执行验证完成 tool。模型在完成 ralph 执行循环后调用本 tool；本 tool 是无输入收口阶段，会通过强制 Elicitation 返回统一 handoff 选项（如 finish / memory_store / yplan / continue_execution），由宿主按固定约定决定是收尾、重规划还是继续执行。'
+            '执行验证后的流程菜单 tool。模型在完成 ralph 执行循环后调用本 tool；本 tool 是无输入的下一步流程选择阶段，会通过 workflow-menu 指导与强制 Elicitation 返回统一 handoff 选项（如 finish / memory_store / yplan / continue_execution），由宿主按固定约定决定是收尾、重规划还是继续执行。'
         ),
         request_model=RalphCompleteRequest,
         response_model=RalphCompleteResult,

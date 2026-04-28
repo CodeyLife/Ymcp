@@ -13,8 +13,8 @@ from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ra
 def test_deep_interview_start_returns_prompt_guidance():
     result = build_deep_interview(DeepInterviewRequest(brief='收敛需求'))
     assert result.status is ToolStatus.NEEDS_INPUT
-    assert result.meta.handoff.recommended_next_action == 'ydeep_complete'
-    assert result.meta.handoff.options[0].value == 'ydeep_complete'
+    assert result.meta.handoff.recommended_next_action == 'ydeep_menu'
+    assert result.meta.handoff.options[0].value == 'ydeep_menu'
     assert 'Task / Arguments:' in result.artifacts.skill_content
 
 
@@ -27,6 +27,8 @@ def test_deep_interview_complete_returns_clarified_artifact_and_handoff():
     )
     assert result.status is ToolStatus.OK
     assert result.meta.required_host_action is HostActionType.AWAIT_INPUT
+    assert result.artifacts.suggested_prompt == 'workflow-menu'
+    assert 'Workflow Menu' in result.artifacts.skill_content
     assert result.artifacts.clarified_artifact.summary == '已完成需求调研总结'
     assert result.artifacts.selected_option is None
     assert {item.value for item in result.artifacts.handoff_options} == {'yplan', 'refine_further'}
@@ -72,6 +74,8 @@ def test_ralplan_can_restart_from_fresh_plain_task():
 def test_ralplan_complete_summary_explains_each_option():
     result = build_ralplan_complete(RalplanCompleteRequest(critic_summary='critic 已批准，验收和验证路径明确'))
     assert '不继续分析' in result.summary
+    assert result.artifacts.suggested_prompt == 'workflow-menu'
+    assert 'meta.handoff.options' in result.artifacts.skill_content
     assert '不生成最终业务结论' in result.summary
     assert '唯一权威菜单数据源' in result.summary
     assert '真实交互控件' in result.summary
@@ -89,6 +93,8 @@ def test_ralph_start_summary_explains_context_based_execution():
 
 def test_ralph_complete_summary_explains_each_option():
     result = build_ralph_complete(RalphCompleteRequest())
+    assert result.artifacts.suggested_prompt == 'workflow-menu'
+    assert 'selected_option' in result.artifacts.skill_content
     assert '真实交互控件' in result.summary
     assert 'markdown 列表' in result.summary
     assert '唯一权威菜单数据源' in result.summary
@@ -109,10 +115,10 @@ def test_ralplan_critic_returns_restart_and_complete_options():
     assert result.artifacts.suggested_prompt == 'critic'
     assert result.artifacts.architect_summary == '架构评估已完成，边界、tradeoff、风险明确'
     assert result.meta.handoff.recommended_next_action is None
-    assert {item.value for item in result.meta.handoff.options} == {'yplan', 'yplan_complete'}
+    assert {item.value for item in result.meta.handoff.options} == {'yplan', 'yplan_menu'}
     assert '必须选择 `yplan` 重开规划' in result.summary
     assert 'critic_summary' in result.summary
-    assert '不要空参调用 `yplan_complete`' in result.summary
+    assert '不要空参调用 `yplan_menu`' in result.summary
 
 
 def test_ralplan_critic_blocks_empty_call_until_architect_summary():
@@ -125,7 +131,7 @@ def test_ralplan_critic_blocks_empty_call_until_architect_summary():
     assert result.artifacts.workflow_state.current_phase == 'architect_summary_required'
     assert result.artifacts.workflow_state.blocked_reason == 'architect_summary_required'
     assert '不能空参进入' in result.summary
-    assert '不会继续到 yplan_complete' in result.summary
+    assert '不会继续到 yplan_menu' in result.summary
 
 
 def test_ralplan_complete_exposes_handoff_options():
@@ -176,8 +182,8 @@ def test_ralplan_complete_blocks_invalid_selected_option():
 def test_ralph_start_returns_prompt_guidance():
     result = build_ralph(RalphRequest())
     assert result.artifacts.suggested_prompt == 'ralph'
-    assert result.meta.handoff.recommended_next_action == 'ydo_complete'
-    assert result.meta.handoff.options[0].value == 'ydo_complete'
+    assert result.meta.handoff.recommended_next_action == 'ydo_menu'
+    assert result.meta.handoff.options[0].value == 'ydo_menu'
     assert 'Task / Arguments:' in result.artifacts.skill_content
 
 

@@ -1,6 +1,6 @@
 from ymcp.cli import inspect_tools_payload
 
-WORKFLOW_NAMES = {'ydeep', 'ydeep_complete', 'yplan', 'yplan_architect', 'yplan_critic', 'yplan_complete', 'ydo', 'ydo_complete'}
+WORKFLOW_NAMES = {'ydeep', 'ydeep_menu', 'yplan', 'yplan_architect', 'yplan_critic', 'yplan_menu', 'ydo', 'ydo_menu'}
 
 
 def test_workflow_tools_expose_state_machine_metadata():
@@ -23,7 +23,7 @@ def test_yplan_schema_exposes_handoff_and_skill_fields():
 
 def test_handoff_schema_exposes_minimal_option_metadata():
     payload = {item['name']: item for item in inspect_tools_payload()}
-    response_schema = payload['yplan_complete']['response_schema']
+    response_schema = payload['yplan_menu']['response_schema']
     meta_schema = response_schema['$defs'][response_schema['properties']['meta']['$ref'].split('/')[-1]]
     handoff_schema = response_schema['$defs'][meta_schema['properties']['handoff']['anyOf'][0]['$ref'].split('/')[-1]]
     option_schema = response_schema['$defs'][handoff_schema['properties']['options']['items']['$ref'].split('/')[-1]]

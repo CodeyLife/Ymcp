@@ -11,13 +11,14 @@ from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field, create_model
 
 from ymcp.capabilities import get_prompt_specs, get_resource_specs, prompt_template
-from ymcp.contracts.common import ElicitationState, Handoff, HostActionType, ToolStatus
+from ymcp.contracts.common import ElicitationState, HostActionType, ToolStatus
 from ymcp.contracts.deep_interview import (
     DeepInterviewCompleteRequest,
     DeepInterviewCompleteResult,
     DeepInterviewRequest,
     DeepInterviewResult,
 )
+from ymcp.contracts.imagegen import ImagegenRequest, ImagegenResult
 from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS, MemoryResult
 from ymcp.contracts.ralph import RalphCompleteRequest, RalphCompleteResult, RalphRequest, RalphResult
 from ymcp.contracts.ralplan import (
@@ -32,6 +33,7 @@ from ymcp.contracts.ralplan import (
 )
 from ymcp.core.versioning import SCHEMA_VERSION
 from ymcp.engine.deep_interview import build_deep_interview, build_deep_interview_complete
+from ymcp.engine.imagegen import build_imagegen
 from ymcp.engine.ralph import build_ralph, build_ralph_complete
 from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ralplan_complete, build_ralplan_critic
 from ymcp.internal_registry import get_tool_specs
@@ -84,7 +86,7 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str, menu_lines:
     result.meta.required_host_action = HostActionType.AWAIT_INPUT
     result.meta.host_controls = []
     result.meta.interaction_kind = 'awaiting_selected_option'
-    result.meta.menu_authority = 'not_exposed_to_assistant'
+    result.meta.menu_authority = 'meta.handoff.options'
     result.meta.assistant_response_policy = 'stop_after_tool_result'
     result.meta.auto_continue_forbidden = True
     result.meta.assistant_visible_response_allowed = False
@@ -96,7 +98,6 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str, menu_lines:
         'failure_semantics': 'not_a_tool_failure',
         'assistant_instruction': 'STOP',
     }
-    result.meta.handoff = Handoff(recommended_next_action=None, options=[])
     _update_workflow_state(
         result,
         current_phase='awaiting_user_selection',
@@ -111,7 +112,12 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str, menu_lines:
         if hasattr(artifacts, 'handoff_options'):
             artifacts.handoff_options = []
     result.next_actions = []
-    result.summary = 'WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION'
+    result.summary = (
+        'WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION: '
+        '宿主必须通过 meta.handoff.options 提供的固定选项收集用户的下一步流程需求，'
+        '并将所选 value 作为 selected_option 回传当前流程菜单 tool；'
+        'assistant 不得用自然语言、markdown 文本菜单或自动选择替代宿主交互控件。'
+    )
     return result
 
 
@@ -145,7 +151,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         result.meta.elicitation_state = ElicitationState.UNSUPPORTED
         return _apply_interactive_handoff_fallback(
             result,
-            reason='当前调用通道未提供 MCP Elicitation 上下文，无法完成 complete 阶段所要求的菜单选择',
+            reason='当前调用通道未提供 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
             menu_lines=menu_lines,
         )
 
@@ -158,7 +164,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         result.meta.elicitation_state = ElicitationState.UNSUPPORTED
         return _apply_interactive_handoff_fallback(
             result,
-            reason='当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成 complete 阶段所要求的菜单选择',
+            reason='当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
             menu_lines=menu_lines,
         )
 
@@ -252,7 +258,7 @@ def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, reque
 
 
 def create_app() -> FastMCP:
-    app = FastMCP(name='ymcp', instructions='Workflow tools ydeep / ydeep_complete / yplan / yplan_architect / yplan_critic / yplan_complete / ydo / ydo_complete with skill-guided reasoning and lightweight Elicitation-oriented handoff options.', log_level='ERROR')
+    app = FastMCP(name='ymcp', instructions='Workflow tools ydeep / ydeep_menu / yplan / yplan_architect / yplan_critic / yplan_menu / ydo / ydo_menu / yimggen with skill-guided reasoning and lightweight Elicitation-oriented handoff options.', log_level='ERROR')
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
 
     for resource_spec in get_resource_specs():
@@ -278,7 +284,7 @@ def create_app() -> FastMCP:
         result = build_deep_interview(request)
         return result
 
-    @app.tool(name='ydeep_complete', description=descriptions['ydeep_complete'], structured_output=True)
+    @app.tool(name='ydeep_menu', description=descriptions['ydeep_menu'], structured_output=True)
     async def deep_interview_complete(summary: str, selected_option: str | None = None, brief: str | None = None, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> DeepInterviewCompleteResult:
         request = DeepInterviewCompleteRequest(summary=summary, selected_option=selected_option, brief=brief, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
         result = build_deep_interview_complete(request)
@@ -300,11 +306,16 @@ def create_app() -> FastMCP:
         request = RalplanCriticRequest(architect_summary=architect_summary, schema_version=schema_version)
         return build_ralplan_critic(request)
 
-    @app.tool(name='yplan_complete', description=descriptions['yplan_complete'], structured_output=True)
+    @app.tool(name='yplan_menu', description=descriptions['yplan_menu'], structured_output=True)
     async def ralplan_complete(critic_summary: str | None = None, selected_option: str | None = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanCompleteResult:
         request = RalplanCompleteRequest(critic_summary=critic_summary, selected_option=selected_option, schema_version=schema_version)
         result = build_ralplan_complete(request)
         return await _maybe_elicit_handoff_choice(ctx, result, message_prefix='规划阶段已完成。宿主必须渲染交互式选择控件；assistant 不得用文本代渲染。')
+
+    @app.tool(name='yimggen', description=descriptions['yimggen'], structured_output=True)
+    async def imagegen(brief: str, output_root: str | None = None, asset_slug: str | None = None, dimensions: str | None = None, frame_count: int | None = None, transparent: bool = True, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> ImagegenResult:
+        request = ImagegenRequest(brief=brief, output_root=output_root, asset_slug=asset_slug, dimensions=dimensions, frame_count=frame_count, transparent=transparent, memory_context=memory_context or {}, schema_version=schema_version)
+        return build_imagegen(request)
 
     @app.tool(name='ydo', description=descriptions['ydo'], structured_output=True)
     async def ralph(memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalphResult:
@@ -312,7 +323,7 @@ def create_app() -> FastMCP:
         result = build_ralph(request)
         return result
 
-    @app.tool(name='ydo_complete', description=descriptions['ydo_complete'], structured_output=True)
+    @app.tool(name='ydo_menu', description=descriptions['ydo_menu'], structured_output=True)
     async def ralph_complete(selected_option: str | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalphCompleteResult:
         request = RalphCompleteRequest(selected_option=selected_option, memory_context=memory_context or {}, schema_version=schema_version)
         result = build_ralph_complete(request)

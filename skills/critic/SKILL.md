@@ -32,16 +32,16 @@ This skill is for evaluation, not custom routing. Judge readiness, then choose t
   1. make approval explicit
   2. explain briefly why execution can proceed now
   3. preserve any critical constraints or risks worth carrying forward
-  4. call `yplan_complete` from `handoff.options` as a handoff-only closeout step, passing `critic_summary`
+  4. call `yplan_menu` from `handoff.options` as a handoff-only workflow-menu step, passing `critic_summary`
 - If the plan is not ready, make rejection explicit, name the blockers, identify the highest-priority fixes for the next planning pass, and choose `yplan` from the returned `handoff.options`.
 
 ## Guardrails
 - Do not invent a separate routing protocol.
 - Do not keep revising inside `yplan_critic` after rejection.
 - Do not bypass the tool-returned next-step options.
-- Do not call `yplan_complete` with only `schema_version` or otherwise empty planning context; pass `critic_summary`.
-- Do not stop the conversation right after writing the approval conclusion; approval is only the precondition for calling `yplan_complete`, not the terminal step.
-- Do not treat `yplan_complete` as the step that writes the final analysis or final user-facing conclusion.
+- Do not call `yplan_menu` with only `schema_version` or otherwise empty planning context; pass `critic_summary`.
+- Do not stop the conversation right after writing the approval conclusion; approval is only the precondition for calling `yplan_menu`, not the terminal step.
+- Do not treat `yplan_menu` as the step that writes the final analysis or final user-facing conclusion.
 - Once `handoff.options` is returned, do not render a markdown/text menu as assistant output and do not auto-advance; only host UI or an explicit selected_option may continue.
 
 ## Verification

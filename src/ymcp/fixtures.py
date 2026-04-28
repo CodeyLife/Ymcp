@@ -4,7 +4,7 @@ from typing import Any
 
 FIXTURES: dict[str, dict[str, Any]] = {
     'ydeep': {'brief': '为当前任务先澄清目标与边界'},
-    'ydeep_complete': {
+    'ydeep_menu': {
         'summary': '已总结当前需求边界、现状与改进方向。',
         'brief': '为当前任务先澄清目标与边界',
     },
@@ -13,9 +13,10 @@ FIXTURES: dict[str, dict[str, Any]] = {
     },
     'yplan_architect': {},
     'yplan_critic': {},
-    'yplan_complete': {},
+    'yplan_menu': {},
+    'yimggen': {'brief': '生成 8 帧本地 Pillow 小球动画', 'asset_slug': 'fixture-ball', 'dimensions': '64x64', 'frame_count': 8},
     'ydo': {},
-    'ydo_complete': {},
+    'ydo_menu': {},
     'mempalace_status': {},
     'mempalace_search': {'query': 'Ymcp workflow tools', 'limit': 3},
 }

@@ -11,21 +11,21 @@ from ymcp.core.result import apply_selected_handoff_option, build_handoff_option
 def build_ralph(request: RalphRequest) -> RalphResult:
     skill_content = prompt_content('ralph', 'continue from current conversation context')
     handoff = Handoff(
-        recommended_next_action='ydo_complete',
+        recommended_next_action='ydo_menu',
         options=[
             build_handoff_option(
-                'ydo_complete',
-                '进入 ydo_complete',
-                '完成执行、修复、验证流程后调用 ydo_complete。',
+                'ydo_menu',
+                '进入 ydo_menu',
+                '完成执行、修复、验证流程后调用 ydo_menu。',
                 recommended=True,
             )
         ],
     )
     return RalphResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请将 skill_content 作为推理指导进入执行阶段：实现、修复并验证。`ydo` 现在不再要求 `approved_plan_artifact` 输入，而是依赖当前调用链上下文继续执行。完成一轮执行与验证后调用 `ydo_complete`。',
+        summary='请将 skill_content 作为推理指导进入执行阶段：实现、修复并验证。`ydo` 现在不再要求 `approved_plan_artifact` 输入，而是依赖当前调用链上下文继续执行。完成一轮执行与验证后调用 `ydo_menu`。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '按批准方案执行并收集新鲜验证证据；不要把部分进展称为完成。完成后调用 ydo_complete。')],
+        next_actions=[build_next_action('下一步', '按批准方案执行并收集新鲜验证证据；不要把部分进展称为完成。完成后调用 ydo_menu。')],
         risks=[],
         meta=build_meta(
             'ydo',
@@ -48,6 +48,7 @@ def build_ralph(request: RalphRequest) -> RalphResult:
 
 
 def build_ralph_complete(request: RalphCompleteRequest) -> RalphCompleteResult:
+    skill_content = prompt_content('workflow-menu', 'ydo_menu')
     handoff_options = [
         build_handoff_option(
             'finish',
@@ -86,18 +87,19 @@ def build_ralph_complete(request: RalphCompleteRequest) -> RalphCompleteResult:
         next_actions=[build_next_action('下一步', '若验证未完成或仍有失败项，不要选择 finish。只有此阶段才可建议工作流完成。')],
         risks=[],
         meta=build_meta(
-            'ydo_complete',
+            'ydo_menu',
             'ymcp.contracts.ralph.RalphCompleteResult',
             host_controls=['display', 'execution', 'verification', 'MCP Elicitation'],
             required_host_action=HostActionType.AWAIT_INPUT,
             handoff=handoff,
         ),
         artifacts=RalphCompleteArtifacts(
+            skill_content=skill_content,
             execution_verdict='complete',
             selected_option=None,
             handoff_options=handoff_options,
             workflow_state=WorkflowState(
-                workflow_name='ydo_complete',
+                workflow_name='ydo_menu',
                 current_phase='ready_for_handoff',
                 readiness='ready_for_handoff',
                 evidence_gaps=[],

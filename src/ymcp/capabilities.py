@@ -9,7 +9,21 @@ from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-SKILLS_DIR = ROOT_DIR / "skills"
+
+
+def _resolve_skills_dir() -> Path:
+    module_path = Path(__file__).resolve()
+    candidates = (
+        module_path.parents[2] / "skills",  # source checkout: <repo>/skills
+        module_path.parents[1] / "skills",  # installed wheel: <site-packages>/skills
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+SKILLS_DIR = _resolve_skills_dir()
 
 
 @dataclass(frozen=True)
@@ -39,7 +53,7 @@ def _memory_protocol_content() -> str:
 
 PRINCIPLES_CONTENT = """# Ymcp FastMCP 第一原则
 
-- 保留 `ydeep`、`ydeep_complete`、`yplan`、`yplan_architect`、`yplan_critic`、`yplan_complete`、`ydo`、`ydo_complete` 等 workflow tools。
+- 保留 `ydeep`、`ydeep_menu`、`yplan`、`yplan_architect`、`yplan_critic`、`yplan_menu`、`ydo`、`ydo_menu` 等 workflow tools。
 - tool 负责阶段 gate 与下一步约束；prompt 负责内部思考方法。
 - 运行时硬约束以 prompts、tool descriptions 和 tool contract 为准。
 """
@@ -48,15 +62,15 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 
 ## ydeep
 
-- `ydeep` returns `skill_content` and a single next-step option: `ydeep_complete`
-- `ydeep_complete` returns `clarified_artifact` plus two Elicitation options:
+- `ydeep` returns `skill_content` and a single next-step option: `ydeep_menu`
+- `ydeep_menu` returns `clarified_artifact` plus two Elicitation options:
   - `yplan`
   - `refine_further`
 - Host convention:
   - when the user/model chooses `yplan`, convert `clarified_artifact.summary` into the plain `task` input expected by `yplan`
-  - when the user/model chooses `refine_further`, stay in the same interview loop and call `ydeep_complete` again after more thinking
+  - when the user/model chooses `refine_further`, stay in the same interview loop and call `ydeep_menu` again after more thinking
   - `recommended_next_action` is only a recommendation; the host / model must not auto-select it
-  - if the host cannot execute MCP Elicitation, `ydeep_complete` should block rather than silently succeeding
+  - if the host cannot execute MCP Elicitation, `ydeep_menu` should block rather than silently succeeding
 
 ## yplan
 
@@ -66,25 +80,25 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 - `yplan_architect` returns architect `skill_content` and a single next-step option: `yplan_critic`
 - `yplan_critic` returns critic `skill_content` and exactly two legal next-step options:
   - `yplan`
-  - `yplan_complete`
+  - `yplan_menu`
 - Host convention:
   - the host converts upstream artifacts into a plain planning task before calling `yplan`
-    - from `ydeep_complete`, use `clarified_artifact.summary` as `task`
+    - from `ydeep_menu`, use `clarified_artifact.summary` as `task`
     - from execution/replanning, use the new planning brief or execution findings as a fresh plain `task`
   - the model finishes the planner stage, then calls `yplan_architect`
   - the model finishes the architect stage, outputs an architecture review summary, then in the same turn calls `yplan_critic` with `architect_summary`; stopping after the summary is not a valid handoff
   - inside `yplan_critic`, the model decides for itself whether the plan is ready:
-    - if ready, make approval explicit, produce a brief critic approval summary, and then call `yplan_complete` with `critic_summary`; do not stop at the approval text and do not call complete with only `schema_version`
+    - if ready, make approval explicit, produce a brief critic approval summary, and then call `yplan_menu` with `critic_summary`; do not stop at the approval text and do not call the menu tool with only `schema_version`
     - if not ready, restart planning by calling `yplan`
   - Ymcp does not require a fixed critic verdict schema such as `APPROVE/REVISE`; the legal next-step options are the contract
-  - `yplan_complete` is a handoff-only completion gate; calling it with `critic_summary` means the model believes planning is complete
-  - `yplan_complete` does not produce the final business conclusion and does not auto-start execution; it only returns the legal next-step options after critic approval evidence is present
+  - `yplan_menu` is a handoff-only workflow menu gate; calling it with `critic_summary` means the model believes planning is ready for next-step selection
+  - `yplan_menu` does not produce the final business conclusion and does not auto-start execution; it only returns the legal next-step options after critic approval evidence is present
 
 ## ydo
 
-- `yplan_complete` returns `ydo` as a legal next step
-- `ydo` returns execution `skill_content` and the next-step option `ydo_complete`
-- `ydo_complete` returns four Elicitation options:
+- `yplan_menu` returns `ydo` as a legal next step
+- `ydo` returns execution `skill_content` and the next-step option `ydo_menu`
+- `ydo_menu` returns four Elicitation options:
   - `finish`
   - `memory_store`
   - `yplan`
@@ -92,7 +106,13 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 - Host convention:
   - `ydo` is entered directly from the current conversation context; it no longer requires an `approved_plan_artifact` input
   - when the user/model chooses `yplan` after execution, restart planning by passing a fresh plain `task`
-  - `ydo_complete` is also a no-input completion gate; `continue_execution` means stay in the execution loop and call `ydo_complete` again after more work
+  - `ydo_menu` is also a no-input workflow menu gate; `continue_execution` means stay in the execution loop and call `ydo_menu` again after more work
+
+## yimggen
+
+- `yimggen` starts the local image generation workflow.
+- It returns `imagegen` skill guidance plus deterministic output-path conventions for Python/Pillow sequence-frame generation.
+- It does not call remote image APIs, does not use external image models, and does not execute arbitrary generated scripts.
 
 ## Design rule
 
@@ -106,10 +126,10 @@ Ymcp is a lightweight skill-flow server. The tool contract only declares:
 The intended interaction is:
 1. tool returns `skill_content`
 2. model thinks and outputs
-3. host calls the matching `*_complete`
-4. for complete stages, host should use `handoff.options` as the Elicitation / interactive-control menu source and wait for user choice; the model should stop analysis and must not render a markdown/text menu
-5. if Elicitation is unavailable or fails, complete stages should return `blocked`; `handoff.options` remains the authoritative menu payload, not a silent-success fallback
-6. complete-stage `workflow_state` should move through explicit handoff statuses such as `ready_for_handoff`, `elicitation_requested`, `awaiting_user_selection`, and `selection_confirmed`
+3. host calls the matching `*_menu`
+4. for menu stages, host should use `handoff.options` as the Elicitation / interactive-control menu source and wait for user choice; the model should stop analysis and must not render a markdown/text menu
+5. if Elicitation is unavailable or fails, menu stages should return `blocked`; `handoff.options` remains the authoritative menu payload, not a silent-success fallback
+6. menu-stage `workflow_state` should move through explicit handoff statuses such as `ready_for_handoff`, `elicitation_requested`, `awaiting_user_selection`, and `selection_confirmed`
 
 The host owns the fixed calling convention between stages. Ymcp does not try to be a fully automatic workflow state machine.
 """

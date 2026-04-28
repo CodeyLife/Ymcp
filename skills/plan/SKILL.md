@@ -12,7 +12,7 @@ In Ymcp:
 - user-facing skill: `$plan`
 - actual MCP entry tool: `yplan`
 - stage tools: `yplan_architect`, `yplan_critic`
-- completion tool: `yplan_complete`
+- flow-menu tool: `yplan_menu`
 
 ## Workflow model
 Ymcp planning is a lightweight skill-flow:
@@ -22,9 +22,9 @@ Ymcp planning is a lightweight skill-flow:
 4. the model completes the architect stage, outputs an architecture review summary, and calls `yplan_critic` with `architect_summary`
 5. `yplan_critic` returns critic `skill_content` plus the only two legal next steps:
    - `yplan`
-   - `yplan_complete`
-6. the model either restarts planning at `yplan` or closes planning with `yplan_complete`
-7. `yplan_complete` closes the planning phase and returns the next workflow options
+   - `yplan_menu`
+6. the model either restarts planning at `yplan` or pauses planning at `yplan_menu`
+7. `yplan_menu` returns the next workflow options for host-side user selection
 
 The tool defines stage boundaries and legal next steps. The skill defines how to think during each stage.
 
@@ -45,16 +45,16 @@ Ymcp does not require the model to round-trip a mid-plan state object between `y
 - Follow the tool-returned next-step boundary at each phase.
 - Do not call `yplan_critic` with only `schema_version`; first output the architect review and pass it as `architect_summary`.
 - Do not stop after `yplan_architect` produces the architecture review. The same turn must call `yplan_critic` with `architect_summary`.
-- In `yplan_critic`, decide between `yplan` and `yplan_complete` from the returned options.
+- In `yplan_critic`, decide between `yplan` and `yplan_menu` from the returned options.
 - If the critic concludes that the plan is not ready, restart planning at `yplan`.
 - If the plan is rejected, you must restart planning at `yplan`.
 - Do not continue inside `yplan_critic` after rejection.
 - Do not route rejection back to `yplan_architect`.
-- `yplan_complete` closes the planning phase, not the overall task.
+- `yplan_menu` pauses after the planning phase and asks the host to collect the user's next workflow choice.
 - Do not say the task is complete; only the planning phase is complete.
-- Do not treat `yplan_complete` as a final analysis, final report, or execution step.
-- When `yplan_critic` approves the plan, do not end the conversation at the approval text; continue by calling `yplan_complete` with `critic_summary`.
-- Do not call `yplan_complete` with only `schema_version`; it requires a brief `critic_summary` handoff note proving critic approval before it can expose the final handoff menu.
+- Do not treat `yplan_menu` as a final analysis, final report, or execution step.
+- When `yplan_critic` approves the plan, do not end the conversation at the approval text; continue by calling `yplan_menu` with `critic_summary`.
+- Do not call `yplan_menu` with only `schema_version`; it requires a brief `critic_summary` handoff note proving critic approval before it can expose the final handoff menu.
 - The host must render a real interactive control from `handoff.options` as the only next-step menu source.
 - If `handoff.options` is present, stop planning; do not paraphrase, merge, auto-select, or render a markdown/text menu as assistant output.
 
@@ -67,16 +67,16 @@ Ymcp does not require the model to round-trip a mid-plan state object between `y
 
 ## Planning Complete
 
-When `yplan_critic` decides the plan is ready, the flow ends with `yplan_complete`.
+When `yplan_critic` decides the plan is ready, the planning flow pauses at `yplan_menu`.
 
 Interpret that boundary correctly:
 - the critic approval itself is not the end of the interaction
-- `yplan_complete` is a handoff-only closeout tool.
+- `yplan_menu` is a handoff-only workflow-menu tool.
 - It does not continue analysis.
 - It does not generate the final business conclusion.
 - It does not auto-start execution.
 
-After `yplan_complete` returns:
+After `yplan_menu` returns:
 - treat `handoff.options` as the only authoritative next-step menu
 - preserve all returned options
 - preserve recommendation markers

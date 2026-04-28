@@ -35,6 +35,8 @@ class DeepInterviewArtifacts(BaseModel):
 
 
 class DeepInterviewCompleteArtifacts(BaseModel):
+    suggested_prompt: str = 'workflow-menu'
+    skill_content: str
     received_summary: str
     clarified_artifact: DeepInterviewHandoffArtifact
     selected_option: str | None = None
