@@ -18,6 +18,7 @@ from ymcp.capabilities import get_prompt_specs, get_resource_specs
 from ymcp.fixtures import FIXTURES, fixture_for
 from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 from ymcp.internal_registry import get_tool_specs
+from ymcp.tools.imagegen.local_frame_workflow import extract_video_frames, framesheet_to_gif, framesheet_to_webp, resize_framesheet
 from ymcp.memory import DEFAULT_MEMORY_ROOM, DEFAULT_MEMORY_WING, mempalace_palace_path, mempalace_version, memory_log_kv
 from ymcp.server import configure_logging, create_app
 
@@ -217,6 +218,68 @@ def doctor_payload() -> dict[str, Any]:
     }
 
 
+def frame_command(grid: str, image_path: str, *, out: str | None = None, size: int = 256, overwrite: bool = True) -> Path:
+    return resize_framesheet(image_path, grid, out, frame_size=size, overwrite=overwrite)
+
+
+def frame_gif_command(grid: str, image_path: str, *, out: str | None = None, duration: int = 80, loop: int = 0, size: int | None = None, overwrite: bool = True) -> Path:
+    return framesheet_to_gif(image_path, grid, out, duration_ms=duration, loop=loop, frame_size=size, overwrite=overwrite)
+
+
+def frame_webp_command(
+    grid: str,
+    image_path: str,
+    *,
+    out: str | None = None,
+    duration: int = 80,
+    loop: int = 0,
+    size: int | None = None,
+    overwrite: bool = True,
+    lossless: bool = True,
+) -> Path:
+    return framesheet_to_webp(
+        image_path,
+        grid,
+        out,
+        duration_ms=duration,
+        loop=loop,
+        frame_size=size,
+        overwrite=overwrite,
+        lossless=lossless,
+    )
+
+
+def video_frames_command(
+    count: int,
+    video: str,
+    *,
+    out: str | None = None,
+    size: str | None = None,
+    seconds: str | None = None,
+    overwrite: bool = True,
+    remove_background: bool = True,
+    background_tolerance: int = 12,
+    columns: int | None = None,
+    duration: int | None = None,
+    loop: int = 0,
+    lossless: bool = True,
+) -> Path:
+    return extract_video_frames(
+        video,
+        count,
+        out,
+        seconds=seconds,
+        size=size,
+        overwrite=overwrite,
+        remove_background=remove_background,
+        background_tolerance=background_tolerance,
+        columns=columns,
+        duration_ms=duration,
+        loop=loop,
+        lossless=lossless,
+    )
+
+
 def run_fixture(tool_name: str) -> dict[str, Any]:
     specs = {spec.name: spec for spec in get_tool_specs()}
     if tool_name not in specs:
@@ -267,6 +330,47 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="兼容旧参数；当前创建项目规则时默认会覆盖写入",
     )
+
+    frame_cmd = subparsers.add_parser("frame", help="将 framesheet 按 COLSxROWS 网格重采样为每帧固定尺寸")
+    frame_cmd.add_argument("grid", help="网格，格式为 COLSxROWS，例如 4x4")
+    frame_cmd.add_argument("image", help="输入 framesheet 图片路径")
+    frame_cmd.add_argument("--out", help="输出 PNG 路径；默认在同目录生成 <name>-256.png")
+    frame_cmd.add_argument("--size", type=int, default=256, help="每帧目标边长；默认 256")
+    frame_cmd.add_argument("--no-overwrite", action="store_true", help="如果输出文件已存在则失败；默认覆盖")
+
+    frame_gif_cmd = subparsers.add_parser("frame-gif", help="将 framesheet 按 COLSxROWS 网格合成为 GIF")
+    frame_gif_cmd.add_argument("grid", help="网格，格式为 COLSxROWS，例如 4x4")
+    frame_gif_cmd.add_argument("image", help="输入 framesheet 图片路径")
+    frame_gif_cmd.add_argument("--out", help="输出 GIF 路径；默认在同目录生成 <name>.gif")
+    frame_gif_cmd.add_argument("--duration", type=int, default=80, help="每帧持续毫秒数；默认 80")
+    frame_gif_cmd.add_argument("--loop", type=int, default=0, help="循环次数；默认 0 表示无限循环")
+    frame_gif_cmd.add_argument("--size", type=int, help="可选：每帧输出边长，不传则使用原格尺寸")
+    frame_gif_cmd.add_argument("--no-overwrite", action="store_true", help="如果输出文件已存在则失败；默认覆盖")
+
+    frame_webp_cmd = subparsers.add_parser("frame-webp", aliases=["frame_webp"], help="将 framesheet 按 COLSxROWS 网格合成为 WebP 动画")
+    frame_webp_cmd.add_argument("grid", help="网格，格式为 COLSxROWS，例如 4x4")
+    frame_webp_cmd.add_argument("image", help="输入 framesheet 图片路径")
+    frame_webp_cmd.add_argument("--out", help="输出 WebP 路径；默认在同目录生成 <name>.webp")
+    frame_webp_cmd.add_argument("--duration", type=int, default=80, help="每帧持续毫秒数；默认 80")
+    frame_webp_cmd.add_argument("--loop", type=int, default=0, help="循环次数；默认 0 表示无限循环")
+    frame_webp_cmd.add_argument("--size", type=int, help="可选：每帧输出边长，不传则使用原格尺寸")
+    frame_webp_cmd.add_argument("--lossy", action="store_true", help="使用有损 WebP；默认 lossless 以保留透明边缘质量")
+    frame_webp_cmd.add_argument("--no-overwrite", action="store_true", help="如果输出文件已存在则失败；默认覆盖")
+
+    video_frames_cmd = subparsers.add_parser("v2f", aliases=["video-frames", "video_frames"], help="均匀抓取视频 N 帧，扣背景后生成 framesheet 和 WebP")
+    video_frames_cmd.add_argument("count", type=int, help="要抓取的帧数")
+    video_frames_cmd.add_argument("video", help="视频路径或 ffmpeg 可读取的视频 URL")
+    video_frames_cmd.add_argument("--out", help="输出目录；默认当前目录下 ./video_frames")
+    video_frames_cmd.add_argument("--size", default="256", help="单帧尺寸：默认 256；full 为原分辨率；也可用 512 或 320x180")
+    video_frames_cmd.add_argument("--seconds", help="使用的视频秒数：2 表示 0-2 秒；1-2 表示 1-2 秒；默认使用完整视频")
+    video_frames_cmd.add_argument("--remove-bg", "--remove-background", dest="remove_bg", action="store_true", default=True, help="扣除背景：用第一帧中出现最多的颜色作为背景色，并复用于所有帧；默认开启")
+    video_frames_cmd.add_argument("--keep-bg", dest="remove_bg", action="store_false", help="保留背景，不执行扣背景")
+    video_frames_cmd.add_argument("--bg-tolerance", type=int, default=12, help="扣背景颜色容差，0-255；默认 12")
+    video_frames_cmd.add_argument("--columns", type=int, help="framesheet 列数；默认尽量接近方形，例如 24 帧为 4x6，20 帧为 4x5")
+    video_frames_cmd.add_argument("--duration", type=int, help="WebP 每帧持续毫秒数；默认按选中视频片段时长/帧数计算")
+    video_frames_cmd.add_argument("--loop", type=int, default=0, help="WebP 循环次数；默认 0 表示无限循环")
+    video_frames_cmd.add_argument("--lossy", action="store_true", help="使用有损 WebP；默认 lossless")
+    video_frames_cmd.add_argument("--no-overwrite", action="store_true", help="如果 framesheet.png 或 animation.webp 已存在则失败；默认覆盖")
 
     fixture_cmd = subparsers.add_parser("call-fixture", help="调用内置确定性示例")
     fixture_cmd.add_argument("tool", choices=sorted(FIXTURES))
@@ -354,6 +458,64 @@ def main(argv: list[str] | None = None) -> int:
             print(f"已创建/更新 Trae 项目规则：{rule_path}")
         else:
             print("已跳过项目规则创建。")
+        return 0
+
+    if args.command == "frame":
+        try:
+            output = frame_command(args.grid, args.image, out=args.out, size=args.size, overwrite=not args.no_overwrite)
+        except Exception as exc:
+            print(f"frame failed: {exc}", file=sys.stderr)
+            return 1
+        print(output)
+        return 0
+
+    if args.command == "frame-gif":
+        try:
+            output = frame_gif_command(args.grid, args.image, out=args.out, duration=args.duration, loop=args.loop, size=args.size, overwrite=not args.no_overwrite)
+        except Exception as exc:
+            print(f"frame-gif failed: {exc}", file=sys.stderr)
+            return 1
+        print(output)
+        return 0
+
+    if args.command in {"frame-webp", "frame_webp"}:
+        try:
+            output = frame_webp_command(
+                args.grid,
+                args.image,
+                out=args.out,
+                duration=args.duration,
+                loop=args.loop,
+                size=args.size,
+                overwrite=not args.no_overwrite,
+                lossless=not args.lossy,
+            )
+        except Exception as exc:
+            print(f"frame-webp failed: {exc}", file=sys.stderr)
+            return 1
+        print(output)
+        return 0
+
+    if args.command in {"v2f", "video-frames", "video_frames"}:
+        try:
+            output = video_frames_command(
+                args.count,
+                args.video,
+                out=args.out,
+                size=args.size,
+                seconds=args.seconds,
+                overwrite=not args.no_overwrite,
+                remove_background=args.remove_bg,
+                background_tolerance=args.bg_tolerance,
+                columns=args.columns,
+                duration=args.duration,
+                loop=args.loop,
+                lossless=not args.lossy,
+            )
+        except Exception as exc:
+            print(f"v2f failed: {exc}", file=sys.stderr)
+            return 1
+        print(output)
         return 0
 
     if args.command == "call-fixture":

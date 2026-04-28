@@ -7,11 +7,17 @@ optional dependency for users who opt into local image generation.
 
 from __future__ import annotations
 
+from collections import Counter
 from io import BytesIO
 from pathlib import Path
 import re
+import shutil
+import math
 from statistics import median
+import subprocess
+import tempfile
 from typing import Any, Iterable, Tuple
+from urllib.parse import urlparse
 
 Color = Tuple[int, int, int]
 KEY_DOMINANCE_THRESHOLD = 16.0
@@ -128,6 +134,466 @@ def save_webp(frames: Iterable[object], out: str | Path, *, duration_ms: int = 1
     return out_path
 
 
+
+
+def parse_grid(raw: str) -> tuple[int, int]:
+    """Parse a COLSxROWS grid string such as ``4x4``."""
+
+    match = re.fullmatch(r"([1-9][0-9]*)[xX]([1-9][0-9]*)", raw.strip())
+    if not match:
+        raise ValueError("grid must be COLSxROWS, for example 4x4")
+    return int(match.group(1)), int(match.group(2))
+
+
+def parse_video_seconds(raw: str | None) -> tuple[float, float] | None:
+    """Parse a video time range.
+
+    ``None`` means the caller should use the whole video. ``"2"`` means
+    0..2 seconds and ``"1-2"`` means 1..2 seconds.
+    """
+
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        raise ValueError("seconds must not be empty")
+    if "-" in value:
+        left, right = value.split("-", 1)
+        if not left.strip() or not right.strip():
+            raise ValueError("seconds range must be START-END, for example 1-2")
+        start = float(left)
+        end = float(right)
+    else:
+        start = 0.0
+        end = float(value)
+    if start < 0 or end <= start:
+        raise ValueError("seconds must describe a positive range")
+    return start, end
+
+
+def parse_video_frame_size(raw: str | int | None) -> tuple[int, int] | None:
+    """Parse a video frame size.
+
+    ``None`` defaults to 256x256, ``"full"`` preserves source dimensions,
+    ``"512"`` means 512x512, and ``"320x180"`` means an explicit rectangle.
+    """
+
+    if raw is None:
+        return (256, 256)
+    if isinstance(raw, int):
+        if raw < 1:
+            raise ValueError("size must be positive")
+        return (raw, raw)
+    value = raw.strip().lower()
+    if value == "full":
+        return None
+    if re.fullmatch(r"[1-9][0-9]*", value):
+        size = int(value)
+        return (size, size)
+    match = re.fullmatch(r"([1-9][0-9]*)[xX]([1-9][0-9]*)", value)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    raise ValueError("size must be full, a positive integer, or WIDTHxHEIGHT")
+
+
+def video_sample_times(count: int, start: float, end: float) -> list[float]:
+    """Return evenly distributed in-segment sample timestamps.
+
+    Samples use bin centers instead of the exact segment end. Many video
+    containers report duration as the timestamp just after the final decodable
+    frame, so seeking to ``end`` can legitimately return no frame.
+    """
+
+    if count < 1:
+        raise ValueError("frame count must be at least 1")
+    if start < 0 or end <= start:
+        raise ValueError("video segment must have a positive duration")
+    step = (end - start) / float(count)
+    return [start + (step * (index + 0.5)) for index in range(count)]
+
+
+def dominant_image_color(image) -> Color:
+    """Return the most common RGB color in an image."""
+
+    rgb = image.convert("RGB")
+    colors = rgb.getcolors(maxcolors=rgb.width * rgb.height)
+    if colors is not None:
+        return max(colors, key=lambda item: item[0])[1]
+    else:
+        counter = Counter(rgb.getdata())
+        return counter.most_common(1)[0][0]
+
+
+def near_square_columns(frame_count: int) -> int:
+    """Choose a compact framesheet column count.
+
+    Preference is given to a divisor at or below the square root so exact grids
+    like 24 -> 4x6 and 20 -> 4x5 stay compact instead of becoming one long row.
+    """
+
+    if frame_count < 1:
+        raise ValueError("frame_count must be at least 1")
+    root = int(math.sqrt(frame_count))
+    for columns in range(root, 0, -1):
+        if frame_count % columns == 0:
+            return columns
+    return root or 1
+
+
+def _is_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    return parsed.scheme in {"http", "https", "ftp", "s3"}
+
+
+def _default_video_frames_dir(video: str | Path) -> Path:
+    return Path.cwd() / "video_frames"
+
+
+def _require_executable(name: str) -> str:
+    executable = shutil.which(name)
+    if executable is None:
+        raise RuntimeError(f"{name} is required for video frame extraction and was not found in PATH")
+    return executable
+
+
+def _probe_video_duration(video: str | Path) -> float:
+    ffprobe = _require_executable("ffprobe")
+    completed = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or "unknown ffprobe error"
+        raise RuntimeError(f"ffprobe failed: {detail}")
+    try:
+        duration = float(completed.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError("ffprobe did not return a valid video duration") from exc
+    if duration <= 0:
+        raise ValueError("video duration must be positive")
+    return duration
+
+
+def _extract_video_frame_png(video: str | Path, timestamp: float) -> bytes:
+    ffmpeg = _require_executable("ffmpeg")
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{timestamp:.6f}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "png",
+            "pipe:1",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0 or not completed.stdout:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip() or "no frame data returned"
+        raise RuntimeError(f"ffmpeg failed at {timestamp:.3f}s: {detail}")
+    return completed.stdout
+
+
+def _save_webp_animation_with_ffmpeg(
+    frames: Iterable[object],
+    out: str | Path,
+    *,
+    duration_ms: int,
+    loop: int = 0,
+    lossless: bool = True,
+) -> Path:
+    """Save frames as animated WebP via ffmpeg.
+
+    Pillow can write animated WebP, but some viewers accumulate transparent
+    frames from those files. ffmpeg/libwebp_anim emits WebP animations that
+    clear the previous frame correctly while keeping temporary PNGs ephemeral.
+    """
+
+    if duration_ms <= 0:
+        raise ValueError("duration_ms must be positive")
+    ffmpeg = _require_executable("ffmpeg")
+    images = _as_image_sequence(frames)
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    framerate = f"1000/{duration_ms}"
+    with tempfile.TemporaryDirectory(prefix="ymcp-video-frames-") as temp_dir:
+        temp_root = Path(temp_dir)
+        for index, image in enumerate(images):
+            image.save(temp_root / f"frame_{index:04d}.png", format="PNG")
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                framerate,
+                "-i",
+                str(temp_root / "frame_%04d.png"),
+                "-loop",
+                str(loop),
+                "-lossless",
+                "1" if lossless else "0",
+                "-c:v",
+                "libwebp_anim",
+                str(out_path),
+            ],
+            check=False,
+            capture_output=True,
+        )
+    if completed.returncode != 0 or not out_path.exists():
+        detail = completed.stderr.decode("utf-8", errors="replace").strip() or "animated WebP was not created"
+        raise RuntimeError(f"ffmpeg WebP encode failed: {detail}")
+    _force_webp_replace_dispose(out_path)
+    return out_path
+
+
+def _force_webp_replace_dispose(path: str | Path) -> None:
+    """Force animated WebP frames to replace and clear, not alpha-blend.
+
+    The ANMF flags byte uses bit 0 for blending and bit 1 for disposal. Setting
+    every frame to ``0b10`` means "do not blend with previous frame" and
+    "dispose to background". This is intentionally defensive: different WebP
+    encoders/viewers can otherwise make transparent animation frames appear to
+    accumulate.
+    """
+
+    webp_path = Path(path)
+    data = bytearray(webp_path.read_bytes())
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        raise ValueError(f"not a WebP file: {webp_path}")
+    offset = 12
+    changed = False
+    while offset + 8 <= len(data):
+        chunk_type = bytes(data[offset : offset + 4])
+        chunk_size = int.from_bytes(data[offset + 4 : offset + 8], "little")
+        payload_offset = offset + 8
+        if chunk_type == b"ANMF" and payload_offset + 16 <= len(data):
+            data[payload_offset + 15] = 0b10
+            changed = True
+        offset = payload_offset + chunk_size + (chunk_size % 2)
+    if changed:
+        webp_path.write_bytes(data)
+
+
+def extract_video_frames(
+    video: str | Path,
+    count: int,
+    out: str | Path | None = None,
+    *,
+    seconds: str | None = None,
+    size: str | int | None = None,
+    overwrite: bool = True,
+    remove_background: bool = True,
+    background_tolerance: int = 12,
+    columns: int | None = None,
+    duration_ms: int | None = None,
+    loop: int = 0,
+    lossless: bool = True,
+) -> Path:
+    """Evenly extract video frames into a framesheet PNG and animated WebP.
+
+    ffmpeg/ffprobe decode the video stream and Pillow performs deterministic
+    resizing/saving. ``size='full'`` preserves the decoded frame dimensions.
+    When ``remove_background`` is true, the most common RGB color in the first
+    output frame is used as the background key for every saved frame. Individual
+    sampled PNG frames are not written to disk.
+    """
+
+    if count < 1:
+        raise ValueError("frame count must be at least 1")
+    if not (0 <= background_tolerance <= 255):
+        raise ValueError("background_tolerance must be between 0 and 255")
+    if columns is not None and columns < 1:
+        raise ValueError("columns must be at least 1")
+    if duration_ms is not None and duration_ms <= 0:
+        raise ValueError("duration_ms must be positive")
+    target_size = parse_video_frame_size(size)
+    range_seconds = parse_video_seconds(seconds)
+    if range_seconds is None:
+        range_seconds = (0.0, _probe_video_duration(video))
+    start, end = range_seconds
+    times = video_sample_times(count, start, end)
+
+    out_dir = Path(out) if out is not None else _default_video_frames_dir(video)
+    sheet_path = out_dir / "framesheet.png"
+    webp_path = out_dir / "animation.webp"
+    if out_dir.exists() and not overwrite:
+        existing = [path for path in (sheet_path, webp_path) if path.exists()]
+        if existing:
+            raise FileExistsError(f"output already exists: {existing[0]}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    Image, _ = _load_pillow()
+    background_key: Color | None = None
+    frames: list[object] = []
+    for timestamp in times:
+        with Image.open(BytesIO(_extract_video_frame_png(video, timestamp))) as image:
+            frame = image.convert("RGBA") if image.mode in {"RGBA", "LA", "P"} or "transparency" in image.info else image.convert("RGB")
+            if target_size is not None:
+                frame = frame.resize(target_size, Image.Resampling.LANCZOS)
+            if remove_background:
+                if background_key is None:
+                    background_key = dominant_image_color(frame)
+                frame = frame.convert("RGBA")
+                _apply_alpha_to_image(
+                    frame,
+                    key=background_key,
+                    tolerance=background_tolerance,
+                    spill_cleanup=True,
+                    soft_matte=True,
+                    transparent_threshold=float(background_tolerance),
+                    opaque_threshold=220.0,
+                )
+            frames.append(frame.copy())
+    output_columns = columns if columns is not None else near_square_columns(count)
+    output_duration = duration_ms if duration_ms is not None else max(1, int(round((end - start) * 1000.0 / count)))
+    save_sprite_sheet(frames, sheet_path, columns=output_columns)
+    _save_webp_animation_with_ffmpeg(frames, webp_path, duration_ms=output_duration, loop=loop, lossless=lossless)
+    return out_dir
+
+
+
+def _frames_from_sheet(image_path: str | Path, grid: str | tuple[int, int], *, frame_size: int | None = None) -> list[object]:
+    if frame_size is not None and frame_size < 1:
+        raise ValueError("frame_size must be positive")
+    cols, rows = parse_grid(grid) if isinstance(grid, str) else grid
+    if cols < 1 or rows < 1:
+        raise ValueError("grid columns and rows must be positive")
+    src = Path(image_path)
+    if not src.exists():
+        raise FileNotFoundError(f"input image not found: {src}")
+
+    Image, _ = _load_pillow()
+    with Image.open(src) as image:
+        source = image.convert("RGBA") if image.mode in {"RGBA", "LA", "P"} or "transparency" in image.info else image.convert("RGB")
+
+    cell_w = source.width / cols
+    cell_h = source.height / rows
+    frames: list[object] = []
+    for row in range(rows):
+        for col in range(cols):
+            left = round(col * cell_w)
+            upper = round(row * cell_h)
+            right = round((col + 1) * cell_w)
+            lower = round((row + 1) * cell_h)
+            frame = source.crop((left, upper, right, lower))
+            if frame_size is not None:
+                frame = frame.resize((frame_size, frame_size), Image.Resampling.LANCZOS)
+            frames.append(frame)
+    return frames
+
+
+def framesheet_to_gif(
+    image_path: str | Path,
+    grid: str | tuple[int, int],
+    out: str | Path | None = None,
+    *,
+    duration_ms: int = 80,
+    loop: int = 0,
+    frame_size: int | None = None,
+    overwrite: bool = True,
+) -> Path:
+    """Convert a framesheet into an animated GIF without writing individual frames."""
+
+    src = Path(image_path)
+    out_path = Path(out) if out is not None else src.with_suffix(".gif")
+    if out_path.exists() and not overwrite:
+        raise FileExistsError(f"output already exists: {out_path}")
+    frames = _frames_from_sheet(src, grid, frame_size=frame_size)
+    return save_gif(frames, out_path, duration_ms=duration_ms, loop=loop, disposal=2)
+
+
+def framesheet_to_webp(
+    image_path: str | Path,
+    grid: str | tuple[int, int],
+    out: str | Path | None = None,
+    *,
+    duration_ms: int = 80,
+    loop: int = 0,
+    frame_size: int | None = None,
+    overwrite: bool = True,
+    lossless: bool = True,
+) -> Path:
+    """Convert a framesheet into an animated WebP without writing individual frames."""
+
+    src = Path(image_path)
+    out_path = Path(out) if out is not None else src.with_suffix(".webp")
+    if out_path.exists() and not overwrite:
+        raise FileExistsError(f"output already exists: {out_path}")
+    frames = _frames_from_sheet(src, grid, frame_size=frame_size)
+    return save_webp(frames, out_path, duration_ms=duration_ms, loop=loop, lossless=lossless)
+
+
+def resize_framesheet(
+    image_path: str | Path,
+    grid: str | tuple[int, int],
+    out: str | Path | None = None,
+    *,
+    frame_size: int = 256,
+    overwrite: bool = False,
+) -> Path:
+    """Resize a framesheet so every grid cell becomes ``frame_size`` square.
+
+    ``grid`` is interpreted as columns x rows. The output is always written as
+    PNG and preserves alpha when the source has transparency.
+    """
+
+    if frame_size < 1:
+        raise ValueError("frame_size must be positive")
+    cols, rows = parse_grid(grid) if isinstance(grid, str) else grid
+    if cols < 1 or rows < 1:
+        raise ValueError("grid columns and rows must be positive")
+
+    src = Path(image_path)
+    if not src.exists():
+        raise FileNotFoundError(f"input image not found: {src}")
+    out_path = Path(out) if out is not None else src.with_name(f"{src.stem}-{frame_size}{src.suffix if src.suffix.lower() == '.png' else '.png'}")
+    if out_path.exists() and not overwrite:
+        raise FileExistsError(f"output already exists: {out_path}")
+
+    Image, _ = _load_pillow()
+    with Image.open(src) as image:
+        source = image.convert("RGBA") if image.mode in {"RGBA", "LA", "P"} or "transparency" in image.info else image.convert("RGB")
+
+    cell_w = source.width / cols
+    cell_h = source.height / rows
+    mode = "RGBA" if source.mode == "RGBA" else "RGB"
+    output = Image.new(mode, (cols * frame_size, rows * frame_size), (0, 0, 0, 0) if mode == "RGBA" else (0, 0, 0))
+
+    for row in range(rows):
+        for col in range(cols):
+            left = round(col * cell_w)
+            upper = round(row * cell_h)
+            right = round((col + 1) * cell_w)
+            lower = round((row + 1) * cell_h)
+            frame = source.crop((left, upper, right, lower)).resize((frame_size, frame_size), Image.Resampling.LANCZOS)
+            output.paste(frame, (col * frame_size, row * frame_size), frame if frame.mode == "RGBA" else None)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    output.save(out_path, format="PNG")
+    return out_path
 
 def validate_frame_sequence(
     frames_dir: str | Path,
@@ -421,6 +887,16 @@ __all__ = [
     "save_sprite_sheet",
     "save_gif",
     "save_webp",
+    "parse_grid",
+    "parse_video_seconds",
+    "parse_video_frame_size",
+    "video_sample_times",
+    "dominant_image_color",
+    "near_square_columns",
+    "extract_video_frames",
+    "resize_framesheet",
+    "framesheet_to_gif",
+    "framesheet_to_webp",
     "validate_frame_sequence",
     "parse_key_color",
     "remove_chroma_key",

@@ -1,23 +1,43 @@
 """Helpers for local image generation workflows."""
 
 from ymcp.tools.imagegen.local_frame_workflow import (
+    dominant_image_color,
     ensure_output_dirs,
+    extract_video_frames,
     frame_path,
+    framesheet_to_gif,
+    framesheet_to_webp,
+    near_square_columns,
+    parse_grid,
     parse_key_color,
+    parse_video_frame_size,
+    parse_video_seconds,
+    resize_framesheet,
     remove_chroma_key,
     save_gif,
     save_sprite_sheet,
     save_webp,
     validate_frame_sequence,
+    video_sample_times,
 )
 
 __all__ = [
     "ensure_output_dirs",
+    "dominant_image_color",
+    "extract_video_frames",
     "frame_path",
+    "framesheet_to_gif",
+    "framesheet_to_webp",
+    "near_square_columns",
+    "parse_grid",
     "parse_key_color",
+    "parse_video_frame_size",
+    "parse_video_seconds",
+    "resize_framesheet",
     "remove_chroma_key",
     "save_gif",
     "save_sprite_sheet",
     "save_webp",
     "validate_frame_sequence",
+    "video_sample_times",
 ]

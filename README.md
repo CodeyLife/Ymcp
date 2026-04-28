@@ -70,6 +70,19 @@ pip install -U ymcp
 ymcp init-trae
 ```
 
+## 本地图像 / 视频帧工具
+
+安装可选 Pillow 支持后可使用本地帧处理命令；视频抽帧还需要系统可执行的 `ffmpeg` / `ffprobe`。
+
+```powershell
+pip install "ymcp[imagegen]"
+ymcp v2f 12 input.mp4 --seconds 1-2 --size 256 --out output/frames
+ymcp v2f 8 input.mp4 --seconds 2 --size full
+ymcp v2f 12 input.mp4 --columns 6
+```
+
+`--seconds 2` 表示使用 0-2 秒，`--seconds 1-2` 表示使用 1-2 秒；`--size` 默认 `256`，`full` 保留原视频分辨率，也支持 `320x180`。该命令不会保留中间采样 PNG，默认在当前目录下的 `video_frames` 输出目录生成 `framesheet.png` 和 `animation.webp`。framesheet 默认尽量接近方形，例如 24 帧为 4x6、20 帧为 4x5，可用 `--columns` 覆盖列数。默认会用第一帧中出现最多的颜色作为背景色，并在所有帧中复用该颜色扣除背景；如需保留背景可传 `--keep-bg`。
+
 ## 记忆
 
 回答历史事实前先查 `mempalace_search` / `mempalace_get_drawer`；任务完成后把稳定偏好、项目约定、重要决策和踩坑结论写入 `mempalace_add_drawer` 或 `mempalace_diary_write`。
