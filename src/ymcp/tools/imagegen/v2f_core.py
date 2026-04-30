@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from io import BytesIO
 import json
@@ -177,6 +178,7 @@ def render_frames(
     timing: TimingMapSpec | None = None,
     *,
     output_count: int | None = None,
+    max_workers: int | None = None,
 ) -> list[object]:
     """Apply visual processing and deterministic timing remap to a FrameSet."""
 
@@ -185,21 +187,21 @@ def render_frames(
     count = output_count or len(source_frames)
     indices = output_frame_source_indices(count, len(source_frames), timing)
     fade_spec = legacy.parse_radial_fade(active_visual.fade)
-    Image, _ = legacy._load_pillow()
+    if active_visual.remove_background and active_visual.key_color is None:
+        background_key: Color | None = legacy.dominant_image_color(source_frames[indices[0]])
+    else:
+        background_key = active_visual.key_color
 
-    background_key: Color | None = active_visual.key_color
-    rendered: list[object] = []
-    for index in indices:
+    def render_one(index: int) -> object:
+        Image, _ = legacy._load_pillow()
         frame = source_frames[index].copy()
         if active_visual.crop is not None:
             frame = frame.crop(active_visual.crop)
         if active_visual.remove_background:
-            if background_key is None:
-                background_key = legacy.dominant_image_color(frame)
             frame = frame.convert("RGBA")
             legacy._apply_alpha_to_image(
                 frame,
-                key=background_key,
+                key=background_key or legacy.dominant_image_color(frame),
                 tolerance=active_visual.background_tolerance,
                 spill_cleanup=True,
                 soft_matte=True,
@@ -209,8 +211,13 @@ def render_frames(
         frame = legacy._apply_radial_alpha_fade(frame, fade_spec)
         if active_visual.output_size is not None:
             frame = frame.resize(active_visual.output_size, Image.Resampling.LANCZOS)
-        rendered.append(frame.copy())
-    return rendered
+        return frame.copy()
+
+    worker_count = max_workers if max_workers is not None else min(8, max(1, len(indices)))
+    if worker_count <= 1 or len(indices) <= 1:
+        return [render_one(index) for index in indices]
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return list(executor.map(render_one, indices))
 
 
 def preview_frames(

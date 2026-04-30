@@ -167,6 +167,16 @@ class V2FSessionStore:
             raise ValueError("当前会话还没有帧")
         return render_frames(session.frame_set, session.visual_spec, session.timing_spec)
 
+    def cache_summary(self, session_id: str) -> dict[str, Any]:
+        session = self.get(session_id)
+        frame_set = session.frame_set
+        return {
+            "cached_in_memory": frame_set is not None,
+            "frame_count": frame_set.frame_count if frame_set else 0,
+            "source_kind": frame_set.source_kind if frame_set else None,
+            "cache_key": frame_set.cache_key if frame_set else None,
+        }
+
     def export(self, session_id: str, out_dir: str | Path | None = None, spec: ExportSpec | None = None) -> Path:
         session = self.get(session_id)
         target = self._resolve_export_target(session, out_dir)

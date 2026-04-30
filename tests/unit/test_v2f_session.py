@@ -5,7 +5,7 @@ import pytest
 Image = pytest.importorskip("PIL.Image")
 
 from ymcp.tools.imagegen.session import V2FSessionStore, resolve_safe_path
-from ymcp.tools.imagegen.v2f_core import CapturePlan, FramesheetPlan, VisualPipelineSpec, frameset_from_framesheet, render_frames
+from ymcp.tools.imagegen.v2f_core import CapturePlan, FrameSet, FramesheetPlan, VisualPipelineSpec, frameset_from_framesheet, render_frames
 
 
 def _make_sheet(path: Path) -> None:
@@ -40,6 +40,33 @@ def test_render_frames_applies_visual_without_mutating_source(tmp_path):
     assert frame_set.frames[0].size == (10, 10)
 
 
+def test_render_frames_radial_fade_changes_corner_alpha(tmp_path):
+    image = Image.new("RGBA", (11, 11), (255, 0, 0, 255))
+    frame_set = FrameSet([image], "framesheet", "test")
+
+    unchanged = render_frames(frame_set, VisualPipelineSpec(remove_background=False, fade="100"))[0]
+    faded = render_frames(frame_set, VisualPipelineSpec(remove_background=False, fade="80-1"))[0]
+
+    assert unchanged.getpixel((0, 0))[3] == 255
+    assert faded.getpixel((0, 0))[3] == 0
+    assert faded.getpixel((5, 5))[3] == 255
+
+
+def test_render_frames_parallel_matches_serial(tmp_path):
+    frames = [
+        Image.new("RGBA", (11, 11), (255, 0, 0, 255)),
+        Image.new("RGBA", (11, 11), (0, 255, 0, 255)),
+        Image.new("RGBA", (11, 11), (0, 0, 255, 255)),
+    ]
+    frame_set = FrameSet(frames, "framesheet", "test")
+    visual = VisualPipelineSpec(remove_background=False, fade="50-2")
+
+    serial = render_frames(frame_set, visual, max_workers=1)
+    parallel = render_frames(frame_set, visual, max_workers=3)
+
+    assert [list(image.getdata()) for image in parallel] == [list(image.getdata()) for image in serial]
+
+
 def test_session_capture_reuses_same_capture_key(monkeypatch, tmp_path):
     calls = []
     store = V2FSessionStore(tmp_path / "sessions")
@@ -60,6 +87,19 @@ def test_session_capture_reuses_same_capture_key(monkeypatch, tmp_path):
     store.capture_video(session.id, plan)
 
     assert len(calls) == 1
+
+
+def test_session_cache_summary_reports_in_memory_frames(tmp_path):
+    sheet = tmp_path / "sheet.png"
+    _make_sheet(sheet)
+    store = V2FSessionStore(tmp_path / "sessions")
+    session = store.create_from_framesheet(sheet, "2x1")
+
+    summary = store.cache_summary(session.id)
+
+    assert summary["cached_in_memory"] is True
+    assert summary["frame_count"] == 2
+    assert summary["source_kind"] == "framesheet"
 
 
 def test_session_reset_removes_temp_root(tmp_path):

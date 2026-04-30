@@ -67,9 +67,31 @@ def test_v2f_web_app_framesheet_session_visual_timing_and_preview(v2f_server, tm
     assert status == 200
     assert payload["timing_spec"]["preset"] == "hold_then_burst"
 
+    status, payload = _request(
+        v2f_server,
+        "PATCH",
+        f"/api/sessions/{session_id}/timing",
+        {
+            "duration_seconds": 8,
+            "speed_keyframes": [
+                {"time": 1, "before": 0.4, "after": 5},
+                {"time": 5, "before": 2, "after": 1},
+            ],
+        },
+    )
+    assert status == 200
+    assert payload["timing_spec"]["preset"] == "speed_keyframes"
+    assert payload["timing_spec"]["points"][0] == {"output": 0.0, "source": 0.0}
+    assert payload["timing_spec"]["points"][-1] == {"output": 1.0, "source": 1.0}
+
     status, payload = _request(v2f_server, "GET", f"/api/sessions/{session_id}/preview")
     assert status == 200
     assert payload["url"] == f"/api/sessions/{session_id}/artifact/preview"
+
+    status, payload = _request(v2f_server, "GET", f"/api/sessions/{session_id}/cache")
+    assert status == 200
+    assert payload["cached_in_memory"] is True
+    assert payload["frame_count"] == 2
 
     status, payload = _request(v2f_server, "POST", f"/api/sessions/{session_id}/export", {"duration_ms": 40})
     assert status == 200
@@ -103,14 +125,30 @@ def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     assert "Ymcp v2f 编辑器" in html
     assert "素材来源" in html
     assert "拖拽视频或帧表到这里" in html
+    assert '<video id="videoPlayer" controls' in html
+    assert "处理中，请稍候" in html
+    assert "正在创建会话并抽取视频帧" in html
+    assert "正在生成预览" in html
+    assert "button:disabled" in html
     assert "中心不透明半径（%）" in html
     assert "边缘衰减速度" in html
     assert "淡出预设" in html
     assert "透明淡出：中心 80% 保持不透明" in html
+    assert "scheduleVisualPreview" not in html
     assert "节奏模板" in html
-    assert "蓄力时长（%）" in html
-    assert "停顿强度（%）" in html
-    assert "爆发位置（%）" in html
+    assert "速度关键帧" in html
+    assert "原视频时长（秒）" in html
+    assert "添加关键帧" in html
+    assert "恢复示例" in html
+    assert 'id="speedCurve"' in html
+    assert "拖动圆点调整关键帧时间" in html
+    assert "前速度" in html
+    assert "后速度" in html
+    assert "速度关键帧 JSON" in html
+    assert '"time":1,"before":0.4,"after":5' in html
+    assert "蓄力时长（%）" not in html
+    assert "停顿强度（%）" not in html
+    assert "爆发位置（%）" not in html
     assert "高级模式" in html
     assert "应用节奏" in html
     assert "可编辑关键点 JSON" not in html
@@ -136,6 +174,25 @@ def test_v2f_web_app_upload_saves_file_under_upload_root(v2f_server):
     assert path.exists()
     assert path.name.endswith("-clip.mp4")
     assert path.read_bytes() == b"fake-video"
+    assert payload["url"].startswith("/api/uploads/")
+
+    conn = HTTPConnection(v2f_server.server_address[0], v2f_server.server_address[1], timeout=5)
+    conn.request("GET", payload["url"])
+    response = conn.getresponse()
+    body = response.read()
+    conn.close()
+    assert response.status == 200
+    assert body == b"fake-video"
+    assert response.getheader("accept-ranges") == "bytes"
+
+    conn = HTTPConnection(v2f_server.server_address[0], v2f_server.server_address[1], timeout=5)
+    conn.request("GET", payload["url"], headers={"Range": "bytes=2-5"})
+    response = conn.getresponse()
+    body = response.read()
+    conn.close()
+    assert response.status == 206
+    assert response.getheader("content-range") == "bytes 2-5/10"
+    assert body == b"ke-v"
 
 
 def test_v2f_web_app_rejects_export_outside_session_root(v2f_server, tmp_path):

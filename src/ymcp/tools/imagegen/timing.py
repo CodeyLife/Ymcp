@@ -40,6 +40,15 @@ class TimingMapSpec:
             raise ValueError("only linear timing interpolation is supported")
 
 
+@dataclass(frozen=True)
+class SpeedKeyframe:
+    """Playback-speed control point at a source-video timestamp."""
+
+    time_seconds: float
+    before_speed: float
+    after_speed: float
+
+
 def _clamp_unit(value: float) -> float:
     return max(0.0, min(1.0, value))
 
@@ -137,11 +146,93 @@ def output_frame_source_indices(output_count: int, source_count: int, spec: Timi
     return [round(map_output_to_source(progress, spec) * max_source_index) for progress in progresses]
 
 
+def timing_from_speed_keyframes(
+    duration_seconds: float,
+    keyframes: Iterable[SpeedKeyframe],
+    *,
+    samples: int = 80,
+) -> TimingMapSpec:
+    """Build a TimingMapSpec from source-time speed keyframes.
+
+    Speed is interpreted as source playback speed. For example, speed ``0.4``
+    before a 1s keyframe means source time advances slowly from 0s to 1s. The
+    interval between two keyframes interpolates from the left keyframe's
+    ``after_speed`` to the right keyframe's ``before_speed``. The final
+    interval interpolates from the last keyframe's ``before_speed`` to its
+    ``after_speed``. Output-time position is computed by integrating
+    ``dt_source / speed`` and normalizing the cumulative output time.
+    """
+
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be positive")
+    if samples < 2:
+        raise ValueError("samples must be at least 2")
+    ordered = tuple(sorted(keyframes, key=lambda item: item.time_seconds))
+    previous_time = 0.0
+    for keyframe in ordered:
+        if not (0.0 < keyframe.time_seconds < duration_seconds):
+            raise ValueError("speed keyframe time must be inside the video duration")
+        if keyframe.time_seconds <= previous_time:
+            raise ValueError("speed keyframes must have strictly increasing times")
+        if keyframe.before_speed <= 0 or keyframe.after_speed <= 0:
+            raise ValueError("speed values must be positive")
+        previous_time = keyframe.time_seconds
+
+    source_times = [duration_seconds * index / float(samples - 1) for index in range(samples)]
+    cumulative = [0.0]
+    for left, right in zip(source_times, source_times[1:]):
+        midpoint = (left + right) / 2.0
+        speed = _speed_at_source_time(midpoint, duration_seconds, ordered)
+        cumulative.append(cumulative[-1] + ((right - left) / speed))
+    total_output = cumulative[-1]
+    if total_output <= 0:
+        raise ValueError("speed keyframes produced an invalid output duration")
+    points = tuple(
+        TimingPoint(
+            output=_clamp_unit(output_time / total_output),
+            source=_clamp_unit(source_time / duration_seconds),
+        )
+        for source_time, output_time in zip(source_times, cumulative)
+    )
+    return TimingMapSpec(points=_dedupe_timing_points(points), preset="speed_keyframes")
+
+
+def _speed_at_source_time(time_seconds: float, duration_seconds: float, keyframes: tuple[SpeedKeyframe, ...]) -> float:
+    if not keyframes:
+        return 1.0
+    first = keyframes[0]
+    if time_seconds <= first.time_seconds:
+        return first.before_speed
+    for left, right in zip(keyframes, keyframes[1:]):
+        if time_seconds <= right.time_seconds:
+            span = right.time_seconds - left.time_seconds
+            local_t = (time_seconds - left.time_seconds) / span if span > 0 else 0.0
+            return left.after_speed + (right.before_speed - left.after_speed) * local_t
+    last = keyframes[-1]
+    tail_span = duration_seconds - last.time_seconds
+    if tail_span <= 0:
+        return last.after_speed
+    local_t = (time_seconds - last.time_seconds) / tail_span
+    return last.before_speed + (last.after_speed - last.before_speed) * local_t
+
+
+def _dedupe_timing_points(points: tuple[TimingPoint, ...]) -> tuple[TimingPoint, ...]:
+    deduped = [points[0]]
+    for point in points[1:-1]:
+        if point.output > deduped[-1].output and point.source >= deduped[-1].source:
+            deduped.append(point)
+    if deduped[-1] != TimingPoint(1.0, 1.0):
+        deduped.append(TimingPoint(1.0, 1.0))
+    return tuple(deduped)
+
+
 __all__ = [
     "TimingMapSpec",
     "TimingPoint",
+    "SpeedKeyframe",
     "map_output_to_source",
     "output_frame_source_indices",
+    "timing_from_speed_keyframes",
     "timing_preset",
     "validate_timing_points",
 ]

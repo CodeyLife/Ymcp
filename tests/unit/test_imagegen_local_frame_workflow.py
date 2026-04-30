@@ -128,6 +128,26 @@ def test_apply_radial_alpha_fade_preserves_center_and_fades_corner():
     assert faded.getpixel((0, 0))[3] == 0
 
 
+def test_radial_fade_percent_uses_short_side_circle_radius():
+    spec = parse_radial_fade("50")
+
+    # For a 256x256 image, the fade circle radius is 128px. 50% therefore
+    # keeps the inner 64px radius fully opaque, then fades to 0 at radius 128.
+    assert local_frame_workflow._radial_alpha_multiplier(191, 128, 256, 256, spec) == 1.0
+    assert local_frame_workflow._radial_alpha_multiplier(255, 128, 256, 256, spec) == 0.0
+
+
+def test_radial_fade_speed_interpolates_between_opaque_and_edge():
+    linear = parse_radial_fade("50-1")
+    faster = parse_radial_fade("50-2")
+
+    mid_linear = local_frame_workflow._radial_alpha_multiplier(223, 128, 256, 256, linear)
+    mid_faster = local_frame_workflow._radial_alpha_multiplier(223, 128, 256, 256, faster)
+
+    assert 0.0 < mid_linear < 1.0
+    assert mid_faster > mid_linear
+
+
 def test_apply_radial_alpha_fade_handles_boundaries_and_tiny_images():
     image = Image.new("RGBA", (3, 3), (255, 0, 0, 128))
     unchanged = local_frame_workflow._apply_radial_alpha_fade(image, parse_radial_fade("100"))

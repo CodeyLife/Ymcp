@@ -893,15 +893,16 @@ def _apply_alpha_to_image(image, *, key: Color, tolerance: int, spill_cleanup: b
 def _radial_alpha_multiplier(x: int, y: int, width: int, height: int, spec: RadialFadeSpec) -> float:
     cx = (width - 1) / 2.0
     cy = (height - 1) / 2.0
-    corners = ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1))
-    max_radius = max(math.hypot(corner_x - cx, corner_y - cy) for corner_x, corner_y in corners)
-    opaque_radius = (spec.opaque_percent / 100.0) * max_radius
-    if max_radius == 0.0 or opaque_radius >= max_radius:
+    fade_radius = min(width, height) / 2.0
+    opaque_radius = (spec.opaque_percent / 100.0) * fade_radius
+    if fade_radius == 0.0 or opaque_radius >= fade_radius:
         return 1.0
     distance = math.hypot(float(x) - cx, float(y) - cy)
     if distance <= opaque_radius:
         return 1.0
-    progress = _clamp_unit((distance - opaque_radius) / (max_radius - opaque_radius))
+    if distance >= fade_radius - 0.5:
+        return 0.0
+    progress = _clamp_unit((distance - opaque_radius) / (fade_radius - opaque_radius))
     return _clamp_unit(1.0 - (progress**spec.speed))
 
 
