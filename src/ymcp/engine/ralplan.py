@@ -40,21 +40,21 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
     memory_preflight = _memory_preflight(task, known_context, memory_context)
     skill_content = prompt_content('planner', task)
     handoff = Handoff(
-        recommended_next_action='yplan_architect',
+        recommended_next_action='menu',
         options=[
             build_handoff_option(
-                'yplan_architect',
-                '进入 yplan_architect',
-                '完成 planner 阶段后调用 yplan_architect。',
+                'menu',
+                '进入 menu',
+                '完成 planner / architect / critic 全部规划思考并输出总结后，调用统一 menu tool。',
                 recommended=True,
             )
         ],
     )
     return RalplanResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请将 skill_content 作为推理指导完成 planner 阶段；产出初版方案后调用 `yplan_architect`。当前阶段只有一个合法下一步：进入 architect 阶段。`handoff.options` 由服务端生成，应直接使用，不要自行构造新的选项对象。',
+        summary='请将 skill_content 作为推理指导，在同一 yplan skill 内完成 planner / architect / critic 三段思考；完成任务并输出规划总结后，调用统一 `menu` tool，并把下一步选项作为 options 参数传入。当前不再公开 yplan_architect / yplan_critic 阶段 tools。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '先完成 planner 阶段输出；完成后调用 yplan_architect。不要跳过 architect 阶段直接进入流程菜单。')],
+        next_actions=[build_next_action('下一步', '完成规划、架构审视、critic 验收与总结后调用 menu；options 应包含 ydo、yplan、memory_store。')],
         risks=[],
         meta=build_meta(
             'yplan',

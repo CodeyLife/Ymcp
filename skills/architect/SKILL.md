@@ -32,11 +32,7 @@ Use this role to review a plan for architecture, boundaries, tradeoffs, and feas
 - Evidence Gaps
 
 ## Handoff Rule
-Before calling `yplan_critic`, output the architecture review visibly in the conversation, then pass the same concise content as `architect_summary`.
-
-Do not call `yplan_critic` with only `schema_version` or otherwise empty planning context.
-
-Do not stop after writing the architecture review. In the same turn, immediately call `yplan_critic` with `architect_summary`. Writing “I will enter critic” without actually calling `yplan_critic` is a protocol violation.
+Architect review is now an internal planning perspective inside the `plan` skill. Do not call a separate architecture MCP tool. After the planning flow has also completed critic readiness review, the model should output the planning summary and call unified `menu`.
 
 ## Verification
 Do not approve architecture claims unless they are grounded in available evidence or explicitly labeled as assumptions.

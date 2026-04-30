@@ -53,60 +53,63 @@ def _memory_protocol_content() -> str:
 
 PRINCIPLES_CONTENT = """# Ymcp FastMCP 第一原则
 
-- 保留 `ydeep`、`ydeep_menu`、`yplan`、`yplan_architect`、`yplan_critic`、`yplan_menu`、`ydo`、`ydo_menu` 等 workflow tools。
-- tool 负责阶段 gate 与下一步约束；prompt 负责内部思考方法。
+- 保留 `ydeep`、`yplan`、`ydo` 三个 workflow 入口与唯一公开 `menu` 流程菜单 tool。
+- tool 负责阶段 gate、统一 handoff、Elicitation 与 WebUI fallback；prompt 负责内部思考方法。
 - 运行时硬约束以 prompts、tool descriptions 和 tool contract 为准。
 """
 
 WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 
+## Public workflow tools
+
+- Public workflow surface:
+  - `ydeep`
+  - `yplan`
+  - `ydo`
+  - `menu`
+- `ydeep`, `yplan`, and `ydo` return stage `skill_content`.
+- After the model finishes the stage task and outputs a visible summary, it calls `menu`.
+- `menu` is the only public workflow handoff tool.
+
+## menu
+
+- `menu` accepts:
+  - `source_workflow`
+  - `summary`
+  - `options`
+  - optional `selected_option`
+  - optional `webui_timeout_seconds`
+- `options` are the sole authoritative next-step menu source.
+- `menu` first tries MCP Elicitation.
+- If Elicitation is unsupported, failed, declined, cancelled, or returns an illegal option, `menu` starts a localhost WebUI fallback and returns `blocked` with `meta.ui_request.webui_url`.
+- WebUI fallback is an interactive control, not a markdown/text menu.
+- The host/model must not auto-select `recommended_next_action`.
+
 ## ydeep
 
-- `ydeep` returns `skill_content` and a single next-step option: `ydeep_menu`
-- `ydeep_menu` returns `clarified_artifact` plus two Elicitation options:
+- `ydeep` returns `deep-interview` skill guidance.
+- After clarification is complete, the model outputs a summary and calls `menu` with options:
   - `yplan`
   - `refine_further`
-- Host convention:
-  - when the user/model chooses `yplan`, convert `clarified_artifact.summary` into the plain `task` input expected by `yplan`
-  - when the user/model chooses `refine_further`, stay in the same interview loop and call `ydeep_menu` again after more thinking
-  - `recommended_next_action` is only a recommendation; the host / model must not auto-select it
-  - if the host cannot execute MCP Elicitation, `ydeep_menu` should block rather than silently succeeding
 
 ## yplan
 
-- `yplan` accepts only:
-  - `task`
-- `yplan` returns planner `skill_content` and a single next-step option: `yplan_architect`
-- `yplan_architect` returns architect `skill_content` and a single next-step option: `yplan_critic`
-- `yplan_critic` returns critic `skill_content` and exactly two legal next-step options:
+- `yplan` accepts only `task`.
+- `yplan` returns `planner` skill guidance.
+- The `plan` skill performs planner / architect / critic thinking internally; `yplan_architect` and `yplan_critic` are no longer public tools.
+- After the plan is approved or needs a new planning pass, the model outputs a summary and calls `menu` with options:
+  - `ydo`
   - `yplan`
-  - `yplan_menu`
-- Host convention:
-  - the host converts upstream artifacts into a plain planning task before calling `yplan`
-    - from `ydeep_menu`, use `clarified_artifact.summary` as `task`
-    - from execution/replanning, use the new planning brief or execution findings as a fresh plain `task`
-  - the model finishes the planner stage, then calls `yplan_architect`
-  - the model finishes the architect stage, outputs an architecture review summary, then in the same turn calls `yplan_critic` with `architect_summary`; stopping after the summary is not a valid handoff
-  - inside `yplan_critic`, the model decides for itself whether the plan is ready:
-    - if ready, make approval explicit, produce a brief critic approval summary, and then call `yplan_menu` with `critic_summary`; do not stop at the approval text and do not call the menu tool with only `schema_version`
-    - if not ready, restart planning by calling `yplan`
-  - Ymcp does not require a fixed critic verdict schema such as `APPROVE/REVISE`; the legal next-step options are the contract
-  - `yplan_menu` is a handoff-only workflow menu gate; calling it with `critic_summary` means the model believes planning is ready for next-step selection
-  - `yplan_menu` does not produce the final business conclusion and does not auto-start execution; it only returns the legal next-step options after critic approval evidence is present
+  - `memory_store`
 
 ## ydo
 
-- `yplan_menu` returns `ydo` as a legal next step
-- `ydo` returns execution `skill_content` and the next-step option `ydo_menu`
-- `ydo_menu` returns four Elicitation options:
+- `ydo` starts execution from current conversation context and no longer requires an `approved_plan_artifact` input.
+- After execution and verification, the model outputs a summary and calls `menu` with options:
   - `finish`
   - `memory_store`
   - `yplan`
   - `continue_execution`
-- Host convention:
-  - `ydo` is entered directly from the current conversation context; it no longer requires an `approved_plan_artifact` input
-  - when the user/model chooses `yplan` after execution, restart planning by passing a fresh plain `task`
-  - `ydo_menu` is also a no-input workflow menu gate; `continue_execution` means stay in the execution loop and call `ydo_menu` again after more work
 
 ## yimggen
 
@@ -126,10 +129,10 @@ Ymcp is a lightweight skill-flow server. The tool contract only declares:
 The intended interaction is:
 1. tool returns `skill_content`
 2. model thinks and outputs
-3. host calls the matching `*_menu`
-4. for menu stages, host should use `handoff.options` as the Elicitation / interactive-control menu source and wait for user choice; the model should stop analysis and must not render a markdown/text menu
-5. if Elicitation is unavailable or fails, menu stages should return `blocked`; `handoff.options` remains the authoritative menu payload, not a silent-success fallback
-6. menu-stage `workflow_state` should move through explicit handoff statuses such as `ready_for_handoff`, `elicitation_requested`, `awaiting_user_selection`, and `selection_confirmed`
+3. model outputs the stage summary and calls `menu` with explicit options
+4. `menu` uses `handoff.options` as the Elicitation / WebUI interactive-control source and waits for user choice where supported
+5. if Elicitation is unavailable or fails, `menu` returns `blocked` plus `webui_url`; `handoff.options` remains the authoritative menu payload
+6. menu `workflow_state` moves through explicit statuses such as `ready_for_handoff`, `elicitation_requested`, `awaiting_user_selection`, and `selection_confirmed`
 
 The host owns the fixed calling convention between stages. Ymcp does not try to be a fully automatic workflow state machine.
 """

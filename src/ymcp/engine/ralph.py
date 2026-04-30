@@ -11,21 +11,21 @@ from ymcp.core.result import apply_selected_handoff_option, build_handoff_option
 def build_ralph(request: RalphRequest) -> RalphResult:
     skill_content = prompt_content('ralph', 'continue from current conversation context')
     handoff = Handoff(
-        recommended_next_action='ydo_menu',
+        recommended_next_action='menu',
         options=[
             build_handoff_option(
-                'ydo_menu',
-                '进入 ydo_menu',
-                '完成执行、修复、验证流程后调用 ydo_menu。',
+                'menu',
+                '进入 menu',
+                '完成执行、修复、验证流程并输出总结后调用统一 menu tool。',
                 recommended=True,
             )
         ],
     )
     return RalphResult(
         status=ToolStatus.NEEDS_INPUT,
-        summary='请将 skill_content 作为推理指导进入执行阶段：实现、修复并验证。`ydo` 现在不再要求 `approved_plan_artifact` 输入，而是依赖当前调用链上下文继续执行。完成一轮执行与验证后调用 `ydo_menu`。',
+        summary='请将 skill_content 作为推理指导进入执行阶段：实现、修复并验证。`ydo` 现在不再要求 `approved_plan_artifact` 输入，而是依赖当前调用链上下文继续执行。完成一轮执行与验证并输出总结后调用统一 `menu` tool。',
         assumptions=[],
-        next_actions=[build_next_action('下一步', '按批准方案执行并收集新鲜验证证据；不要把部分进展称为完成。完成后调用 ydo_menu。')],
+        next_actions=[build_next_action('下一步', '按批准方案执行并收集新鲜验证证据；不要把部分进展称为完成。完成后调用 menu。')],
         risks=[],
         meta=build_meta(
             'ydo',

@@ -13,31 +13,26 @@ from pydantic import BaseModel, Field, create_model
 from ymcp.capabilities import get_prompt_specs, get_resource_specs, prompt_template
 from ymcp.contracts.common import ElicitationState, HostActionType, ToolStatus
 from ymcp.contracts.deep_interview import (
-    DeepInterviewCompleteRequest,
-    DeepInterviewCompleteResult,
     DeepInterviewRequest,
     DeepInterviewResult,
 )
 from ymcp.contracts.imagegen import ImagegenRequest, ImagegenResult
+from ymcp.contracts.menu import MenuRequest, MenuResult
 from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS, MemoryResult
-from ymcp.contracts.ralph import RalphCompleteRequest, RalphCompleteResult, RalphRequest, RalphResult
+from ymcp.contracts.ralph import RalphRequest, RalphResult
 from ymcp.contracts.ralplan import (
-    RalplanArchitectRequest,
-    RalplanArchitectResult,
-    RalplanCompleteRequest,
-    RalplanCompleteResult,
-    RalplanCriticRequest,
-    RalplanCriticResult,
     RalplanRequest,
     RalplanResult,
 )
 from ymcp.core.versioning import SCHEMA_VERSION
-from ymcp.engine.deep_interview import build_deep_interview, build_deep_interview_complete
+from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.imagegen import build_imagegen
-from ymcp.engine.ralph import build_ralph, build_ralph_complete
-from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ralplan_complete, build_ralplan_critic
+from ymcp.engine.menu import build_menu
+from ymcp.engine.ralph import build_ralph
+from ymcp.engine.ralplan import build_ralplan
 from ymcp.internal_registry import get_tool_specs
 from ymcp.memory import build_memory_request_id, execute_memory_operation, memory_log_kv, memory_result_to_mcp_payload, mempalace_palace_path
+from ymcp.web.menu_app import create_menu_session_url
 
 LOGGER = logging.getLogger('ymcp')
 
@@ -81,15 +76,37 @@ def _update_workflow_state(result: Any, *, current_phase: str, readiness: str, c
         artifacts.selected_option = selected_option
 
 
-def _apply_interactive_handoff_fallback(result: Any, *, reason: str) -> Any:
+def _apply_interactive_handoff_fallback(result: Any, *, reason: str, timeout_seconds: int | None = None) -> Any:
+    artifacts = getattr(result, 'artifacts', None)
+    options = list(result.meta.handoff.options) if result.meta.handoff else []
+    source_workflow = getattr(artifacts, 'source_workflow', result.meta.tool_name)
+    summary = getattr(artifacts, 'received_summary', result.summary)
+    session = None
+    webui_url = None
+    if options:
+        session, webui_url = create_menu_session_url(
+            source_workflow=source_workflow,
+            summary=summary,
+            options=options,
+            timeout_seconds=timeout_seconds,
+        )
+        if hasattr(artifacts, 'menu_session_id'):
+            artifacts.menu_session_id = session.id
+        if hasattr(artifacts, 'webui_url'):
+            artifacts.webui_url = webui_url
     result.status = ToolStatus.BLOCKED
     result.meta.required_host_action = HostActionType.AWAIT_INPUT
-    result.meta.host_controls = ['display', 'selected_option tool recall']
+    result.meta.host_controls = ['display', 'webui fallback', 'selected_option tool recall']
     result.meta.elicitation_error = reason
     result.meta.menu_authority = 'meta.handoff.options'
     result.meta.ui_request = {
         'kind': 'await_selected_option',
         'selected_option_param': 'selected_option',
+        'source_workflow': source_workflow,
+        'summary': summary,
+        'options': [option.model_dump(mode='json') for option in options],
+        'webui_url': webui_url,
+        'menu_session_id': session.id if session else None,
     }
     _update_workflow_state(
         result,
@@ -102,13 +119,14 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str) -> Any:
     result.summary = (
         'WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION: '
         '宿主必须通过 meta.handoff.options 提供的固定选项收集用户的下一步流程需求，'
-        '并将所选 value 作为 selected_option 回传当前流程菜单 tool；'
+        'menu 已提供 WebUI fallback 作为 Elicitation 失败时的真实可交互菜单；'
+        '用户选择后，宿主应将所选 value 作为 selected_option 回传 menu tool；'
         'assistant 不得用自然语言、markdown 文本菜单或自动选择替代宿主交互控件。'
     )
     return result
 
 
-async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, message_prefix: str) -> Any:
+async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, message_prefix: str, timeout_seconds: int | None = None) -> Any:
     artifacts = getattr(result, 'artifacts', None)
     if getattr(artifacts, 'selected_option', None):
         return result
@@ -139,6 +157,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         return _apply_interactive_handoff_fallback(
             result,
             reason='当前调用通道未提供 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
+            timeout_seconds=timeout_seconds,
         )
 
     try:
@@ -151,6 +170,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         return _apply_interactive_handoff_fallback(
             result,
             reason='当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
+            timeout_seconds=timeout_seconds,
         )
 
     try:
@@ -160,6 +180,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         return _apply_interactive_handoff_fallback(
             result,
             reason=f'Elicitation 调用失败（{type(exc).__name__}: {exc}）',
+            timeout_seconds=timeout_seconds,
         )
 
     action = getattr(elicitation, 'action', None)
@@ -170,6 +191,7 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
             return _apply_interactive_handoff_fallback(
                 result,
                 reason=f'Elicitation 返回了非法选项 `{selected}`。合法选项只能来自 handoff.options：{", ".join(values)}',
+                timeout_seconds=timeout_seconds,
             )
         result.meta.required_host_action = HostActionType.DISPLAY_ONLY
         result.meta.elicitation_state = ElicitationState.ACCEPTED
@@ -184,23 +206,17 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         result.summary = f"{result.summary}\n\nElicitation 已完成，用户选择了 `{selected}`。"
         return result
 
-    result.status = ToolStatus.NEEDS_INPUT
-    result.meta.required_host_action = HostActionType.AWAIT_INPUT
     if action == 'decline':
         result.meta.elicitation_state = ElicitationState.DECLINED
     elif action == 'cancel':
         result.meta.elicitation_state = ElicitationState.CANCELLED
     else:
         result.meta.elicitation_state = ElicitationState.FAILED
-    _update_workflow_state(
+    return _apply_interactive_handoff_fallback(
         result,
-        current_phase='awaiting_user_selection',
-        readiness='awaiting_user_selection',
-        current_focus='awaiting_user_selection',
-        blocked_reason='user_choice_pending',
+        reason=f'Elicitation 未完成（{action}），已启用 WebUI fallback 继续收集 selected_option',
+        timeout_seconds=timeout_seconds,
     )
-    result.summary = f"{result.summary}\n\nElicitation 未完成（{action}）。宿主必须继续基于 handoff.options 渲染真实交互控件并等待 selected_option；assistant 不得输出文本菜单。"
-    return result
 
 
 def configure_logging(level: int = logging.INFO) -> None:
@@ -241,7 +257,7 @@ def _register_mempalace_tool(app: FastMCP, *, name: str, description: str, reque
 
 
 def create_app() -> FastMCP:
-    app = FastMCP(name='ymcp', instructions='Workflow tools ydeep / ydeep_menu / yplan / yplan_architect / yplan_critic / yplan_menu / ydo / ydo_menu / yimggen with skill-guided reasoning and lightweight Elicitation-oriented handoff options.', log_level='ERROR')
+    app = FastMCP(name='ymcp', instructions='Workflow tools ydeep / yplan / ydo / menu / yimggen with skill-guided reasoning, unified menu handoff, MCP Elicitation, and WebUI fallback options.', log_level='ERROR')
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
 
     for resource_spec in get_resource_specs():
@@ -267,33 +283,29 @@ def create_app() -> FastMCP:
         result = build_deep_interview(request)
         return result
 
-    @app.tool(name='ydeep_menu', description=descriptions['ydeep_menu'], structured_output=True)
-    async def deep_interview_complete(summary: str, selected_option: str | None = None, brief: str | None = None, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> DeepInterviewCompleteResult:
-        request = DeepInterviewCompleteRequest(summary=summary, selected_option=selected_option, brief=brief, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
-        result = build_deep_interview_complete(request)
-        return await _maybe_elicit_handoff_choice(ctx, result, message_prefix='需求澄清阶段已完成。宿主必须渲染交互式选择控件；assistant 不得用文本代渲染。')
-
     @app.tool(name='yplan', description=descriptions['yplan'], structured_output=True)
     async def ralplan(task: str, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanResult:
         request = RalplanRequest(task=task, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
         result = build_ralplan(request)
         return result
 
-    @app.tool(name='yplan_architect', description=descriptions['yplan_architect'], structured_output=True)
-    async def ralplan_architect(schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanArchitectResult:
-        request = RalplanArchitectRequest(schema_version=schema_version)
-        return build_ralplan_architect(request)
-
-    @app.tool(name='yplan_critic', description=descriptions['yplan_critic'], structured_output=True)
-    async def ralplan_critic(architect_summary: str | None = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanCriticResult:
-        request = RalplanCriticRequest(architect_summary=architect_summary, schema_version=schema_version)
-        return build_ralplan_critic(request)
-
-    @app.tool(name='yplan_menu', description=descriptions['yplan_menu'], structured_output=True)
-    async def ralplan_complete(critic_summary: str | None = None, selected_option: str | None = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanCompleteResult:
-        request = RalplanCompleteRequest(critic_summary=critic_summary, selected_option=selected_option, schema_version=schema_version)
-        result = build_ralplan_complete(request)
-        return await _maybe_elicit_handoff_choice(ctx, result, message_prefix='规划阶段已完成。宿主必须渲染交互式选择控件；assistant 不得用文本代渲染。')
+    @app.tool(name='menu', description=descriptions['menu'], structured_output=True)
+    async def workflow_menu(source_workflow: str, summary: str, options: list[dict[str, Any]], selected_option: str | None = None, webui_timeout_seconds: int | None = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> MenuResult:
+        request = MenuRequest(
+            source_workflow=source_workflow,
+            summary=summary,
+            options=options,
+            selected_option=selected_option,
+            webui_timeout_seconds=webui_timeout_seconds,
+            schema_version=schema_version,
+        )
+        result = build_menu(request)
+        return await _maybe_elicit_handoff_choice(
+            ctx,
+            result,
+            message_prefix=f'{source_workflow} 阶段已完成。宿主必须渲染交互式选择控件；assistant 不得用文本代渲染。',
+            timeout_seconds=webui_timeout_seconds,
+        )
 
     @app.tool(name='yimggen', description=descriptions['yimggen'], structured_output=True)
     async def imagegen(brief: str, output_root: str | None = None, asset_slug: str | None = None, dimensions: str | None = None, frame_count: int | None = None, transparent: bool = True, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> ImagegenResult:
@@ -305,12 +317,6 @@ def create_app() -> FastMCP:
         request = RalphRequest(memory_context=memory_context or {}, schema_version=schema_version)
         result = build_ralph(request)
         return result
-
-    @app.tool(name='ydo_menu', description=descriptions['ydo_menu'], structured_output=True)
-    async def ralph_complete(selected_option: str | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalphCompleteResult:
-        request = RalphCompleteRequest(selected_option=selected_option, memory_context=memory_context or {}, schema_version=schema_version)
-        result = build_ralph_complete(request)
-        return await _maybe_elicit_handoff_choice(ctx, result, message_prefix='执行阶段当前一轮已结束。宿主必须渲染交互式选择控件；assistant 不得用文本代渲染。')
 
     for tool_schema in MEMPALACE_TOOL_SCHEMAS:
         _register_mempalace_tool(app, name=tool_schema['name'], description=descriptions[tool_schema['name']], request_model=MEMPALACE_REQUEST_MODELS[tool_schema['name']])

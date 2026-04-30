@@ -11,24 +11,19 @@ description: Strategic planning with planner, architect, and critic stages
 In Ymcp:
 - user-facing skill: `$plan`
 - actual MCP entry tool: `yplan`
-- stage tools: `yplan_architect`, `yplan_critic`
-- flow-menu tool: `yplan_menu`
+- unified handoff tool: `menu`
+- planner / architect / critic are thinking roles inside this skill, not public MCP stage tools
 
 ## Workflow model
 Ymcp planning is a lightweight skill-flow:
-1. `yplan` returns planner `skill_content`
-2. the model completes the planner stage and calls `yplan_architect`
-3. `yplan_architect` returns architect `skill_content`
-4. the model completes the architect stage, outputs an architecture review summary, and calls `yplan_critic` with `architect_summary`
-5. `yplan_critic` returns critic `skill_content` plus the only two legal next steps:
-   - `yplan`
-   - `yplan_menu`
-6. the model either restarts planning at `yplan` or pauses planning at `yplan_menu`
-7. `yplan_menu` returns the next workflow options for host-side user selection
-
-The tool defines stage boundaries and legal next steps. The skill defines how to think during each stage.
-
-Ymcp does not require the model to round-trip a mid-plan state object between `yplan`, `yplan_architect`, and `yplan_critic`. Within the same call chain, the model carries that context itself.
+1. `yplan` returns planner `skill_content`.
+2. The model completes planner / architect / critic reasoning in the same skill flow.
+3. The model outputs a visible planning summary containing requirements, accepted plan, tradeoffs, risks, and verification approach.
+4. The model calls `menu` with:
+   - `source_workflow="yplan"`
+   - `summary=<planning summary>`
+   - `options=[ydo, yplan, memory_store]`
+5. `menu` handles MCP Elicitation first and falls back to WebUI when Elicitation fails.
 
 ## When to use
 - The task is clear enough to plan, but not yet ready to execute
@@ -36,27 +31,18 @@ Ymcp does not require the model to round-trip a mid-plan state object between `y
 - You want a structured plan artifact for downstream execution
 
 ## Stage roles
-- **Planner / `yplan`** drafts the initial plan
-- **Architect / `yplan_architect`** challenges feasibility, boundaries, and tradeoffs
-- **Critic / `yplan_critic`** judges readiness and either approves completion or restarts planning at `yplan`
+- **Planner** drafts the initial plan
+- **Architect** challenges feasibility, boundaries, and tradeoffs
+- **Critic** judges readiness and either approves handoff or recommends another `yplan` pass
 
 ## Core rules
 - Do not invent a separate routing protocol inside the skill.
-- Follow the tool-returned next-step boundary at each phase.
-- Do not call `yplan_critic` with only `schema_version`; first output the architect review and pass it as `architect_summary`.
-- Do not stop after `yplan_architect` produces the architecture review. The same turn must call `yplan_critic` with `architect_summary`.
-- In `yplan_critic`, decide between `yplan` and `yplan_menu` from the returned options.
-- If the critic concludes that the plan is not ready, restart planning at `yplan`.
-- If the plan is rejected, you must restart planning at `yplan`.
-- Do not continue inside `yplan_critic` after rejection.
-- Do not route rejection back to `yplan_architect`.
-- `yplan_menu` pauses after the planning phase and asks the host to collect the user's next workflow choice.
-- Do not say the task is complete; only the planning phase is complete.
-- Do not treat `yplan_menu` as a final analysis, final report, or execution step.
-- When `yplan_critic` approves the plan, do not end the conversation at the approval text; continue by calling `yplan_menu` with `critic_summary`.
-- Do not call `yplan_menu` with only `schema_version`; it requires a brief `critic_summary` handoff note proving critic approval before it can expose the final handoff menu.
+- Do not call `yplan_architect`, `yplan_critic`, or `yplan_menu`; they are no longer public workflow tools.
+- Complete planner / architect / critic reasoning before calling `menu`.
+- If the critic concludes that the plan is not ready, call `menu` with `yplan` as a legal option and explain the replan reason in `summary`.
+- If the plan is ready, call `menu` with `ydo` as the recommended option.
 - The host must render a real interactive control from `handoff.options` as the only next-step menu source.
-- If `handoff.options` is present, stop planning; do not paraphrase, merge, auto-select, or render a markdown/text menu as assistant output.
+- If MCP Elicitation is unavailable or fails, `menu` provides a WebUI fallback; do not render a markdown/text menu as assistant output.
 
 ## Expected plan contents
 - Requirements summary
@@ -66,19 +52,15 @@ Ymcp does not require the model to round-trip a mid-plan state object between `y
 - Verification approach
 
 ## Planning Complete
-
-When `yplan_critic` decides the plan is ready, the planning flow pauses at `yplan_menu`.
+When the critic decides the plan is ready, planning pauses at `menu`.
 
 Interpret that boundary correctly:
-- the critic approval itself is not the end of the interaction
-- `yplan_menu` is a handoff-only workflow-menu tool.
-- It does not continue analysis.
-- It does not generate the final business conclusion.
-- It does not auto-start execution.
+- critic approval itself is not the end of the interaction
+- `menu` is a handoff-only workflow-menu tool
+- it does not continue analysis or auto-start execution
 
-After `yplan_menu` returns:
+After `menu` returns:
 - treat `handoff.options` as the only authoritative next-step menu
-- preserve all returned options
-- preserve recommendation markers
+- preserve all returned options and recommendation markers
 - do not omit, rewrite, merge, reorder, invent, or auto-select options
-- if host-side elicitation is unavailable, do not render a text menu; stop assistant output and require host UI or an explicit selected_option tool call
+- if Elicitation fails, use the returned WebUI fallback instead of a text menu

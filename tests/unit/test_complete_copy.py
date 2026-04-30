@@ -1,14 +1,11 @@
-from ymcp.complete_copy import (
-    COMPLETE_TOOL_BLOCKED_SUFFIX,
-    with_blocked_on_unsupported_elicitation,
-    with_handoff_menu_requirement,
-)
+from ymcp.complete_copy import with_blocked_on_unsupported_elicitation, with_handoff_menu_requirement
 from ymcp.internal_registry import get_tool_specs
 
 
 def test_complete_copy_helpers_keep_common_contract_suffixes():
     blocked = with_blocked_on_unsupported_elicitation('前置说明。')
-    assert blocked.endswith('若宿主不支持 Elicitation，则本流程菜单 tool 应返回 blocked，并要求宿主以 handoff.options 渲染真实可交互菜单；普通文本列表或 assistant 代渲染不能替代交互选择。')
+    assert '统一 menu tool 应返回 blocked' in blocked
+    assert 'WebUI fallback' in blocked
 
     menu = with_handoff_menu_requirement('前置说明。', closing='不得自动继续')
     assert 'handoff.options' in menu
@@ -17,14 +14,9 @@ def test_complete_copy_helpers_keep_common_contract_suffixes():
     assert menu.endswith('不得自动继续。')
 
 
-def test_complete_tool_descriptions_share_blocked_contract():
-    descriptions = {
-        spec.name: spec.description
-        for spec in get_tool_specs()
-        if spec.name in {'ydeep_menu', 'yplan_menu', 'ydo_menu'}
-    }
-
-    assert descriptions.keys() == {'ydeep_menu', 'yplan_menu', 'ydo_menu'}
-    for description in descriptions.values():
-        assert description.endswith('若宿主不支持 Elicitation，则本流程菜单 tool 应返回 blocked，并要求宿主以 handoff.options 渲染真实可交互菜单；普通文本列表或 assistant 代渲染不能替代交互选择。')
-        assert 'workflow-menu' in description
+def test_menu_tool_description_mentions_elicitation_and_webui_fallback():
+    descriptions = {spec.name: spec.description for spec in get_tool_specs()}
+    assert set(name for name in descriptions if name.endswith('_menu')) == set()
+    assert 'workflow-menu' in descriptions['menu']
+    assert 'Elicitation' in descriptions['menu']
+    assert 'WebUI fallback' in descriptions['menu']

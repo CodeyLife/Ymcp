@@ -6,8 +6,8 @@ TRAE_PROJECT_RULE_TEMPLATE = """
 - 仅非空 `artifacts.selected_option` 或 `meta.elicitation_selected_option` 表示用户已选择；`selected_option` 为 `null` 时表示用户尚未选择任何菜单项。
 - 严禁根据 `recommended_next_action`、上下文、原始需求或推理推断/模拟/假设用户选择。
 - `status=blocked` 且 `ui_request.kind=await_selected_option` 时，必须停止规划、分析、执行和下一步 tool 调用，并等待合法 `option.value`。
-- 用户直接回复合法 `option.value` 时，必须原样作为 `selected_option` 回传当前菜单 tool。
-- Elicitation 不可用或失败时，必须按 `handoff.options` 渲染交互菜单并等待选择，不得自动推进。
+- 用户直接回复合法 `option.value` 时，必须原样作为 `selected_option` 回传统一 `menu` tool。
+- Elicitation 不可用或失败时，必须使用 `menu` 返回的 WebUI fallback 或等价真实交互控件按 `handoff.options` 渲染菜单并等待选择，不得自动推进。
 - blocked fallback 仅供宿主 UI 使用；assistant 不得用普通文本或 markdown 列表代渲染菜单。
 
 ## 记忆规则

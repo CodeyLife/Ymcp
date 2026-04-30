@@ -54,21 +54,17 @@ def test_skill_docs_avoid_stale_host_specific_tool_names():
             assert name not in text, f"{path} still references stale host tool {name}"
 
 
-def test_plan_and_ralph_skills_include_phase_boundary_templates():
+def test_plan_and_ralph_skills_include_unified_menu_boundaries():
     plan = Path('skills/plan/SKILL.md').read_text(encoding='utf-8')
-    critic = Path('skills/critic/SKILL.md').read_text(encoding='utf-8')
     ralph = Path('skills/ralph/SKILL.md').read_text(encoding='utf-8')
+    deep = Path('skills/deep-interview/SKILL.md').read_text(encoding='utf-8')
     assert '# Planning Complete' in plan
-    assert 'Do not say the task is complete; only the planning phase is complete' in plan
-    assert 'Do not call `yplan_menu` with only `schema_version`' in plan
+    assert 'unified handoff tool: `menu`' in plan
+    assert 'Do not call `yplan_architect`, `yplan_critic`, or `yplan_menu`' in plan
     assert 'The host must render a real interactive control from `handoff.options`' in plan
-    assert 'you must restart planning at `yplan`' in plan
-    assert 'If you judge the plan as ready, you must do the approved path in this order' in critic
-    assert 'choose `yplan` from the returned `handoff.options`' in critic
-    assert 'Do not call `yplan_menu` with only `schema_version`' in critic
-    architect = Path('skills/architect/SKILL.md').read_text(encoding='utf-8')
-    assert 'Do not stop after writing the architecture review' in architect
-    assert 'immediately call `yplan_critic` with `architect_summary`' in architect
+    assert 'WebUI fallback' in plan
+    assert 'source_workflow="ydeep"' in deep
+    assert 'source_workflow="ydo"' in ralph
     assert '# Execution Start' in ralph
     assert '# Execution Complete' in ralph
     assert 'Do not recommend `finish` if failures remain or verification is incomplete' in ralph

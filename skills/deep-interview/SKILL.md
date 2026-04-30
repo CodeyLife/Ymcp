@@ -27,17 +27,15 @@ argument-hint: "[--quick|--standard|--deep] [--autoresearch] <想法、目标或
 真实链路如下：
 
 1. 模型依据本 skill 的方法完成需求澄清
-2. 澄清完成后调用 `ydeep_menu`
-3. `ydeep_menu` 返回：
-   - `clarified_artifact`
-   - 下一步 handoff 菜单（当前合法项为 `yplan` 与 `refine_further`）
+2. 澄清完成并输出总结文案后调用统一 `menu` tool
+3. `menu` 参数必须包含 `source_workflow="ydeep"`、总结 `summary`，以及下一步 options（当前合法项为 `yplan` 与 `refine_further`）
 
 请注意：
 
 - `ydeep` **不会**返回结构化“澄清进度面板”
 - `ydeep` **不会**返回 clarity score、missing items、gap list 等字段
-- `clarified_artifact` 只在 `ydeep_menu` 阶段产出
-- 下一步动作必须以 `handoff.options` 为唯一权威来源
+- 澄清总结由调用 `menu` 时的 `summary` 参数承载
+- 下一步动作必须以 `menu` 返回的 `handoff.options` 为唯一权威来源
 
 换句话说：
 
@@ -242,15 +240,14 @@ argument-hint: "[--quick|--standard|--deep] [--autoresearch] <想法、目标或
 - `.omx/interviews/`
 - `.omx/specs/`
 
-### Phase 5：进入 `ydeep_menu`
-当你认为本轮澄清已经足够进入下一阶段时，调用 `ydeep_menu`。
+### Phase 5：进入统一 `menu`
+当你认为本轮澄清已经足够进入下一阶段时，先输出澄清总结，然后调用统一 `menu` tool。
 
-请记住：
+调用参数必须包含：
 
-- `ydeep_menu` 返回的是**收口后的 handoff 菜单**
-- 当前合法下一步只有：
-  - `yplan`
-  - `refine_further`
+- `source_workflow="ydeep"`
+- `summary=<刚输出的澄清总结>`
+- `options=[yplan, refine_further]`
 
 ## 交接规则
 
@@ -261,11 +258,11 @@ argument-hint: "[--quick|--standard|--deep] [--autoresearch] <想法、目标或
 不要自己发明直接跳去 `ydo`、`autopilot` 或其他执行路线，除非 tool 明确提供。
 
 ### 3. 如果仍有关键歧义，就走 `refine_further`
-如果边界、非目标、约束或成功标准仍不稳，优先继续澄清，而不是强行 handoff。
+如果边界、非目标、约束或成功标准仍不稳，优先在 menu 选项中保留 `refine_further`，而不是强行 handoff。
 
 ## 完成提示建议
 
-在调用 `ydeep_menu` 前，你的总结可优先覆盖这些内容：
+在调用 `menu` 前，你的总结可优先覆盖这些内容：
 
 - clarified goal
 - scope
@@ -274,7 +271,7 @@ argument-hint: "[--quick|--standard|--deep] [--autoresearch] <想法、目标或
 - success criteria
 - 任何必须保留给下游的关键边界
 
-但不要把自然语言总结误当成新的协议字段。真正的下一步选择仍由 `handoff.options` 决定。
+自然语言总结必须作为 `menu.summary` 传入；真正的下一步选择仍由 `menu.options` / `handoff.options` 决定。
 
 ## 注意事项
 

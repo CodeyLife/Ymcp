@@ -7,28 +7,22 @@ from pydantic import BaseModel
 
 from ymcp.complete_copy import with_blocked_on_unsupported_elicitation
 from ymcp.contracts.deep_interview import (
-    DeepInterviewCompleteRequest,
-    DeepInterviewCompleteResult,
     DeepInterviewRequest,
     DeepInterviewResult,
 )
 from ymcp.contracts.imagegen import ImagegenRequest, ImagegenResult
+from ymcp.contracts.menu import MenuRequest, MenuResult
 from ymcp.contracts.memory import MEMPALACE_REQUEST_MODELS, MEMPALACE_TOOL_SCHEMAS, MemoryResult
-from ymcp.contracts.ralph import RalphCompleteRequest, RalphCompleteResult, RalphRequest, RalphResult
+from ymcp.contracts.ralph import RalphRequest, RalphResult
 from ymcp.contracts.ralplan import (
-    RalplanArchitectRequest,
-    RalplanArchitectResult,
-    RalplanCompleteRequest,
-    RalplanCompleteResult,
-    RalplanCriticRequest,
-    RalplanCriticResult,
     RalplanRequest,
     RalplanResult,
 )
-from ymcp.engine.deep_interview import build_deep_interview, build_deep_interview_complete
+from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.imagegen import build_imagegen
-from ymcp.engine.ralph import build_ralph, build_ralph_complete
-from ymcp.engine.ralplan import build_ralplan, build_ralplan_architect, build_ralplan_complete, build_ralplan_critic
+from ymcp.engine.menu import build_menu
+from ymcp.engine.ralph import build_ralph
+from ymcp.engine.ralplan import build_ralplan
 from ymcp.memory import execute_memory_operation
 
 
@@ -44,57 +38,33 @@ class ToolSpec:
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name='ydeep',
-        description='需求澄清启动 tool。模型应使用返回的 deep-interview skill_content 完成调研；tool 只提供下一步 handoff，不要求回传中间 artifact。',
+        description='需求澄清启动 tool。模型应使用返回的 deep-interview skill_content 完成调研；完成任务并输出总结文案后调用统一 menu tool，并把 yplan / refine_further 作为 options 参数传入。',
         request_model=DeepInterviewRequest,
         response_model=DeepInterviewResult,
         handler=build_deep_interview,
     ),
     ToolSpec(
-        name='ydeep_menu',
-        description=with_blocked_on_unsupported_elicitation(
-            '需求澄清后的流程菜单 tool。模型在完成 deep-interview 调研后调用本 tool；tool 产出 clarified_artifact，并通过 workflow-menu 指导与强制 Elicitation 返回统一 handoff 选项，由宿主按固定约定决定如何进入 yplan 或继续澄清。'
-        ),
-        request_model=DeepInterviewCompleteRequest,
-        response_model=DeepInterviewCompleteResult,
-        handler=build_deep_interview_complete,
-    ),
-    ToolSpec(
         name='yplan',
-        description='共识规划启动 tool。模型应使用返回的 planner skill_content 完成 planner 阶段；tool 强约束下一步只能进入 yplan_architect。输入只保留 task，其他来源转换由宿主完成。',
+        description='共识规划启动 tool。模型应使用返回的 planner skill_content，在同一 skill 内完成 planner / architect / critic；完成任务并输出总结文案后调用统一 menu tool，并把 ydo / yplan / memory_store 作为 options 参数传入。',
         request_model=RalplanRequest,
         response_model=RalplanResult,
         handler=build_ralplan,
     ),
     ToolSpec(
-        name='yplan_architect',
-        description='共识规划 architect 阶段 tool。模型在进入本阶段后，使用 architect skill_content 继续推理；必须先输出 architecture review 摘要，再在同一轮携带 architect_summary 调用 yplan_critic，不能空参进入 critic，也不能只输出摘要后停止。',
-        request_model=RalplanArchitectRequest,
-        response_model=RalplanArchitectResult,
-        handler=build_ralplan_architect,
-    ),
-    ToolSpec(
-        name='yplan_critic',
-        description='共识规划 critic 阶段 tool。模型在进入本阶段后，使用 critic skill_content 继续推理，并自主判断是调用 yplan_menu 收口，还是在否决后强制回到 yplan 重开规划；若已批准，则必须先输出 critic 评估与批准摘要，再携带 critic_summary 调用 yplan_menu，不能空参调用菜单工具，也不能在输出批准结论后直接结束。tool 不强制固定 verdict 协议。',
-        request_model=RalplanCriticRequest,
-        response_model=RalplanCriticResult,
-        handler=build_ralplan_critic,
-    ),
-    ToolSpec(
-        name='yplan_menu',
-        description=with_blocked_on_unsupported_elicitation(
-            '共识规划后的流程菜单 tool。模型在完成 critic 评估后调用本 tool；本 tool 是 handoff-only 的下一步流程选择阶段，只负责暂停规划并通过 workflow-menu 指导与强制 Elicitation 返回 handoff 选项，用于决定是否进入 ydo、restart 或 memory_store。',
-            '它不会继续分析、不会生成最终业务结论、不会自动推进到下一阶段，也不再要求 summary 或构造交接 artifact。',
-        ),
-        request_model=RalplanCompleteRequest,
-        response_model=RalplanCompleteResult,
-        handler=build_ralplan_complete,
-    ),
-    ToolSpec(
         name='ydo',
-        description='执行验证启动 tool。模型应使用返回的 ralph skill_content 完成执行、修复、验证流程；本 tool 不再要求 approved_plan_artifact 输入，而是依赖当前调用链上下文继续执行。',
+        description='执行验证启动 tool。模型应使用返回的 ralph skill_content 完成执行、修复、验证流程；完成任务并输出总结文案后调用统一 menu tool，并把 finish / memory_store / yplan / continue_execution 作为 options 参数传入。',
         request_model=RalphRequest,
         response_model=RalphResult,
         handler=build_ralph,
+    ),
+    ToolSpec(
+        name='menu',
+        description=with_blocked_on_unsupported_elicitation(
+            '统一 workflow 流程菜单 tool。模型在完成 ydeep / yplan / ydo 阶段任务并输出总结文案后调用本 tool；tool 通过 workflow-menu 指导、优先 MCP Elicitation，并在 Elicitation 失败时启动 localhost WebUI fallback 提供真实可交互选项。'
+        ),
+        request_model=MenuRequest,
+        response_model=MenuResult,
+        handler=build_menu,
     ),
     ToolSpec(
         name='yimggen',
@@ -102,15 +72,6 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         request_model=ImagegenRequest,
         response_model=ImagegenResult,
         handler=build_imagegen,
-    ),
-    ToolSpec(
-        name='ydo_menu',
-        description=with_blocked_on_unsupported_elicitation(
-            '执行验证后的流程菜单 tool。模型在完成 ralph 执行循环后调用本 tool；本 tool 是无输入的下一步流程选择阶段，会通过 workflow-menu 指导与强制 Elicitation 返回统一 handoff 选项（如 finish / memory_store / yplan / continue_execution），由宿主按固定约定决定是收尾、重规划还是继续执行。'
-        ),
-        request_model=RalphCompleteRequest,
-        response_model=RalphCompleteResult,
-        handler=build_ralph_complete,
     ),
 )
 

@@ -24,11 +24,12 @@ Ralph is the execution phase. Its job is to finish the task, verify it with fres
 1. Read the approved plan or execution brief.
 2. Implement / fix / verify.
 3. Gather fresh evidence.
-4. Call `ydo_menu`.
-5. Choose the next step from `handoff.options`.
+4. Output an execution / verification summary.
+5. Call unified `menu` with `source_workflow="ydo"` and options `finish`, `memory_store`, `yplan`, `continue_execution`.
+6. Choose the next step from `handoff.options`.
 
 Within the same execution call chain, do not invent or depend on a mid-execution artifact round-trip unless the tool explicitly asks for one.
-`ydo` now starts without a business payload, and `ydo_menu` is a no-input workflow menu gate.
+`ydo` now starts without a business payload, and unified `menu` is the workflow menu gate.
 
 ## Minimal response shape
 For `ydo`, the response may include:
@@ -37,7 +38,7 @@ For `ydo`, the response may include:
 - key constraints to preserve
 - expected verification evidence
 
-For `ydo_menu`, the response may include:
+For the `menu.summary` after `ydo`, the response may include:
 - what changed
 - what evidence proves it
 - remaining blockers or follow-up needs
@@ -52,7 +53,7 @@ For `ydo_menu`, the response may include:
 At `ydo`, begin from the current approved plan or execution brief, preserve the active constraints, and aim to produce fresh verification evidence before attempting to close the loop.
 
 ## Next-step rule
-After a Ralph iteration, do not invent your own routing rules. Use the tool-returned options:
+After a Ralph iteration, do not invent your own routing rules. Call `menu` with these options:
 - `finish`
 - `memory_store`
 - `yplan`
@@ -60,7 +61,7 @@ After a Ralph iteration, do not invent your own routing rules. Use the tool-retu
 
 # Execution Complete
 
-`ydo_menu` is a handoff gate, not a substitute for verification. Use it only after a real execution pass, and interpret its returned menu as the only authoritative source for how the workflow should continue.
+Unified `menu` is a handoff gate, not a substitute for verification. Use it only after a real execution pass, and interpret its returned menu as the only authoritative source for how the workflow should continue.
 
 ## Guardrails
 - Do not reopen planning unless execution reveals a real blocker or mismatch.

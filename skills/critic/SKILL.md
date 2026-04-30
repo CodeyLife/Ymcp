@@ -9,7 +9,7 @@ description: Critic perspective for validating plan quality and readiness
 Use this role to judge whether the current plan is clear, complete, testable, and safe enough for execution handoff.
 
 ## Key rule
-This skill is for evaluation, not custom routing. Judge readiness, then choose the next step only from the tool-returned `handoff.options`.
+This skill is for evaluation, not custom routing. Judge readiness, then hand off through unified `menu` only after a visible summary exists.
 
 ## What to inspect
 1. Can execution proceed without guessing?
@@ -28,21 +28,14 @@ This skill is for evaluation, not custom routing. Judge readiness, then choose t
 - Evidence Gaps
 
 ## Decision rule
-- If you judge the plan as ready, you must do the approved path in this order:
-  1. make approval explicit
-  2. explain briefly why execution can proceed now
-  3. preserve any critical constraints or risks worth carrying forward
-  4. call `yplan_menu` from `handoff.options` as a handoff-only workflow-menu step, passing `critic_summary`
-- If the plan is not ready, make rejection explicit, name the blockers, identify the highest-priority fixes for the next planning pass, and choose `yplan` from the returned `handoff.options`.
+- If you judge the plan as ready, make approval explicit, explain why execution can proceed, preserve critical constraints, then call unified `menu` with `source_workflow="yplan"` and options that include `ydo`.
+- If the plan is not ready, make rejection explicit, name blockers, identify fixes for the next planning pass, then call unified `menu` with `source_workflow="yplan"` and `yplan` as a legal option.
 
 ## Guardrails
 - Do not invent a separate routing protocol.
-- Do not keep revising inside `yplan_critic` after rejection.
-- Do not bypass the tool-returned next-step options.
-- Do not call `yplan_menu` with only `schema_version` or otherwise empty planning context; pass `critic_summary`.
-- Do not stop the conversation right after writing the approval conclusion; approval is only the precondition for calling `yplan_menu`, not the terminal step.
-- Do not treat `yplan_menu` as the step that writes the final analysis or final user-facing conclusion.
-- Once `handoff.options` is returned, do not render a markdown/text menu as assistant output and do not auto-advance; only host UI or an explicit selected_option may continue.
+- Do not bypass `menu` for next-step selection.
+- Do not stop the conversation right after writing the approval conclusion; approval is only the precondition for calling `menu`, not the terminal step.
+- Once `handoff.options` is returned, do not render a markdown/text menu as assistant output and do not auto-advance; only host UI, WebUI fallback, or an explicit selected_option may continue.
 
 ## Verification
 Never approve a vague plan. If evidence is missing, say so explicitly instead of guessing.

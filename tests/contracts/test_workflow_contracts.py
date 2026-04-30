@@ -1,6 +1,6 @@
 from ymcp.cli import inspect_tools_payload
 
-WORKFLOW_NAMES = {'ydeep', 'ydeep_menu', 'yplan', 'yplan_architect', 'yplan_critic', 'yplan_menu', 'ydo', 'ydo_menu'}
+WORKFLOW_NAMES = {'ydeep', 'yplan', 'ydo', 'menu'}
 
 
 def test_workflow_tools_expose_state_machine_metadata():
@@ -21,9 +21,11 @@ def test_yplan_schema_exposes_handoff_and_skill_fields():
     assert 'planning_artifact' not in artifacts_schema['properties']
 
 
-def test_handoff_schema_exposes_minimal_option_metadata():
+def test_menu_schema_exposes_dynamic_options_and_handoff_metadata():
     payload = {item['name']: item for item in inspect_tools_payload()}
-    response_schema = payload['yplan_menu']['response_schema']
+    request_schema = payload['menu']['request_schema']
+    response_schema = payload['menu']['response_schema']
+    assert {'source_workflow', 'summary', 'options'} <= set(request_schema['properties'])
     meta_schema = response_schema['$defs'][response_schema['properties']['meta']['$ref'].split('/')[-1]]
     handoff_schema = response_schema['$defs'][meta_schema['properties']['handoff']['anyOf'][0]['$ref'].split('/')[-1]]
     option_schema = response_schema['$defs'][handoff_schema['properties']['options']['items']['$ref'].split('/')[-1]]
