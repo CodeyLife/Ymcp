@@ -30,6 +30,13 @@ def _browser_open_enabled() -> bool:
     return value.strip().lower() not in {'0', 'false', 'no', 'off'}
 
 
+def webui_wait_enabled() -> bool:
+    value = os.environ.get('YMCP_MENU_WAIT_FOR_SELECTION')
+    if value is None:
+        return True
+    return value.strip().lower() not in {'0', 'false', 'no', 'off'}
+
+
 def clamp_timeout(value: int | None) -> int:
     if value is None:
         return DEFAULT_TIMEOUT_SECONDS
@@ -55,6 +62,7 @@ class MenuSession:
 class MenuSessionStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._sessions: dict[str, MenuSession] = {}
 
     def create(self, *, source_workflow: str, summary: str, options: list[HandoffOption], timeout_seconds: int | None = None) -> MenuSession:
@@ -89,7 +97,24 @@ class MenuSessionStore:
             if selected_option not in values:
                 raise ValueError(f'invalid selected option: {selected_option}')
             session.selected_option = selected_option
+            self._condition.notify_all()
             return session
+
+    def wait_for_selection(self, session_id: str, timeout_seconds: int | None = None) -> MenuSession | None:
+        timeout = DEFAULT_TIMEOUT_SECONDS if timeout_seconds is None else max(0, min(MAX_TIMEOUT_SECONDS, int(timeout_seconds)))
+        deadline = time.time() + timeout
+        with self._condition:
+            while True:
+                session = self._sessions.get(session_id)
+                if session is None or session.expired:
+                    self._sessions.pop(session_id, None)
+                    return None
+                if session.selected_option:
+                    return session
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return session
+                self._condition.wait(min(remaining, 0.5))
 
 
 STORE = MenuSessionStore()
@@ -115,6 +140,8 @@ INDEX_HTML = """<!doctype html>
     .recommended { color:#71f2b5; font-size:12px; margin-left:8px; }
     .description { color:#aab5d6; margin-top:4px; font-size:13px; }
     .status { margin-top:14px; color:#9fb3ff; }
+    .close-help { color:#aab5d6; margin-top:8px; font-size:12px; }
+    .close-button { margin-top:10px; padding:8px 10px; border-radius:8px; border:1px solid #3a4260; background:#20283a; color:#edf1ff; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -148,11 +175,21 @@ async function load() {
     button.onclick = async () => {
       const selected_option = button.dataset.value;
       await api(`/api/menu/${id}/select`, {method:'POST', body:JSON.stringify({selected_option})});
-      document.getElementById('status').textContent = `已选择：${selected_option}。可以返回 MCP 宿主继续。`;
+      document.getElementById('status').innerHTML = `
+        已选择：${selected_option}。正在返回 MCP 宿主；本页面将尝试自动关闭。
+        <div class="close-help">如果浏览器阻止自动关闭，请手动关闭该标签页并返回 Trae。</div>
+        <button class="close-button" type="button" onclick="window.close()">关闭页面</button>`;
       for (const item of document.querySelectorAll('.option')) item.disabled = true;
+      setTimeout(() => window.close(), 500);
     };
   }
-  if (data.selected_option) document.getElementById('status').textContent = `已选择：${data.selected_option}`;
+  if (data.selected_option) {
+    document.getElementById('status').innerHTML = `
+      已选择：${data.selected_option}。可以关闭此页面并返回 Trae。
+      <div class="close-help">如果浏览器阻止自动关闭，请手动关闭该标签页。</div>
+      <button class="close-button" type="button" onclick="window.close()">关闭页面</button>`;
+    setTimeout(() => window.close(), 500);
+  }
 }
 load().catch(error => { document.getElementById('status').textContent = String(error); });
 </script>
@@ -268,6 +305,10 @@ def create_menu_session_url(*, source_workflow: str, summary: str, options: list
     return session, url
 
 
+def wait_for_menu_selection(session_id: str, timeout_seconds: int | None = None) -> MenuSession | None:
+    return STORE.wait_for_selection(session_id, timeout_seconds=timeout_seconds)
+
+
 __all__ = [
     'MenuSession',
     'MenuSessionStore',
@@ -276,4 +317,6 @@ __all__ = [
     'create_menu_app',
     'create_menu_session_url',
     'ensure_menu_server',
+    'wait_for_menu_selection',
+    'webui_wait_enabled',
 ]

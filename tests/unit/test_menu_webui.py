@@ -3,7 +3,7 @@ import urllib.error
 import urllib.request
 
 from ymcp.contracts.common import HandoffOption
-from ymcp.web.menu_app import MenuSessionStore, clamp_timeout, create_menu_app
+from ymcp.web.menu_app import INDEX_HTML, MenuSessionStore, clamp_timeout, create_menu_app
 from http.server import ThreadingHTTPServer
 import threading
 
@@ -36,6 +36,17 @@ def test_timeout_clamp_bounds():
     assert clamp_timeout(1) == 30
     assert clamp_timeout(None) == 600
     assert clamp_timeout(999999) == 86400
+
+
+def test_handoff_option_title_defaults_to_value():
+    option = HandoffOption(value='fix_webui', description='修复 WebUI')
+    assert option.title == 'fix_webui'
+
+
+def test_menu_webui_attempts_to_close_after_selection():
+    assert 'setTimeout(() => window.close(), 500)' in INDEX_HTML
+    assert '如果浏览器阻止自动关闭' in INDEX_HTML
+    assert '返回 Trae' in INDEX_HTML
 
 
 def test_menu_webui_requires_token_and_accepts_legal_selection():

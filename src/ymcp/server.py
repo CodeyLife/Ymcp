@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import asyncio
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ from ymcp.contracts.ralplan import (
     RalplanResult,
 )
 from ymcp.core.versioning import SCHEMA_VERSION
+from ymcp.core.result import apply_selected_handoff_option
 from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.imagegen import build_imagegen
 from ymcp.engine.menu import build_menu
@@ -32,7 +34,7 @@ from ymcp.engine.ralph import build_ralph
 from ymcp.engine.ralplan import build_ralplan
 from ymcp.internal_registry import get_tool_specs
 from ymcp.memory import build_memory_request_id, execute_memory_operation, memory_log_kv, memory_result_to_mcp_payload, mempalace_palace_path
-from ymcp.web.menu_app import create_menu_session_url
+from ymcp.web.menu_app import create_menu_session_url, wait_for_menu_selection, webui_wait_enabled
 
 LOGGER = logging.getLogger('ymcp')
 
@@ -126,11 +128,41 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str, timeout_sec
     return result
 
 
+async def _wait_for_webui_selection(result: Any, *, timeout_seconds: int | None = None) -> Any:
+    if not webui_wait_enabled():
+        return result
+    artifacts = getattr(result, 'artifacts', None)
+    session_id = getattr(artifacts, 'menu_session_id', None)
+    if not session_id:
+        return result
+
+    session = await asyncio.to_thread(wait_for_menu_selection, session_id, timeout_seconds)
+    if session is None or not session.selected_option:
+        return result
+
+    updated = apply_selected_handoff_option(result, session.selected_option)
+    updated.meta.elicitation_error = None
+    updated.meta.ui_request['selected_option'] = session.selected_option
+    updated.meta.ui_request['selection_status'] = 'confirmed'
+    updated.summary = f'WEBUI_SELECTION_CONFIRMED: 已通过 WebUI 收到用户选择 `{session.selected_option}`。'
+    return updated
+
+
 async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, message_prefix: str, timeout_seconds: int | None = None) -> Any:
     artifacts = getattr(result, 'artifacts', None)
     if getattr(artifacts, 'selected_option', None):
         return result
     if result.status is ToolStatus.BLOCKED:
+        has_handoff_options = bool(result.meta.handoff and result.meta.handoff.options)
+        has_webui_url = bool(getattr(artifacts, 'webui_url', None) or result.meta.ui_request.get('webui_url'))
+        if has_handoff_options and not has_webui_url:
+            result.meta.elicitation_state = ElicitationState.FAILED
+            fallback = _apply_interactive_handoff_fallback(
+                result,
+                reason=result.meta.elicitation_error or 'menu 已阻塞，需通过 WebUI fallback 重新收集合法 selected_option',
+                timeout_seconds=timeout_seconds,
+            )
+            return await _wait_for_webui_selection(fallback, timeout_seconds=timeout_seconds)
         return result
     if result.meta.handoff is None or not result.meta.handoff.options:
         return result
@@ -154,11 +186,12 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
 
     if ctx is None:
         result.meta.elicitation_state = ElicitationState.UNSUPPORTED
-        return _apply_interactive_handoff_fallback(
+        fallback = _apply_interactive_handoff_fallback(
             result,
             reason='当前调用通道未提供 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
             timeout_seconds=timeout_seconds,
         )
+        return await _wait_for_webui_selection(fallback, timeout_seconds=timeout_seconds)
 
     try:
         request_context = ctx.request_context
@@ -167,32 +200,35 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
 
     if request_context is None:
         result.meta.elicitation_state = ElicitationState.UNSUPPORTED
-        return _apply_interactive_handoff_fallback(
+        fallback = _apply_interactive_handoff_fallback(
             result,
             reason='当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
             timeout_seconds=timeout_seconds,
         )
+        return await _wait_for_webui_selection(fallback, timeout_seconds=timeout_seconds)
 
     try:
         elicitation = await ctx.elicit(message, ChoiceSchema)
     except Exception as exc:
         result.meta.elicitation_state = ElicitationState.FAILED
-        return _apply_interactive_handoff_fallback(
+        fallback = _apply_interactive_handoff_fallback(
             result,
             reason=f'Elicitation 调用失败（{type(exc).__name__}: {exc}）',
             timeout_seconds=timeout_seconds,
         )
+        return await _wait_for_webui_selection(fallback, timeout_seconds=timeout_seconds)
 
     action = getattr(elicitation, 'action', None)
     if action == 'accept':
         selected = elicitation.data.choice
         if selected not in values:
             result.meta.elicitation_state = ElicitationState.FAILED
-            return _apply_interactive_handoff_fallback(
+            fallback = _apply_interactive_handoff_fallback(
                 result,
                 reason=f'Elicitation 返回了非法选项 `{selected}`。合法选项只能来自 handoff.options：{", ".join(values)}',
                 timeout_seconds=timeout_seconds,
             )
+            return await _wait_for_webui_selection(fallback, timeout_seconds=timeout_seconds)
         result.meta.required_host_action = HostActionType.DISPLAY_ONLY
         result.meta.elicitation_state = ElicitationState.ACCEPTED
         result.meta.elicitation_selected_option = selected
@@ -212,11 +248,12 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         result.meta.elicitation_state = ElicitationState.CANCELLED
     else:
         result.meta.elicitation_state = ElicitationState.FAILED
-    return _apply_interactive_handoff_fallback(
+    fallback = _apply_interactive_handoff_fallback(
         result,
         reason=f'Elicitation 未完成（{action}），已启用 WebUI fallback 继续收集 selected_option',
         timeout_seconds=timeout_seconds,
     )
+    return await _wait_for_webui_selection(fallback, timeout_seconds=timeout_seconds)
 
 
 def configure_logging(level: int = logging.INFO) -> None:

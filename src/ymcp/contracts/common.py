@@ -46,9 +46,15 @@ class ElicitationState(str, Enum):
 
 class HandoffOption(BaseModel):
     value: str
-    title: str
-    description: str
+    title: str = ""
+    description: str = ""
     recommended: bool = False
+
+    @model_validator(mode="after")
+    def fill_display_defaults(self) -> "HandoffOption":
+        if not self.title.strip():
+            self.title = self.value
+        return self
 
 
 class Handoff(BaseModel):

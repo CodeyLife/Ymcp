@@ -1,15 +1,18 @@
 import anyio
 import pytest
+from urllib.parse import parse_qs, urlparse
 
 from ymcp.contracts.common import ElicitationState, HandoffOption, ToolStatus
 from ymcp.contracts.menu import MenuRequest
 from ymcp.engine.menu import build_menu
 from ymcp.server import _maybe_elicit_handoff_choice
+from ymcp.web.menu_app import STORE
 
 
 @pytest.fixture(autouse=True)
 def _stub_browser_open(monkeypatch):
     monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: True)
+    monkeypatch.setenv('YMCP_MENU_WAIT_FOR_SELECTION', '0')
 
 
 def test_menu_fallback_attempts_to_open_webui_browser(monkeypatch):
@@ -20,6 +23,68 @@ def test_menu_fallback_attempts_to_open_webui_browser(monkeypatch):
         updated = await _maybe_elicit_handoff_choice(None, _menu_result(), message_prefix='规划完成')
         assert opened == [(updated.artifacts.webui_url, 2)]
         _assert_webui_fallback(updated)
+    anyio.run(_run)
+
+
+def test_menu_helper_starts_webui_for_invalid_selected_option(monkeypatch):
+    opened = []
+    monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: opened.append((url, new)) or True)
+
+    async def _run():
+        result = build_menu(MenuRequest(
+            source_workflow='yplan',
+            summary='规划完成',
+            options=[
+                HandoffOption(value='ydo', title='进入 ydo', description='执行', recommended=True),
+                HandoffOption(value='memory_store', title='保存记忆', description='保存'),
+            ],
+            selected_option='',
+        ))
+        assert result.status is ToolStatus.BLOCKED
+        assert result.artifacts.webui_url is None
+
+        updated = await _maybe_elicit_handoff_choice(None, result, message_prefix='规划完成')
+
+        assert updated.status is ToolStatus.BLOCKED
+        assert updated.meta.elicitation_state is ElicitationState.FAILED
+        assert updated.meta.elicitation_error == '非法 selected_option：'
+        assert opened == [(updated.artifacts.webui_url, 2)]
+        _assert_webui_fallback(updated)
+    anyio.run(_run)
+
+
+def test_menu_helper_waits_for_webui_selection(monkeypatch):
+    opened = []
+    monkeypatch.setenv('YMCP_MENU_WAIT_FOR_SELECTION', '1')
+    monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: opened.append(url) or True)
+
+    async def _run():
+        async with anyio.create_task_group() as task_group:
+            result_holder = {}
+
+            async def call_menu():
+                result_holder['result'] = await _maybe_elicit_handoff_choice(
+                    None,
+                    _menu_result(),
+                    message_prefix='规划完成',
+                    timeout_seconds=5,
+                )
+
+            task_group.start_soon(call_menu)
+            with anyio.fail_after(2):
+                while not opened:
+                    await anyio.sleep(0.01)
+
+            parsed = urlparse(opened[0])
+            session_id = parsed.path.rstrip('/').split('/')[-1]
+            token = parse_qs(parsed.query)['token'][0]
+            STORE.select(session_id, token, 'ydo')
+
+        updated = result_holder['result']
+        assert updated.status is ToolStatus.OK
+        assert updated.artifacts.selected_option == 'ydo'
+        assert updated.meta.elicitation_selected_option == 'ydo'
+        assert updated.summary == 'WEBUI_SELECTION_CONFIRMED: 已通过 WebUI 收到用户选择 `ydo`。'
     anyio.run(_run)
 
 

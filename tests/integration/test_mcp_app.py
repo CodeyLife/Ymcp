@@ -79,6 +79,7 @@ def test_ydo_start_returns_menu_handoff():
 
 def test_menu_without_elicitation_starts_webui_fallback(monkeypatch):
     opened = []
+    monkeypatch.setenv('YMCP_MENU_WAIT_FOR_SELECTION', '0')
     monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: opened.append((url, new)) or True)
 
     async def _run():
@@ -96,6 +97,34 @@ def test_menu_without_elicitation_starts_webui_fallback(monkeypatch):
         assert structured['meta']['required_host_action'] == 'await_input'
         assert structured['meta']['elicitation_required'] is True
         assert structured['meta']['elicitation_state'] == 'unsupported'
+        assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
+        assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
+        assert structured['artifacts']['webui_url'].startswith('http://127.0.0.1:')
+        assert opened == [(structured['artifacts']['webui_url'], 2)]
+        _assert_webui_fallback(structured, ('ydo', 'memory_store'))
+    anyio.run(_run)
+
+
+def test_menu_invalid_selected_option_starts_webui_fallback(monkeypatch):
+    opened = []
+    monkeypatch.setenv('YMCP_MENU_WAIT_FOR_SELECTION', '0')
+    monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: opened.append((url, new)) or True)
+
+    async def _run():
+        app = create_app()
+        result = await app.call_tool('menu', {
+            'source_workflow': 'yplan',
+            'summary': 'critic 已批准，验收和验证路径明确',
+            'options': [
+                {'value': 'ydo', 'title': '进入 ydo', 'description': '执行', 'recommended': True},
+                {'value': 'memory_store', 'title': '保存记忆', 'description': '沉淀经验'},
+            ],
+            'selected_option': '',
+        })
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured['status'] == 'blocked'
+        assert structured['meta']['elicitation_state'] == 'failed'
+        assert structured['meta']['elicitation_error'] == '非法 selected_option：'
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
         assert structured['artifacts']['webui_url'].startswith('http://127.0.0.1:')
