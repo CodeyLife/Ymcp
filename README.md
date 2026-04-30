@@ -81,7 +81,20 @@ ymcp v2f 8 input.mp4 --seconds 2 --size full
 ymcp v2f 12 input.mp4 --columns 6
 ```
 
-`--seconds 2` 表示使用 0-2 秒，`--seconds 1-2` 表示使用 1-2 秒；`--size` 默认 `256`，`full` 保留原视频分辨率，也支持 `320x180`。该命令不会保留中间采样 PNG，默认在当前目录下的 `video_frames` 输出目录生成 `framesheet.png` 和 `animation.webp`。framesheet 默认尽量接近方形，例如 24 帧为 4x6、20 帧为 4x5，可用 `--columns` 覆盖列数。默认会用第一帧中出现最多的颜色作为背景色，并在所有帧中复用该颜色扣除背景；如需保留背景可传 `--keep-bg`。
+`--seconds 2` 表示使用 0-2 秒，`--seconds 1-2` 表示使用 1-2 秒；`--size` 默认 `256`，`full` 保留原视频分辨率，也支持 `320x180`。该命令不会保留中间采样 PNG，默认在当前目录下的 `video_frames` 输出目录生成 `framesheet.png` 和 `animation.webp`。framesheet 默认尽量接近方形，例如 24 帧为 4x6、20 帧为 4x5，可用 `--columns` 覆盖列数。默认会用第一帧中出现最多的颜色作为背景色，并在所有帧中复用该颜色扣除背景；如需保留背景可传 `--keep-bg`。`v2f` 默认还会从画面中心按半径添加透明淡出，减少边缘裁剪截断感；`--fade 80` 表示中心 80% 半径保持不透明后线性淡出，`--fade 80-2` 可调整衰减速度。
+
+### 本地 v2f 网页编辑器
+
+`ymcp v2f-ui` 会启动一个本机单用户网页编辑器，默认只监听 `127.0.0.1`，用于反复调参预览，而不是多用户服务、批量任务或云端部署。
+
+```powershell
+ymcp v2f-ui
+ymcp v2f-ui --port 8765 --no-open
+```
+
+编辑器把流程拆成两层：视频抽帧只在视频来源、采样时间段、帧数或解码尺寸变化时执行；背景扣除、透明淡出、裁剪/缩放、Timing Map 节奏曲线、预览和导出会复用当前 session 中缓存的帧。除了视频输入，编辑器也支持从已有 framesheet + grid 创建 session，再进入同一套视觉处理、节奏编辑和 `framesheet.png` / `animation.webp` 导出流程。
+
+Timing Map 使用单调关键点曲线把输出动画进度映射到源帧进度，可用于“蓄力趋静止 → 爆发加速 → 回落”的节奏。v1 导出采用确定性的 nearest-frame 选择，不做光流或中间帧合成。
 
 ## 记忆
 

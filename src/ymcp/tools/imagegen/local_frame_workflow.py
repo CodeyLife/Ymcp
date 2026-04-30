@@ -8,6 +8,8 @@ optional dependency for users who opt into local image generation.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
+import json
 from io import BytesIO
 from pathlib import Path
 import re
@@ -22,6 +24,16 @@ from urllib.parse import urlparse
 Color = Tuple[int, int, int]
 KEY_DOMINANCE_THRESHOLD = 16.0
 ALPHA_NOISE_FLOOR = 8
+DEFAULT_RADIAL_FADE_OPAQUE_PERCENT = 80.0
+DEFAULT_RADIAL_FADE_SPEED = 1.0
+
+
+@dataclass(frozen=True)
+class RadialFadeSpec:
+    """Radial alpha-fade settings for v2f output frames."""
+
+    opaque_percent: float = DEFAULT_RADIAL_FADE_OPAQUE_PERCENT
+    speed: float = DEFAULT_RADIAL_FADE_SPEED
 
 
 def _load_pillow():
@@ -86,7 +98,10 @@ def save_sprite_sheet(frames: Iterable[object], out: str | Path, *, columns: int
         x = (idx % columns) * (width + padding)
         y = (idx // columns) * (height + padding)
         if image.mode == "RGBA":
-            sheet.paste(image, (x, y), image)
+            if sheet.mode == "RGBA":
+                sheet.paste(image, (x, y))
+            else:
+                sheet.paste(image, (x, y), image)
         else:
             sheet.paste(image, (x, y))
 
@@ -196,6 +211,38 @@ def parse_video_frame_size(raw: str | int | None) -> tuple[int, int] | None:
     raise ValueError("size must be full, a positive integer, or WIDTHxHEIGHT")
 
 
+def parse_radial_fade(raw: str | RadialFadeSpec | None = None) -> RadialFadeSpec:
+    """Parse a v2f radial fade value.
+
+    ``None`` and ``"default"`` mean an 80% fully opaque radius with linear
+    falloff. Numeric values set the opaque-radius percentage, and
+    ``PERCENT-SPEED`` additionally sets the falloff curve speed.
+    """
+
+    if isinstance(raw, RadialFadeSpec):
+        return raw
+    if raw is None:
+        return RadialFadeSpec()
+
+    value = raw.strip()
+    if value.lower() == "default":
+        return RadialFadeSpec()
+    if not value:
+        raise ValueError("fade must be default, PERCENT, or PERCENT-SPEED")
+
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?|[0-9]*\.[0-9]+)%?(?:-([0-9]+(?:\.[0-9]+)?|[0-9]*\.[0-9]+))?", value)
+    if not match:
+        raise ValueError("fade must be default, PERCENT, or PERCENT-SPEED")
+
+    opaque_percent = float(match.group(1))
+    speed = float(match.group(2)) if match.group(2) is not None else DEFAULT_RADIAL_FADE_SPEED
+    if not (0.0 <= opaque_percent <= 100.0):
+        raise ValueError("fade percent must be between 0 and 100")
+    if speed <= 0.0:
+        raise ValueError("fade speed must be positive")
+    return RadialFadeSpec(opaque_percent=opaque_percent, speed=speed)
+
+
 def video_sample_times(count: int, start: float, end: float) -> list[float]:
     """Return evenly distributed in-segment sample timestamps.
 
@@ -256,6 +303,37 @@ def _require_executable(name: str) -> str:
     return executable
 
 
+def _positive_float(raw: object) -> float | None:
+    if raw in {None, "", "N/A"}:
+        return None
+    try:
+        value = float(str(raw))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _rate_to_float(raw: object) -> float | None:
+    if raw in {None, "", "0/0", "N/A"}:
+        return None
+    text = str(raw)
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        try:
+            den = float(denominator)
+            if den == 0:
+                return None
+            value = float(numerator) / den
+        except ValueError:
+            return None
+    else:
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+    return value if value > 0 else None
+
+
 def _probe_video_duration(video: str | Path) -> float:
     ffprobe = _require_executable("ffprobe")
     completed = subprocess.run(
@@ -263,10 +341,12 @@ def _probe_video_duration(video: str | Path) -> float:
             ffprobe,
             "-v",
             "error",
+            "-select_streams",
+            "v:0",
             "-show_entries",
-            "format=duration",
+            "format=duration:stream=duration,nb_frames,r_frame_rate,avg_frame_rate",
             "-of",
-            "default=noprint_wrappers=1:nokey=1",
+            "json",
             str(video),
         ],
         check=False,
@@ -276,42 +356,88 @@ def _probe_video_duration(video: str | Path) -> float:
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "unknown ffprobe error"
         raise RuntimeError(f"ffprobe failed: {detail}")
+
+    durations: list[float] = []
     try:
-        duration = float(completed.stdout.strip())
-    except ValueError as exc:
-        raise RuntimeError("ffprobe did not return a valid video duration") from exc
+        data = json.loads(completed.stdout)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        # Backward-compatible fallback for older tests or non-JSON ffprobe wrappers.
+        duration = _positive_float(completed.stdout.strip())
+        if duration is None:
+            raise RuntimeError("ffprobe did not return a valid video duration")
+        return duration
+    if not isinstance(data, dict):
+        duration = _positive_float(data)
+        if duration is None:
+            raise RuntimeError("ffprobe did not return a valid video duration")
+        return duration
+
+    format_duration = _positive_float(data.get("format", {}).get("duration"))
+    if format_duration is not None:
+        durations.append(format_duration)
+
+    streams = data.get("streams") or []
+    if streams:
+        stream = streams[0]
+        stream_duration = _positive_float(stream.get("duration"))
+        if stream_duration is not None:
+            durations.append(stream_duration)
+        frame_count = _positive_float(stream.get("nb_frames"))
+        frame_rate = _rate_to_float(stream.get("avg_frame_rate")) or _rate_to_float(stream.get("r_frame_rate"))
+        if frame_count is not None and frame_rate is not None:
+            durations.append(frame_count / frame_rate)
+
+    if not durations:
+        raise RuntimeError("ffprobe did not return a valid video duration")
+
+    # Use the conservative positive duration. Some containers report the format
+    # duration as the timestamp just after the last frame (or even slightly past
+    # it), which can make the final sampled timestamp undecodable.
+    duration = min(durations)
     if duration <= 0:
         raise ValueError("video duration must be positive")
     return duration
 
 
-def _extract_video_frame_png(video: str | Path, timestamp: float) -> bytes:
+def _extract_video_frame_png(video: str | Path, timestamp: float, *, min_timestamp: float = 0.0) -> bytes:
     ffmpeg = _require_executable("ffmpeg")
-    completed = subprocess.run(
-        [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-ss",
-            f"{timestamp:.6f}",
-            "-i",
-            str(video),
-            "-frames:v",
-            "1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "png",
-            "pipe:1",
-        ],
-        check=False,
-        capture_output=True,
-    )
-    if completed.returncode != 0 or not completed.stdout:
-        detail = completed.stderr.decode("utf-8", errors="replace").strip() or "no frame data returned"
-        raise RuntimeError(f"ffmpeg failed at {timestamp:.3f}s: {detail}")
-    return completed.stdout
+    attempts = [max(min_timestamp, timestamp)]
+    # If a container overstates the last decodable timestamp, retry just before
+    # the requested point instead of failing the whole extraction. This keeps
+    # user-facing sampling inside the requested segment/video length.
+    for delta in (0.05, 0.10, 0.25, 0.50, 1.00):
+        candidate = max(min_timestamp, timestamp - delta)
+        if all(abs(candidate - previous) > 1e-6 for previous in attempts):
+            attempts.append(candidate)
+
+    last_detail = "no frame data returned"
+    for attempt in attempts:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                f"{attempt:.6f}",
+                "-i",
+                str(video),
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
+                "pipe:1",
+            ],
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode == 0 and completed.stdout:
+            return completed.stdout
+        last_detail = completed.stderr.decode("utf-8", errors="replace").strip() or "no frame data returned"
+
+    raise RuntimeError(f"ffmpeg failed at {timestamp:.3f}s: {last_detail}")
 
 
 def _save_webp_animation_with_ffmpeg(
@@ -411,6 +537,7 @@ def extract_video_frames(
     duration_ms: int | None = None,
     loop: int = 0,
     lossless: bool = True,
+    fade: str | RadialFadeSpec | None = "default",
 ) -> Path:
     """Evenly extract video frames into a framesheet PNG and animated WebP.
 
@@ -429,13 +556,6 @@ def extract_video_frames(
         raise ValueError("columns must be at least 1")
     if duration_ms is not None and duration_ms <= 0:
         raise ValueError("duration_ms must be positive")
-    target_size = parse_video_frame_size(size)
-    range_seconds = parse_video_seconds(seconds)
-    if range_seconds is None:
-        range_seconds = (0.0, _probe_video_duration(video))
-    start, end = range_seconds
-    times = video_sample_times(count, start, end)
-
     out_dir = Path(out) if out is not None else _default_video_frames_dir(video)
     sheet_path = out_dir / "framesheet.png"
     webp_path = out_dir / "animation.webp"
@@ -445,33 +565,21 @@ def extract_video_frames(
             raise FileExistsError(f"output already exists: {existing[0]}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    Image, _ = _load_pillow()
-    background_key: Color | None = None
-    frames: list[object] = []
-    for timestamp in times:
-        with Image.open(BytesIO(_extract_video_frame_png(video, timestamp))) as image:
-            frame = image.convert("RGBA") if image.mode in {"RGBA", "LA", "P"} or "transparency" in image.info else image.convert("RGB")
-            if target_size is not None:
-                frame = frame.resize(target_size, Image.Resampling.LANCZOS)
-            if remove_background:
-                if background_key is None:
-                    background_key = dominant_image_color(frame)
-                frame = frame.convert("RGBA")
-                _apply_alpha_to_image(
-                    frame,
-                    key=background_key,
-                    tolerance=background_tolerance,
-                    spill_cleanup=True,
-                    soft_matte=True,
-                    transparent_threshold=float(background_tolerance),
-                    opaque_threshold=220.0,
-                )
-            frames.append(frame.copy())
+    from ymcp.tools.imagegen.v2f_core import CapturePlan, ExportSpec, VisualPipelineSpec, capture_video_frames, export_framesheet_webp, render_frames
+
+    frame_set = capture_video_frames(CapturePlan(video, count, seconds=seconds, decode_size=size))
+    frames = render_frames(
+        frame_set,
+        VisualPipelineSpec(
+            remove_background=remove_background,
+            background_tolerance=background_tolerance,
+            fade=fade,
+        ),
+    )
+    start, end = frame_set.source_metadata.get("seconds", [0.0, float(count)])
     output_columns = columns if columns is not None else near_square_columns(count)
     output_duration = duration_ms if duration_ms is not None else max(1, int(round((end - start) * 1000.0 / count)))
-    save_sprite_sheet(frames, sheet_path, columns=output_columns)
-    _save_webp_animation_with_ffmpeg(frames, webp_path, duration_ms=output_duration, loop=loop, lossless=lossless)
-    return out_dir
+    return export_framesheet_webp(frames, out_dir, ExportSpec(columns=output_columns, duration_ms=output_duration, loop=loop, lossless=lossless))
 
 
 
@@ -682,8 +790,12 @@ def _clamp_channel(value: float) -> int:
     return max(0, min(255, int(round(value))))
 
 
+def _clamp_unit(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
 def _smoothstep(value: float) -> float:
-    value = max(0.0, min(1.0, value))
+    value = _clamp_unit(value)
     return value * value * (3.0 - 2.0 * value)
 
 
@@ -776,6 +888,35 @@ def _apply_alpha_to_image(image, *, key: Color, tolerance: int, spill_cleanup: b
                 red, green, blue = _cleanup_spill(rgb, key, output_alpha)
             pixels[x, y] = (red, green, blue, output_alpha)
     return transparent
+
+
+def _radial_alpha_multiplier(x: int, y: int, width: int, height: int, spec: RadialFadeSpec) -> float:
+    cx = (width - 1) / 2.0
+    cy = (height - 1) / 2.0
+    corners = ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1))
+    max_radius = max(math.hypot(corner_x - cx, corner_y - cy) for corner_x, corner_y in corners)
+    opaque_radius = (spec.opaque_percent / 100.0) * max_radius
+    if max_radius == 0.0 or opaque_radius >= max_radius:
+        return 1.0
+    distance = math.hypot(float(x) - cx, float(y) - cy)
+    if distance <= opaque_radius:
+        return 1.0
+    progress = _clamp_unit((distance - opaque_radius) / (max_radius - opaque_radius))
+    return _clamp_unit(1.0 - (progress**spec.speed))
+
+
+def _apply_radial_alpha_fade(image, spec: RadialFadeSpec):
+    """Apply a center-out radial alpha fade and return an RGBA image."""
+
+    faded = image.convert("RGBA")
+    pixels = faded.load()
+    width, height = faded.size
+    for y in range(height):
+        for x in range(width):
+            red, green, blue, alpha = pixels[x, y]
+            multiplier = _radial_alpha_multiplier(x, y, width, height, spec)
+            pixels[x, y] = (red, green, blue, _clamp_channel(float(alpha) * multiplier))
+    return faded
 
 
 def _contract_alpha(image, pixels: int):
@@ -890,6 +1031,7 @@ __all__ = [
     "parse_grid",
     "parse_video_seconds",
     "parse_video_frame_size",
+    "parse_radial_fade",
     "video_sample_times",
     "dominant_image_color",
     "near_square_columns",

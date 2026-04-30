@@ -9,6 +9,7 @@ from ymcp.tools.imagegen.local_frame_workflow import (
     framesheet_to_webp,
     near_square_columns,
     parse_grid,
+    parse_radial_fade,
     parse_key_color,
     parse_video_frame_size,
     parse_video_seconds,
@@ -20,6 +21,8 @@ from ymcp.tools.imagegen.local_frame_workflow import (
     validate_frame_sequence,
     video_sample_times,
 )
+from ymcp.tools.imagegen.timing import TimingMapSpec, TimingPoint, output_frame_source_indices, timing_preset
+from ymcp.tools.imagegen.v2f_core import CapturePlan, ExportSpec, FrameSet, FramesheetPlan, VisualPipelineSpec
 
 __all__ = [
     "ensure_output_dirs",
@@ -30,6 +33,7 @@ __all__ = [
     "framesheet_to_webp",
     "near_square_columns",
     "parse_grid",
+    "parse_radial_fade",
     "parse_key_color",
     "parse_video_frame_size",
     "parse_video_seconds",
@@ -40,4 +44,13 @@ __all__ = [
     "save_webp",
     "validate_frame_sequence",
     "video_sample_times",
+    "CapturePlan",
+    "ExportSpec",
+    "FrameSet",
+    "FramesheetPlan",
+    "TimingMapSpec",
+    "TimingPoint",
+    "VisualPipelineSpec",
+    "output_frame_source_indices",
+    "timing_preset",
 ]

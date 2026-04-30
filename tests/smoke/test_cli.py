@@ -165,6 +165,8 @@ def test_video_frames_command_writes_framesheet_and_webp(tmp_path, capsys, monke
     monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.shutil.which", lambda name: name)
 
     def fake_run(command, **kwargs):
+        if command[0] == "ffprobe":
+            return type("Completed", (), {"returncode": 0, "stdout": "4.0\n", "stderr": ""})()
         if "libwebp_anim" in command:
             Image.new("RGB", (6, 4), (255, 0, 0)).save(out / "animation.webp", save_all=True, append_images=[Image.new("RGB", (6, 4), (0, 255, 0))], duration=100, loop=0)
             return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
@@ -178,13 +180,55 @@ def test_video_frames_command_writes_framesheet_and_webp(tmp_path, capsys, monke
     assert [path.name for path in sorted(out.iterdir())] == ["animation.webp", "framesheet.png"]
     assert not list(out.glob("frame_*.png"))
     with Image.open(out / "framesheet.png") as sheet:
+        assert sheet.mode == "RGBA"
         assert sheet.size == (6, 8)
+        assert sheet.getpixel((0, 0))[3] == 0
+        assert sheet.getpixel((3, 2))[:3] == (255, 0, 0)
+        assert sheet.getpixel((3, 2))[3] == 255
     with Image.open(out / "animation.webp") as animation:
         assert getattr(animation, "is_animated", False)
         assert animation.n_frames == 2
         assert animation.size == (6, 4)
 
     assert main(["video_frames", "2", "clip.mp4", "--seconds", "1-2", "--out", str(out), "--no-overwrite"]) == 1
+
+
+def test_video_frames_command_accepts_fade_option(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    source = tmp_path / "source.png"
+    Image.new("RGB", (12, 8), (255, 0, 0)).save(source)
+    source_bytes = source.read_bytes()
+
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        if command[0] == "ffprobe":
+            return type("Completed", (), {"returncode": 0, "stdout": "4.0\n", "stderr": ""})()
+        if "libwebp_anim" in command:
+            Image.new("RGBA", (6, 4), (255, 0, 0, 255)).save(out / "animation.webp")
+            return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+        return type("Completed", (), {"returncode": 0, "stdout": source_bytes, "stderr": b""})()
+
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.subprocess.run", fake_run)
+
+    out = tmp_path / "frames"
+    assert main(["v2f", "1", "clip.mp4", "--seconds", "1", "--out", str(out), "--size", "6x4", "--keep-bg", "--fade", "70-2"]) == 0
+    with Image.open(out / "framesheet.png") as sheet:
+        assert sheet.mode == "RGBA"
+        assert sheet.getpixel((0, 0))[3] == 0
+
+    out = tmp_path / "frames-default-flag"
+    assert main(["v2f", "1", "clip.mp4", "--seconds", "1", "--out", str(out), "--size", "6x4", "--keep-bg", "--fade"]) == 0
+    with Image.open(out / "framesheet.png") as sheet:
+        assert sheet.mode == "RGBA"
+        assert sheet.getpixel((0, 0))[3] == 0
+
+
+def test_v2f_ui_help_mentions_local_editor():
+    completed = subprocess.run([sys.executable, "-m", "ymcp.cli", "v2f-ui", "--help"], check=True, capture_output=True, text=True)
+
+    assert "本地 v2f" in completed.stdout
+    assert "--host" in completed.stdout
 
 
 def test_video_frames_command_can_remove_background(tmp_path, monkeypatch):
@@ -198,6 +242,8 @@ def test_video_frames_command_can_remove_background(tmp_path, monkeypatch):
     monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.shutil.which", lambda name: name)
 
     def fake_run(command, **kwargs):
+        if command[0] == "ffprobe":
+            return type("Completed", (), {"returncode": 0, "stdout": "4.0\n", "stderr": ""})()
         if "libwebp_anim" in command:
             Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(out / "animation.webp")
             return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()

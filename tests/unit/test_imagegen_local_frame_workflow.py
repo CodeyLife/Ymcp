@@ -13,6 +13,7 @@ from ymcp.tools.imagegen.local_frame_workflow import (
     framesheet_to_webp,
     near_square_columns,
     parse_grid,
+    parse_radial_fade,
     parse_video_frame_size,
     parse_video_seconds,
     remove_chroma_key,
@@ -66,6 +67,18 @@ def test_local_frame_workflow_writes_frames_sprite_and_gif(tmp_path):
         assert sprite_image.mode == "RGBA"
 
 
+def test_save_sprite_sheet_preserves_rgba_source_alpha(tmp_path):
+    image = Image.new("RGBA", (2, 1), (0, 0, 0, 0))
+    image.putpixel((0, 0), (255, 0, 0, 128))
+    image.putpixel((1, 0), (0, 255, 0, 255))
+
+    sprite = save_sprite_sheet([image], tmp_path / "sprite.png", columns=1)
+
+    with Image.open(sprite) as sprite_image:
+        assert sprite_image.getpixel((0, 0)) == (255, 0, 0, 128)
+        assert sprite_image.getpixel((1, 0)) == (0, 255, 0, 255)
+
+
 def test_remove_chroma_key_preserves_subject_and_adds_alpha(tmp_path):
     source = tmp_path / "source.png"
     output = tmp_path / "cutout.png"
@@ -80,6 +93,60 @@ def test_remove_chroma_key_preserves_subject_and_adds_alpha(tmp_path):
         assert cutout.mode == "RGBA"
         assert cutout.getpixel((0, 0))[3] == 0
         assert cutout.getpixel((2, 2)) == (255, 0, 0, 255)
+
+
+def test_parse_radial_fade_accepts_default_percent_and_speed():
+    assert parse_radial_fade(None).opaque_percent == 80.0
+    assert parse_radial_fade(None).speed == 1.0
+    assert parse_radial_fade("default").opaque_percent == 80.0
+    assert parse_radial_fade("80").opaque_percent == 80.0
+    assert parse_radial_fade("80.0").opaque_percent == 80.0
+    assert parse_radial_fade("80%").opaque_percent == 80.0
+
+    percent_and_speed = parse_radial_fade("80%-1.5")
+    assert percent_and_speed.opaque_percent == 80.0
+    assert percent_and_speed.speed == 1.5
+
+    compact = parse_radial_fade("80-2")
+    assert compact.opaque_percent == 80.0
+    assert compact.speed == 2.0
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "-1", "101", "80-0", "80--1"])
+def test_parse_radial_fade_rejects_invalid_values(raw):
+    with pytest.raises(ValueError):
+        parse_radial_fade(raw)
+
+
+def test_apply_radial_alpha_fade_preserves_center_and_fades_corner():
+    image = Image.new("RGBA", (11, 11), (255, 0, 0, 255))
+
+    faded = local_frame_workflow._apply_radial_alpha_fade(image, parse_radial_fade("80"))
+
+    assert faded.mode == "RGBA"
+    assert faded.getpixel((5, 5))[3] == 255
+    assert faded.getpixel((0, 0))[3] == 0
+
+
+def test_apply_radial_alpha_fade_handles_boundaries_and_tiny_images():
+    image = Image.new("RGBA", (3, 3), (255, 0, 0, 128))
+    unchanged = local_frame_workflow._apply_radial_alpha_fade(image, parse_radial_fade("100"))
+    assert list(unchanged.getdata()) == list(image.getdata())
+
+    tiny = Image.new("RGBA", (1, 1), (255, 0, 0, 128))
+    faded_tiny = local_frame_workflow._apply_radial_alpha_fade(tiny, parse_radial_fade("0"))
+    assert faded_tiny.getpixel((0, 0))[3] == 128
+
+
+def test_apply_radial_alpha_fade_multiplies_existing_alpha():
+    image = Image.new("RGBA", (5, 5), (255, 0, 0, 255))
+    image.putpixel((4, 2), (255, 0, 0, 128))
+    spec = parse_radial_fade("0")
+
+    faded = local_frame_workflow._apply_radial_alpha_fade(image, spec)
+    expected_multiplier = local_frame_workflow._radial_alpha_multiplier(4, 2, 5, 5, spec)
+
+    assert faded.getpixel((4, 2))[3] == round(128 * expected_multiplier)
 
 
 def test_frame_path_validates_index_and_extension(tmp_path):
@@ -247,6 +314,8 @@ def test_extract_video_frames_uses_ffmpeg_and_pillow_resize(tmp_path, monkeypatc
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        if command[0] == "ffprobe":
+            return type("Completed", (), {"returncode": 0, "stdout": "4.0\n", "stderr": ""})()
         if "libwebp_anim" in command:
             Image.new("RGB", (6, 4), (255, 0, 0)).save(tmp_path / "frames" / "animation.webp", save_all=True, append_images=[Image.new("RGB", (6, 4), (0, 255, 0)), Image.new("RGB", (6, 4), (0, 0, 255))], duration=100, loop=0)
             return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
@@ -259,7 +328,11 @@ def test_extract_video_frames_uses_ffmpeg_and_pillow_resize(tmp_path, monkeypatc
     assert out_dir == tmp_path / "frames"
     assert [path.name for path in sorted(out_dir.iterdir())] == ["animation.webp", "framesheet.png"]
     with Image.open(out_dir / "framesheet.png") as sheet:
+        assert sheet.mode == "RGBA"
         assert sheet.size == (6, 12)
+        assert sheet.getpixel((0, 0))[3] == 0
+        assert sheet.getpixel((3, 2))[:3] == (255, 0, 0)
+        assert sheet.getpixel((3, 2))[3] == 255
     with Image.open(out_dir / "animation.webp") as animation:
         assert getattr(animation, "is_animated", False)
         assert animation.n_frames == 3
@@ -290,6 +363,46 @@ def test_extract_video_frames_probes_duration_when_seconds_omitted(tmp_path, mon
 
     with Image.open(out_dir / "framesheet.png") as sheet:
         assert sheet.size == (12, 8)
+        assert sheet.mode == "RGBA"
+
+
+def test_probe_video_duration_prefers_conservative_decodable_duration(monkeypatch):
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        return type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": '{"streams":[{"nb_frames":"24","avg_frame_rate":"12/1"}],"format":{"duration":"2.083333"}}',
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.subprocess.run", fake_run)
+
+    assert local_frame_workflow._probe_video_duration("clip.mp4") == 2.0
+
+
+def test_extract_video_frame_png_retries_before_undecodable_timestamp(tmp_path, monkeypatch):
+    png = tmp_path / "source.png"
+    Image.new("RGB", (4, 4), (255, 0, 0)).save(png)
+    calls = []
+
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.shutil.which", lambda name: name)
+
+    def fake_run(command, **kwargs):
+        timestamp = float(command[command.index("-ss") + 1])
+        calls.append(timestamp)
+        if timestamp > 2.0:
+            return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+        return type("Completed", (), {"returncode": 0, "stdout": png.read_bytes(), "stderr": b""})()
+
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.subprocess.run", fake_run)
+
+    assert local_frame_workflow._extract_video_frame_png("clip.mp4", 2.04, min_timestamp=0.0) == png.read_bytes()
+    assert calls == [2.04, 1.99]
 
 
 def test_extract_video_frames_removes_dominant_first_frame_background(tmp_path, monkeypatch):
@@ -306,6 +419,8 @@ def test_extract_video_frames_removes_dominant_first_frame_background(tmp_path, 
     monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow.shutil.which", lambda name: name)
 
     def fake_run(command, **kwargs):
+        if command[0] == "ffprobe":
+            return type("Completed", (), {"returncode": 0, "stdout": "4.0\n", "stderr": ""})()
         if "libwebp_anim" in command:
             Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(tmp_path / "frames" / "animation.webp", save_all=True, append_images=[Image.new("RGBA", (4, 4), (0, 0, 255, 255))], duration=100, loop=0)
             return type("Completed", (), {"returncode": 0, "stdout": b"", "stderr": b""})()

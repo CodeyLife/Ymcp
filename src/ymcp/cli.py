@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import sys
+import time
 from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
@@ -263,6 +264,7 @@ def video_frames_command(
     duration: int | None = None,
     loop: int = 0,
     lossless: bool = True,
+    fade: str | None = "default",
 ) -> Path:
     return extract_video_frames(
         video,
@@ -277,6 +279,7 @@ def video_frames_command(
         duration_ms=duration,
         loop=loop,
         lossless=lossless,
+        fade=fade,
     )
 
 
@@ -370,7 +373,18 @@ def main(argv: list[str] | None = None) -> int:
     video_frames_cmd.add_argument("--duration", type=int, help="WebP 每帧持续毫秒数；默认按选中视频片段时长/帧数计算")
     video_frames_cmd.add_argument("--loop", type=int, default=0, help="WebP 循环次数；默认 0 表示无限循环")
     video_frames_cmd.add_argument("--lossy", action="store_true", help="使用有损 WebP；默认 lossless")
+    video_frames_cmd.add_argument("--fade", nargs="?", const="default", default="default", help="径向透明淡出：默认 80%% 半径内不透明并线性淡出；可用 80 或 80-2 调整百分比和衰减速度")
     video_frames_cmd.add_argument("--no-overwrite", action="store_true", help="如果 framesheet.png 或 animation.webp 已存在则失败；默认覆盖")
+
+    v2f_ui_cmd = subparsers.add_parser(
+        "v2f-ui",
+        aliases=["v2f_ui"],
+        help="启动本地 v2f 网页编辑器（单用户、localhost 默认）",
+        description="启动本地 v2f 网页编辑器（单用户、localhost 默认）",
+    )
+    v2f_ui_cmd.add_argument("--host", default="127.0.0.1", help="监听地址；默认 127.0.0.1。非本机地址不代表多用户/云端支持")
+    v2f_ui_cmd.add_argument("--port", type=int, default=0, help="监听端口；默认 0 表示自动选择可用端口")
+    v2f_ui_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     fixture_cmd = subparsers.add_parser("call-fixture", help="调用内置确定性示例")
     fixture_cmd.add_argument("tool", choices=sorted(FIXTURES))
@@ -511,12 +525,32 @@ def main(argv: list[str] | None = None) -> int:
                 duration=args.duration,
                 loop=args.loop,
                 lossless=not args.lossy,
+                fade=args.fade,
             )
         except Exception as exc:
             print(f"v2f failed: {exc}", file=sys.stderr)
             return 1
         print(output)
         return 0
+
+    if args.command in {"v2f-ui", "v2f_ui"}:
+        try:
+            from ymcp.web.v2f_app import run_v2f_editor
+
+            server, url = run_v2f_editor(host=args.host, port=args.port, open_browser=not args.no_open)
+            print(f"Ymcp v2f editor running at {url}")
+            print("Press Ctrl+C to stop. This is a local single-user editor, not a multi-user/cloud service.")
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                server.shutdown()
+                server.server_close()
+                print("Ymcp v2f editor stopped.")
+            return 0
+        except Exception as exc:
+            print(f"v2f-ui failed: {exc}", file=sys.stderr)
+            return 1
 
     if args.command == "call-fixture":
         payload = run_fixture(args.tool)
