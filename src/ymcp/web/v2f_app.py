@@ -8,6 +8,7 @@ import mimetypes
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -38,10 +39,16 @@ INDEX_HTML = """<!doctype html>
       radial-gradient(circle at center, #26314f, #0d1018 65%); border-radius:12px; overflow:hidden; }
     .preview img { max-width:100%; max-height:420px; image-rendering:auto; }
     .row { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
-    .status { white-space:pre-wrap; color:#aab5d6; font-size:12px; }
+    .status { white-space:pre-wrap; color:#aab5d6; font-size:12px; max-height:180px; overflow:auto; margin-bottom:0; }
+    .log-panel { margin-top:14px; padding-top:12px; border-top:1px solid #2b3040; }
     .curve { font-family: ui-monospace, monospace; font-size:12px; background:#0f1320; border-radius:10px; padding:10px; }
     .dropzone { border:1px dashed #5d7bff; border-radius:12px; padding:14px; text-align:center; color:#c8d3ff; background:#101729; margin:10px 0; }
     .dropzone.dragover { background:#1d2a55; border-color:#9fb3ff; }
+    .video-preview { display:none; position:relative; width:100%; margin-top:10px; border-radius:12px; overflow:hidden; background:#000; touch-action:none; }
+    .video-preview video { display:block; width:100%; background:#000; }
+    .crop-box { display:none; position:absolute; border:2px solid #71f2b5; box-shadow:0 0 0 9999px rgba(0,0,0,.38); cursor:move; box-sizing:border-box; }
+    .crop-box::after { content:""; position:absolute; right:-7px; bottom:-7px; width:14px; height:14px; border-radius:50%; background:#71f2b5; border:2px solid #0f1320; cursor:nwse-resize; }
+    .crop-active .crop-box { display:block; }
     .busy { display:none; margin:10px 0; padding:10px; border-radius:10px; background:#25345e; color:#dce6ff; }
     .busy.active { display:block; }
     .keyframe-editor { margin-top:10px; padding:10px; border:1px solid #2f3855; border-radius:12px; background:#12182a; }
@@ -62,15 +69,19 @@ INDEX_HTML = """<!doctype html>
       <label>输入类型</label><select id="kind"><option value="video">视频</option><option value="framesheet">帧表</option></select>
       <div id="dropzone" class="dropzone">拖拽视频或帧表到这里，或点击选择文件</div>
       <input id="fileInput" type="file" style="display:none" />
-      <video id="videoPlayer" controls style="display:none;width:100%;margin-top:10px;border-radius:12px;background:#000"></video>
+      <div id="videoPreview" class="video-preview">
+        <video id="videoPlayer" controls></video>
+        <div id="cropBox" class="crop-box" aria-label="视频裁剪框"></div>
+      </div>
+      <div class="row"><div><label>视频裁剪</label><select id="cropEnabled"><option value="false">关闭</option><option value="true">启用</option></select></div><div><label>裁剪坐标</label><input id="captureCrop" placeholder="自动：左,上,右,下" /></div></div>
+      <button class="secondary" onclick="resetCropBox()">重置裁剪框</button>
+      <div class="hint">裁剪、帧数、时间范围、解码尺寸会重新从视频取帧；右侧参数复用已取帧素材。</div>
       <label>路径</label><input id="source" placeholder="例如：F:/path/input.mp4 或 framesheet.png" />
       <div class="row"><div><label>帧数</label><input id="count" type="number" value="12" /></div><div><label>网格</label><input id="grid" value="4x3" /></div></div>
       <label>时间范围</label><input id="seconds" placeholder="例如：1-2" />
       <label>解码尺寸</label><input id="decodeSize" value="256" />
       <button onclick="createSession()">创建并抽帧</button>
       <button class="secondary" onclick="loadFramesheet()">载入帧表</button>
-      <div class="busy" id="busy">处理中，请稍候……</div>
-      <pre class="status" id="status">尚未创建会话。</pre>
     </section>
     <section>
       <h2>预览</h2>
@@ -79,6 +90,11 @@ INDEX_HTML = """<!doctype html>
       <button class="secondary" onclick="exportOutput('framesheet')">导出帧表</button>
       <button class="secondary" onclick="exportOutput('webp')">导出 WebP</button>
       <button class="secondary" onclick="exportOutput('gif')">导出 GIF</button>
+      <div class="log-panel">
+        <h2>输出日志</h2>
+        <div class="busy" id="busy">处理中，请稍候……</div>
+        <pre class="status" id="status">尚未创建会话。</pre>
+      </div>
     </section>
     <section>
       <h2>视觉与节奏</h2>
@@ -89,13 +105,12 @@ INDEX_HTML = """<!doctype html>
       <label>淡出预设</label><select id="fadePreset"><option value="default">默认柔和</option><option value="none">关闭淡出</option><option value="tight">紧凑淡出</option><option value="wide">宽松淡出</option><option value="fast">快速收边</option></select>
       <pre class="curve" id="fadeSummary">透明淡出：中心 80% 保持不透明，边缘线性淡出</pre>
       <label>背景色 RGB</label><input id="keyColor" placeholder="可选，例如：0,255,0" />
-      <label>裁剪区域</label><input id="crop" placeholder="可选：左,上,右,下" />
       <div class="row"><div><label>输出宽度</label><input id="outW" type="number" placeholder="可选" /></div><div><label>输出高度</label><input id="outH" type="number" placeholder="可选" /></div></div>
       <button onclick="updateVisual()">应用视觉参数</button>
       <label>节奏模板</label><select id="preset"><option value="speed_keyframes">速度关键帧</option><option value="linear">线性</option><option value="hold_then_burst">蓄力后爆发</option><option value="slow_in_fast_out">先慢后快</option><option value="burst_then_settle">爆发后回落</option><option value="anticipation_explosion">预备爆发</option></select>
       <div class="row"><div><label>原视频时长（秒）</label><input id="timingDuration" type="number" min="0.01" step="0.01" placeholder="上传视频后自动读取" /></div><div><label>高级模式</label><select id="advancedTiming"><option value="false">隐藏关键点</option><option value="true">显示关键点</option></select></div></div>
       <div class="keyframe-editor" id="keyframeEditor">
-        <div class="row"><button class="secondary" onclick="addSpeedKeyframe()">添加关键帧</button><button class="secondary" onclick="resetSpeedKeyframes()">恢复示例</button></div>
+        <div class="row"><button class="secondary" onclick="addSpeedKeyframe()">添加关键帧</button><button class="secondary" onclick="resetSpeedKeyframes()">恢复单关键帧预设</button></div>
         <div id="keyframeRows"></div>
         <svg id="speedCurve" class="speed-curve" viewBox="0 0 320 170" role="img" aria-label="速度关键帧曲线">
           <line x1="34" y1="134" x2="304" y2="134" stroke="#34405f" />
@@ -106,7 +121,7 @@ INDEX_HTML = """<!doctype html>
         </svg>
         <div class="hint">拖动圆点调整关键帧时间和“前速度”，拖动菱形调整同一关键帧的“后速度”；下方 JSON 会自动同步。</div>
       </div>
-      <label>速度关键帧 JSON（自动同步，可直接编辑）</label><textarea id="speedKeyframes" style="width:100%;height:105px;background:#0f1320;color:#edf1ff;border-radius:10px">[{"time":1,"before":0.4,"after":5},{"time":5,"before":2,"after":1}]</textarea>
+      <label>速度关键帧 JSON（自动同步，可直接编辑）</label><textarea id="speedKeyframes" style="width:100%;height:105px;background:#0f1320;color:#edf1ff;border-radius:10px">[{"time":1,"before":0.4,"after":5}]</textarea>
       <button onclick="applySemanticTiming()">应用节奏</button>
       <div id="advancedTimingPanel" style="display:none">
         <label>高级：关键点 JSON</label><textarea id="points" style="width:100%;height:130px;background:#0f1320;color:#edf1ff;border-radius:10px">[[0,0],[1,1]]</textarea>
@@ -121,6 +136,7 @@ INDEX_HTML = """<!doctype html>
   </main>
 <script>
 let sessionId = null;
+const cropState = {x:0, y:0, w:0, h:0};
 async function api(path, options={}) {
   const res = await fetch(path, {headers:{'content-type':'application/json'}, ...options});
   const data = await res.json();
@@ -163,6 +179,13 @@ dropzone.addEventListener('drop', async (event) => {
 fileInput.addEventListener('change', async () => {
   if (fileInput.files.length) await uploadFile(fileInput.files[0]);
 });
+document.getElementById('count').addEventListener('input', updateGridFromCount);
+document.getElementById('cropEnabled').addEventListener('change', () => {
+  document.getElementById('videoPreview').classList.toggle('crop-active', document.getElementById('cropEnabled').value === 'true');
+  if (document.getElementById('cropEnabled').value === 'true' && !cropState.w) resetCropBox();
+  updateCaptureCropInput();
+});
+document.getElementById('captureCrop').addEventListener('change', applyCaptureCropInput);
 document.getElementById('fadePreset').addEventListener('change', applyFadePreset);
 document.getElementById('fadeEnabled').addEventListener('change', updateFadeSummary);
 document.getElementById('fadePercent').addEventListener('input', updateFadeSummary);
@@ -188,32 +211,148 @@ async function uploadFile(file){
     document.getElementById('kind').value = 'framesheet';
     player.pause();
     player.removeAttribute('src');
-    player.style.display = 'none';
+    document.getElementById('videoPreview').style.display = 'none';
+    document.getElementById('cropEnabled').value = 'false';
+    document.getElementById('videoPreview').classList.remove('crop-active');
     return {提示:'已上传帧表，请确认网格后点击“载入帧表”。', upload:data};
   } else {
     document.getElementById('kind').value = 'video';
     player.src = data.url;
-    player.style.display = 'block';
+    document.getElementById('videoPreview').style.display = 'block';
     player.load();
     player.onloadedmetadata = () => {
       if (Number.isFinite(player.duration)) {
         document.getElementById('timingDuration').value = String(round3(player.duration));
         updateSemanticTimingSummary();
       }
+      resetCropBox();
     };
     return {提示:'已上传视频，请设置帧数/时间范围后点击“创建并抽帧”。', upload:data};
   }
   });
 }
+function displayedVideoRect(){
+  const player = document.getElementById('videoPlayer');
+  const preview = document.getElementById('videoPreview');
+  const box = preview.getBoundingClientRect();
+  if (!player.videoWidth || !player.videoHeight || !box.width || !box.height) return {left:0, top:0, width:box.width, height:box.height};
+  const videoRatio = player.videoWidth / player.videoHeight;
+  const boxRatio = box.width / box.height;
+  let width = box.width, height = box.height, left = 0, top = 0;
+  if (boxRatio > videoRatio) { width = box.height * videoRatio; left = (box.width - width) / 2; }
+  else { height = box.width / videoRatio; top = (box.height - height) / 2; }
+  return {left, top, width, height};
+}
+function clampCropState(){
+  const rect = displayedVideoRect();
+  const minSize = 24;
+  cropState.w = Math.max(minSize, Math.min(cropState.w || rect.width * 0.8, rect.width));
+  cropState.h = Math.max(minSize, Math.min(cropState.h || rect.height * 0.8, rect.height));
+  cropState.x = Math.max(rect.left, Math.min(cropState.x || rect.left + (rect.width - cropState.w) / 2, rect.left + rect.width - cropState.w));
+  cropState.y = Math.max(rect.top, Math.min(cropState.y || rect.top + (rect.height - cropState.h) / 2, rect.top + rect.height - cropState.h));
+}
+function renderCropBox(){
+  clampCropState();
+  const box = document.getElementById('cropBox');
+  box.style.left = `${cropState.x}px`;
+  box.style.top = `${cropState.y}px`;
+  box.style.width = `${cropState.w}px`;
+  box.style.height = `${cropState.h}px`;
+  updateCaptureCropInput();
+}
+function resetCropBox(){
+  const rect = displayedVideoRect();
+  const side = Math.max(24, Math.min(rect.width, rect.height) * 0.8);
+  cropState.w = side;
+  cropState.h = side;
+  cropState.x = rect.left + (rect.width - side) / 2;
+  cropState.y = rect.top + (rect.height - side) / 2;
+  renderCropBox();
+}
+function readCaptureCrop(){
+  if (document.getElementById('cropEnabled').value !== 'true') return null;
+  const input = document.getElementById('captureCrop').value.trim();
+  if (input) {
+    const values = input.split(',').map(Number);
+    if (values.length === 4 && values.every(Number.isFinite)) return values.map(Math.round);
+  }
+  return cropFromBox();
+}
+function cropFromBox(){
+  const player = document.getElementById('videoPlayer');
+  if (!player.videoWidth || !player.videoHeight) return null;
+  const rect = displayedVideoRect();
+  const scaleX = player.videoWidth / rect.width;
+  const scaleY = player.videoHeight / rect.height;
+  const left = Math.round((cropState.x - rect.left) * scaleX);
+  const top = Math.round((cropState.y - rect.top) * scaleY);
+  const right = Math.round((cropState.x + cropState.w - rect.left) * scaleX);
+  const bottom = Math.round((cropState.y + cropState.h - rect.top) * scaleY);
+  return [left, top, right, bottom];
+}
+function updateCaptureCropInput(){
+  const crop = document.getElementById('cropEnabled').value === 'true' ? cropFromBox() : null;
+  document.getElementById('captureCrop').value = crop ? crop.join(',') : '';
+}
+function applyCaptureCropInput(){
+  const player = document.getElementById('videoPlayer');
+  const values = document.getElementById('captureCrop').value.trim().split(',').map(Number);
+  if (!player.videoWidth || !player.videoHeight || values.length !== 4 || !values.every(Number.isFinite)) return;
+  const rect = displayedVideoRect();
+  const scaleX = rect.width / player.videoWidth;
+  const scaleY = rect.height / player.videoHeight;
+  cropState.x = rect.left + values[0] * scaleX;
+  cropState.y = rect.top + values[1] * scaleY;
+  cropState.w = (values[2] - values[0]) * scaleX;
+  cropState.h = (values[3] - values[1]) * scaleY;
+  document.getElementById('cropEnabled').value = 'true';
+  document.getElementById('videoPreview').classList.add('crop-active');
+  renderCropBox();
+}
+(function installCropDrag(){
+  const preview = document.getElementById('videoPreview');
+  const box = document.getElementById('cropBox');
+  box.addEventListener('pointerdown', (event) => {
+    if (document.getElementById('cropEnabled').value !== 'true') return;
+    event.preventDefault();
+    const start = {x:event.clientX, y:event.clientY, crop:{...cropState}};
+    const mode = event.offsetX > cropState.w - 18 && event.offsetY > cropState.h - 18 ? 'resize' : 'move';
+    box.setPointerCapture(event.pointerId);
+    const move = (moveEvent) => {
+      const dx = moveEvent.clientX - start.x;
+      const dy = moveEvent.clientY - start.y;
+      if (mode === 'resize') {
+        cropState.w = start.crop.w + dx;
+        cropState.h = start.crop.h + dy;
+      } else {
+        cropState.x = start.crop.x + dx;
+        cropState.y = start.crop.y + dy;
+      }
+      renderCropBox();
+    };
+    const up = () => {
+      box.removeEventListener('pointermove', move);
+      box.removeEventListener('pointerup', up);
+      box.removeEventListener('pointercancel', up);
+    };
+    box.addEventListener('pointermove', move);
+    box.addEventListener('pointerup', up);
+    box.addEventListener('pointercancel', up);
+  });
+  window.addEventListener('resize', () => { if (preview.style.display !== 'none' && cropState.w) renderCropBox(); });
+})();
 async function createSession(){
   return withBusy('正在创建会话并抽取视频帧……', async () => {
   const source = document.getElementById('source').value;
   const count = Number(document.getElementById('count').value);
   const seconds = document.getElementById('seconds').value || null;
   const decode_size = document.getElementById('decodeSize').value || null;
+  const body = {source,count,seconds,decode_size};
+  const crop = readCaptureCrop();
+  if (crop) body.crop = crop;
   const created = await api('/api/sessions',{method:'POST',body:JSON.stringify({kind:'video'})});
   sessionId = created.id;
-  const captured = await api(`/api/sessions/${sessionId}/capture`,{method:'POST',body:JSON.stringify({source,count,seconds,decode_size})});
+  const captured = await api(`/api/sessions/${sessionId}/capture`,{method:'POST',body:JSON.stringify(body)});
   const preview = await renderPreview();
   return {captured, preview};
   });
@@ -228,16 +367,20 @@ async function loadFramesheet(){
   return {session:data, preview};
   });
 }
+function updateGridFromCount(){
+  const count = Math.max(1, Math.floor(Number(document.getElementById('count').value || 1)));
+  const columns = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / columns);
+  document.getElementById('grid').value = `${columns}x${rows}`;
+}
 async function updateVisual(){
   if (!sessionId) return;
   return withBusy('正在应用视觉参数并刷新预览……', async () => {
   const w = document.getElementById('outW').value, h = document.getElementById('outH').value;
   const keyColor = document.getElementById('keyColor').value.trim();
-  const crop = document.getElementById('crop').value.trim();
   const body = {remove_background: document.getElementById('removeBg').value === 'true', background_tolerance:Number(document.getElementById('bgTolerance').value), fade:buildFadeValue()};
   if (w && h) body.output_size = [Number(w), Number(h)];
   if (keyColor) body.key_color = keyColor.split(',').map(Number);
-  if (crop) body.crop = crop.split(',').map(Number);
   const data = await api(`/api/sessions/${sessionId}/visual`,{method:'PATCH',body:JSON.stringify(body)});
   await renderPreview();
   return data;
@@ -274,7 +417,7 @@ function updateFadeSummary(){
 }
 function round3(value){ return Math.round(value * 1000) / 1000; }
 function defaultSpeedKeyframes(){
-  return [{time:1,before:0.4,after:5},{time:5,before:2,after:1}];
+  return [{time:1,before:0.4,after:5}];
 }
 function timingDuration(){
   const explicit = Number(document.getElementById('timingDuration').value);
@@ -478,6 +621,7 @@ async function exportOutput(format){
 }
 renderKeyframeEditor();
 updateSemanticTimingSummary();
+updateGridFromCount();
 </script>
 </body>
 </html>"""
@@ -639,6 +783,7 @@ def create_v2f_app(store: V2FSessionStore | None = None) -> type[BaseHTTPRequest
                         count=int(payload["count"]),
                         seconds=payload.get("seconds"),
                         decode_size=payload.get("decode_size"),
+                        crop=tuple(payload["crop"]) if payload.get("crop") else None,  # type: ignore[arg-type]
                     )
                     _json_response(self, 200, sessions.capture_video(parts[2], plan).to_dict())
                     return
@@ -696,10 +841,18 @@ def create_v2f_app(store: V2FSessionStore | None = None) -> type[BaseHTTPRequest
     return V2FHandler
 
 
-def run_v2f_editor(host: str = "127.0.0.1", port: int = 0, *, open_browser: bool = True) -> tuple[ThreadingHTTPServer, str]:
-    handler = create_v2f_app()
+def run_v2f_editor(
+    host: str = "127.0.0.1",
+    port: int = 0,
+    *,
+    open_browser: bool = True,
+    work_dir: str | Path | None = None,
+) -> tuple[ThreadingHTTPServer, str]:
+    output_root = Path(work_dir).expanduser().resolve() if work_dir is not None else (Path.cwd() / "v2f-ui-output").resolve()
+    handler = create_v2f_app(V2FSessionStore(export_root=output_root))
     server = ThreadingHTTPServer((host, port), handler)
     url = f"http://{server.server_address[0]}:{server.server_address[1]}/"
+    server.v2f_output_root = output_root  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     if open_browser:

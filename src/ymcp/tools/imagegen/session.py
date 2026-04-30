@@ -78,9 +78,12 @@ class V2FSession:
 class V2FSessionStore:
     """In-process local session store for the v2f editor."""
 
-    def __init__(self, root: str | Path | None = None, *, allow_external_exports: bool = False) -> None:
+    def __init__(self, root: str | Path | None = None, *, allow_external_exports: bool = False, export_root: str | Path | None = None) -> None:
         self.root = Path(root) if root is not None else Path(tempfile.mkdtemp(prefix="ymcp-v2f-ui-"))
         self.root.mkdir(parents=True, exist_ok=True)
+        self.export_root = Path(export_root).expanduser().resolve() if export_root is not None else None
+        if self.export_root is not None:
+            self.export_root.mkdir(parents=True, exist_ok=True)
         self.sessions: dict[str, V2FSession] = {}
         self.allow_external_exports = allow_external_exports
         self.upload_root = self.root / "uploads"
@@ -111,7 +114,7 @@ class V2FSessionStore:
     def capture_video(self, session_id: str, plan: CapturePlan) -> V2FSession:
         session = self.get(session_id)
         source = resolve_safe_path(plan.source, must_exist=False)
-        normalized = CapturePlan(source=source, count=plan.count, seconds=plan.seconds, decode_size=plan.decode_size)
+        normalized = CapturePlan(source=source, count=plan.count, seconds=plan.seconds, decode_size=plan.decode_size, crop=plan.crop)
         if session.frame_set is not None and session.frame_set.cache_key == normalized.cache_key():
             session.touch()
             return session
@@ -157,10 +160,12 @@ class V2FSessionStore:
 
     def _resolve_export_target(self, session: V2FSession, out_dir: str | Path | None) -> Path:
         if out_dir is None:
+            if self.export_root is not None:
+                return self.export_root / session.id
             return session.temp_root / "export"
         if self.allow_external_exports:
             return Path(out_dir).expanduser().resolve()
-        return resolve_safe_path(out_dir, base=session.temp_root)
+        return resolve_safe_path(out_dir, base=self.export_root or session.temp_root)
 
     def _render_export_frames(self, session: V2FSession) -> list[object]:
         if session.frame_set is None:

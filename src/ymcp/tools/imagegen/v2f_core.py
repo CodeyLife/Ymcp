@@ -23,14 +23,24 @@ Color = tuple[int, int, int]
 class CapturePlan:
     """Video decode/sampling plan.
 
-    ``decode_size`` belongs to capture. User-facing crop/output resize belongs
-    to ``VisualPipelineSpec`` so those edits do not invalidate captured frames.
+    ``decode_size`` and ``crop`` belong to capture because both require
+    re-sampling source video frames. User-facing output resize belongs to
+    ``VisualPipelineSpec`` so that edit can reuse captured frames.
     """
 
     source: str | Path
     count: int
     seconds: str | None = None
     decode_size: str | int | None = None
+    crop: tuple[int, int, int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.crop is not None:
+            left, upper, right, lower = self.crop
+            if right <= left or lower <= upper:
+                raise ValueError("crop must be (left, upper, right, lower) with positive area")
+            if min(left, upper, right, lower) < 0:
+                raise ValueError("crop coordinates must be non-negative")
 
     def cache_key(self) -> str:
         return _hash_payload(
@@ -39,6 +49,7 @@ class CapturePlan:
                 "count": self.count,
                 "seconds": self.seconds,
                 "decode_size": self.decode_size,
+                "crop": self.crop,
             }
         )
 
@@ -149,6 +160,13 @@ def capture_video_frames(plan: CapturePlan) -> FrameSet:
     for timestamp in times:
         with Image.open(BytesIO(legacy._extract_video_frame_png(plan.source, timestamp, min_timestamp=start))) as image:
             frame = image.convert("RGBA") if image.mode in {"RGBA", "LA", "P"} or "transparency" in image.info else image.convert("RGB")
+            if plan.crop is not None:
+                left, upper, right, lower = plan.crop
+                left = max(0, min(left, frame.width - 1))
+                upper = max(0, min(upper, frame.height - 1))
+                right = max(left + 1, min(right, frame.width))
+                lower = max(upper + 1, min(lower, frame.height))
+                frame = frame.crop((left, upper, right, lower))
             if target_size is not None:
                 frame = frame.resize(target_size, Image.Resampling.LANCZOS)
             frames.append(frame.copy())
@@ -157,7 +175,7 @@ def capture_video_frames(plan: CapturePlan) -> FrameSet:
         source_kind="video",
         cache_key=plan.cache_key(),
         capture_plan=plan,
-        source_metadata={"duration": video_duration, "seconds": [start, end], "sample_times": times},
+        source_metadata={"duration": video_duration, "seconds": [start, end], "sample_times": times, "crop": plan.crop},
     )
 
 

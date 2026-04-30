@@ -384,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     v2f_ui_cmd.add_argument("--host", default="127.0.0.1", help="监听地址；默认 127.0.0.1。非本机地址不代表多用户/云端支持")
     v2f_ui_cmd.add_argument("--port", type=int, default=0, help="监听端口；默认 0 表示自动选择可用端口")
+    v2f_ui_cmd.add_argument("--work-dir", help="工作/导出根目录；默认当前启动目录下的 v2f-ui-output")
     v2f_ui_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     fixture_cmd = subparsers.add_parser("call-fixture", help="调用内置确定性示例")
@@ -537,8 +538,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from ymcp.web.v2f_app import run_v2f_editor
 
-            server, url = run_v2f_editor(host=args.host, port=args.port, open_browser=not args.no_open)
+            server, url = run_v2f_editor(host=args.host, port=args.port, open_browser=not args.no_open, work_dir=args.work_dir)
             print(f"Ymcp v2f editor running at {url}")
+            print(f"Output root: {server.v2f_output_root}")  # type: ignore[attr-defined]
             print("Press Ctrl+C to stop. This is a local single-user editor, not a multi-user/cloud service.")
             try:
                 while True:

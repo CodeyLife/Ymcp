@@ -229,6 +229,7 @@ def test_v2f_ui_help_mentions_local_editor():
 
     assert "本地 v2f" in completed.stdout
     assert "--host" in completed.stdout
+    assert "--work-dir" in completed.stdout
 
 
 def test_video_frames_command_can_remove_background(tmp_path, monkeypatch):

@@ -11,7 +11,7 @@ Image = pytest.importorskip("PIL.Image")
 from http.server import ThreadingHTTPServer
 
 from ymcp.tools.imagegen.session import V2FSessionStore
-from ymcp.web.v2f_app import create_v2f_app
+from ymcp.web.v2f_app import create_v2f_app, run_v2f_editor
 
 
 def _request(server, method, path, payload=None):
@@ -125,7 +125,17 @@ def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     assert "Ymcp v2f 编辑器" in html
     assert "素材来源" in html
     assert "拖拽视频或帧表到这里" in html
+    assert "updateGridFromCount" in html
     assert '<video id="videoPlayer" controls' in html
+    assert 'id="videoPreview"' in html
+    assert 'id="cropBox"' in html
+    assert "视频裁剪" in html
+    assert "裁剪坐标" in html
+    assert "重置裁剪框" in html
+    assert "右侧参数复用已取帧素材" in html
+    assert "裁剪区域" not in html
+    assert "输出日志" in html
+    assert 'class="log-panel"' in html
     assert "处理中，请稍候" in html
     assert "正在创建会话并抽取视频帧" in html
     assert "正在生成预览" in html
@@ -139,13 +149,13 @@ def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     assert "速度关键帧" in html
     assert "原视频时长（秒）" in html
     assert "添加关键帧" in html
-    assert "恢复示例" in html
+    assert "恢复单关键帧预设" in html
     assert 'id="speedCurve"' in html
     assert "拖动圆点调整关键帧时间" in html
     assert "前速度" in html
     assert "后速度" in html
     assert "速度关键帧 JSON" in html
-    assert '"time":1,"before":0.4,"after":5' in html
+    assert '[{"time":1,"before":0.4,"after":5}]' in html
     assert "蓄力时长（%）" not in html
     assert "停顿强度（%）" not in html
     assert "爆发位置（%）" not in html
@@ -195,6 +205,42 @@ def test_v2f_web_app_upload_saves_file_under_upload_root(v2f_server):
     assert body == b"ke-v"
 
 
+def test_run_v2f_editor_defaults_output_under_launch_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    server, url = run_v2f_editor(open_browser=False)
+    try:
+        assert server.v2f_output_root == tmp_path / "v2f-ui-output"
+        status, payload = _request(
+            server,
+            "POST",
+            "/api/uploads",
+            {"filename": "clip.mp4", "data_base64": base64.b64encode(b"fake-video").decode("ascii")},
+        )
+        assert status == 200
+        assert not Path(payload["path"]).is_relative_to(tmp_path / "v2f-ui-output")
+        assert url.startswith("http://")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_run_v2f_editor_exports_under_launch_directory_but_keeps_uploads_temporary(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sheet = tmp_path / "sheet.png"
+    Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(sheet)
+    server, _ = run_v2f_editor(open_browser=False)
+    try:
+        status, payload = _request(server, "POST", "/api/sessions", {"kind": "framesheet", "source": str(sheet), "grid": "1x1"})
+        assert status == 200
+
+        status, payload = _request(server, "POST", f"/api/sessions/{payload['id']}/export", {"format": "framesheet"})
+        assert status == 200
+        assert Path(payload["framesheet"]).is_relative_to(tmp_path / "v2f-ui-output")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_v2f_web_app_rejects_export_outside_session_root(v2f_server, tmp_path):
     sheet = tmp_path / "sheet.png"
     Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(sheet)
@@ -238,7 +284,7 @@ def test_v2f_web_app_video_render_changes_do_not_recapture(tmp_path, monkeypatch
         assert status == 200
         session_id = payload["id"]
 
-        status, _ = _request(server, "POST", f"/api/sessions/{session_id}/capture", {"source": str(tmp_path / "clip.mp4"), "count": 2, "seconds": "0-1", "decode_size": "256"})
+        status, _ = _request(server, "POST", f"/api/sessions/{session_id}/capture", {"source": str(tmp_path / "clip.mp4"), "count": 2, "seconds": "0-1", "decode_size": "256", "crop": [0, 0, 10, 10]})
         assert status == 200
         status, _ = _request(server, "PATCH", f"/api/sessions/{session_id}/visual", {"remove_background": False, "fade": "100"})
         assert status == 200
@@ -248,6 +294,48 @@ def test_v2f_web_app_video_render_changes_do_not_recapture(tmp_path, monkeypatch
         assert status == 200
 
         assert len(calls) == 1
+        assert calls[0].crop == (0, 0, 10, 10)
+    finally:
+        server.shutdown()
+        server.server_close()
+        store.close()
+
+
+def test_v2f_web_app_video_crop_change_recaptures(tmp_path, monkeypatch):
+    calls = []
+    sheet = tmp_path / "sheet.png"
+    image = Image.new("RGBA", (20, 10), (0, 0, 0, 0))
+    for x in range(10):
+        for y in range(10):
+            image.putpixel((x, y), (255, 0, 0, 255))
+            image.putpixel((x + 10, y), (0, 255, 0, 255))
+    image.save(sheet)
+
+    from ymcp.tools.imagegen.v2f_core import FramesheetPlan, frameset_from_framesheet
+
+    def fake_capture(plan):
+        calls.append(plan)
+        frame_set = frameset_from_framesheet(FramesheetPlan(sheet, "2x1"))
+        frame_set.cache_key = plan.cache_key()
+        return frame_set
+
+    monkeypatch.setattr("ymcp.tools.imagegen.session.capture_video_frames", fake_capture)
+    store = V2FSessionStore(tmp_path / "sessions")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), create_v2f_app(store))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, payload = _request(server, "POST", "/api/sessions", {"kind": "video"})
+        assert status == 200
+        session_id = payload["id"]
+
+        body = {"source": str(tmp_path / "clip.mp4"), "count": 2, "seconds": "0-1", "decode_size": "256"}
+        status, _ = _request(server, "POST", f"/api/sessions/{session_id}/capture", body | {"crop": [0, 0, 10, 10]})
+        assert status == 200
+        status, _ = _request(server, "POST", f"/api/sessions/{session_id}/capture", body | {"crop": [2, 0, 12, 10]})
+        assert status == 200
+
+        assert [call.crop for call in calls] == [(0, 0, 10, 10), (2, 0, 12, 10)]
     finally:
         server.shutdown()
         server.server_close()

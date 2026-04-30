@@ -67,6 +67,35 @@ def test_render_frames_parallel_matches_serial(tmp_path):
     assert [list(image.getdata()) for image in parallel] == [list(image.getdata()) for image in serial]
 
 
+def test_capture_plan_crop_changes_cache_key(tmp_path):
+    base = CapturePlan(source=tmp_path / "clip.mp4", count=2, seconds="0-1", decode_size="256")
+    cropped = CapturePlan(source=tmp_path / "clip.mp4", count=2, seconds="0-1", decode_size="256", crop=(1, 2, 9, 10))
+
+    assert base.cache_key() != cropped.cache_key()
+
+
+def test_capture_video_crops_before_resizing(monkeypatch, tmp_path):
+    from io import BytesIO
+
+    from ymcp.tools.imagegen.v2f_core import capture_video_frames
+
+    source = Image.new("RGB", (20, 10), (0, 0, 0))
+    for x in range(10, 20):
+        for y in range(10):
+            source.putpixel((x, y), (255, 0, 0))
+    raw = BytesIO()
+    source.save(raw, format="PNG")
+
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow._probe_video_duration", lambda _source: 1.0)
+    monkeypatch.setattr("ymcp.tools.imagegen.local_frame_workflow._extract_video_frame_png", lambda *_args, **_kwargs: raw.getvalue())
+
+    frame_set = capture_video_frames(CapturePlan(source=tmp_path / "clip.mp4", count=1, seconds="0-1", decode_size="4x4", crop=(10, 0, 20, 10)))
+
+    assert frame_set.frames[0].size == (4, 4)
+    assert frame_set.frames[0].getpixel((0, 0))[:3] == (255, 0, 0)
+    assert frame_set.source_metadata["crop"] == (10, 0, 20, 10)
+
+
 def test_session_capture_reuses_same_capture_key(monkeypatch, tmp_path):
     calls = []
     store = V2FSessionStore(tmp_path / "sessions")
@@ -87,6 +116,29 @@ def test_session_capture_reuses_same_capture_key(monkeypatch, tmp_path):
     store.capture_video(session.id, plan)
 
     assert len(calls) == 1
+
+
+def test_session_capture_recaptures_when_crop_changes(monkeypatch, tmp_path):
+    calls = []
+    store = V2FSessionStore(tmp_path / "sessions")
+    session = store.create_empty()
+    sheet = tmp_path / "sheet.png"
+    _make_sheet(sheet)
+
+    def fake_capture(plan):
+        calls.append(plan)
+        frame_set = frameset_from_framesheet(FramesheetPlan(sheet, "2x1"))
+        frame_set.cache_key = plan.cache_key()
+        return frame_set
+
+    monkeypatch.setattr("ymcp.tools.imagegen.session.capture_video_frames", fake_capture)
+
+    base = CapturePlan(source=tmp_path / "clip.mp4", count=2, seconds="0-1", decode_size="256", crop=(0, 0, 10, 10))
+    changed = CapturePlan(source=tmp_path / "clip.mp4", count=2, seconds="0-1", decode_size="256", crop=(2, 0, 12, 10))
+    store.capture_video(session.id, base)
+    store.capture_video(session.id, changed)
+
+    assert [call.crop for call in calls] == [(0, 0, 10, 10), (2, 0, 12, 10)]
 
 
 def test_session_cache_summary_reports_in_memory_frames(tmp_path):
