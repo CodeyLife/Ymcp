@@ -81,22 +81,15 @@ def _update_workflow_state(result: Any, *, current_phase: str, readiness: str, c
         artifacts.selected_option = selected_option
 
 
-def _apply_interactive_handoff_fallback(result: Any, *, reason: str, menu_lines: str) -> Any:
+def _apply_interactive_handoff_fallback(result: Any, *, reason: str) -> Any:
     result.status = ToolStatus.BLOCKED
     result.meta.required_host_action = HostActionType.AWAIT_INPUT
-    result.meta.host_controls = []
-    result.meta.interaction_kind = 'awaiting_selected_option'
+    result.meta.host_controls = ['display', 'selected_option tool recall']
+    result.meta.elicitation_error = reason
     result.meta.menu_authority = 'meta.handoff.options'
-    result.meta.assistant_response_policy = 'stop_after_tool_result'
-    result.meta.auto_continue_forbidden = True
-    result.meta.assistant_visible_response_allowed = False
-    result.meta.host_ui_required = False
-    result.meta.text_menu_forbidden = True
     result.meta.ui_request = {
         'kind': 'await_selected_option',
         'selected_option_param': 'selected_option',
-        'failure_semantics': 'not_a_tool_failure',
-        'assistant_instruction': 'STOP',
     }
     _update_workflow_state(
         result,
@@ -105,12 +98,6 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str, menu_lines:
         current_focus='fallback_requires_interactive_menu',
         blocked_reason='interactive_menu_required',
     )
-    artifacts = getattr(result, 'artifacts', None)
-    if artifacts is not None:
-        if hasattr(artifacts, 'critic_summary'):
-            artifacts.critic_summary = None
-        if hasattr(artifacts, 'handoff_options'):
-            artifacts.handoff_options = []
     result.next_actions = []
     result.summary = (
         'WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION: '
@@ -152,7 +139,6 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         return _apply_interactive_handoff_fallback(
             result,
             reason='当前调用通道未提供 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
-            menu_lines=menu_lines,
         )
 
     try:
@@ -165,7 +151,6 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         return _apply_interactive_handoff_fallback(
             result,
             reason='当前调用通道未提供可用的 MCP Elicitation 上下文，无法完成流程菜单阶段所要求的菜单选择',
-            menu_lines=menu_lines,
         )
 
     try:
@@ -175,7 +160,6 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
         return _apply_interactive_handoff_fallback(
             result,
             reason=f'Elicitation 调用失败（{type(exc).__name__}: {exc}）',
-            menu_lines=menu_lines,
         )
 
     action = getattr(elicitation, 'action', None)
@@ -186,7 +170,6 @@ async def _maybe_elicit_handoff_choice(ctx: Context | None, result: Any, *, mess
             return _apply_interactive_handoff_fallback(
                 result,
                 reason=f'Elicitation 返回了非法选项 `{selected}`。合法选项只能来自 handoff.options：{", ".join(values)}',
-                menu_lines=menu_lines,
             )
         result.meta.required_host_action = HostActionType.DISPLAY_ONLY
         result.meta.elicitation_state = ElicitationState.ACCEPTED

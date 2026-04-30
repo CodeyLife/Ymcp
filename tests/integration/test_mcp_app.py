@@ -13,21 +13,14 @@ def _assert_host_ui_fallback(structured, expected_values):
     assert structured['summary'].startswith('WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION')
     assert 'meta.handoff.options' in structured['summary']
     assert 'selected_option' in structured['summary']
-    assert structured['meta']['assistant_response_policy'] == 'stop_after_tool_result'
-    assert structured['meta']['assistant_visible_response_allowed'] is False
-    assert structured['meta']['host_ui_required'] is False
-    assert structured['meta']['text_menu_forbidden'] is True
-    assert structured['meta']['host_controls'] == []
     assert structured['meta']['menu_authority'] == 'meta.handoff.options'
+    assert structured['meta']['elicitation_error']
+    assert structured['meta']['host_controls'] == ['display', 'selected_option tool recall']
     assert structured['meta']['ui_request']['kind'] == 'await_selected_option'
     assert structured['meta']['ui_request']['selected_option_param'] == 'selected_option'
-    assert structured['meta']['ui_request']['failure_semantics'] == 'not_a_tool_failure'
-    assert structured['meta']['ui_request']['assistant_instruction'] == 'STOP'
     assert set(structured['meta']['ui_request']) == {
         'kind',
         'selected_option_param',
-        'failure_semantics',
-        'assistant_instruction',
     }
     assert [item['value'] for item in structured['meta']['handoff']['options']] == list(expected_values)
     assert structured['meta']['handoff']['recommended_next_action'] in expected_values
@@ -82,7 +75,7 @@ def test_ydeep_menu_ready_exposes_handoff_options():
         assert structured['artifacts']['workflow_state']['readiness'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
         _assert_host_ui_fallback(structured, ('yplan', 'refine_further'))
-        assert structured['artifacts']['handoff_options'] == []
+        assert [item['value'] for item in structured['artifacts']['handoff_options']] == ['yplan', 'refine_further']
     anyio.run(_run)
 
 
@@ -134,7 +127,8 @@ def test_yplan_chain_returns_handoffs_and_complete_artifact():
 
         complete = await app.call_tool('yplan_menu', {'critic_summary': 'critic 已批准，验收和验证路径明确'})
         structured = complete[1] if isinstance(complete, tuple) else complete
-        assert structured['artifacts']['handoff_options'] == []
+        assert [item['value'] for item in structured['artifacts']['handoff_options']] == ['ydo', 'restart', 'memory_store']
+        assert structured['artifacts']['critic_summary'] == 'critic 已批准，验收和验证路径明确'
         assert structured['status'] == 'blocked'
         assert structured['meta']['required_host_action'] == 'await_input'
         assert structured['meta']['elicitation_required'] is True
@@ -176,7 +170,7 @@ def test_ydo_menu_exposes_finish_option():
         app = create_app()
         result = await app.call_tool('ydo_menu', {})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured['artifacts']['handoff_options'] == []
+        assert [item['value'] for item in structured['artifacts']['handoff_options']] == ['finish', 'memory_store', 'yplan', 'continue_execution']
         assert structured['artifacts']['execution_verdict'] == 'complete'
         assert structured['status'] == 'blocked'
         assert structured['meta']['required_host_action'] == 'await_input'

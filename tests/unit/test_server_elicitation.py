@@ -10,23 +10,14 @@ def _assert_host_ui_fallback(result, expected_values=('ydo', 'restart', 'memory_
     assert result.summary.startswith('WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION')
     assert 'meta.handoff.options' in result.summary
     assert 'selected_option' in result.summary
-    assert result.meta.interaction_kind == 'awaiting_selected_option'
     assert result.meta.menu_authority == 'meta.handoff.options'
-    assert result.meta.assistant_response_policy == 'stop_after_tool_result'
-    assert result.meta.auto_continue_forbidden is True
-    assert result.meta.assistant_visible_response_allowed is False
-    assert result.meta.host_ui_required is False
-    assert result.meta.text_menu_forbidden is True
-    assert result.meta.host_controls == []
+    assert result.meta.elicitation_error
+    assert result.meta.host_controls == ['display', 'selected_option tool recall']
     assert result.meta.ui_request['kind'] == 'await_selected_option'
     assert result.meta.ui_request['selected_option_param'] == 'selected_option'
-    assert result.meta.ui_request['failure_semantics'] == 'not_a_tool_failure'
-    assert result.meta.ui_request['assistant_instruction'] == 'STOP'
     assert set(result.meta.ui_request) == {
         'kind',
         'selected_option_param',
-        'failure_semantics',
-        'assistant_instruction',
     }
     assert [option.value for option in result.meta.handoff.options] == list(expected_values)
     assert result.meta.handoff.recommended_next_action in expected_values
@@ -81,6 +72,7 @@ def test_complete_helper_blocks_without_request_context():
         assert updated.meta.required_host_action is HostActionType.AWAIT_INPUT
         assert updated.meta.elicitation_required is True
         assert updated.meta.elicitation_state is ElicitationState.UNSUPPORTED
+        assert '未提供 MCP Elicitation 上下文' in updated.meta.elicitation_error
         assert updated.artifacts.workflow_state.current_phase == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.readiness == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.current_focus == 'fallback_requires_interactive_menu'
@@ -94,6 +86,7 @@ def test_complete_helper_blocks_without_request_context():
         assert updated.meta.required_host_action is HostActionType.AWAIT_INPUT
         assert updated.meta.elicitation_required is True
         assert updated.meta.elicitation_state is ElicitationState.UNSUPPORTED
+        assert '未提供可用的 MCP Elicitation 上下文' in updated.meta.elicitation_error
         assert updated.artifacts.workflow_state.current_phase == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.readiness == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.current_focus == 'fallback_requires_interactive_menu'
@@ -124,6 +117,7 @@ def test_complete_helper_keeps_invalid_selected_option_blocked():
         assert updated.status is ToolStatus.BLOCKED
         assert updated.meta.required_host_action is HostActionType.AWAIT_INPUT
         assert updated.meta.elicitation_required is False
+        assert updated.meta.elicitation_error == '非法 selected_option：invalid'
         assert updated.artifacts.selected_option is None
         assert updated.artifacts.workflow_state.current_phase == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.current_focus == 'invalid_selected_option'
@@ -171,6 +165,7 @@ def test_complete_helper_blocks_on_elicitation_failure():
         assert updated.meta.required_host_action is HostActionType.AWAIT_INPUT
         assert updated.meta.elicitation_required is True
         assert updated.meta.elicitation_state is ElicitationState.FAILED
+        assert updated.meta.elicitation_error == 'Elicitation 调用失败（RuntimeError: boom）'
         assert updated.artifacts.workflow_state.current_phase == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.readiness == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.current_focus == 'fallback_requires_interactive_menu'
@@ -197,6 +192,7 @@ def test_complete_helper_blocks_on_illegal_selected_option():
         updated = await _maybe_elicit_handoff_choice(_FakeIllegalAcceptedContext(), result, message_prefix='规划完成')
         assert updated.status is ToolStatus.BLOCKED
         assert updated.meta.elicitation_state is ElicitationState.FAILED
+        assert 'Elicitation 返回了非法选项 `invalid`' in updated.meta.elicitation_error
         assert updated.artifacts.workflow_state.current_phase == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.readiness == 'awaiting_user_selection'
         assert updated.artifacts.workflow_state.current_focus == 'fallback_requires_interactive_menu'

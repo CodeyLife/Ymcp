@@ -87,6 +87,7 @@ def apply_selected_handoff_option(result, selected_option: str | None):
 
     result.status = ToolStatus.BLOCKED
     result.meta.required_host_action = HostActionType.AWAIT_INPUT
+    result.meta.elicitation_error = f'非法 selected_option：{selected}'
     if hasattr(artifacts, 'selected_option'):
         artifacts.selected_option = None
     if workflow_state is not None:

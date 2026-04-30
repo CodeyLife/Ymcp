@@ -82,13 +82,8 @@ class ResultMeta(BaseModel):
     elicitation_required: bool = False
     elicitation_state: ElicitationState = ElicitationState.NOT_APPLICABLE
     elicitation_selected_option: str | None = None
-    interaction_kind: str | None = None
+    elicitation_error: str | None = None
     menu_authority: str | None = None
-    assistant_response_policy: str | None = None
-    auto_continue_forbidden: bool = False
-    assistant_visible_response_allowed: bool = True
-    host_ui_required: bool = False
-    text_menu_forbidden: bool = False
     ui_request: dict[str, Any] = Field(default_factory=dict)
 
 

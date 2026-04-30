@@ -20,6 +20,15 @@ def test_project_rule_template_keeps_memory_rules():
     assert 'mempalace_search' in TRAE_PROJECT_RULE_TEMPLATE
 
 
+def test_project_rule_template_forbids_inferred_menu_selection():
+    assert 'selected_option` 为 `null`' in TRAE_PROJECT_RULE_TEMPLATE
+    assert '用户尚未选择任何菜单项' in TRAE_PROJECT_RULE_TEMPLATE
+    assert '严禁根据 `recommended_next_action`' in TRAE_PROJECT_RULE_TEMPLATE
+    assert '推断/模拟/假设用户选择' in TRAE_PROJECT_RULE_TEMPLATE
+    assert 'ui_request.kind=await_selected_option' in TRAE_PROJECT_RULE_TEMPLATE
+    assert '停止规划、分析、执行和下一步 tool 调用' in TRAE_PROJECT_RULE_TEMPLATE
+
+
 def test_flowchart_doc_mentions_three_tools():
     flow = Path('docs/current-workflow-flowcharts.md').read_text(encoding='utf-8')
     assert 'ydeep' in flow
