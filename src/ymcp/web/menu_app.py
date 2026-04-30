@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import secrets
 import threading
 import time
@@ -18,6 +20,14 @@ from ymcp.contracts.common import HandoffOption
 MIN_TIMEOUT_SECONDS = 30
 DEFAULT_TIMEOUT_SECONDS = 600
 MAX_TIMEOUT_SECONDS = 86_400
+LOGGER = logging.getLogger('ymcp.menu_webui')
+
+
+def _browser_open_enabled() -> bool:
+    value = os.environ.get('YMCP_MENU_OPEN_BROWSER')
+    if value is None:
+        return True
+    return value.strip().lower() not in {'0', 'false', 'no', 'off'}
 
 
 def clamp_timeout(value: int | None) -> int:
@@ -245,12 +255,16 @@ def ensure_menu_server(host: str = '127.0.0.1', port: int = 0) -> tuple[Threadin
         return server, base_url
 
 
-def create_menu_session_url(*, source_workflow: str, summary: str, options: list[HandoffOption], timeout_seconds: int | None = None, open_browser: bool = False) -> tuple[MenuSession, str]:
+def create_menu_session_url(*, source_workflow: str, summary: str, options: list[HandoffOption], timeout_seconds: int | None = None, open_browser: bool | None = None) -> tuple[MenuSession, str]:
     _server, base_url = ensure_menu_server()
     session = STORE.create(source_workflow=source_workflow, summary=summary, options=options, timeout_seconds=timeout_seconds)
     url = f'{base_url}/menu/{session.id}?token={session.token}'
-    if open_browser:
-        webbrowser.open(url)
+    should_open_browser = _browser_open_enabled() if open_browser is None else open_browser
+    if should_open_browser:
+        try:
+            webbrowser.open(url, new=2)
+        except Exception as exc:
+            LOGGER.warning('failed to open menu WebUI fallback browser: %s', exc)
     return session, url
 
 

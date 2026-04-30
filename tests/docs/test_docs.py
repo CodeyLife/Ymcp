@@ -60,7 +60,7 @@ def test_plan_and_ralph_skills_include_unified_menu_boundaries():
     deep = Path('skills/deep-interview/SKILL.md').read_text(encoding='utf-8')
     assert '# Planning Complete' in plan
     assert 'unified handoff tool: `menu`' in plan
-    assert 'Do not call `yplan_architect`, `yplan_critic`, or `yplan_menu`' in plan
+    assert 'Use `yplan` as the planning entry and `menu` as the only workflow handoff surface' in plan
     assert 'The host must render a real interactive control from `handoff.options`' in plan
     assert 'WebUI fallback' in plan
     assert 'source_workflow="ydeep"' in deep
@@ -68,3 +68,53 @@ def test_plan_and_ralph_skills_include_unified_menu_boundaries():
     assert '# Execution Start' in ralph
     assert '# Execution Complete' in ralph
     assert 'Do not recommend `finish` if failures remain or verification is incomplete' in ralph
+
+
+def test_workflow_skills_restore_reference_methodology_with_ymcp_boundaries():
+    deep = Path('skills/deep-interview/SKILL.md').read_text(encoding='utf-8')
+    plan = Path('skills/plan/SKILL.md').read_text(encoding='utf-8')
+    ralplan = Path('skills/ralplan/SKILL.md').read_text(encoding='utf-8')
+    ralph = Path('skills/ralph/SKILL.md').read_text(encoding='utf-8')
+
+    assert 'ambiguity = 1 -' in deep
+    assert 'Non-goals' in deep and 'Decision Boundaries' in deep
+    assert 'pressure pass' in deep
+    assert 'challenge modes' in deep
+    assert '不能把未实际生成的文件声称为已存在' in deep
+
+    assert 'RALPLAN-DR summary' in plan
+    assert 'strongest steelman antithesis' in plan
+    assert '最多 5 轮' in plan
+    assert 'deliberate mode' in plan
+    assert 'Pre-Execution Gate' in plan
+
+    assert 'Alias for $plan --consensus' in ralplan
+    assert '公共工作流入口是：`ydeep`、`yplan`、`ydo`、`menu`' in ralplan
+
+    assert 'Restored execution pressure' in ralph
+    assert 'cleanup/deslop 后回归验证' in ralph
+    assert '不要声称 Ymcp 服务端已自动创建这些文件' in ralph
+
+
+def test_workflow_text_avoids_obsolete_tool_guidance():
+    obsolete_terms = [
+        'yplan_architect',
+        'yplan_critic',
+        'yplan_menu',
+        'no longer public',
+        '不再公开',
+        '已删除',
+        'deleted',
+    ]
+    workflow_paths = [
+        Path('skills/deep-interview/SKILL.md'),
+        Path('skills/plan/SKILL.md'),
+        Path('skills/ralplan/SKILL.md'),
+        Path('skills/ralph/SKILL.md'),
+        Path('src/ymcp/engine/ralplan.py'),
+        Path('src/ymcp/contracts/ralplan.py'),
+    ]
+    for path in workflow_paths:
+        text = path.read_text(encoding='utf-8').lower()
+        for term in obsolete_terms:
+            assert term.lower() not in text, f"{path} contains obsolete workflow guidance: {term}"

@@ -1,9 +1,26 @@
 import anyio
+import pytest
 
 from ymcp.contracts.common import ElicitationState, HandoffOption, ToolStatus
 from ymcp.contracts.menu import MenuRequest
 from ymcp.engine.menu import build_menu
 from ymcp.server import _maybe_elicit_handoff_choice
+
+
+@pytest.fixture(autouse=True)
+def _stub_browser_open(monkeypatch):
+    monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: True)
+
+
+def test_menu_fallback_attempts_to_open_webui_browser(monkeypatch):
+    opened = []
+    monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: opened.append((url, new)) or True)
+
+    async def _run():
+        updated = await _maybe_elicit_handoff_choice(None, _menu_result(), message_prefix='规划完成')
+        assert opened == [(updated.artifacts.webui_url, 2)]
+        _assert_webui_fallback(updated)
+    anyio.run(_run)
 
 
 def _menu_result():

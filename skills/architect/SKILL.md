@@ -32,7 +32,7 @@ Use this role to review a plan for architecture, boundaries, tradeoffs, and feas
 - Evidence Gaps
 
 ## Handoff Rule
-Architect review is now an internal planning perspective inside the `plan` skill. Do not call a separate architecture MCP tool. After the planning flow has also completed critic readiness review, the model should output the planning summary and call unified `menu`.
+Architect review runs as an internal planning perspective inside the `plan` skill. After the planning flow has also completed critic readiness review, the model should output the planning summary and call unified `menu`.
 
 ## Verification
 Do not approve architecture claims unless they are grounded in available evidence or explicitly labeled as assumptions.

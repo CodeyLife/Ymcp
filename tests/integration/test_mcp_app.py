@@ -77,7 +77,10 @@ def test_ydo_start_returns_menu_handoff():
     anyio.run(_run)
 
 
-def test_menu_without_elicitation_starts_webui_fallback():
+def test_menu_without_elicitation_starts_webui_fallback(monkeypatch):
+    opened = []
+    monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: opened.append((url, new)) or True)
+
     async def _run():
         app = create_app()
         result = await app.call_tool('menu', {
@@ -96,6 +99,7 @@ def test_menu_without_elicitation_starts_webui_fallback():
         assert structured['artifacts']['workflow_state']['current_phase'] == 'awaiting_user_selection'
         assert structured['artifacts']['workflow_state']['current_focus'] == 'fallback_requires_interactive_menu'
         assert structured['artifacts']['webui_url'].startswith('http://127.0.0.1:')
+        assert opened == [(structured['artifacts']['webui_url'], 2)]
         _assert_webui_fallback(structured, ('ydo', 'memory_store'))
     anyio.run(_run)
 
