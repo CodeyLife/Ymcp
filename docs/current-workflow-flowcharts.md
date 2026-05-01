@@ -22,13 +22,18 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[进入规划] --> B[调用 yplan]
-    B --> C[返回 planner skill_content]
-    C --> D[LLM 在 skill 内完成 planner / architect / critic]
-    D --> E[输出规划 summary]
-    E --> F[调用 menu source_workflow=yplan]
-    F --> G[ydo]
-    F --> H[yplan]
-    F --> I[memory_store]
+    B --> C[phase=start 返回 plan skill_content]
+    C --> D[输出 planner_summary]
+    D --> E[调用 yplan phase=planner]
+    E --> F[输出 architect_summary]
+    F --> G[调用 yplan phase=architect]
+    G --> H[输出 critic_verdict 和 critic_summary]
+    H --> I[调用 yplan phase=critic]
+    I --> J[输出规划 summary]
+    J --> K[调用 menu source_workflow=yplan]
+    K --> L[ydo]
+    K --> M[yplan]
+    K --> N[memory_store]
 ```
 
 ## 3. `ydo` → `menu`

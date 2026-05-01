@@ -13,11 +13,14 @@ def test_workflow_tools_expose_state_machine_metadata():
 
 def test_yplan_schema_exposes_handoff_and_skill_fields():
     payload = {item['name']: item for item in inspect_tools_payload()}
+    request_schema = payload['yplan']['request_schema']
     response_schema = payload['yplan']['response_schema']
     meta_schema = response_schema['$defs'][response_schema['properties']['meta']['$ref'].split('/')[-1]]
     artifacts_schema = response_schema['$defs'][response_schema['properties']['artifacts']['$ref'].split('/')[-1]]
+    assert {'phase', 'planner_summary', 'architect_summary', 'critic_verdict', 'critic_summary'} <= set(request_schema['properties'])
     assert 'handoff' in meta_schema['properties']
     assert 'skill_content' in artifacts_schema['properties']
+    assert {'phase', 'planner_summary', 'architect_summary', 'critic_verdict', 'critic_summary'} <= set(artifacts_schema['properties'])
     assert 'planning_artifact' not in artifacts_schema['properties']
 
 

@@ -25,12 +25,69 @@ def test_deep_interview_start_returns_prompt_guidance_and_menu_handoff():
     assert '统一 `menu` tool' in result.summary
 
 
-def test_ralplan_start_returns_planner_prompt_and_menu_handoff():
+def test_ralplan_start_returns_plan_prompt_and_phase_gate():
     result = build_ralplan(RalplanRequest(task='恢复架构'))
-    assert result.artifacts.suggested_prompt == 'planner'
+    assert result.artifacts.suggested_prompt == 'plan'
     assert result.meta.handoff.recommended_next_action == 'menu'
     assert 'Task / Arguments:' in result.artifacts.skill_content
+    assert 'name: plan' in result.artifacts.skill_content
     assert 'planner / architect / critic' in result.summary
+    assert result.artifacts.workflow_state.readiness == 'needs_planner_summary'
+
+
+def test_ralplan_architect_blocks_without_planner_summary():
+    result = build_ralplan(RalplanRequest(task='恢复架构', phase='architect'))
+    assert result.status is ToolStatus.BLOCKED
+    assert result.artifacts.workflow_state.blocked_reason == 'planner_summary'
+    assert 'planner_summary' in result.summary
+
+
+def test_ralplan_critic_blocks_without_architect_summary():
+    result = build_ralplan(
+        RalplanRequest(
+            task='恢复架构',
+            phase='critic',
+            planner_summary='计划摘要',
+            critic_verdict='APPROVE',
+            critic_summary='critic 已批准',
+        )
+    )
+    assert result.status is ToolStatus.BLOCKED
+    assert result.artifacts.workflow_state.blocked_reason == 'architect_summary'
+    assert 'architect_summary' in result.summary
+
+
+def test_ralplan_critic_approve_requires_menu_with_execution_options():
+    result = build_ralplan(
+        RalplanRequest(
+            task='恢复架构',
+            phase='critic',
+            planner_summary='计划摘要',
+            architect_summary='架构审查',
+            critic_verdict='APPROVE',
+            critic_summary='critic 已批准',
+        )
+    )
+    assert result.status is ToolStatus.OK
+    assert result.artifacts.workflow_state.readiness == 'ready_for_menu'
+    assert 'ydo、yplan、memory_store' in result.next_actions[0].description
+
+
+def test_ralplan_critic_iterate_does_not_recommend_ydo():
+    result = build_ralplan(
+        RalplanRequest(
+            task='恢复架构',
+            phase='critic',
+            planner_summary='计划摘要',
+            architect_summary='架构审查',
+            critic_verdict='ITERATE',
+            critic_summary='还需修订',
+        )
+    )
+    assert result.status is ToolStatus.OK
+    assert result.artifacts.workflow_state.readiness == 'replan_required'
+    assert 'yplan、memory_store' in result.next_actions[0].description
+    assert 'ydo' not in result.next_actions[0].description
 
 
 def test_ralph_start_returns_prompt_guidance_and_menu_handoff():

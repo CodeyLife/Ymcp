@@ -9,7 +9,7 @@ description: Alias for $plan --consensus, adapted to Ymcp yplan/menu lightweight
 
 `ralplan` is the consensus-planning alias for `$plan --consensus`.
 
-在当前项目中，它表示：调用 `yplan`，在同一个 plan skill-flow 内完成 Planner / Architect / Critic 共识规划，然后通过统一 `menu` 交接。
+在当前项目中，它表示：调用 `yplan`，按 `phase=start → planner → architect → critic` 在同一个 plan skill-flow 内完成 Planner / Architect / Critic 共识规划总结，然后通过统一 `menu` 交接。
 
 ## Restored intent from reference workflow
 
@@ -25,7 +25,7 @@ description: Alias for $plan --consensus, adapted to Ymcp yplan/menu lightweight
 
 ## Practical rule
 
-Use `yplan(task=...)` and follow `skills/plan/SKILL.md`.
+Use `yplan(task=..., phase="start")` and follow `skills/plan/SKILL.md`.
 
 完成规划后不要直接执行；输出规划总结并调用 `menu`：
 

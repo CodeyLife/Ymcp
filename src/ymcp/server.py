@@ -321,8 +321,29 @@ def create_app() -> FastMCP:
         return result
 
     @app.tool(name='yplan', description=descriptions['yplan'], structured_output=True)
-    async def ralplan(task: str, known_context: list[str] | None = None, memory_context: Any = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> RalplanResult:
-        request = RalplanRequest(task=task, known_context=known_context or [], memory_context=memory_context or {}, schema_version=schema_version)
+    async def ralplan(
+        task: str,
+        phase: str = 'start',
+        known_context: list[str] | None = None,
+        memory_context: Any = None,
+        planner_summary: str | None = None,
+        architect_summary: str | None = None,
+        critic_verdict: str | None = None,
+        critic_summary: str | None = None,
+        schema_version: str = SCHEMA_VERSION,
+        ctx: Context | None = None,
+    ) -> RalplanResult:
+        request = RalplanRequest(
+            task=task,
+            phase=phase,
+            known_context=known_context or [],
+            memory_context=memory_context or {},
+            planner_summary=planner_summary,
+            architect_summary=architect_summary,
+            critic_verdict=critic_verdict,
+            critic_summary=critic_summary,
+            schema_version=schema_version,
+        )
         result = build_ralplan(request)
         return result
 

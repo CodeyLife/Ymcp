@@ -7,7 +7,7 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
 - **tool 负责轻 gate**：阶段入口、统一 handoff、Elicitation 选项、必要时产出最终交接 artifact
 - **skill 负责思考**：具体推理过程由 LLM 自主完成
 - **LLM 自主循环**：Ymcp 不维护重型服务端状态机，只提供关键流转约束
-- **中间阶段不回灌复杂状态**：同一调用链内由 LLM 自己承接上下文
+- **规划阶段显式回灌总结**：`yplan` 通过 phase 参数记录 planner / architect / critic 的可审计总结，不暴露内部思考
 - **handoff.options 更接近菜单项**：重点是 `value`、`title`、`description`、`recommended`
 
 ## 当前 workflow tools
@@ -19,9 +19,10 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
   - 完成澄清并输出总结后调用统一 `menu`
 - `yplan`
   - 对应 prompt：`plan` / `planner`
-  - 输入核心：`task`
+  - 输入核心：`task`、可选 `phase`、`planner_summary`、`architect_summary`、`critic_verdict`、`critic_summary`
   - 输出核心：`skill_content`、统一 `handoff`
-  - planner / architect / critic 是 skill 内部思考步骤，不再作为公开 MCP tools 暴露
+  - planner / architect / critic 是 `yplan` 内部阶段，不再作为公开 MCP tools 暴露
+  - `phase=start` 返回完整 `plan` skill；后续阶段必须显式回传对应总结，Critic 只接受 `APPROVE` / `ITERATE` / `REJECT`
   - 完成规划、架构审视、critic 验收并输出总结后调用统一 `menu`
 - `ydo`
   - 对应 prompt：`ralph`

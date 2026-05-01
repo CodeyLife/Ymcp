@@ -45,7 +45,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='yplan',
-        description='共识规划启动 tool。模型应使用返回的 planner skill_content，在同一 skill 内完成 planner / architect / critic；完成任务并输出总结文案后调用统一 menu tool，并把 ydo / yplan / memory_store 作为 options 参数传入。',
+        description='共识规划阶段化 tool。模型应使用返回的 plan skill_content，按 phase=start/planner/architect/critic 顺序提交 planner_summary、architect_summary、critic_verdict 和 critic_summary；Critic 批准或要求修订后输出总结文案并调用统一 menu tool。',
         request_model=RalplanRequest,
         response_model=RalplanResult,
         handler=build_ralplan,

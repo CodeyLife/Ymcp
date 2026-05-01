@@ -16,7 +16,7 @@ def test_canonical_tool_names():
 def test_tool_descriptions_include_skill_and_gate_constraints():
     descriptions = {spec.name: spec.description for spec in get_tool_specs()}
     assert 'deep-interview' in descriptions['ydeep']
-    assert 'planner' in descriptions['yplan']
+    assert 'phase=start/planner/architect/critic' in descriptions['yplan']
     assert 'ralph' in descriptions['ydo']
     assert 'workflow-menu' in descriptions['menu']
     assert 'Elicitation' in descriptions['menu']

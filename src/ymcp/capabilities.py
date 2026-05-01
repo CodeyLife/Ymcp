@@ -94,9 +94,10 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 
 ## yplan
 
-- `yplan` accepts only `task`.
-- `yplan` returns `planner` skill guidance.
-- The `plan` skill performs planner / architect / critic thinking internally; `yplan_architect` and `yplan_critic` are no longer public tools.
+- `yplan` accepts `task` plus optional phase-gate fields: `phase=start|planner|architect|critic`, `planner_summary`, `architect_summary`, `critic_verdict`, and `critic_summary`.
+- `phase=start` returns full `plan` skill guidance.
+- The `plan` skill performs planner / architect / critic thinking internally, then records each phase through `yplan`; `yplan_architect` and `yplan_critic` are no longer public tools.
+- `phase=architect` requires `planner_summary`; `phase=critic` requires `planner_summary`, `architect_summary`, `critic_verdict`, and `critic_summary`.
 - After the plan is approved or needs a new planning pass, the model outputs a summary and calls `menu` with options:
   - `ydo`
   - `yplan`

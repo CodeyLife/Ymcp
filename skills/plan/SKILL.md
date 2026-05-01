@@ -19,11 +19,13 @@ In Ymcp:
 
 ## Workflow model
 
-Ymcp planning is a lightweight skill-flow:
-1. `yplan(task=...)` returns planner `skill_content`.
-2. The model completes planner / architect / critic reasoning in the same skill flow.
-3. The model outputs a visible planning summary containing requirements, accepted plan, tradeoffs, risks, and verification approach.
-4. The model calls `menu` with:
+Ymcp planning is a lightweight phased skill-flow:
+1. `yplan(task=..., phase="start")` returns full `plan` `skill_content`.
+2. The model completes Planner work, outputs visible `planner_summary`, then calls `yplan(phase="planner", planner_summary=...)`.
+3. The model completes Architect review, outputs visible `architect_summary`, then calls `yplan(phase="architect", planner_summary=..., architect_summary=...)`.
+4. The model completes Critic review, outputs visible `critic_verdict` and `critic_summary`, then calls `yplan(phase="critic", planner_summary=..., architect_summary=..., critic_verdict=..., critic_summary=...)`.
+5. The model outputs a visible planning summary containing requirements, accepted plan, tradeoffs, risks, and verification approach.
+6. The model calls `menu` with:
    - `source_workflow="yplan"`
    - `summary=<planning summary>`
    - `options=[ydo, yplan, memory_store]`
@@ -92,8 +94,8 @@ Critic 结论只能是 APPROVE / ITERATE / REJECT。APPROVE 才能进入 `menu` 
 ## Core rules
 
 - Do not invent a separate routing protocol inside the skill.
-- Use `yplan` as the planning entry and `menu` as the only workflow handoff surface.
-- Complete planner / architect / critic reasoning before calling `menu`.
+- Use `yplan` as the planning entry/phase-gate and `menu` as the only workflow handoff surface.
+- Complete and visibly summarize planner / architect / critic before calling `menu`; do not expose hidden chain-of-thought.
 - If the critic concludes that the plan is not ready, call `menu` with `yplan` as a legal option and explain the replan reason in `summary`.
 - If the plan is ready, call `menu` with `ydo` as the recommended option.
 - The host must render a real interactive control from `handoff.options` as the only next-step menu source.

@@ -60,7 +60,7 @@ def test_yplan_start_returns_menu_handoff():
         app = create_app()
         result = await app.call_tool('yplan', {'task': '恢复三工具'})
         structured = result[1] if isinstance(result, tuple) else result
-        assert structured['artifacts']['suggested_prompt'] == 'planner'
+        assert structured['artifacts']['suggested_prompt'] == 'plan'
         assert structured['meta']['handoff']['recommended_next_action'] == 'menu'
         assert 'planner / architect / critic' in structured['summary']
     anyio.run(_run)
