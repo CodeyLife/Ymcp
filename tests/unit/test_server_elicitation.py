@@ -88,6 +88,43 @@ def test_menu_helper_waits_for_webui_selection(monkeypatch):
     anyio.run(_run)
 
 
+def test_menu_helper_waits_for_webui_user_input(monkeypatch):
+    opened = []
+    monkeypatch.setenv('YMCP_MENU_WAIT_FOR_SELECTION', '1')
+    monkeypatch.setattr('ymcp.web.menu_app.webbrowser.open', lambda url, new=0: opened.append(url) or True)
+
+    async def _run():
+        async with anyio.create_task_group() as task_group:
+            result_holder = {}
+
+            async def call_menu():
+                result_holder['result'] = await _maybe_elicit_handoff_choice(
+                    None,
+                    _menu_result(),
+                    message_prefix='规划完成',
+                    timeout_seconds=5,
+                )
+
+            task_group.start_soon(call_menu)
+            with anyio.fail_after(2):
+                while not opened:
+                    await anyio.sleep(0.01)
+
+            parsed = urlparse(opened[0])
+            session_id = parsed.path.rstrip('/').split('/')[-1]
+            token = parse_qs(parsed.query)['token'][0]
+            STORE.submit_input(session_id, token, '请先补充风险分析')
+
+        updated = result_holder['result']
+        assert updated.status is ToolStatus.OK
+        assert updated.artifacts.selected_option is None
+        assert updated.artifacts.user_input == '请先补充风险分析'
+        assert updated.meta.elicitation_selected_option is None
+        assert updated.meta.ui_request['user_input'] == '请先补充风险分析'
+        assert updated.summary == 'WEBUI_INPUT_CONFIRMED: 已通过 WebUI 收到用户自由输入。'
+    anyio.run(_run)
+
+
 def _menu_result():
     return build_menu(MenuRequest(
         source_workflow='yplan',
@@ -103,9 +140,10 @@ def _assert_webui_fallback(result):
     assert result.summary.startswith('WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION')
     assert result.meta.menu_authority == 'meta.handoff.options'
     assert result.meta.elicitation_error
-    assert result.meta.host_controls == ['display', 'webui fallback', 'selected_option tool recall']
+    assert result.meta.host_controls == ['display', 'webui fallback', 'selected_option or user_input tool recall']
     assert result.meta.ui_request['kind'] == 'await_selected_option'
     assert result.meta.ui_request['selected_option_param'] == 'selected_option'
+    assert result.meta.ui_request['user_input_param'] == 'user_input'
     assert result.meta.ui_request['webui_url'].startswith('http://127.0.0.1:')
     assert result.meta.ui_request['menu_session_id']
     assert [option.value for option in result.meta.handoff.options] == ['ydo', 'memory_store']

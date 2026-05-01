@@ -45,7 +45,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name='yplan',
-        description='共识规划阶段化 tool。模型应使用返回的 plan skill_content，按 phase=start/planner/architect/critic 顺序提交 planner_summary、architect_summary、critic_verdict 和 critic_summary；Critic 批准或要求修订后输出总结文案并调用统一 menu tool。',
+        description='共识规划阶段化 tool。模型应使用返回的 plan skill_content，按 phase=start/planner/architect/critic 顺序提交 planner_summary、architect_summary、critic_verdict 和 critic_summary；只有 critic_verdict=APPROVE 才能输出最终规划总结并调用 menu，ITERATE/REJECT 必须继续 yplan 修订且不得宣告任务完成。',
         request_model=RalplanRequest,
         response_model=RalplanResult,
         handler=build_ralplan,

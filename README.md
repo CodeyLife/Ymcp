@@ -23,7 +23,8 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
   - 输出核心：`skill_content`、统一 `handoff`
   - planner / architect / critic 是 `yplan` 内部阶段，不再作为公开 MCP tools 暴露
   - `phase=start` 返回完整 `plan` skill；后续阶段必须显式回传对应总结，Critic 只接受 `APPROVE` / `ITERATE` / `REJECT`
-  - 完成规划、架构审视、critic 验收并输出总结后调用统一 `menu`
+  - `ITERATE` / `REJECT` 不是终态：必须继续 `yplan phase=planner` 修订，不进入 `menu`，不得宣告任务完成
+  - 只有 `APPROVE` 后才输出最终规划总结并调用统一 `menu`
 - `ydo`
   - 对应 prompt：`ralph`
   - 输入核心：无业务输入（依赖当前调用链上下文）
@@ -52,6 +53,7 @@ Trae / 通用 LLM 宿主可用的 MCP 工具包，提供 `ydeep`、`yplan`、`yd
 - 宿主菜单不要求逐字多行还原 description，但必须保留每个选项的 `value` / `title` / `recommended`；`description` 可作为详情、tooltip 或辅助文本呈现
 - `host_controls` 仅表达当前返回实际依赖的宿主能力
 - `status` 表示当前 tool 调用结果；`meta.required_host_action` 只表达宿主当前是“继续思考”还是“展示并收口”
+- 非终态 `yplan` 返回会在 `meta.ui_request` 中标记 `workflow_complete=false`、`must_continue=true`、`required_next_tool=yplan` 和 `required_next_phase`
 - `handoff.options` 是下一步动作的**唯一权威源**；`allowed_next_actions` 仅为派生兼容视图
 - `handoff.options` 应被视为服务端给出的菜单，而不是让 LLM 自己构造的路由对象
 - `menu` 的 `workflow_state` 会显式表达 handoff 状态流转，例如 `ready_for_handoff`、`elicitation_requested`、`awaiting_user_selection`、`selection_confirmed`

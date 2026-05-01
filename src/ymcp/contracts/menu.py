@@ -11,6 +11,7 @@ class MenuRequest(WorkflowRequestBase):
     summary: str = Field(..., min_length=1)
     options: list[HandoffOption] = Field(..., min_length=1)
     selected_option: str | None = None
+    user_input: str | None = None
     webui_timeout_seconds: int | None = None
 
 
@@ -20,6 +21,7 @@ class MenuArtifacts(BaseModel):
     source_workflow: str
     received_summary: str
     selected_option: str | None = None
+    user_input: str | None = None
     handoff_options: list[HandoffOption] = Field(default_factory=list)
     menu_session_id: str | None = None
     webui_url: str | None = None

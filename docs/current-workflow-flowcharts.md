@@ -29,7 +29,9 @@ flowchart TD
     F --> G[调用 yplan phase=architect]
     G --> H[输出 critic_verdict 和 critic_summary]
     H --> I[调用 yplan phase=critic]
-    I --> J[输出规划 summary]
+    I --> O{critic_verdict}
+    O -->|ITERATE/REJECT| D
+    O -->|APPROVE| J[输出最终规划 summary]
     J --> K[调用 menu source_workflow=yplan]
     K --> L[ydo]
     K --> M[yplan]

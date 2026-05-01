@@ -68,15 +68,38 @@ def _menu_handoff(*, recommended: str = 'menu') -> Handoff:
     )
 
 
+def _continuation_request(
+    *,
+    required_next_phase: str,
+    missing_field: str | None = None,
+    replan_reason: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        'workflow_complete': False,
+        'terminal': False,
+        'must_continue': True,
+        'required_next_tool': 'yplan',
+        'required_next_phase': required_next_phase,
+    }
+    if missing_field:
+        payload['missing_field'] = missing_field
+    if replan_reason:
+        payload['replan_reason'] = replan_reason
+    return payload
+
+
 def _blocked_result(request: RalplanRequest, *, reason: str, required_summary: str, next_phase: str) -> RalplanResult:
-    return RalplanResult(
+    result = RalplanResult(
         status=ToolStatus.BLOCKED,
-        summary=reason,
+        summary=(
+            'WORKFLOW_NOT_COMPLETE: '
+            f'{reason} 不得向用户宣布任务完成；必须补齐该字段后继续调用 yplan。'
+        ),
         assumptions=[],
         next_actions=[
             build_next_action(
                 '补齐 yplan 阶段输入',
-                f'先生成并回传 {required_summary}，再调用 yplan phase="{next_phase}"。',
+                f'先生成并回传 {required_summary}，再调用 yplan phase="{next_phase}"。当前 workflow_complete=false。',
             )
         ],
         risks=[],
@@ -96,6 +119,11 @@ def _blocked_result(request: RalplanRequest, *, reason: str, required_summary: s
             blocked_reason=required_summary,
         ),
     )
+    result.meta.ui_request = _continuation_request(
+        required_next_phase=next_phase,
+        missing_field=required_summary,
+    )
+    return result
 
 
 def _validated(value: str | None) -> str | None:
@@ -111,19 +139,18 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
     skill_content = prompt_content('plan', task)
 
     if request.phase == 'start':
-        handoff = _menu_handoff()
-        return RalplanResult(
+        result = RalplanResult(
             status=ToolStatus.NEEDS_INPUT,
-            summary='请将 skill_content 作为完整 plan 推理指导，按 yplan phase 顺序完成 planner / architect / critic 阶段；先输出 planner_summary，再调用 yplan phase="planner"。',
+            summary='WORKFLOW_NOT_COMPLETE: 请将 skill_content 作为完整 plan 推理指导，按 yplan phase 顺序提交 planner / architect / critic 阶段总结；先输出 planner_summary，再调用 yplan phase="planner"。',
             assumptions=[],
-            next_actions=[build_next_action('下一步', '输出 planner_summary 后调用 yplan phase="planner"；不要跳过 architect / critic，也不要直接调用 menu。')],
+            next_actions=[build_next_action('下一步', '输出 planner_summary 后调用 yplan phase="planner"；不要跳过 architect / critic，也不要直接调用 menu。当前 workflow_complete=false。')],
             risks=[],
             meta=build_meta(
                 'yplan',
                 'ymcp.contracts.ralplan.RalplanResult',
                 host_controls=['display', 'prompt guidance', 'memory lookup', 'phase gate'],
                 required_host_action=HostActionType.AWAIT_INPUT,
-                handoff=handoff,
+                handoff=None,
             ),
             artifacts=_base_artifacts(
                 request,
@@ -134,6 +161,8 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
                 memory_preflight=memory_preflight,
             ),
         )
+        result.meta.ui_request = _continuation_request(required_next_phase='planner')
+        return result
 
     if request.phase == 'planner':
         if not _validated(request.planner_summary):
@@ -143,18 +172,18 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
                 required_summary='planner_summary',
                 next_phase='planner',
             )
-        return RalplanResult(
+        result = RalplanResult(
             status=ToolStatus.NEEDS_INPUT,
-            summary='Planner 阶段总结已记录。下一步必须基于 planner_summary 执行 Architect 审查，并调用 yplan phase="architect" 回传 architect_summary。',
+            summary='WORKFLOW_NOT_COMPLETE: Planner 阶段总结已记录。下一步必须基于 planner_summary 生成 Architect 审查总结，并调用 yplan phase="architect" 回传 architect_summary。',
             assumptions=[],
-            next_actions=[build_next_action('下一步', '执行 Architect 审查，输出 architect_summary 后调用 yplan phase="architect"。')],
+            next_actions=[build_next_action('下一步', '生成 Architect 可见总结，输出 architect_summary 后调用 yplan phase="architect"。当前 workflow_complete=false。')],
             risks=[],
             meta=build_meta(
                 'yplan',
                 'ymcp.contracts.ralplan.RalplanResult',
                 host_controls=['display', 'prompt guidance', 'phase gate'],
                 required_host_action=HostActionType.AWAIT_INPUT,
-                handoff=_menu_handoff(),
+                handoff=None,
             ),
             artifacts=_base_artifacts(
                 request,
@@ -164,6 +193,8 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
                 current_focus='architect_summary',
             ),
         )
+        result.meta.ui_request = _continuation_request(required_next_phase='architect')
+        return result
 
     if request.phase == 'architect':
         if not _validated(request.planner_summary):
@@ -180,18 +211,18 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
                 required_summary='architect_summary',
                 next_phase='architect',
             )
-        return RalplanResult(
+        result = RalplanResult(
             status=ToolStatus.NEEDS_INPUT,
-            summary='Architect 阶段总结已记录。下一步必须基于 planner_summary 与 architect_summary 执行 Critic 质量门，并调用 yplan phase="critic" 回传 critic_verdict 与 critic_summary。',
+            summary='WORKFLOW_NOT_COMPLETE: Architect 阶段总结已记录。下一步必须基于 planner_summary 与 architect_summary 生成 Critic 判定总结，并调用 yplan phase="critic" 回传 critic_verdict 与 critic_summary。',
             assumptions=[],
-            next_actions=[build_next_action('下一步', '执行 Critic 审查，回传 critic_verdict=APPROVE/ITERATE/REJECT 与 critic_summary。')],
+            next_actions=[build_next_action('下一步', '生成 Critic 可见总结，回传 critic_verdict=APPROVE/ITERATE/REJECT 与 critic_summary。当前 workflow_complete=false。')],
             risks=[],
             meta=build_meta(
                 'yplan',
                 'ymcp.contracts.ralplan.RalplanResult',
                 host_controls=['display', 'prompt guidance', 'phase gate'],
                 required_host_action=HostActionType.AWAIT_INPUT,
-                handoff=_menu_handoff(),
+                handoff=None,
             ),
             artifacts=_base_artifacts(
                 request,
@@ -201,6 +232,8 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
                 current_focus='critic_verdict',
             ),
         )
+        result.meta.ui_request = _continuation_request(required_next_phase='critic')
+        return result
 
     if not _validated(request.planner_summary):
         return _blocked_result(
@@ -231,18 +264,49 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
             next_phase='critic',
         )
 
-    approved = request.critic_verdict == 'APPROVE'
-    summary = (
-        'Critic 已 APPROVE。规划阶段已具备进入 menu 的条件；请先输出可见规划总结，然后调用 menu(source_workflow="yplan", options=[ydo, yplan, memory_store])。'
-        if approved
-        else f'Critic 判定为 {request.critic_verdict}。规划尚未批准，不得推荐 ydo；请输出修订原因并调用 menu(source_workflow="yplan", options=[yplan, memory_store])。'
-    )
-    menu_options = 'ydo、yplan、memory_store' if approved else 'yplan、memory_store'
+    if request.critic_verdict != 'APPROVE':
+        result = RalplanResult(
+            status=ToolStatus.NEEDS_INPUT,
+            summary=(
+                f'WORKFLOW_NOT_COMPLETE: Critic 判定为 {request.critic_verdict}。'
+                '规划尚未批准，ITERATE/REJECT 不是终态，不得进入 menu，不得推荐 ydo，也不得向用户宣布任务完成；'
+                '必须将 critic_summary 的修订要求回灌到 Planner，并调用 yplan phase="planner" 提交修订后的 planner_summary。'
+            ),
+            assumptions=[],
+            next_actions=[
+                build_next_action(
+                    '返回 Planner 修订',
+                    '基于 critic_summary 和 architect_summary 修订 planner_summary，然后调用 yplan phase="planner"。当前 workflow_complete=false。',
+                )
+            ],
+            risks=[],
+            meta=build_meta(
+                'yplan',
+                'ymcp.contracts.ralplan.RalplanResult',
+                host_controls=['display', 'phase gate', 'replan guidance'],
+                required_host_action=HostActionType.AWAIT_INPUT,
+                handoff=None,
+            ),
+            artifacts=_base_artifacts(
+                request,
+                skill_content=prompt_content('plan', task),
+                current_phase='critic',
+                readiness='replan_required',
+                current_focus='planner_summary',
+                memory_preflight=memory_preflight,
+            ),
+        )
+        result.meta.ui_request = _continuation_request(
+            required_next_phase='planner',
+            replan_reason=request.critic_verdict,
+        )
+        return result
+
     return RalplanResult(
         status=ToolStatus.OK,
-        summary=summary,
+        summary='Critic 已 APPROVE。规划阶段已具备进入 menu 的条件；请先输出可见规划总结，然后调用 menu(source_workflow="yplan", options=[ydo, yplan, memory_store])。',
         assumptions=[],
-        next_actions=[build_next_action('调用 menu', f'使用当前 planner/architect/critic 总结作为 summary，options 应包含 {menu_options}。')],
+        next_actions=[build_next_action('调用 menu', '使用当前 planner/architect/critic 总结作为 summary，options 应包含 ydo、yplan、memory_store。')],
         risks=[],
         meta=build_meta(
             'yplan',
@@ -255,7 +319,7 @@ def build_ralplan(request: RalplanRequest) -> RalplanResult:
             request,
             skill_content=prompt_content('workflow-menu', 'yplan'),
             current_phase='critic',
-            readiness='ready_for_menu' if approved else 'replan_required',
+            readiness='ready_for_menu',
             current_focus='menu',
             memory_preflight=memory_preflight,
         ),

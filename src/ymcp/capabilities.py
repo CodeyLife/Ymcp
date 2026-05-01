@@ -68,7 +68,7 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
   - `ydo`
   - `menu`
 - `ydeep`, `yplan`, and `ydo` return stage `skill_content`.
-- After the model finishes the stage task and outputs a visible summary, it calls `menu`.
+- After the model reaches an approved terminal handoff state and outputs a visible summary, it calls `menu`.
 - `menu` is the only public workflow handoff tool.
 
 ## menu
@@ -98,7 +98,9 @@ WORKFLOW_CONTRACTS_CONTENT = """# Ymcp Workflow Contracts
 - `phase=start` returns full `plan` skill guidance.
 - The `plan` skill performs planner / architect / critic thinking internally, then records each phase through `yplan`; `yplan_architect` and `yplan_critic` are no longer public tools.
 - `phase=architect` requires `planner_summary`; `phase=critic` requires `planner_summary`, `architect_summary`, `critic_verdict`, and `critic_summary`.
-- After the plan is approved or needs a new planning pass, the model outputs a summary and calls `menu` with options:
+- Non-terminal yplan responses set `meta.ui_request.workflow_complete=false`, `must_continue=true`, `required_next_tool=yplan`, and `required_next_phase`.
+- `ITERATE` and `REJECT` are not terminal states; they require a revised `planner_summary` via `yplan phase=planner` and must not call `menu` or recommend `ydo`.
+- Only after the plan is APPROVE, the model outputs a summary and calls `menu` with options:
   - `ydo`
   - `yplan`
   - `memory_store`
@@ -130,10 +132,12 @@ Ymcp is a lightweight skill-flow server. The tool contract only declares:
 The intended interaction is:
 1. tool returns `skill_content`
 2. model thinks and outputs
-3. model outputs the stage summary and calls `menu` with explicit options
-4. `menu` uses `handoff.options` as the Elicitation / WebUI interactive-control source and waits for user choice where supported
-5. if Elicitation is unavailable or fails, `menu` returns `blocked` plus `webui_url`; `handoff.options` remains the authoritative menu payload
-6. menu `workflow_state` moves through explicit statuses such as `ready_for_handoff`, `elicitation_requested`, `awaiting_user_selection`, and `selection_confirmed`
+3. non-terminal phases return `workflow_complete=false` continuation hints instead of `handoff`
+4. only an approved handoff phase returns `handoff` and expects `menu`
+5. model outputs the approved stage summary and calls `menu` with explicit options
+6. `menu` uses `handoff.options` as the Elicitation / WebUI interactive-control source and waits for user choice where supported
+7. if Elicitation is unavailable or fails, `menu` returns `blocked` plus `webui_url`; `handoff.options` remains the authoritative menu payload
+8. menu `workflow_state` moves through explicit statuses such as `ready_for_handoff`, `elicitation_requested`, `awaiting_user_selection`, and `selection_confirmed`
 
 The host owns the fixed calling convention between stages. Ymcp does not try to be a fully automatic workflow state machine.
 """

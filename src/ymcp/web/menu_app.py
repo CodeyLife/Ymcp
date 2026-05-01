@@ -52,6 +52,7 @@ class MenuSession:
     options: list[HandoffOption]
     expires_at: float
     selected_option: str | None = None
+    user_input: str | None = None
     created_at: float = field(default_factory=time.time)
 
     @property
@@ -100,6 +101,20 @@ class MenuSessionStore:
             self._condition.notify_all()
             return session
 
+    def submit_input(self, session_id: str, token: str, user_input: str) -> MenuSession:
+        content = user_input.strip()
+        if not content:
+            raise ValueError('user_input must not be blank')
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None or session.expired:
+                raise KeyError('menu session not found or expired')
+            if not secrets.compare_digest(session.token, token):
+                raise PermissionError('invalid menu session token')
+            session.user_input = content
+            self._condition.notify_all()
+            return session
+
     def wait_for_selection(self, session_id: str, timeout_seconds: int | None = None) -> MenuSession | None:
         timeout = DEFAULT_TIMEOUT_SECONDS if timeout_seconds is None else max(0, min(MAX_TIMEOUT_SECONDS, int(timeout_seconds)))
         deadline = time.time() + timeout
@@ -109,7 +124,7 @@ class MenuSessionStore:
                 if session is None or session.expired:
                     self._sessions.pop(session_id, None)
                     return None
-                if session.selected_option:
+                if session.selected_option or session.user_input:
                     return session
                 remaining = deadline - time.time()
                 if remaining <= 0:
@@ -134,12 +149,30 @@ INDEX_HTML = """<!doctype html>
     body { margin:0; min-height:100vh; display:grid; place-items:center; }
     main { width:min(760px, calc(100vw - 32px)); background:#171c2a; border:1px solid #2b3040; border-radius:16px; padding:22px; }
     h1 { margin:0 0 8px; font-size:22px; }
-    .summary { color:#c8d3ff; white-space:pre-wrap; line-height:1.5; }
+    .summary { color:#c8d3ff; line-height:1.5; }
     .option { width:100%; margin-top:12px; padding:14px; border-radius:12px; border:1px solid #3a4260; background:#20283a; color:#edf1ff; text-align:left; cursor:pointer; }
     .option:hover { border-color:#7aa2ff; }
     .recommended { color:#71f2b5; font-size:12px; margin-left:8px; }
     .description { color:#aab5d6; margin-top:4px; font-size:13px; }
+    .markdown > :first-child { margin-top:0; }
+    .markdown > :last-child { margin-bottom:0; }
+    .markdown h1, .markdown h2, .markdown h3 { color:#edf1ff; margin:12px 0 6px; line-height:1.25; }
+    .markdown h1 { font-size:18px; } .markdown h2 { font-size:16px; } .markdown h3 { font-size:14px; }
+    .markdown p { margin:8px 0; }
+    .markdown ul, .markdown ol { margin:8px 0; padding-left:22px; }
+    .markdown li { margin:3px 0; }
+    .markdown blockquote { margin:8px 0; padding:6px 10px; border-left:3px solid #5d7bff; background:#12182a; color:#c8d3ff; }
+    .markdown code { padding:1px 4px; border-radius:4px; background:#0f1320; color:#ffd38a; font-family:ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .markdown pre { overflow:auto; padding:10px; border-radius:10px; background:#0f1320; }
+    .markdown pre code { padding:0; background:transparent; color:#dce6ff; }
+    .markdown a { color:#9fb3ff; }
     .status { margin-top:14px; color:#9fb3ff; }
+    .free-input { margin-top:16px; padding-top:14px; border-top:1px solid #2b3040; }
+    .free-input label { display:block; color:#c8d3ff; font-weight:700; margin-bottom:6px; }
+    .free-input textarea { width:100%; min-height:118px; box-sizing:border-box; border-radius:12px; border:1px solid #3a4260; background:#0f1320; color:#edf1ff; padding:10px; resize:vertical; font:inherit; }
+    .free-input button { margin-top:8px; padding:10px 12px; border-radius:10px; border:1px solid #5d7bff; background:#365cff; color:#edf1ff; font-weight:700; cursor:pointer; }
+    .free-input button:disabled, .option:disabled { cursor:not-allowed; opacity:.55; }
+    .input-help { color:#aab5d6; font-size:12px; margin-top:6px; line-height:1.45; }
     .close-help { color:#aab5d6; margin-top:8px; font-size:12px; }
     .close-button { margin-top:10px; padding:8px 10px; border-radius:8px; border:1px solid #3a4260; background:#20283a; color:#edf1ff; cursor:pointer; }
   </style>
@@ -149,6 +182,12 @@ INDEX_HTML = """<!doctype html>
   <h1 id="title">Ymcp 下一步</h1>
   <div class="summary" id="summary"></div>
   <div id="options"></div>
+  <div class="free-input">
+    <label for="userInput">或者输入任意内容返回给大模型</label>
+    <textarea id="userInput" placeholder="例如：我想修改计划、补充约束、提出新的下一步要求……"></textarea>
+    <button id="submitInput" type="button">提交输入给大模型</button>
+    <div class="input-help">提交后会把这里的内容作为 user_input 返回给 MCP 宿主；不需要匹配上方固定选项。</div>
+  </div>
   <div class="status" id="status"></div>
 </main>
 <script>
@@ -160,34 +199,179 @@ async function api(path, options={}) {
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  })[char]);
+}
+function sanitizeUrl(value) {
+  const raw = String(value ?? '').trim();
+  if (/^(https?:|mailto:)/i.test(raw)) return raw;
+  if (/^[/.#?]/.test(raw)) return raw;
+  return '#';
+}
+function renderInlineMarkdown(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\\[([^\\]]+)\\]\\(([^)\\s]+)\\)/g, (_match, label, href) =>
+    `<a href="${escapeHtml(sanitizeUrl(href))}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+  html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+  html = html.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
+  return html;
+}
+function renderParagraph(lines) {
+  return `<p>${renderInlineMarkdown(lines.join('\\n')).replace(/\\n/g, '<br>')}</p>`;
+}
+function renderMarkdown(markdown) {
+  const source = String(markdown ?? '').replace(/\\r\\n?/g, '\\n');
+  const lines = source.split('\\n');
+  const blocks = [];
+  let paragraph = [];
+  let listType = null;
+  let listItems = [];
+  let inCode = false;
+  let codeLines = [];
+  function flushParagraph() {
+    if (paragraph.length) {
+      blocks.push(renderParagraph(paragraph));
+      paragraph = [];
+    }
+  }
+  function flushList() {
+    if (listType) {
+      blocks.push(`<${listType}>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${listType}>`);
+      listType = null;
+      listItems = [];
+    }
+  }
+  for (const line of lines) {
+    if (/^```/.test(line.trim())) {
+      if (inCode) {
+        blocks.push(`<pre><code>${escapeHtml(codeLines.join('\\n'))}</code></pre>`);
+        inCode = false;
+        codeLines = [];
+      } else {
+        flushParagraph();
+        flushList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\\s+(.+)$/);
+    const unordered = line.match(/^\\s*[-*]\\s+(.+)$/);
+    const ordered = line.match(/^\\s*\\d+[.)]\\s+(.+)$/);
+    const quote = line.match(/^>\\s?(.+)$/);
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+    } else if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+    } else if (unordered || ordered) {
+      flushParagraph();
+      const nextType = unordered ? 'ul' : 'ol';
+      if (listType && listType !== nextType) flushList();
+      listType = nextType;
+      listItems.push((unordered || ordered)[1]);
+    } else if (quote) {
+      flushParagraph();
+      flushList();
+      blocks.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+    } else {
+      flushList();
+      paragraph.push(line);
+    }
+  }
+  flushParagraph();
+  flushList();
+  if (inCode) blocks.push(`<pre><code>${escapeHtml(codeLines.join('\\n'))}</code></pre>`);
+  return blocks.join('\\n');
+}
+function renderMarkdownInto(element, markdown) {
+  element.classList.add('markdown');
+  element.innerHTML = renderMarkdown(markdown);
+}
+function renderOption(option) {
+  const button = document.createElement('button');
+  button.className = 'option';
+  button.dataset.value = String(option.value ?? '');
+  const title = document.createElement('strong');
+  title.textContent = option.title || option.value || '';
+  button.appendChild(title);
+  if (option.recommended) {
+    const recommended = document.createElement('span');
+    recommended.className = 'recommended';
+    recommended.textContent = '推荐';
+    button.appendChild(recommended);
+  }
+  const description = document.createElement('div');
+  description.className = 'description';
+  renderMarkdownInto(description, option.description || '');
+  button.appendChild(description);
+  return button;
+}
+function disableControls() {
+  for (const item of document.querySelectorAll('.option')) item.disabled = true;
+  document.getElementById('userInput').disabled = true;
+  document.getElementById('submitInput').disabled = true;
+}
 async function load() {
   const parts = location.pathname.split('/').filter(Boolean);
   const id = parts[parts.length - 1];
   const data = await api(`/api/menu/${id}`);
   document.getElementById('title').textContent = `Ymcp menu · ${data.source_workflow}`;
-  document.getElementById('summary').textContent = data.summary;
-  document.getElementById('options').innerHTML = data.options.map(option => `
-    <button class="option" data-value="${option.value}">
-      <strong>${option.title}</strong>${option.recommended ? '<span class="recommended">推荐</span>' : ''}
-      <div class="description">${option.description}</div>
-    </button>`).join('');
+  renderMarkdownInto(document.getElementById('summary'), data.summary);
+  const options = document.getElementById('options');
+  options.replaceChildren(...data.options.map(renderOption));
+  document.getElementById('submitInput').onclick = async () => {
+    const user_input = document.getElementById('userInput').value.trim();
+    if (!user_input) {
+      document.getElementById('status').textContent = '请输入内容后再提交。';
+      return;
+    }
+    await api(`/api/menu/${id}/input`, {method:'POST', body:JSON.stringify({user_input})});
+    document.getElementById('status').innerHTML = `
+      已提交输入给 MCP 宿主；本页面将尝试自动关闭。
+      <div class="close-help">如果浏览器阻止自动关闭，请手动关闭该标签页并返回 Trae。</div>
+      <button class="close-button" type="button" onclick="window.close()">关闭页面</button>`;
+    disableControls();
+    setTimeout(() => window.close(), 500);
+  };
   for (const button of document.querySelectorAll('.option')) {
     button.onclick = async () => {
       const selected_option = button.dataset.value;
       await api(`/api/menu/${id}/select`, {method:'POST', body:JSON.stringify({selected_option})});
+      const selected = escapeHtml(selected_option);
       document.getElementById('status').innerHTML = `
-        已选择：${selected_option}。正在返回 MCP 宿主；本页面将尝试自动关闭。
+        已选择：${selected}。正在返回 MCP 宿主；本页面将尝试自动关闭。
         <div class="close-help">如果浏览器阻止自动关闭，请手动关闭该标签页并返回 Trae。</div>
         <button class="close-button" type="button" onclick="window.close()">关闭页面</button>`;
-      for (const item of document.querySelectorAll('.option')) item.disabled = true;
+      disableControls();
       setTimeout(() => window.close(), 500);
     };
   }
   if (data.selected_option) {
+    const selected = escapeHtml(data.selected_option);
     document.getElementById('status').innerHTML = `
-      已选择：${data.selected_option}。可以关闭此页面并返回 Trae。
+      已选择：${selected}。可以关闭此页面并返回 Trae。
       <div class="close-help">如果浏览器阻止自动关闭，请手动关闭该标签页。</div>
       <button class="close-button" type="button" onclick="window.close()">关闭页面</button>`;
+    disableControls();
+    setTimeout(() => window.close(), 500);
+  }
+  if (data.user_input) {
+    document.getElementById('userInput').value = data.user_input;
+    document.getElementById('status').innerHTML = `
+      已提交输入。可以关闭此页面并返回 Trae。
+      <div class="close-help">如果浏览器阻止自动关闭，请手动关闭该标签页。</div>
+      <button class="close-button" type="button" onclick="window.close()">关闭页面</button>`;
+    disableControls();
     setTimeout(() => window.close(), 500);
   }
 }
@@ -213,6 +397,7 @@ def _session_payload(session: MenuSession) -> dict[str, Any]:
         'summary': session.summary,
         'options': [option.model_dump(mode='json') for option in session.options],
         'selected_option': session.selected_option,
+        'user_input': session.user_input,
         'expires_at': session.expires_at,
     }
 
@@ -267,6 +452,10 @@ def create_menu_app(store: MenuSessionStore = STORE) -> type[BaseHTTPRequestHand
                 payload = self._read_json()
                 if len(parts) == 4 and parts[:2] == ['api', 'menu'] and parts[3] == 'select':
                     session = store.select(parts[2], self._token(), str(payload.get('selected_option', '')))
+                    _json_response(self, 200, _session_payload(session))
+                    return
+                if len(parts) == 4 and parts[:2] == ['api', 'menu'] and parts[3] == 'input':
+                    session = store.submit_input(parts[2], self._token(), str(payload.get('user_input', '')))
                     _json_response(self, 200, _session_payload(session))
                     return
                 _json_response(self, 404, {'error': 'not found'})

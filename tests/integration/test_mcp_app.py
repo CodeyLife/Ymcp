@@ -14,9 +14,10 @@ def _assert_webui_fallback(structured, expected_values):
     assert 'WebUI fallback' in structured['summary']
     assert structured['meta']['menu_authority'] == 'meta.handoff.options'
     assert structured['meta']['elicitation_error']
-    assert structured['meta']['host_controls'] == ['display', 'webui fallback', 'selected_option tool recall']
+    assert structured['meta']['host_controls'] == ['display', 'webui fallback', 'selected_option or user_input tool recall']
     assert structured['meta']['ui_request']['kind'] == 'await_selected_option'
     assert structured['meta']['ui_request']['selected_option_param'] == 'selected_option'
+    assert structured['meta']['ui_request']['user_input_param'] == 'user_input'
     assert structured['meta']['ui_request']['webui_url'].startswith('http://127.0.0.1:')
     assert structured['meta']['ui_request']['menu_session_id']
     assert [item['value'] for item in structured['meta']['handoff']['options']] == list(expected_values)
@@ -55,13 +56,15 @@ def test_ydeep_start_returns_menu_handoff():
     anyio.run(_run)
 
 
-def test_yplan_start_returns_menu_handoff():
+def test_yplan_start_returns_phase_continuation():
     async def _run():
         app = create_app()
         result = await app.call_tool('yplan', {'task': '恢复三工具'})
         structured = result[1] if isinstance(result, tuple) else result
         assert structured['artifacts']['suggested_prompt'] == 'plan'
-        assert structured['meta']['handoff']['recommended_next_action'] == 'menu'
+        assert structured['meta']['handoff'] is None
+        assert structured['meta']['ui_request']['workflow_complete'] is False
+        assert structured['meta']['ui_request']['required_next_phase'] == 'planner'
         assert 'planner / architect / critic' in structured['summary']
     anyio.run(_run)
 

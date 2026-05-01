@@ -29,7 +29,7 @@ from ymcp.core.versioning import SCHEMA_VERSION
 from ymcp.core.result import apply_selected_handoff_option
 from ymcp.engine.deep_interview import build_deep_interview
 from ymcp.engine.imagegen import build_imagegen
-from ymcp.engine.menu import build_menu
+from ymcp.engine.menu import apply_menu_user_input, build_menu
 from ymcp.engine.ralph import build_ralph
 from ymcp.engine.ralplan import build_ralplan
 from ymcp.internal_registry import get_tool_specs
@@ -98,12 +98,13 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str, timeout_sec
             artifacts.webui_url = webui_url
     result.status = ToolStatus.BLOCKED
     result.meta.required_host_action = HostActionType.AWAIT_INPUT
-    result.meta.host_controls = ['display', 'webui fallback', 'selected_option tool recall']
+    result.meta.host_controls = ['display', 'webui fallback', 'selected_option or user_input tool recall']
     result.meta.elicitation_error = reason
     result.meta.menu_authority = 'meta.handoff.options'
     result.meta.ui_request = {
         'kind': 'await_selected_option',
         'selected_option_param': 'selected_option',
+        'user_input_param': 'user_input',
         'source_workflow': source_workflow,
         'summary': summary,
         'options': [option.model_dump(mode='json') for option in options],
@@ -121,8 +122,9 @@ def _apply_interactive_handoff_fallback(result: Any, *, reason: str, timeout_sec
     result.summary = (
         'WORKFLOW_PAUSED_AWAITING_SELECTED_OPTION: '
         '宿主必须通过 meta.handoff.options 提供的固定选项收集用户的下一步流程需求，'
-        'menu 已提供 WebUI fallback 作为 Elicitation 失败时的真实可交互菜单；'
-        '用户选择后，宿主应将所选 value 作为 selected_option 回传 menu tool；'
+        '或通过 menu WebUI fallback 收集用户自由输入；'
+        '用户选择固定选项后，宿主应将所选 value 作为 selected_option 回传 menu tool；'
+        '用户提交自由输入后，宿主应将文本作为 user_input 回传 menu tool；'
         'assistant 不得用自然语言、markdown 文本菜单或自动选择替代宿主交互控件。'
     )
     return result
@@ -137,8 +139,16 @@ async def _wait_for_webui_selection(result: Any, *, timeout_seconds: int | None 
         return result
 
     session = await asyncio.to_thread(wait_for_menu_selection, session_id, timeout_seconds)
-    if session is None or not session.selected_option:
+    if session is None or (not session.selected_option and not session.user_input):
         return result
+
+    if session.user_input:
+        updated = apply_menu_user_input(result, session.user_input)
+        updated.meta.elicitation_error = None
+        updated.meta.ui_request['user_input'] = session.user_input
+        updated.meta.ui_request['input_status'] = 'confirmed'
+        updated.summary = 'WEBUI_INPUT_CONFIRMED: 已通过 WebUI 收到用户自由输入。'
+        return updated
 
     updated = apply_selected_handoff_option(result, session.selected_option)
     updated.meta.elicitation_error = None
