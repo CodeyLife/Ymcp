@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ymcp"
-version = "0.4.2"
+version = "0.4.3"
 description = "Python MCP workflow tools for host-controlled planning workflows"
 readme = "README.md"
 requires-python = ">=3.10"
