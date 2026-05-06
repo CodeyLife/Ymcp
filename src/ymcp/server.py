@@ -65,6 +65,41 @@ def _handoff_choice_schema(options: tuple[Any, ...] | list[Any]) -> type[BaseMod
     )
 
 
+def _strip_dsml_tail(value: str) -> str:
+    """Remove leaked DSML/XML closing tags from scalar menu arguments."""
+    markers = (
+        '</parameter>',
+        '</｜DSML｜parameter>',
+        '</｜DSML｜invoke',
+        '</|DSML|invoke',
+        '<｜DSML｜parameter',
+        '<|DSML|parameter',
+    )
+    first_marker = min((index for marker in markers if (index := value.find(marker)) != -1), default=-1)
+    if first_marker == -1:
+        return value.strip()
+    return value[:first_marker].strip()
+
+
+def _normalize_menu_options(options: list[dict[str, Any]] | str) -> Any:
+    """Accept native menu options or recover JSON arrays stringified by host tool-call bugs."""
+    if not isinstance(options, str):
+        return options
+
+    text = options.strip()
+    decoder = json.JSONDecoder()
+    parsed: Any = options
+    for _ in range(2):
+        try:
+            parsed, _ = decoder.raw_decode(text)
+        except json.JSONDecodeError:
+            return options
+        if not isinstance(parsed, str):
+            return parsed
+        text = _strip_dsml_tail(parsed)
+    return parsed
+
+
 def _update_workflow_state(result: Any, *, current_phase: str, readiness: str, current_focus: str, blocked_reason: str | None = None, selected_option: str | None = None) -> None:
     artifacts = getattr(result, 'artifacts', None)
     workflow_state = getattr(artifacts, 'workflow_state', None)
@@ -358,11 +393,13 @@ def create_app() -> FastMCP:
         return result
 
     @app.tool(name='menu', description=descriptions['menu'], structured_output=True)
-    async def workflow_menu(source_workflow: str, summary: str, options: list[dict[str, Any]], selected_option: str | None = None, webui_timeout_seconds: int | None = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> MenuResult:
+    async def workflow_menu(source_workflow: str, summary: str, options: list[dict[str, Any]] | str, selected_option: str | None = None, webui_timeout_seconds: int | None = None, schema_version: str = SCHEMA_VERSION, ctx: Context | None = None) -> MenuResult:
+        clean_source_workflow = _strip_dsml_tail(source_workflow)
+        clean_summary = _strip_dsml_tail(summary)
         request = MenuRequest(
-            source_workflow=source_workflow,
-            summary=summary,
-            options=options,
+            source_workflow=clean_source_workflow,
+            summary=clean_summary,
+            options=_normalize_menu_options(options),
             selected_option=selected_option,
             webui_timeout_seconds=webui_timeout_seconds,
             schema_version=schema_version,
@@ -371,7 +408,7 @@ def create_app() -> FastMCP:
         return await _maybe_elicit_handoff_choice(
             ctx,
             result,
-            message_prefix=f'{source_workflow} 阶段已完成。宿主必须渲染交互式选择控件；assistant 不得用文本代渲染。',
+            message_prefix=f'{clean_source_workflow} 阶段已完成。宿主必须渲染交互式选择控件；assistant 不得用文本代渲染。',
             timeout_seconds=webui_timeout_seconds,
         )
 

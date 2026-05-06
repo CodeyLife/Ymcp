@@ -58,6 +58,7 @@ class V2FSession:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     preview_path: Path | None = None
+    preview_frame_paths: list[Path] = field(default_factory=list)
     export_path: Path | None = None
 
     def touch(self) -> None:
@@ -157,6 +158,25 @@ class V2FSessionStore:
         session.preview_path = out_path
         session.touch()
         return out_path
+
+    def render_preview_sequence(self, session_id: str, spec: PreviewSpec | None = None) -> list[Path]:
+        session = self.get(session_id)
+        if session.frame_set is None:
+            raise ValueError("当前会话还没有帧")
+        active_spec = spec or PreviewSpec(max_frames=session.frame_set.frame_count)
+        frames = preview_frames(session.frame_set, session.visual_spec, session.timing_spec, active_spec)
+        preview_dir = session.temp_root / "preview" / "frames"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        for existing in preview_dir.glob("frame_*.png"):
+            existing.unlink()
+        paths: list[Path] = []
+        for index, frame in enumerate(frames):
+            out_path = preview_dir / f"frame_{index:04d}.png"
+            frame.save(out_path)
+            paths.append(out_path)
+        session.preview_frame_paths = paths
+        session.touch()
+        return paths
 
     def _resolve_export_target(self, session: V2FSession, out_dir: str | Path | None) -> Path:
         if out_dir is None:

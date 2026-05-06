@@ -155,6 +155,39 @@ def test_menu_accepts_selected_option_without_elicitation():
     anyio.run(_run)
 
 
+def test_menu_recovers_stringified_options_without_elicitation():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool('menu', {
+            'source_workflow': 'yplan',
+            'summary': '规划完成',
+            'options': '[{"value":"ydo","title":"进入 ydo","description":"执行","recommended":true},{"value":"memory_store","title":"保存记忆","description":"沉淀经验"}]',
+            'selected_option': 'ydo',
+        })
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured['status'] == 'ok'
+        assert structured['meta']['elicitation_selected_option'] == 'ydo'
+        assert [item['value'] for item in structured['artifacts']['handoff_options']] == ['ydo', 'memory_store']
+    anyio.run(_run)
+
+
+def test_menu_recovers_options_with_leaked_parameter_tail_and_cleans_scalars():
+    async def _run():
+        app = create_app()
+        result = await app.call_tool('menu', {
+            'source_workflow': 'yplan</parameter>\n<｜DSML｜parameter name',
+            'summary': '规划完成</parameter>\n</｜DSML｜invoke',
+            'options': '[{"value":"ydo","title":"进入 ydo","description":"执行","recommended":true}]</parameter>',
+            'selected_option': 'ydo',
+        })
+        structured = result[1] if isinstance(result, tuple) else result
+        assert structured['status'] == 'ok'
+        assert structured['artifacts']['source_workflow'] == 'yplan'
+        assert structured['artifacts']['received_summary'] == '规划完成'
+        assert structured['artifacts']['handoff_options'][0]['value'] == 'ydo'
+    anyio.run(_run)
+
+
 def test_yimggen_returns_local_imagegen_guidance():
     async def _run():
         app = create_app()

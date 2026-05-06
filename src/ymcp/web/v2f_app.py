@@ -10,7 +10,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ymcp.tools.imagegen.session import V2FSessionStore
 from ymcp.tools.imagegen.timing import SpeedKeyframe, TimingMapSpec, TimingPoint, timing_from_speed_keyframes, timing_preset
@@ -38,6 +38,7 @@ INDEX_HTML = """<!doctype html>
     .preview { min-height:420px; display:flex; align-items:center; justify-content:center; background:
       radial-gradient(circle at center, #26314f, #0d1018 65%); border-radius:12px; overflow:hidden; }
     .preview img { max-width:100%; max-height:420px; image-rendering:auto; }
+    .playback-status { color:#aab5d6; font-family: ui-monospace, monospace; font-size:12px; margin-top:8px; text-align:center; }
     .row { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
     .status { white-space:pre-wrap; color:#aab5d6; font-size:12px; max-height:180px; overflow:auto; margin-bottom:0; }
     .log-panel { margin-top:14px; padding-top:12px; border-top:1px solid #2b3040; }
@@ -46,6 +47,9 @@ INDEX_HTML = """<!doctype html>
     .dropzone.dragover { background:#1d2a55; border-color:#9fb3ff; }
     .video-preview { display:none; position:relative; width:100%; margin-top:10px; border-radius:12px; overflow:hidden; background:#000; touch-action:none; }
     .video-preview video { display:block; width:100%; background:#000; }
+    .video-timebar { display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; padding:8px; background:#0b0f18; border-top:1px solid #20283a; }
+    .video-timebar button { width:auto; margin-top:0; padding:7px 10px; }
+    .video-time { font-family: ui-monospace, monospace; color:#dce6ff; font-size:12px; }
     .crop-box { display:none; position:absolute; border:2px solid #71f2b5; box-shadow:0 0 0 9999px rgba(0,0,0,.38); cursor:move; box-sizing:border-box; }
     .crop-box::after { content:""; position:absolute; right:-7px; bottom:-7px; width:14px; height:14px; border-radius:50%; background:#71f2b5; border:2px solid #0f1320; cursor:nwse-resize; }
     .crop-active .crop-box { display:block; }
@@ -71,6 +75,11 @@ INDEX_HTML = """<!doctype html>
       <input id="fileInput" type="file" style="display:none" />
       <div id="videoPreview" class="video-preview">
         <video id="videoPlayer" controls></video>
+        <div class="video-timebar" aria-label="视频时间预览">
+          <span id="videoTime" class="video-time">当前 00:00 / --:--（0 秒 / -- 秒）</span>
+          <button class="secondary" onclick="setRangePoint('start')">设为起点</button>
+          <button class="secondary" onclick="setRangePoint('end')">设为终点</button>
+        </div>
         <div id="cropBox" class="crop-box" aria-label="视频裁剪框"></div>
       </div>
       <div class="row"><div><label>视频裁剪</label><select id="cropEnabled"><option value="false">关闭</option><option value="true">启用</option></select></div><div><label>裁剪坐标</label><input id="captureCrop" placeholder="自动：左,上,右,下" /></div></div>
@@ -86,6 +95,9 @@ INDEX_HTML = """<!doctype html>
     <section>
       <h2>预览</h2>
       <div class="preview"><img id="preview" alt="预览会显示在这里" /></div>
+      <div class="playback-status" id="playbackStatus">序列帧 0 / 0 · 12 fps</div>
+      <div class="row"><div><label>预览 FPS</label><input id="previewFps" type="number" min="1" max="60" step="1" value="12" /></div><div><label>播放控制</label><button class="secondary" onclick="toggleSequencePlayback()">播放 / 暂停</button></div></div>
+      <div class="row"><button class="secondary" onclick="startSequencePlayback()">播放</button><button class="secondary" onclick="resetSequencePlayback()">重置</button></div>
       <button onclick="renderPreview()">生成预览</button>
       <button class="secondary" onclick="exportOutput('framesheet')">导出帧表</button>
       <button class="secondary" onclick="exportOutput('webp')">导出 WebP</button>
@@ -107,7 +119,7 @@ INDEX_HTML = """<!doctype html>
       <label>背景色 RGB</label><input id="keyColor" placeholder="可选，例如：0,255,0" />
       <div class="row"><div><label>输出宽度</label><input id="outW" type="number" placeholder="可选" /></div><div><label>输出高度</label><input id="outH" type="number" placeholder="可选" /></div></div>
       <button onclick="updateVisual()">应用视觉参数</button>
-      <label>节奏模板</label><select id="preset"><option value="speed_keyframes">速度关键帧</option><option value="linear">线性</option><option value="hold_then_burst">蓄力后爆发</option><option value="slow_in_fast_out">先慢后快</option><option value="burst_then_settle">爆发后回落</option><option value="anticipation_explosion">预备爆发</option></select>
+      <label>节奏模板</label><select id="preset"><option value="linear">线性</option><option value="speed_keyframes">速度关键帧</option><option value="hold_then_burst">蓄力后爆发</option><option value="slow_in_fast_out">先慢后快</option><option value="burst_then_settle">爆发后回落</option><option value="anticipation_explosion">预备爆发</option></select>
       <div class="row"><div><label>原视频时长（秒）</label><input id="timingDuration" type="number" min="0.01" step="0.01" placeholder="上传视频后自动读取" /></div><div><label>高级模式</label><select id="advancedTiming"><option value="false">隐藏关键点</option><option value="true">显示关键点</option></select></div></div>
       <div class="keyframe-editor" id="keyframeEditor">
         <div class="row"><button class="secondary" onclick="addSpeedKeyframe()">添加关键帧</button><button class="secondary" onclick="resetSpeedKeyframes()">恢复单关键帧预设</button></div>
@@ -121,7 +133,9 @@ INDEX_HTML = """<!doctype html>
         </svg>
         <div class="hint">拖动圆点调整关键帧时间和“前速度”，拖动菱形调整同一关键帧的“后速度”；下方 JSON 会自动同步。</div>
       </div>
-      <label>速度关键帧 JSON（自动同步，可直接编辑）</label><textarea id="speedKeyframes" style="width:100%;height:105px;background:#0f1320;color:#edf1ff;border-radius:10px">[{"time":1,"before":0.4,"after":5}]</textarea>
+      <div id="speedKeyframeJson">
+        <label>速度关键帧 JSON（自动同步，可直接编辑）</label><textarea id="speedKeyframes" style="width:100%;height:105px;background:#0f1320;color:#edf1ff;border-radius:10px">[]</textarea>
+      </div>
       <button onclick="applySemanticTiming()">应用节奏</button>
       <div id="advancedTimingPanel" style="display:none">
         <label>高级：关键点 JSON</label><textarea id="points" style="width:100%;height:130px;background:#0f1320;color:#edf1ff;border-radius:10px">[[0,0],[1,1]]</textarea>
@@ -137,6 +151,7 @@ INDEX_HTML = """<!doctype html>
 <script>
 let sessionId = null;
 const cropState = {x:0, y:0, w:0, h:0};
+const sequencePlayback = {frames:[], index:0, timer:null, playing:false};
 async function api(path, options={}) {
   const res = await fetch(path, {headers:{'content-type':'application/json'}, ...options});
   const data = await res.json();
@@ -190,10 +205,14 @@ document.getElementById('fadePreset').addEventListener('change', applyFadePreset
 document.getElementById('fadeEnabled').addEventListener('change', updateFadeSummary);
 document.getElementById('fadePercent').addEventListener('input', updateFadeSummary);
 document.getElementById('fadeSpeed').addEventListener('input', updateFadeSummary);
-document.getElementById('preset').addEventListener('change', updateSemanticTimingSummary);
+document.getElementById('preset').addEventListener('change', () => { ensureSpeedKeyframeDefaultsForPreset(); updateSemanticTimingSummary(); });
 document.getElementById('advancedTiming').addEventListener('change', toggleAdvancedTiming);
 document.getElementById('timingDuration').addEventListener('input', () => { renderKeyframeEditor(); updateSemanticTimingSummary(); });
 document.getElementById('speedKeyframes').addEventListener('input', () => { renderKeyframeEditor(); updateSemanticTimingSummary(); });
+document.getElementById('previewFps').addEventListener('input', () => {
+  updateSequenceStatus();
+  if (sequencePlayback.playing) startSequencePlayback();
+});
 async function uploadFile(file){
   return withBusy('正在上传文件……', async () => {
   const dataUrl = await new Promise((resolve, reject) => {
@@ -225,22 +244,64 @@ async function uploadFile(file){
         document.getElementById('timingDuration').value = String(round3(player.duration));
         updateSemanticTimingSummary();
       }
+      updateVideoTimePreview();
       resetCropBox();
     };
     return {提示:'已上传视频，请设置帧数/时间范围后点击“创建并抽帧”。', upload:data};
   }
   });
 }
+
+function formatClock(seconds){
+  if (!Number.isFinite(seconds)) return '--:--';
+  const whole = Math.max(0, Math.round(seconds));
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  const mmss = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return h ? `${h}:${mmss}` : mmss;
+}
+function videoWholeSecond(value){
+  return Math.max(0, Math.round(Number(value) || 0));
+}
+function updateVideoTimePreview(){
+  const player = document.getElementById('videoPlayer');
+  const current = videoWholeSecond(player.currentTime);
+  const duration = Number.isFinite(player.duration) ? videoWholeSecond(player.duration) : null;
+  const durationText = duration === null ? '--' : String(duration);
+  document.getElementById('videoTime').textContent = `当前 ${formatClock(current)} / ${formatClock(duration)}（${current} 秒 / ${durationText} 秒）`;
+}
+function readSecondsRange(){
+  const raw = document.getElementById('seconds').value.trim();
+  const match = raw.match(/^\\s*(\\d+(?:\\.\\d+)?)\\s*-\\s*(\\d+(?:\\.\\d+)?)\\s*$/);
+  return match ? {start:Number(match[1]), end:Number(match[2])} : {start:null, end:null};
+}
+function setRangePoint(point){
+  const current = videoWholeSecond(document.getElementById('videoPlayer').currentTime);
+  const range = readSecondsRange();
+  const start = point === 'start' ? current : (range.start ?? 0);
+  const end = point === 'end' ? current : (range.end ?? Math.max(current, start + 1));
+  document.getElementById('seconds').value = `${Math.min(start, end)}-${Math.max(start, end)}`;
+}
+const videoPlayer = document.getElementById('videoPlayer');
+videoPlayer.addEventListener('timeupdate', updateVideoTimePreview);
+videoPlayer.addEventListener('seeking', updateVideoTimePreview);
+videoPlayer.addEventListener('loadedmetadata', updateVideoTimePreview);
+videoPlayer.addEventListener('durationchange', updateVideoTimePreview);
+
 function displayedVideoRect(){
   const player = document.getElementById('videoPlayer');
-  const preview = document.getElementById('videoPreview');
-  const box = preview.getBoundingClientRect();
-  if (!player.videoWidth || !player.videoHeight || !box.width || !box.height) return {left:0, top:0, width:box.width, height:box.height};
+  const previewBox = document.getElementById('videoPreview').getBoundingClientRect();
+  const playerBox = player.getBoundingClientRect();
+  const box = {width:playerBox.width, height:playerBox.height};
+  if (!player.videoWidth || !player.videoHeight || !box.width || !box.height) {
+    return {left:playerBox.left - previewBox.left, top:playerBox.top - previewBox.top, width:box.width, height:box.height};
+  }
   const videoRatio = player.videoWidth / player.videoHeight;
   const boxRatio = box.width / box.height;
-  let width = box.width, height = box.height, left = 0, top = 0;
-  if (boxRatio > videoRatio) { width = box.height * videoRatio; left = (box.width - width) / 2; }
-  else { height = box.width / videoRatio; top = (box.height - height) / 2; }
+  let width = box.width, height = box.height, left = playerBox.left - previewBox.left, top = playerBox.top - previewBox.top;
+  if (boxRatio > videoRatio) { width = box.height * videoRatio; left += (box.width - width) / 2; }
+  else { height = box.width / videoRatio; top += (box.height - height) / 2; }
   return {left, top, width, height};
 }
 function clampCropState(){
@@ -566,9 +627,16 @@ document.getElementById('speedCurve').addEventListener('pointerdown', (event) =>
   curve.addEventListener('pointerup', up);
   curve.addEventListener('pointercancel', up);
 });
+function ensureSpeedKeyframeDefaultsForPreset(){
+  if (document.getElementById('preset').value !== 'speed_keyframes') return;
+  if (!readSpeedKeyframes(false).length) writeSpeedKeyframes(defaultSpeedKeyframes());
+}
 function updateSemanticTimingSummary(){
   const preset = document.getElementById('preset').value;
-  if (preset !== 'speed_keyframes') {
+  const usesSpeedKeyframes = preset === 'speed_keyframes';
+  document.getElementById('keyframeEditor').style.display = usesSpeedKeyframes ? 'block' : 'none';
+  document.getElementById('speedKeyframeJson').style.display = usesSpeedKeyframes ? 'block' : 'none';
+  if (!usesSpeedKeyframes) {
     document.getElementById('curve').textContent = `节奏映射：${preset}\\n说明：使用内置预设。`;
     return;
   }
@@ -604,10 +672,62 @@ async function updateTiming(){
 }
 async function renderPreview(){
   if (!sessionId) return;
-  return withBusy('正在生成预览……', async () => {
-  const data = await api(`/api/sessions/${sessionId}/preview`);
-  document.getElementById('preview').src = data.url + '?t=' + Date.now(); return data;
+  return withBusy('正在生成预览（序列帧）……', async () => {
+  const fps = readPreviewFps();
+  const data = await api(`/api/sessions/${sessionId}/preview-frames?fps=${fps}`);
+  loadSequenceFrames(data.frames || []);
+  startSequencePlayback();
+  return data;
   });
+}
+function readPreviewFps(){
+  const fps = Math.round(Number(document.getElementById('previewFps').value || 12));
+  return Math.max(1, Math.min(60, Number.isFinite(fps) ? fps : 12));
+}
+function loadSequenceFrames(frames){
+  stopSequencePlayback();
+  sequencePlayback.frames = frames.map(url => `${url}?t=${Date.now()}`);
+  sequencePlayback.index = 0;
+  if (sequencePlayback.frames.length) {
+    document.getElementById('preview').src = sequencePlayback.frames[0];
+  }
+  updateSequenceStatus();
+}
+function updateSequenceStatus(){
+  const total = sequencePlayback.frames.length;
+  const current = total ? sequencePlayback.index + 1 : 0;
+  document.getElementById('playbackStatus').textContent = `序列帧 ${current} / ${total} · ${readPreviewFps()} fps${sequencePlayback.playing ? ' · 播放中' : ''}`;
+}
+function showSequenceFrame(index){
+  if (!sequencePlayback.frames.length) {
+    updateSequenceStatus();
+    return;
+  }
+  sequencePlayback.index = ((index % sequencePlayback.frames.length) + sequencePlayback.frames.length) % sequencePlayback.frames.length;
+  document.getElementById('preview').src = sequencePlayback.frames[sequencePlayback.index];
+  updateSequenceStatus();
+}
+function stopSequencePlayback(){
+  if (sequencePlayback.timer) clearInterval(sequencePlayback.timer);
+  sequencePlayback.timer = null;
+  sequencePlayback.playing = false;
+  updateSequenceStatus();
+}
+function startSequencePlayback(){
+  if (!sequencePlayback.frames.length) return;
+  stopSequencePlayback();
+  sequencePlayback.playing = true;
+  const intervalMs = 1000 / readPreviewFps();
+  sequencePlayback.timer = setInterval(() => showSequenceFrame(sequencePlayback.index + 1), intervalMs);
+  updateSequenceStatus();
+}
+function toggleSequencePlayback(){
+  if (sequencePlayback.playing) stopSequencePlayback();
+  else startSequencePlayback();
+}
+function resetSequencePlayback(){
+  stopSequencePlayback();
+  showSequenceFrame(0);
 }
 async function exportOutput(format){
   return withBusy(`正在导出 ${format === 'framesheet' ? '帧表' : format.toUpperCase()}……`, async () => {
@@ -622,6 +742,7 @@ async function exportOutput(format){
 renderKeyframeEditor();
 updateSemanticTimingSummary();
 updateGridFromCount();
+updateSequenceStatus();
 </script>
 </body>
 </html>"""
@@ -731,10 +852,31 @@ def create_v2f_app(store: V2FSessionStore | None = None) -> type[BaseHTTPRequest
                     path = sessions.render_preview(parts[2])
                     _json_response(self, 200, {"path": str(path), "url": f"/api/sessions/{parts[2]}/artifact/preview"})
                     return
+                if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "preview-frames":
+                    query = parse_qs(parsed.query)
+                    fps = max(1, min(60, int(float(query.get("fps", ["12"])[0]))))
+                    paths = sessions.render_preview_sequence(parts[2])
+                    _json_response(
+                        self,
+                        200,
+                        {
+                            "fps": fps,
+                            "frame_count": len(paths),
+                            "frames": [f"/api/sessions/{parts[2]}/artifact/preview-frame-{index}" for index in range(len(paths))],
+                        },
+                    )
+                    return
                 if len(parts) == 5 and parts[:2] == ["api", "sessions"] and parts[3] == "artifact":
                     session = sessions.get(parts[2])
                     artifact_name = parts[4]
                     path = session.preview_path if artifact_name == "preview" else None
+                    if artifact_name.startswith("preview-frame-"):
+                        try:
+                            frame_index = int(artifact_name.removeprefix("preview-frame-"))
+                        except ValueError:
+                            frame_index = -1
+                        if 0 <= frame_index < len(session.preview_frame_paths):
+                            path = session.preview_frame_paths[frame_index]
                     if path is None or not path.exists():
                         _json_response(self, 404, {"error": "未找到产物"})
                         return
@@ -743,7 +885,8 @@ def create_v2f_app(store: V2FSessionStore | None = None) -> type[BaseHTTPRequest
                     if resolved != session_root and session_root not in resolved.parents:
                         _json_response(self, 403, {"error": "产物路径不在当前会话目录内"})
                         return
-                    _bytes_response(self, 200, resolved.read_bytes(), "image/webp")
+                    content_type = "image/webp" if artifact_name == "preview" else "image/png"
+                    _bytes_response(self, 200, resolved.read_bytes(), content_type)
                     return
                 if len(parts) == 3 and parts[:2] == ["api", "uploads"]:
                     upload_path = sessions.upload_root / parts[2]

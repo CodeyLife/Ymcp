@@ -88,6 +88,24 @@ def test_v2f_web_app_framesheet_session_visual_timing_and_preview(v2f_server, tm
     assert status == 200
     assert payload["url"] == f"/api/sessions/{session_id}/artifact/preview"
 
+    status, payload = _request(v2f_server, "GET", f"/api/sessions/{session_id}/preview-frames?fps=12")
+    assert status == 200
+    assert payload["fps"] == 12
+    assert payload["frame_count"] == 2
+    assert payload["frames"] == [
+        f"/api/sessions/{session_id}/artifact/preview-frame-0",
+        f"/api/sessions/{session_id}/artifact/preview-frame-1",
+    ]
+
+    conn = HTTPConnection(v2f_server.server_address[0], v2f_server.server_address[1], timeout=5)
+    conn.request("GET", payload["frames"][0])
+    response = conn.getresponse()
+    body = response.read()
+    conn.close()
+    assert response.status == 200
+    assert response.getheader("content-type") == "image/png"
+    assert body.startswith(b"\x89PNG")
+
     status, payload = _request(v2f_server, "GET", f"/api/sessions/{session_id}/cache")
     assert status == 200
     assert payload["cached_in_memory"] is True
@@ -114,6 +132,27 @@ def test_v2f_web_app_framesheet_session_visual_timing_and_preview(v2f_server, tm
     assert Path(payload["animation"]).name == "animation.gif"
 
 
+def test_v2f_web_app_preview_frames_uses_all_frames_not_fps_as_count(v2f_server, tmp_path):
+    frame_count = 15
+    sheet = tmp_path / "sheet.png"
+    image = Image.new("RGBA", (frame_count * 2, 2), (0, 0, 0, 0))
+    for index in range(frame_count):
+        for x in range(2):
+            for y in range(2):
+                image.putpixel((index * 2 + x, y), (index, 0, 0, 255))
+    image.save(sheet)
+
+    status, payload = _request(v2f_server, "POST", "/api/sessions", {"kind": "framesheet", "source": str(sheet), "grid": "15x1"})
+    assert status == 200
+
+    status, payload = _request(v2f_server, "GET", f"/api/sessions/{payload['id']}/preview-frames?fps=12")
+
+    assert status == 200
+    assert payload["fps"] == 12
+    assert payload["frame_count"] == frame_count
+    assert len(payload["frames"]) == frame_count
+
+
 def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     conn = HTTPConnection(v2f_server.server_address[0], v2f_server.server_address[1], timeout=5)
     conn.request("GET", "/")
@@ -128,6 +167,13 @@ def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     assert "updateGridFromCount" in html
     assert '<video id="videoPlayer" controls' in html
     assert 'id="videoPreview"' in html
+    assert 'id="videoTime"' in html
+    assert '视频时间预览' in html
+    assert '当前 00:00 / --:--' in html
+    assert '设为起点' in html
+    assert '设为终点' in html
+    assert "setRangePoint('start')" in html
+    assert 'formatClock' in html
     assert 'id="cropBox"' in html
     assert "视频裁剪" in html
     assert "裁剪坐标" in html
@@ -139,13 +185,22 @@ def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     assert "处理中，请稍候" in html
     assert "正在创建会话并抽取视频帧" in html
     assert "正在生成预览" in html
+    assert "正在生成预览（序列帧）" in html
     assert "button:disabled" in html
+    assert 'id="playbackStatus"' in html
+    assert 'id="previewFps" type="number" min="1" max="60" step="1" value="12"' in html
+    assert "序列帧 0 / 0 · 12 fps" in html
+    assert "播放 / 暂停" in html
+    assert "startSequencePlayback" in html
+    assert "resetSequencePlayback" in html
+    assert "preview-frames?fps=" in html
     assert "中心不透明半径（%）" in html
     assert "边缘衰减速度" in html
     assert "淡出预设" in html
     assert "透明淡出：中心 80% 保持不透明" in html
     assert "scheduleVisualPreview" not in html
     assert "节奏模板" in html
+    assert '<select id="preset"><option value="linear">线性</option><option value="speed_keyframes">速度关键帧</option>' in html
     assert "速度关键帧" in html
     assert "原视频时长（秒）" in html
     assert "添加关键帧" in html
@@ -155,12 +210,16 @@ def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     assert "前速度" in html
     assert "后速度" in html
     assert "速度关键帧 JSON" in html
-    assert '[{"time":1,"before":0.4,"after":5}]' in html
+    assert '<textarea id="speedKeyframes"' in html
+    assert '>[]</textarea>' in html
     assert "蓄力时长（%）" not in html
     assert "停顿强度（%）" not in html
     assert "爆发位置（%）" not in html
     assert "高级模式" in html
     assert "应用节奏" in html
+    assert "无缝序列帧" not in html
+    assert "应用无缝序列" not in html
+    assert "sourceFrameGrid" not in html
     assert "可编辑关键点 JSON" not in html
     assert "创建并抽帧" in html
     assert "生成预览" in html
