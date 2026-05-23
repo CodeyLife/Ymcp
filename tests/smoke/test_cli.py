@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ymcp.cli import main
 from ymcp.contracts.memory import MEMPALACE_TOOL_SCHEMAS
+from ymcp.tools.imagegen.local_frame_workflow import remove_chroma_key
 
 WORKFLOW_NAMES = {'ydeep', 'yplan', 'ydo', 'menu', 'yimggen'}
 MEMORY_NAMES = {tool['name'] for tool in MEMPALACE_TOOL_SCHEMAS}
@@ -62,6 +63,225 @@ def test_example_host_call_all_tools_runs():
     assert 'ydo:' in completed.stdout
     assert 'menu:' in completed.stdout
     assert 'yimggen:' in completed.stdout
+
+
+def test_to_jpg_command_converts_current_directory_pngs_in_place_and_deletes_sources(tmp_path, capsys, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "images"
+    work.mkdir()
+    first = work / "first.png"
+    second = work / "SECOND.PNG"
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(first)
+    Image.new("RGB", (2, 2), (0, 255, 0)).save(second)
+    monkeypatch.chdir(work)
+
+    assert main(["to-jpg"]) == 0
+    stdout = capsys.readouterr().out
+    assert str(work) in stdout
+    assert "2 files" in stdout
+    assert not first.exists()
+    assert not second.exists()
+
+    assert sorted(path.name for path in work.iterdir()) == ["SECOND.jpg", "first.jpg"]
+    with Image.open(work / "first.jpg") as converted:
+        assert converted.mode == "RGB"
+        assert converted.format == "JPEG"
+
+
+def test_to_jpg_command_flattens_transparency_to_white(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "transparent"
+    work.mkdir()
+    image = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    for x in range(8, 16):
+        for y in range(16):
+            image.putpixel((x, y), (255, 0, 0, 255))
+    image.save(work / "alpha.png")
+    monkeypatch.chdir(work)
+
+    assert main(["to-jpg"]) == 0
+
+    assert not (work / "alpha.png").exists()
+    with Image.open(work / "alpha.jpg") as converted:
+        assert converted.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_nobg_command_writes_multiple_transparent_pngs_to_child_output(tmp_path, capsys, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    source = work / "subject.png"
+    source2 = work / "subject2.jpg"
+    image = Image.new("RGB", (9, 9), (0, 255, 0))
+    for x in range(3, 6):
+        for y in range(3, 6):
+            image.putpixel((x, y), (255, 0, 0))
+    image.save(source)
+    image.save(source2)
+    monkeypatch.chdir(work)
+
+    assert main(["nobg"]) == 0
+    stdout = capsys.readouterr().out
+    output_dir = work / "assets-nobg"
+    assert str(output_dir) in stdout
+    assert "2 files" in stdout
+
+    with Image.open(output_dir / "subject.png") as cutout:
+        assert cutout.mode == "RGBA"
+        assert cutout.getpixel((0, 0))[3] == 0
+        assert cutout.getpixel((4, 4))[3] == 255
+
+
+def test_nobg_command_writes_single_image_to_current_directory(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    source = work / "subject.jpg"
+    image = Image.new("RGB", (9, 9), (0, 255, 0))
+    for x in range(3, 6):
+        for y in range(3, 6):
+            image.putpixel((x, y), (255, 0, 0))
+    image.save(source)
+    monkeypatch.chdir(work)
+
+    assert main(["nobg"]) == 0
+
+    assert not (work / "assets-nobg").exists()
+    with Image.open(work / "subject.png") as cutout:
+        assert cutout.mode == "RGBA"
+        assert cutout.getpixel((0, 0))[3] == 0
+        assert cutout.getpixel((4, 4))[3] == 255
+
+
+def test_nobg_single_png_does_not_overwrite_source(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    source = work / "subject.png"
+    image = Image.new("RGB", (9, 9), (0, 255, 0))
+    image.putpixel((4, 4), (255, 0, 0))
+    image.save(source)
+    original_bytes = source.read_bytes()
+    monkeypatch.chdir(work)
+
+    assert main(["nobg"]) == 0
+
+    assert source.read_bytes() == original_bytes
+    with Image.open(work / "subject-nobg.png") as cutout:
+        assert cutout.mode == "RGBA"
+        assert cutout.getpixel((0, 0))[3] == 0
+        assert cutout.getpixel((4, 4))[3] == 255
+
+
+def test_nobg_command_accepts_cut_option(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    source = work / "subject.png"
+    image = Image.new("RGB", (5, 5), (0, 250, 0))
+    image.putpixel((2, 2), (255, 0, 0))
+    image.save(source)
+    monkeypatch.chdir(work)
+
+    assert main(["nobg", "--cut", "20"]) == 0
+
+    with Image.open(work / "subject-nobg.png") as cutout:
+        assert cutout.getpixel((0, 0))[3] == 0
+        assert cutout.getpixel((2, 2))[3] == 255
+
+
+def test_nobg_command_keeps_tol_as_cut_alias(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    source = work / "subject.png"
+    image = Image.new("RGB", (5, 5), (0, 250, 0))
+    image.putpixel((2, 2), (255, 0, 0))
+    image.save(source)
+    monkeypatch.chdir(work)
+
+    assert main(["nobg", "--tol", "20"]) == 0
+
+    with Image.open(work / "subject-nobg.png") as cutout:
+        assert cutout.getpixel((0, 0))[3] == 0
+        assert cutout.getpixel((2, 2))[3] == 255
+
+
+def test_nobg_without_threshold_args_uses_conservative_default(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    source = work / "subject.png"
+    image = Image.new("RGB", (5, 5), (0, 255, 0))
+    image.putpixel((1, 1), (0, 200, 0))
+    image.putpixel((2, 2), (255, 0, 0))
+    image.save(source)
+    expected = tmp_path / "expected.png"
+    remove_chroma_key(source, expected, auto_key="border", tolerance=12, transparent_threshold=12, opaque_threshold=48)
+    monkeypatch.chdir(work)
+
+    assert main(["nobg"]) == 0
+
+    with Image.open(expected) as expected_cutout, Image.open(work / "subject-nobg.png") as actual_cutout:
+        assert list(actual_cutout.getdata()) == list(expected_cutout.getdata())
+
+
+def test_nobg_cut_and_keep_control_soft_background_range(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    source = work / "subject.png"
+    image = Image.new("RGB", (5, 5), (0, 255, 0))
+    image.putpixel((1, 1), (0, 240, 0))
+    image.putpixel((2, 2), (255, 0, 0))
+    image.save(source)
+    monkeypatch.chdir(work)
+
+    narrow = tmp_path / "narrow"
+    wide = tmp_path / "wide"
+    assert main(["nobg", "--cut", "0", "--keep", "10", "--out-dir", str(narrow)]) == 0
+    assert main(["nobg", "--cut", "20", "--keep", "52", "--out-dir", str(wide)]) == 0
+
+    with Image.open(narrow / "subject.png") as narrow_cutout, Image.open(wide / "subject.png") as wide_cutout:
+        assert narrow_cutout.getpixel((0, 0))[3] == 0
+        assert wide_cutout.getpixel((0, 0))[3] == 0
+        assert narrow_cutout.getpixel((1, 1))[3] > wide_cutout.getpixel((1, 1))[3]
+        assert wide_cutout.getpixel((1, 1))[3] == 0
+        assert narrow_cutout.getpixel((2, 2))[3] == 255
+        assert wide_cutout.getpixel((2, 2))[3] == 255
+
+
+def test_nobg_keep_requires_cut_and_must_be_greater(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    Image.new("RGB", (5, 5), (0, 255, 0)).save(work / "subject.png")
+    monkeypatch.chdir(work)
+
+    assert main(["nobg", "--cut", "20", "--keep", "20"]) == 1
+
+
+def test_batch_image_commands_fail_on_empty_directory(tmp_path, monkeypatch):
+    work = tmp_path / "empty"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+    assert main(["to-jpg"]) == 1
+    assert main(["nobg"]) == 1
+
+
+def test_nobg_uses_numbered_child_output_directory_when_default_exists(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
+    work = tmp_path / "assets"
+    work.mkdir()
+    (work / "assets-nobg").mkdir()
+    Image.new("RGB", (2, 2), (0, 255, 0)).save(work / "first.png")
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(work / "second.jpg")
+    monkeypatch.chdir(work)
+
+    assert main(["nobg"]) == 0
+
+    assert (work / "assets-nobg-2" / "first.png").exists()
 
 
 def test_frame_command_resizes_framesheet(tmp_path, capsys):

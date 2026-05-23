@@ -878,7 +878,11 @@ def _apply_alpha_to_image(image, *, key: Color, tolerance: int, spill_cleanup: b
             rgb = (red, green, blue)
             distance = _channel_distance(rgb, key)
             key_like = _looks_key_colored(rgb, key, distance)
-            output_alpha = min(_soft_alpha(distance, transparent_threshold, opaque_threshold), _dominance_alpha(rgb, key)) if soft_matte and key_like else (0 if distance <= tolerance else 255)
+            output_alpha = (
+                min(_soft_alpha(distance, transparent_threshold, opaque_threshold), _dominance_alpha(rgb, key))
+                if soft_matte and key_like and distance <= opaque_threshold
+                else (0 if distance <= tolerance else 255)
+            )
             output_alpha = int(round(output_alpha * (alpha / 255.0)))
             if 0 < output_alpha <= ALPHA_NOISE_FLOOR:
                 output_alpha = 0

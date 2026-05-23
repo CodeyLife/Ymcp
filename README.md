@@ -85,9 +85,13 @@ pip install "ymcp[imagegen]"
 ymcp v2f 12 input.mp4 --seconds 1-2 --size 256 --out output/frames
 ymcp v2f 8 input.mp4 --seconds 2 --size full
 ymcp v2f 12 input.mp4 --columns 6
+ymcp to-jpg
+ymcp nobg
 ```
 
 `--seconds 2` 表示使用 0-2 秒，`--seconds 1-2` 表示使用 1-2 秒；`--size` 默认 `256`，`full` 保留原视频分辨率，也支持 `320x180`。该命令不会保留中间采样 PNG，默认在当前目录下的 `video_frames` 输出目录生成 `framesheet.png` 和 `animation.webp`。framesheet 默认尽量接近方形，例如 24 帧为 4x6、20 帧为 4x5，可用 `--columns` 覆盖列数。默认会用第一帧中出现最多的颜色作为背景色，并在所有帧中复用该颜色扣除背景；如需保留背景可传 `--keep-bg`。`v2f` 默认还会从画面中心按半径添加透明淡出，减少边缘裁剪截断感；`--fade 80` 表示中心 80% 半径保持不透明后线性淡出，`--fade 80-2` 可调整衰减速度。
+
+`to-jpg` 会把当前目录直属 PNG 图片原地转换成 JPG，新文件沿用源文件名，并在每张图成功转换后删除对应 PNG。`nobg` 会把当前目录直属 PNG/JPG/JPEG/WebP/BMP 图片按边缘背景色本地去背景；只有一张图时结果直接写在当前目录，多张图时在当前目录下创建 `<当前文件夹名>-nobg` 输出目录。单张 PNG 去背景会写为 `<文件名>-nobg.png`，避免覆盖原图。默认使用较保守的 `--cut 12 --keep 48`。需要微调时可用 `--cut` 和 `--keep`：距离背景色小于等于 `--cut` 的像素完全透明，`--cut` 到 `--keep` 之间软过渡，大于等于 `--keep` 的像素保留。
 
 ### 本地 v2f 网页编辑器
 

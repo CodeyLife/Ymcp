@@ -19,7 +19,14 @@ from ymcp.capabilities import get_prompt_specs, get_resource_specs
 from ymcp.fixtures import FIXTURES, fixture_for
 from ymcp.docs.template import TRAE_PROJECT_RULE_TEMPLATE
 from ymcp.internal_registry import get_tool_specs
-from ymcp.tools.imagegen.local_frame_workflow import extract_video_frames, framesheet_to_gif, framesheet_to_webp, resize_framesheet
+from ymcp.tools.imagegen.local_frame_workflow import (
+    extract_video_frames,
+    framesheet_to_gif,
+    framesheet_to_webp,
+    parse_key_color,
+    remove_chroma_key,
+    resize_framesheet,
+)
 from ymcp.memory import DEFAULT_MEMORY_ROOM, DEFAULT_MEMORY_WING, mempalace_palace_path, mempalace_version, memory_log_kv
 from ymcp.server import configure_logging, create_app
 
@@ -41,6 +48,12 @@ TRAE_HOST_CONFIG = {
     }
 }
 
+
+PNG_SUFFIXES = {".png"}
+NOBG_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+PILLOW_INSTALL_HINT = 'Install with `pip install "ymcp[imagegen]"`.'
+NOBG_DEFAULT_CUT = 12
+NOBG_DEFAULT_KEEP = 48
 
 
 def resolve_trae_config_dir(config_dir: str | None = None) -> Path:
@@ -219,6 +232,120 @@ def doctor_payload() -> dict[str, Any]:
     }
 
 
+def _load_cli_pillow():
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - only exercised without optional dependency
+        raise RuntimeError(f"Pillow is required for image batch commands. {PILLOW_INSTALL_HINT}") from exc
+    return Image
+
+
+def _current_dir_files_with_suffixes(suffixes: set[str]) -> list[Path]:
+    return sorted(path for path in Path.cwd().iterdir() if path.is_file() and path.suffix.lower() in suffixes)
+
+
+def _resolve_batch_output_dir(default_suffix: str, out_dir: str | None = None) -> Path:
+    if out_dir:
+        output_dir = Path(out_dir).expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    cwd = Path.cwd().resolve()
+    base = cwd / f"{cwd.name}-{default_suffix}"
+    candidate = base
+    index = 2
+    while candidate.exists():
+        candidate = cwd / f"{cwd.name}-{default_suffix}-{index}"
+        index += 1
+    candidate.mkdir(parents=True)
+    return candidate
+
+
+def _resolve_image_batch_output_root(default_suffix: str, source_count: int, out_dir: str | None = None) -> Path:
+    if out_dir or source_count > 1:
+        return _resolve_batch_output_dir(default_suffix, out_dir)
+    return Path.cwd().resolve()
+
+
+def _ensure_can_write_output(path: Path, *, overwrite: bool) -> None:
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"output already exists: {path}")
+
+
+def to_jpg_command(*, out_dir: str | None = None, overwrite: bool = True, background: str = "#ffffff") -> tuple[Path, int]:
+    Image = _load_cli_pillow()
+    background_rgb = parse_key_color(background)
+    sources = _current_dir_files_with_suffixes(PNG_SUFFIXES)
+    if not sources:
+        raise ValueError(f"no PNG files found in {Path.cwd()}")
+
+    output_dir = Path(out_dir).expanduser().resolve() if out_dir else Path.cwd().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    failures: list[str] = []
+    converted = 0
+    for source in sources:
+        target = output_dir / f"{source.stem}.jpg"
+        try:
+            _ensure_can_write_output(target, overwrite=overwrite)
+            with Image.open(source) as image:
+                rgba = image.convert("RGBA")
+            background_image = Image.new("RGBA", rgba.size, (*background_rgb, 255))
+            background_image.alpha_composite(rgba)
+            background_image.convert("RGB").save(target, format="JPEG", quality=95, subsampling=0)
+            source.unlink()
+            converted += 1
+        except Exception as exc:  # noqa: BLE001 - report all per-file image failures together
+            failures.append(f"{source.name}: {exc}")
+
+    if failures:
+        raise RuntimeError("; ".join(failures))
+    return output_dir, converted
+
+
+def nobg_command(
+    *,
+    out_dir: str | None = None,
+    overwrite: bool = True,
+    cut: int = NOBG_DEFAULT_CUT,
+    keep: int | None = None,
+    auto_key: str = "border",
+) -> tuple[Path, int]:
+    _load_cli_pillow()
+    if keep is not None and keep <= cut:
+        raise ValueError("--keep must be greater than --cut")
+    sources = _current_dir_files_with_suffixes(NOBG_IMAGE_SUFFIXES)
+    if not sources:
+        raise ValueError(f"no supported image files found in {Path.cwd()}")
+
+    output_dir = _resolve_image_batch_output_root("nobg", len(sources), out_dir)
+    failures: list[str] = []
+    converted = 0
+    for source in sources:
+        target = output_dir / f"{source.stem}.png"
+        if target.resolve() == source.resolve():
+            target = output_dir / f"{source.stem}-nobg.png"
+        try:
+            _ensure_can_write_output(target, overwrite=overwrite)
+            keep_threshold = keep if keep is not None else NOBG_DEFAULT_KEEP if cut == NOBG_DEFAULT_CUT else min(255, cut + 32)
+            soft_matte = cut < keep_threshold
+            remove_chroma_key(
+                source,
+                target,
+                auto_key=auto_key,
+                tolerance=cut,
+                soft_matte=soft_matte,
+                transparent_threshold=cut,
+                opaque_threshold=keep_threshold,
+            )
+            converted += 1
+        except Exception as exc:  # noqa: BLE001 - report all per-file image failures together
+            failures.append(f"{source.name}: {exc}")
+
+    if failures:
+        raise RuntimeError("; ".join(failures))
+    return output_dir, converted
+
+
 def frame_command(grid: str, image_path: str, *, out: str | None = None, size: int = 256, overwrite: bool = True) -> Path:
     return resize_framesheet(image_path, grid, out, frame_size=size, overwrite=overwrite)
 
@@ -333,6 +460,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="兼容旧参数；当前创建项目规则时默认会覆盖写入",
     )
+
+    to_jpg_cmd = subparsers.add_parser("to-jpg", aliases=["to_jpg"], help="将当前目录直属 PNG 图片批量转换为 JPG")
+    to_jpg_cmd.add_argument("--out-dir", help="输出目录；默认输出到当前目录，并在成功转换后删除源 PNG")
+    to_jpg_cmd.add_argument("--no-overwrite", action="store_true", help="如果目标文件已存在则失败；默认覆盖输出目录内同名文件")
+    to_jpg_cmd.add_argument("--background", default="#ffffff", help="透明 PNG 转 JPG 时使用的铺底色，格式 #RRGGBB；默认 #ffffff")
+
+    nobg_cmd = subparsers.add_parser("nobg", help="将当前目录直属图片批量去背景并输出透明 PNG")
+    nobg_cmd.add_argument("--out-dir", help="输出目录；多图默认在当前目录下创建 <当前文件夹名>-nobg，单图默认输出到当前目录")
+    nobg_cmd.add_argument("--no-overwrite", action="store_true", help="如果目标文件已存在则失败；默认覆盖输出目录内同名文件")
+    nobg_cmd.add_argument("--cut", "--tol", "--tolerance", dest="cut", type=int, default=NOBG_DEFAULT_CUT, help=f"完全扣掉的背景色距离阈值，0-255；默认 {NOBG_DEFAULT_CUT}")
+    nobg_cmd.add_argument("--keep", type=int, help=f"完全保留的背景色距离阈值，必须大于 --cut；默认 {NOBG_DEFAULT_KEEP}，显式 --cut 时默认是 --cut + 32")
+    nobg_cmd.add_argument("--auto-key", choices=["border", "corners"], default="border", help="自动取样背景色的位置；默认 border")
 
     frame_cmd = subparsers.add_parser("frame", help="将 framesheet 按 COLSxROWS 网格重采样为每帧固定尺寸")
     frame_cmd.add_argument("grid", help="网格，格式为 COLSxROWS，例如 4x4")
@@ -473,6 +612,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"已创建/更新 Trae 项目规则：{rule_path}")
         else:
             print("已跳过项目规则创建。")
+        return 0
+
+    if args.command in {"to-jpg", "to_jpg"}:
+        try:
+            output_dir, count = to_jpg_command(out_dir=args.out_dir, overwrite=not args.no_overwrite, background=args.background)
+        except Exception as exc:
+            print(f"to-jpg failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"{output_dir} ({count} files)")
+        return 0
+
+    if args.command == "nobg":
+        try:
+            output_dir, count = nobg_command(out_dir=args.out_dir, overwrite=not args.no_overwrite, cut=args.cut, keep=args.keep, auto_key=args.auto_key)
+        except Exception as exc:
+            print(f"nobg failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"{output_dir} ({count} files)")
         return 0
 
     if args.command == "frame":
