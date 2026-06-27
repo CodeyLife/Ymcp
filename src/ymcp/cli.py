@@ -515,16 +515,16 @@ def main(argv: list[str] | None = None) -> int:
     video_frames_cmd.add_argument("--fade", nargs="?", const="default", default="default", help="径向透明淡出：默认 80%% 半径内不透明并线性淡出；可用 80 或 80-2 调整百分比和衰减速度")
     video_frames_cmd.add_argument("--no-overwrite", action="store_true", help="如果 framesheet.png 或 animation.webp 已存在则失败；默认覆盖")
 
-    v2f_ui_cmd = subparsers.add_parser(
-        "v2f-ui",
-        aliases=["v2f_ui"],
-        help="启动本地 v2f 网页编辑器（单用户、localhost 默认）",
-        description="启动本地 v2f 网页编辑器（单用户、localhost 默认）",
+    web_cmd = subparsers.add_parser(
+        "web",
+        aliases=["v2f-ui", "v2f_ui"],
+        help="启动本地网页工作台（单用户、localhost 默认）",
+        description="启动本地网页工作台（单用户、localhost 默认）",
     )
-    v2f_ui_cmd.add_argument("--host", default="127.0.0.1", help="监听地址；默认 127.0.0.1。非本机地址不代表多用户/云端支持")
-    v2f_ui_cmd.add_argument("--port", type=int, default=0, help="监听端口；默认 0 表示自动选择可用端口")
-    v2f_ui_cmd.add_argument("--work-dir", help="工作/导出根目录；默认当前启动目录下的 v2f-ui-output")
-    v2f_ui_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    web_cmd.add_argument("--host", default="127.0.0.1", help="监听地址；默认 127.0.0.1。非本机地址不代表多用户/云端支持")
+    web_cmd.add_argument("--port", type=int, default=0, help="监听端口；默认 0 表示自动选择可用端口")
+    web_cmd.add_argument("--work-dir", help="工作/导出根目录；默认当前启动目录下的 v2f-ui-output")
+    web_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     fixture_cmd = subparsers.add_parser("call-fixture", help="调用内置确定性示例")
     fixture_cmd.add_argument("tool", choices=sorted(FIXTURES))
@@ -691,24 +691,24 @@ def main(argv: list[str] | None = None) -> int:
         print(output)
         return 0
 
-    if args.command in {"v2f-ui", "v2f_ui"}:
+    if args.command in {"web", "v2f-ui", "v2f_ui"}:
         try:
             from ymcp.web.v2f_app import run_v2f_editor
 
             server, url = run_v2f_editor(host=args.host, port=args.port, open_browser=not args.no_open, work_dir=args.work_dir)
-            print(f"Ymcp v2f editor running at {url}")
+            print(f"Ymcp web workbench running at {url}")
             print(f"Output root: {server.v2f_output_root}")  # type: ignore[attr-defined]
-            print("Press Ctrl+C to stop. This is a local single-user editor, not a multi-user/cloud service.")
+            print("Press Ctrl+C to stop. This is a local single-user web workbench, not a multi-user/cloud service.")
             try:
                 while True:
                     time.sleep(3600)
             except KeyboardInterrupt:
                 server.shutdown()
                 server.server_close()
-                print("Ymcp v2f editor stopped.")
+                print("Ymcp web workbench stopped.")
             return 0
         except Exception as exc:
-            print(f"v2f-ui failed: {exc}", file=sys.stderr)
+            print(f"web failed: {exc}", file=sys.stderr)
             return 1
 
     if args.command == "call-fixture":

@@ -440,12 +440,19 @@ def test_video_frames_command_accepts_fade_option(tmp_path, monkeypatch):
         assert sheet.getpixel((0, 0))[3] == 0
 
 
-def test_v2f_ui_help_mentions_local_editor():
-    completed = subprocess.run([sys.executable, "-m", "ymcp.cli", "v2f-ui", "--help"], check=True, capture_output=True, text=True)
+def test_web_help_mentions_local_workbench():
+    completed = subprocess.run([sys.executable, "-m", "ymcp.cli", "web", "--help"], check=True, capture_output=True, text=True)
 
-    assert "本地 v2f" in completed.stdout
+    assert "本地网页工作台" in completed.stdout
     assert "--host" in completed.stdout
     assert "--work-dir" in completed.stdout
+
+
+def test_v2f_ui_alias_still_opens_web_help():
+    completed = subprocess.run([sys.executable, "-m", "ymcp.cli", "v2f-ui", "--help"], check=True, capture_output=True, text=True)
+
+    assert "本地网页工作台" in completed.stdout
+    assert "--host" in completed.stdout
 
 
 def test_video_frames_command_can_remove_background(tmp_path, monkeypatch):

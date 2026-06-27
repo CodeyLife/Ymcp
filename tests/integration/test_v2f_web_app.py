@@ -163,6 +163,11 @@ def test_v2f_web_app_index_uses_chinese_ui_text(v2f_server):
     assert response.status == 200
     assert "Ymcp v2f 编辑器" in html
     assert "素材来源" in html
+    assert "参考版视频转序列帧" in html
+    assert "纯浏览器 video + canvas 抽 PNG 帧和 Sprite Sheet" in html
+    assert "id=\"tool-clientVideo\"" in html
+    assert "extractClientVideoFrames" in html
+    assert "downloadClientFramesZip('clientVideo')" in html
     assert "拖拽视频或帧表到这里" in html
     assert "updateGridFromCount" in html
     assert '<video id="videoPlayer" controls' in html

@@ -93,16 +93,16 @@ ymcp nobg
 
 `to-jpg` 会把当前目录直属 PNG 图片原地转换成 JPG，新文件沿用源文件名，并在每张图成功转换后删除对应 PNG。`nobg` 会把当前目录直属 PNG/JPG/JPEG/WebP/BMP 图片按边缘背景色本地去背景；只有一张图时结果直接写在当前目录，多张图时在当前目录下创建 `<当前文件夹名>-nobg` 输出目录。单张 PNG 去背景会写为 `<文件名>-nobg.png`，避免覆盖原图。默认使用较保守的 `--cut 12 --keep 48`。需要微调时可用 `--cut` 和 `--keep`：距离背景色小于等于 `--cut` 的像素完全透明，`--cut` 到 `--keep` 之间软过渡，大于等于 `--keep` 的像素保留。
 
-### 本地 v2f 网页编辑器
+### 本地网页工作台
 
-`ymcp v2f-ui` 会启动一个本机单用户网页编辑器，默认只监听 `127.0.0.1`，用于反复调参预览，而不是多用户服务、批量任务或云端部署。
+`ymcp web` 会启动一个本机单用户网页工作台，默认只监听 `127.0.0.1`，用于反复调参预览和处理客户端可完成的图片帧工具，而不是多用户服务、批量任务或云端部署。
 
 ```powershell
-ymcp v2f-ui
-ymcp v2f-ui --port 8765 --no-open
+ymcp web
+ymcp web --port 8765 --no-open
 ```
 
-编辑器把流程拆成两层：视频抽帧只在视频来源、采样时间段、帧数或解码尺寸变化时执行；背景扣除、透明淡出、裁剪/缩放、Timing Map 节奏曲线、预览和导出会复用当前 session 中缓存的帧。除了视频输入，编辑器也支持从已有 framesheet + grid 创建 session，再进入同一套视觉处理、节奏编辑和 `framesheet.png` / `animation.webp` 导出流程。
+工作台包含两个视频转序列帧版本：默认版复用 Ymcp 后端 session、FFmpeg/Pillow 流程和 `framesheet.png` / `animation.webp` / GIF 导出；参考版完全在浏览器端用 `<video>` + `canvas` 抽取 PNG 序列帧，并可下载 ZIP 或 Sprite Sheet。默认版把流程拆成两层：视频抽帧只在视频来源、采样时间段、帧数或解码尺寸变化时执行；背景扣除、透明淡出、裁剪/缩放、Timing Map 节奏曲线、预览和导出会复用当前 session 中缓存的帧。除了视频输入，工作台也支持从已有 framesheet + grid 创建 session，再进入同一套视觉处理、节奏编辑和导出流程；Sprite Sheet 拆分、多图合成、简单拼接、客户端抠图、像素化/缩放等功能直接在浏览器端完成。
 
 Timing Map 使用单调关键点曲线把输出动画进度映射到源帧进度，可用于“蓄力趋静止 → 爆发加速 → 回落”的节奏。v1 导出采用确定性的 nearest-frame 选择，不做光流或中间帧合成。
 
