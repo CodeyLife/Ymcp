@@ -3,13 +3,14 @@ import {
   Card, Typography, Form, InputNumber, Input, Button, Row, Col, Space, App, Progress,
 } from "antd";
 import {
-  ToolOutlined, DownloadOutlined, FileZipOutlined, PlayCircleOutlined,
+  ToolOutlined, DownloadOutlined, FileZipOutlined, PlayCircleOutlined, UploadOutlined,
 } from "@ant-design/icons";
 import {
   seekVideo, canvasToBlob, downloadBlob, makeZip, formatClock, applyCanvasKey,
   type FrameItem,
 } from "@/lib/canvas";
 import { PageHeader, EmptyState } from "@/components/showtime";
+import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 
 const { Text } = Typography;
 
@@ -36,8 +37,8 @@ export default function Workbench() {
   const [tolerance, setTolerance] = useState(42);
   const [feather, setFeather] = useState(38);
 
-  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
+  function onFile(files: FileList) {
+    const f = files[0];
     if (!f) return;
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     const url = URL.createObjectURL(f);
@@ -168,11 +169,14 @@ export default function Workbench() {
           <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
             <Form layout="vertical">
               <Form.Item label="视频文件">
-                <input
-                  type="file"
+                <FileUploadTrigger
                   accept="video/*"
-                  onChange={onFile}
-                  style={{ width: "100%", color: "#a1a1aa", fontSize: 13 }}
+                  block
+                  label="选择视频文件"
+                  hint="MP4 / WebM / MOV"
+                  selectedText={fileName || undefined}
+                  icon={<UploadOutlined />}
+                  onFiles={onFile}
                 />
               </Form.Item>
 

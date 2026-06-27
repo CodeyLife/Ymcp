@@ -982,6 +982,143 @@ body {
 }
 
 /* ============================================================
+ * 统一文件上传入口
+ * ============================================================ */
+.file-upload-trigger {
+  --upload-border: rgba(63, 63, 70, 0.72);
+  --upload-border-hover: rgba(52, 211, 153, 0.48);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  gap: 9px;
+  border: 1px solid var(--upload-border);
+  border-radius: var(--radius-button);
+  background:
+    linear-gradient(180deg, rgba(39, 39, 42, 0.82), rgba(18, 18, 21, 0.92)),
+    #18181b;
+  color: #d4d4d8;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.28);
+  transition:
+    transform 0.14s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease,
+    color 0.2s ease;
+}
+.file-upload-trigger::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(220px circle at 50% 0%, rgba(52, 211, 153, 0.12), transparent 58%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.file-upload-trigger:hover,
+.file-upload-trigger-dragging {
+  border-color: var(--upload-border-hover);
+  color: #f4f4f5;
+  background:
+    linear-gradient(180deg, rgba(16, 185, 129, 0.12), rgba(18, 18, 21, 0.94)),
+    #18181b;
+  box-shadow:
+    inset 0 1px 0 rgba(110, 231, 183, 0.16),
+    0 0 0 3px rgba(16, 185, 129, 0.08),
+    0 8px 20px rgba(0, 0, 0, 0.26);
+}
+.file-upload-trigger:hover::before,
+.file-upload-trigger-dragging::before {
+  opacity: 1;
+}
+.file-upload-trigger:active {
+  transform: translateY(1px) scale(0.985);
+}
+.file-upload-trigger:focus-visible {
+  outline: none;
+  border-color: #34d399;
+  box-shadow:
+    inset 0 1px 0 rgba(110, 231, 183, 0.16),
+    0 0 0 3px rgba(52, 211, 153, 0.18),
+    0 8px 20px rgba(0, 0, 0, 0.26);
+}
+.file-upload-trigger-block {
+  width: 100%;
+}
+.file-upload-trigger-button {
+  padding: 0 14px;
+}
+.file-upload-trigger-dropzone {
+  width: 100%;
+  min-height: 108px;
+  flex-direction: column;
+  padding: 18px 16px;
+  border-style: dashed;
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.08), transparent 55%),
+    linear-gradient(180deg, rgba(19, 19, 22, 0.98), rgba(10, 10, 12, 0.98));
+}
+.file-upload-trigger-icon {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #34d399;
+  font-size: 15px;
+  filter: drop-shadow(0 0 5px rgba(52, 211, 153, 0.35));
+}
+.file-upload-trigger-dropzone .file-upload-trigger-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.18);
+  font-size: 20px;
+}
+.file-upload-trigger-copy {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.file-upload-trigger-button .file-upload-trigger-copy {
+  align-items: flex-start;
+}
+.file-upload-trigger-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-upload-trigger-hint {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #71717a;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.file-upload-trigger:hover .file-upload-trigger-hint,
+.file-upload-trigger-dragging .file-upload-trigger-hint {
+  color: #a1a1aa;
+}
+
+/* ============================================================
  * Bento 网格 - Dashboard 用，必须显式响应式
  * ============================================================ */
 .bento-grid {

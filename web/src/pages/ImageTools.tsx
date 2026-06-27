@@ -7,6 +7,7 @@ import {
 } from "@ant-design/icons";
 import { loadImagesFromFiles, downloadBlob } from "@/lib/canvas";
 import { PageHeader, EmptyState } from "@/components/showtime";
+import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 
 const { Text } = Typography;
 
@@ -19,15 +20,14 @@ function ComposePanel() {
   const [gap, setGap] = useState(0);
   const [bg, setBg] = useState("#000000");
 
-  async function onFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
+  async function onFiles(fileList: FileList) {
+    const files = Array.from(fileList);
     if (!files.length) return;
     const loaded = await loadImagesFromFiles(files);
     setItems((prev) => [
       ...prev,
       ...loaded.map((l) => ({ image: l.image, url: l.url, name: l.file.name })),
     ]);
-    e.target.value = "";
   }
 
   function compose() {
@@ -64,10 +64,16 @@ function ComposePanel() {
         <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
           <Form layout="vertical">
             <Form.Item label="添加图片（可多选）">
-              <Button block icon={<PlusOutlined />} onClick={() => document.getElementById("compose-upload")?.click()}>
-                选择图片
-              </Button>
-              <input id="compose-upload" type="file" accept="image/*" multiple onChange={onFiles} style={{ display: "none" }} />
+              <FileUploadTrigger
+                accept="image/*"
+                multiple
+                block
+                label="选择图片"
+                hint="可一次选择多张"
+                selectedText={items.length > 0 ? `已选 ${items.length} 张` : undefined}
+                icon={<PlusOutlined />}
+                onFiles={onFiles}
+              />
             </Form.Item>
             {items.length > 0 && (
               <div style={{ marginBottom: 12 }}>
@@ -114,12 +120,11 @@ function StitchPanel() {
   const [gap, setGap] = useState(0);
   const [bg, setBg] = useState("#000000");
 
-  async function onFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
+  async function onFiles(fileList: FileList) {
+    const files = Array.from(fileList);
     if (!files.length) return;
     const loaded = await loadImagesFromFiles(files);
     setItems((prev) => [...prev, ...loaded.map((l) => ({ image: l.image, url: l.url }))]);
-    e.target.value = "";
   }
 
   function stitch() {
@@ -163,10 +168,16 @@ function StitchPanel() {
         <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
           <Form layout="vertical">
             <Form.Item label="添加图片">
-              <Button block icon={<PlusOutlined />} onClick={() => document.getElementById("stitch-upload")?.click()}>
-                选择图片
-              </Button>
-              <input id="stitch-upload" type="file" accept="image/*" multiple onChange={onFiles} style={{ display: "none" }} />
+              <FileUploadTrigger
+                accept="image/*"
+                multiple
+                block
+                label="选择图片"
+                hint="PNG / JPEG / WebP"
+                selectedText={items.length > 0 ? `已选 ${items.length} 张` : undefined}
+                icon={<PlusOutlined />}
+                onFiles={onFiles}
+              />
             </Form.Item>
             <Form.Item label="方向">
               <Segmented block value={dir} onChange={(v) => setDir(v as typeof dir)} options={[
@@ -215,8 +226,8 @@ function PixelPanel() {
   // 跟踪输出尺寸与显示倍率，供 JSX 渲染使用（canvas ref 在 render 期间读取会是旧值）
   const [outputInfo, setOutputInfo] = useState({ w: 0, h: 0, scale: 1 });
 
-  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
+  function onFile(files: FileList) {
+    const f = files[0];
     if (!f) return;
     if (imgUrl) URL.revokeObjectURL(imgUrl);
     const url = URL.createObjectURL(f);
@@ -226,7 +237,6 @@ function PixelPanel() {
     };
     image.src = url;
     setImgUrl(url);
-    e.target.value = "";
   }
 
   // 使用 useEffect 绑定绘制逻辑，避免闭包陷阱（旧实现中 run 通过 requestAnimationFrame 调用，
@@ -270,10 +280,15 @@ function PixelPanel() {
         <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
           <Form layout="vertical">
             <Form.Item label="图片">
-              <Button block icon={<PlusOutlined />} onClick={() => document.getElementById("pixel-upload")?.click()}>
-                选择图片
-              </Button>
-              <input id="pixel-upload" type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} />
+              <FileUploadTrigger
+                accept="image/*"
+                block
+                label="选择图片"
+                hint="PNG / JPEG / WebP"
+                selectedText={img ? "已载入图片" : undefined}
+                icon={<PlusOutlined />}
+                onFiles={onFile}
+              />
             </Form.Item>
             {img && (
               <div style={{ marginBottom: 12, display: "flex", flexDirection: "column", gap: 2 }}>

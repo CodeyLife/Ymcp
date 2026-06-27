@@ -1,6 +1,6 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import {
-  Button, App, Image, Segmented, Input,
+  App, Image, Segmented, Input,
 } from "antd";
 import {
   AppstoreOutlined, UploadOutlined, SearchOutlined,
@@ -11,6 +11,7 @@ import { downloadBlob } from "@/lib/canvas";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
 import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
+import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 
 type FilterType = "all" | "generated" | "uploaded" | "matte";
 
@@ -47,7 +48,6 @@ export default function Assets() {
   const [filter, setFilter] = useState<FilterType>("all");
   const [search, setSearch] = useState("");
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = items.filter((item) => {
     if (filter !== "all" && item.source !== filter) return false;
@@ -124,19 +124,14 @@ export default function Assets() {
         description="生成和上传的图片统一管理，支持搜索、筛选、批量删除和快速抠图。"
         icon={<AppstoreOutlined />}
         extra={
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: "none" }}
-              onChange={(e) => e.target.files && handleUpload(e.target.files)}
-            />
-            <Button icon={<UploadOutlined />} onClick={() => fileInputRef.current?.click()}>
-              上传
-            </Button>
-          </>
+          <FileUploadTrigger
+            accept="image/*"
+            multiple
+            label="上传"
+            hint="PNG / JPEG / WebP"
+            icon={<UploadOutlined />}
+            onFiles={handleUpload}
+          />
         }
       />
 

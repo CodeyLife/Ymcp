@@ -3,11 +3,12 @@ import {
   Card, Typography, Form, InputNumber, Button, Row, Col, Space, App, Segmented, Slider, Switch, Tag,
 } from "antd";
 import {
-  BorderOuterOutlined, FileZipOutlined, EyeOutlined, PlayCircleOutlined, PauseCircleOutlined,
+  BorderOuterOutlined, FileZipOutlined, EyeOutlined, PlayCircleOutlined, PauseCircleOutlined, UploadOutlined,
 } from "@ant-design/icons";
 import { loadImageFromFile, canvasToBlob, downloadBlob, makeZip, type FrameItem } from "@/lib/canvas";
 import { useUIStore } from "@/stores/ui";
 import { PageHeader, EmptyState } from "@/components/showtime";
+import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 
 const { Text } = Typography;
 
@@ -20,6 +21,7 @@ export default function SpriteSplit() {
 
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [imgUrl, setImgUrl] = useState("");
+  const [uploadName, setUploadName] = useState("");
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [rows, setRows] = useState(4);
   const [cols, setCols] = useState(4);
@@ -55,6 +57,7 @@ export default function SpriteSplit() {
         revokeUrl = url;
         setImg(image);
         setImgUrl(url);
+        setUploadName(`来自 ${incomingImage.from}`);
         setFrames([]);
         setMode("auto");
         if (incomingImage.from === "image-gen") {
@@ -116,13 +119,14 @@ export default function SpriteSplit() {
     };
   }, [imgUrl]);
 
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
+  async function onFile(files: FileList) {
+    const f = files[0];
     if (!f) return;
     if (imgUrl) URL.revokeObjectURL(imgUrl);
     const { image, url } = await loadImageFromFile(f);
     setImg(image);
     setImgUrl(url);
+    setUploadName(f.name);
     setFrames([]);
     requestAnimationFrame(drawPreview);
   }
@@ -292,11 +296,14 @@ export default function SpriteSplit() {
           <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
             <Form layout="vertical">
               <Form.Item label="Sprite Sheet 图片">
-                <input
-                  type="file"
+                <FileUploadTrigger
                   accept="image/png,image/jpeg,image/webp"
-                  onChange={onFile}
-                  style={{ width: "100%", color: "#a1a1aa", fontSize: 13 }}
+                  block
+                  label="选择 Sprite Sheet"
+                  hint="PNG / JPEG / WebP"
+                  selectedText={uploadName || undefined}
+                  icon={<UploadOutlined />}
+                  onFiles={onFile}
                 />
               </Form.Item>
               <Form.Item label="模式">

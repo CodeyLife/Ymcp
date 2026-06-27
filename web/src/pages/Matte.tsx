@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Card, Typography, Row, Col, Form, InputNumber, Select, Button, Input, Space, App, Tag } from "antd";
-import { ScissorOutlined, DownloadOutlined, AimOutlined } from "@ant-design/icons";
+import { ScissorOutlined, DownloadOutlined, AimOutlined, UploadOutlined } from "@ant-design/icons";
 import { useUIStore } from "@/stores/ui";
 import { cacheImageLocally } from "@/lib/api";
 import { useAssetStore } from "@/stores/asset";
 import { downloadBlob } from "@/lib/canvas";
 import { PageHeader } from "@/components/showtime";
+import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 
 const { Text } = Typography;
 
@@ -87,6 +88,7 @@ export default function Matte() {
   const setIncomingImage = useUIStore((s) => s.setIncomingImage);
   const addAsset = useAssetStore((s) => s.add);
   const [src, setSrc] = useState<string | null>(null);
+  const [uploadName, setUploadName] = useState("");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [color, setColor] = useState("#00ff00");
@@ -218,6 +220,7 @@ export default function Matte() {
       cacheImageLocally(incomingImage.src)
         .then((cached) => {
           setSrc(cached);
+          setUploadName(`来自 ${incomingImage.from}`);
           message.info(`已从 ${incomingImage.from} 载入图片`);
         })
         .catch(() => message.error("图片加载失败"));
@@ -225,9 +228,11 @@ export default function Matte() {
     }
   }, [incomingImage, setIncomingImage]);
 
-  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (f) setSrc(URL.createObjectURL(f));
+  function onFile(files: FileList) {
+    const f = files[0];
+    if (!f) return;
+    setSrc(URL.createObjectURL(f));
+    setUploadName(f.name);
   }
 
   function manualDetectColor() {
@@ -290,11 +295,14 @@ export default function Matte() {
           <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
             <Form layout="vertical">
               <Form.Item label="上传图片">
-                <input
-                  type="file"
+                <FileUploadTrigger
                   accept="image/png,image/jpeg,image/webp"
-                  onChange={onFile}
-                  style={{ width: "100%", color: "#a1a1aa" }}
+                  block
+                  label="选择图片"
+                  hint="PNG / JPEG / WebP"
+                  selectedText={uploadName || undefined}
+                  icon={<UploadOutlined />}
+                  onFiles={onFile}
                 />
               </Form.Item>
               <Form.Item label="算法">

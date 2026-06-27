@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Upload, Tag,
+  Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag,
 } from "antd";
 import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
@@ -14,6 +14,7 @@ import { useNavigate } from "react-router-dom";
 import { DiffusionLoader } from "@/components/DiffusionLoader";
 import { MagneticButton } from "@/components/motion";
 import { PageHeader, TiltCard } from "@/components/showtime";
+import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
 
@@ -423,6 +424,12 @@ export default function ImageGen() {
   const currentSize = SIZE_OPTIONS.find((s) => s.value === size);
   const currentStylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
 
+  function handleRefImageFiles(files: FileList) {
+    const file = files[0];
+    if (!file) return;
+    setRefImage(URL.createObjectURL(file));
+  }
+
   async function handleGenerate() {
     if (!prompt.trim()) {
       message.warning("请输入提示词");
@@ -729,32 +736,15 @@ export default function ImageGen() {
             <Form layout="vertical">
               {mode === "img2img" && (
                 <Form.Item label="参考图">
-                  <Upload.Dragger
+                  <FileUploadTrigger
                     accept="image/png,image/jpeg,image/webp"
-                    showUploadList={false}
-                    beforeUpload={(file) => {
-                      setRefImage(URL.createObjectURL(file));
-                      return false;
-                    }}
-                    style={{
-                      background: "#131316",
-                      borderColor: "#27272a",
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left" }}>
-                      <InboxOutlined style={{ fontSize: 22, color: "#71717a" }} />
-                      <div>
-                        <div style={{ color: "#d4d4d8", fontSize: 13, fontWeight: 500, lineHeight: 1.4 }}>
-                          点击或拖拽上传参考图
-                        </div>
-                        <div style={{ color: "#52525b", fontSize: 11, lineHeight: 1.4 }}>
-                          PNG / JPEG / WebP
-                        </div>
-                      </div>
-                    </div>
-                  </Upload.Dragger>
+                    variant="dropzone"
+                    label="点击或拖拽上传参考图"
+                    hint="PNG / JPEG / WebP"
+                    selectedText={refImage ? "已载入参考图" : undefined}
+                    icon={<InboxOutlined />}
+                    onFiles={handleRefImageFiles}
+                  />
                   {refImage && (
                     <div style={{ marginTop: 8, position: "relative" }}>
                       <img
