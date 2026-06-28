@@ -97,11 +97,15 @@ function ComposePanel() {
         </Card>
       </Col>
       <Col xs={24} lg={16}>
-        <Card style={{ background: "#18181b", borderColor: "#27272a", minHeight: 360 }} styles={{ body: { padding: 18 } }}>
+        <Card
+          style={{ background: "#18181b", borderColor: "#27272a", minHeight: 480 }}
+          styles={{ body: { padding: 14 } }}
+          title={<Text style={{ color: "#a1a1aa" }}>合成结果{items.length > 0 ? ` (${items.length} 图)` : ""}</Text>}
+        >
           {items.length === 0 ? (
             <EmptyState icon={<BlockOutlined />} title="添加图片后合成 Sprite Sheet" description="支持多张图片合成帧表，可调整行列与间距。" minHeight={280} />
           ) : (
-            <div className="checker-bg" style={{ borderRadius: 8, padding: 12, textAlign: "center", overflow: "auto", maxHeight: "calc(100vh - 200px)" }}>
+            <div className="checker-bg" style={{ borderRadius: 8, padding: 12, textAlign: "center", overflow: "auto", maxHeight: "calc(100vh - 220px)" }}>
               <canvas ref={canvasRef} style={{ maxWidth: "100%", imageRendering: "pixelated" }} />
             </div>
           )}
@@ -200,11 +204,15 @@ function StitchPanel() {
         </Card>
       </Col>
       <Col xs={24} lg={16}>
-        <Card style={{ background: "#18181b", borderColor: "#27272a", minHeight: 360 }} styles={{ body: { padding: 18 } }}>
+        <Card
+          style={{ background: "#18181b", borderColor: "#27272a", minHeight: 480 }}
+          styles={{ body: { padding: 14 } }}
+          title={<Text style={{ color: "#a1a1aa" }}>拼接结果{items.length > 0 ? ` (${items.length} 图)` : ""}</Text>}
+        >
           {items.length === 0 ? (
             <EmptyState icon={<ColumnHeightOutlined />} title="添加图片后拼接" description="纵向或横向拼接多张图片，可调整间距与对齐。" minHeight={280} />
           ) : (
-            <div className="checker-bg" style={{ borderRadius: 8, padding: 12, textAlign: "center", overflow: "auto", maxHeight: "calc(100vh - 200px)" }}>
+            <div className="checker-bg" style={{ borderRadius: 8, padding: 12, textAlign: "center", overflow: "auto", maxHeight: "calc(100vh - 220px)" }}>
               <canvas ref={canvasRef} style={{ maxWidth: "100%", imageRendering: "pixelated" }} />
             </div>
           )}
@@ -334,11 +342,15 @@ function PixelPanel() {
         </Card>
       </Col>
       <Col xs={24} lg={16}>
-        <Card style={{ background: "#18181b", borderColor: "#27272a", minHeight: 360 }} styles={{ body: { padding: 18 } }}>
+        <Card
+          style={{ background: "#18181b", borderColor: "#27272a", minHeight: 480 }}
+          styles={{ body: { padding: 14 } }}
+          title={<Text style={{ color: "#a1a1aa" }}>处理结果{img ? ` (${outputInfo.w}×${outputInfo.h})` : ""}</Text>}
+        >
           {!img ? (
             <EmptyState icon={<AppstoreOutlined />} title="上传图片后处理" description="支持像素化与缩放，纯浏览器处理。" minHeight={280} />
           ) : (
-            <div className="checker-bg" style={{ borderRadius: 8, padding: 12, textAlign: "center", overflow: "auto", maxHeight: "calc(100vh - 200px)" }}>
+            <div className="checker-bg" style={{ borderRadius: 8, padding: 12, textAlign: "center", overflow: "auto", maxHeight: "calc(100vh - 220px)" }}>
               <canvas
                 ref={canvasRef}
                 style={{

@@ -1,86 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Card, Typography, Row, Col, Form, InputNumber, Select, Button, Input, Space, App, Tag } from "antd";
+import { Card, Typography, Row, Col, Form, InputNumber, Select, Button, Input, Space, App, Tag, Switch } from "antd";
 import { ScissorOutlined, DownloadOutlined, AimOutlined, UploadOutlined } from "@ant-design/icons";
 import { useUIStore } from "@/stores/ui";
 import { cacheImageLocally } from "@/lib/api";
 import { useAssetStore } from "@/stores/asset";
-import { downloadBlob } from "@/lib/canvas";
-import { PageHeader } from "@/components/showtime";
+import { hexToRgb, rgbToHex, downloadBlob } from "@/lib/canvas";
+import { applyChromaKey, contractAlpha, sampleBorderKey, type RGB } from "@/lib/chromaKey";
+import { PageHeader, EmptyState } from "@/components/showtime";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 
 const { Text } = Typography;
 
-interface HexRgb { r: number; g: number; b: number }
-
-function hexToRgb(hex: string): HexRgb {
-  const raw = hex.replace("#", "");
-  const full = raw.length === 3
-    ? raw.split("").map((c) => c + c).join("")
-    : raw.padEnd(6, "0").slice(0, 6);
-  return {
-    r: parseInt(full.slice(0, 2), 16) || 0,
-    g: parseInt(full.slice(2, 4), 16) || 0,
-    b: parseInt(full.slice(4, 6), 16) || 0,
-  };
-}
-
-function rgbToHex(r: number, g: number, b: number) {
-  return `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
-}
-
-/**
- * 背景色提取：采样图片四条边的像素，取出现次数最多的颜色。
- * 参考 ymcp dominant_image_color，但只用边缘像素更准确。
- */
-function detectBackgroundColor(img: HTMLImageElement): string {
-  const w = img.naturalWidth;
-  const h = img.naturalHeight;
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(img, 0, 0);
-
-  const edgeThickness = Math.max(2, Math.round(Math.min(w, h) * 0.05));
-  const counter = new Map<string, number>();
-
-  function sample(x: number, y: number) {
-    const pixel = ctx.getImageData(x, y, 1, 1).data;
-    // 量化到 16 级以合并相近颜色
-    const r = Math.round(pixel[0] / 16) * 16;
-    const g = Math.round(pixel[1] / 16) * 16;
-    const b = Math.round(pixel[2] / 16) * 16;
-    const key = `${r},${g},${b}`;
-    counter.set(key, (counter.get(key) || 0) + 1);
-  }
-
-  // 采样四条边
-  for (let x = 0; x < w; x += Math.max(1, Math.floor(w / 100))) {
-    for (let t = 0; t < edgeThickness; t++) {
-      sample(x, t);           // 上边
-      sample(x, h - 1 - t);   // 下边
-    }
-  }
-  for (let y = 0; y < h; y += Math.max(1, Math.floor(h / 100))) {
-    for (let t = 0; t < edgeThickness; t++) {
-      sample(t, y);           // 左边
-      sample(w - 1 - t, y);   // 右边
-    }
-  }
-
-  if (counter.size === 0) return "#00ff00";
-
-  let bestKey = "";
-  let bestCount = 0;
-  for (const [k, v] of counter) {
-    if (v > bestCount) {
-      bestCount = v;
-      bestKey = k;
-    }
-  }
-  const [r, g, b] = bestKey.split(",").map(Number);
-  return rgbToHex(r, g, b);
-}
+const WHITE_KEY: RGB = [255, 255, 255];
 
 export default function Matte() {
   const { message } = App.useApp();
@@ -93,139 +24,95 @@ export default function Matte() {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [color, setColor] = useState("#00ff00");
   const [mode, setMode] = useState<"chroma" | "white">("chroma");
-  const [tolerance, setTolerance] = useState(72);
-  const [feather, setFeather] = useState(54);
+  const [tolerance, setTolerance] = useState(24);
+  const [feather, setFeather] = useState(48);
   const [erode, setErode] = useState(1);
-  const [autoDetect] = useState(true);
+  const [spillCleanup, setSpillCleanup] = useState(true);
   const [detectedColor, setDetectedColor] = useState<string | null>(null);
 
-  const runMatte = useCallback(() => {
-    const canvas = canvasRef.current;
-    const img = imgRef.current;
-    if (!canvas || !img) return;
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext("2d")!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    const target = hexToRgb(color);
-    const soft = Math.max(1, feather);
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      const dist = mode === "white"
-        ? Math.sqrt((255 - r) ** 2 + (255 - g) ** 2 + (255 - b) ** 2)
-        : Math.sqrt((target.r - r) ** 2 + (target.g - g) ** 2 + (target.b - b) ** 2);
-      const alpha = dist <= tolerance
-        ? 0
-        : dist >= tolerance + soft
-        ? 255
-        : Math.round(((dist - tolerance) / soft) * 255);
-      data[i + 3] = Math.min(data[i + 3], alpha);
-    }
-    // 边缘腐蚀
-    if (erode > 0) {
-      const alphaData = new Uint8ClampedArray(data.length / 4);
-      for (let i = 0; i < data.length; i += 4) {
-        alphaData[i / 4] = data[i + 3];
-      }
-      const w = canvas.width;
-      const h = canvas.height;
-      for (let e = 0; e < erode; e++) {
-        const tmp = new Uint8ClampedArray(alphaData);
-        for (let y = 1; y < h - 1; y++) {
-          for (let x = 1; x < w - 1; x++) {
-            const idx = y * w + x;
-            const minNeighbor = Math.min(
-              tmp[idx], tmp[idx - 1], tmp[idx + 1],
-              tmp[idx - w], tmp[idx + w]
-            );
-            alphaData[idx] = Math.min(tmp[idx], minNeighbor);
-          }
-        }
-      }
-      for (let i = 0; i < data.length; i += 4) {
-        data[i + 3] = alphaData[i / 4];
-      }
-    }
-    ctx.putImageData(imageData, 0, 0);
-  }, [color, mode, tolerance, feather, erode]);
-
-  // 图片加载后自动提取背景色 + 自动抠图
-  function onImageLoad() {
-    const img = imgRef.current;
-    if (!img || !autoDetect) {
-      runMatte();
-      return;
-    }
-    const detected = detectBackgroundColor(img);
-    setColor(detected);
-    setDetectedColor(detected);
-    message.info(`检测到背景色 ${detected}，自动抠图中...`);
-    // 等待 state 更新后再执行抠图
-    setTimeout(() => {
+  /**
+   * 执行抠图。overrideKey 用于自动检测后立即处理，规避 setState 异步导致的 stale closure。
+   * mode === "white" 时强制使用白色键，忽略 color。
+   */
+  const runMatte = useCallback(
+    (overrideKey?: RGB) => {
       const canvas = canvasRef.current;
+      const img = imgRef.current;
       if (!canvas || !img) return;
+
+      const key: RGB =
+        mode === "white"
+          ? WHITE_KEY
+          : overrideKey ?? (hexToRgb(color) as RGB);
+
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d")!;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
+
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imageData.data;
-      const target = hexToRgb(detected);
-      const soft = Math.max(1, feather);
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i], g = data[i + 1], b = data[i + 2];
-        const dist = Math.sqrt((target.r - r) ** 2 + (target.g - g) ** 2 + (target.b - b) ** 2);
-        const alpha = dist <= tolerance
-          ? 0
-          : dist >= tolerance + soft
-          ? 255
-          : Math.round(((dist - tolerance) / soft) * 255);
-        data[i + 3] = Math.min(data[i + 3], alpha);
-      }
-      if (erode > 0) {
-        const alphaData = new Uint8ClampedArray(data.length / 4);
-        for (let i = 0; i < data.length; i += 4) {
-          alphaData[i / 4] = data[i + 3];
-        }
-        const w = canvas.width;
-        const h = canvas.height;
-        for (let e = 0; e < erode; e++) {
-          const tmp = new Uint8ClampedArray(alphaData);
-          for (let y = 1; y < h - 1; y++) {
-            for (let x = 1; x < w - 1; x++) {
-              const idx = y * w + x;
-              const minNeighbor = Math.min(
-                tmp[idx], tmp[idx - 1], tmp[idx + 1],
-                tmp[idx - w], tmp[idx + w]
-              );
-              alphaData[idx] = Math.min(tmp[idx], minNeighbor);
-            }
-          }
-        }
-        for (let i = 0; i < data.length; i += 4) {
-          data[i + 3] = alphaData[i / 4];
-        }
-      }
+      const transparentThreshold = tolerance;
+      const opaqueThreshold = tolerance + Math.max(1, feather);
+      applyChromaKey(imageData, {
+        key,
+        tolerance,
+        transparentThreshold,
+        opaqueThreshold,
+        softMatte: true,
+        spillCleanup,
+      });
+      contractAlpha(imageData, erode);
       ctx.putImageData(imageData, 0, 0);
-      message.success("自动抠图完成");
-    }, 50);
+    },
+    [color, mode, tolerance, feather, erode, spillCleanup]
+  );
+
+  /** 从图像边框采样键色（中位数），返回 RGB 与对应 hex */
+  function detectKey(img: HTMLImageElement): { rgb: RGB; hex: string } {
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const probe = document.createElement("canvas");
+    probe.width = w;
+    probe.height = h;
+    const ctx = probe.getContext("2d")!;
+    ctx.drawImage(img, 0, 0);
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const rgb = sampleBorderKey(imageData);
+    return { rgb, hex: rgbToHex(rgb[0], rgb[1], rgb[2]) };
   }
 
-  useEffect(() => {
-    if (incomingImage) {
-      cacheImageLocally(incomingImage.src)
-        .then((cached) => {
-          setSrc(cached);
-          setUploadName(`来自 ${incomingImage.from}`);
-          message.info(`已从 ${incomingImage.from} 载入图片`);
-        })
-        .catch(() => message.error("图片加载失败"));
-      setIncomingImage(null);
+  // 图片加载后：自动检测背景色并立即抠图（无 setTimeout、无重复逻辑）
+  function onImageLoad() {
+    const img = imgRef.current;
+    if (!img) return;
+    if (mode === "white") {
+      runMatte();
+      return;
     }
+    const { rgb, hex } = detectKey(img);
+    setColor(hex);
+    setDetectedColor(hex);
+    message.info(`检测到背景色 ${hex}，自动抠图中...`);
+    runMatte(rgb);
+    message.success("自动抠图完成");
+  }
+
+  // 守卫：StrictMode 开发模式下会双触发 effect，用 ref 标记已领取的 src 避免重复提示
+  const claimedSrcRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!incomingImage) return;
+    if (claimedSrcRef.current === incomingImage.src) return;
+    claimedSrcRef.current = incomingImage.src;
+    const from = incomingImage.from;
+    cacheImageLocally(incomingImage.src)
+      .then((cached) => {
+        setSrc(cached);
+        setUploadName(`来自 ${from}`);
+        message.info(`已从 ${from} 载入图片`);
+      })
+      .catch(() => message.error("图片加载失败"));
+    setIncomingImage(null);
   }, [incomingImage, setIncomingImage]);
 
   function onFile(files: FileList) {
@@ -238,11 +125,11 @@ export default function Matte() {
   function manualDetectColor() {
     const img = imgRef.current;
     if (!img) return;
-    const detected = detectBackgroundColor(img);
-    setColor(detected);
-    setDetectedColor(detected);
-    message.success(`检测到背景色 ${detected}`);
-    runMatte();
+    const { rgb, hex } = detectKey(img);
+    setColor(hex);
+    setDetectedColor(hex);
+    message.success(`检测到背景色 ${hex}`);
+    runMatte(rgb);
   }
 
   function pickColor(e: React.MouseEvent<HTMLImageElement>) {
@@ -291,7 +178,7 @@ export default function Matte() {
       />
 
       <Row gutter={16}>
-        <Col xs={24} lg={8}>
+        <Col xs={24} lg={10} xl={9} xxl={8}>
           <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
             <Form layout="vertical">
               <Form.Item label="上传图片">
@@ -321,15 +208,17 @@ export default function Matte() {
                     prefix={<div style={{ width: 16, height: 16, borderRadius: 4, background: color, border: "1px solid #3f3f46" }} />}
                     value={color}
                     onChange={(e) => setColor(e.target.value)}
+                    disabled={mode === "white"}
                   />
                   <input
                     type="color"
                     value={color}
                     onChange={(e) => setColor(e.target.value)}
+                    disabled={mode === "white"}
                     style={{ width: 40, height: 32, border: "none", background: "transparent" }}
                   />
                 </Space.Compact>
-                {detectedColor && (
+                {detectedColor && mode === "chroma" && (
                   <div style={{ marginTop: 4, fontSize: 11, color: "#10b981" }}>
                     <Tag color="green" style={{ fontSize: 11 }}>自动检测: {detectedColor}</Tag>
                   </div>
@@ -344,46 +233,65 @@ export default function Matte() {
               <Form.Item label={`边缘腐蚀: ${erode}`}>
                 <InputNumber min={0} max={8} value={erode} onChange={(v) => setErode(v ?? 0)} style={{ width: "100%" }} />
               </Form.Item>
+              <Form.Item label="去溢色" valuePropName="checked">
+                <Switch checked={spillCleanup} onChange={setSpillCleanup} />
+              </Form.Item>
               <Space wrap>
-                <Button type="primary" onClick={runMatte} disabled={!src}>处理</Button>
-                <Button icon={<AimOutlined />} onClick={manualDetectColor} disabled={!src}>重新检测背景色</Button>
+                <Button type="primary" onClick={() => runMatte()} disabled={!src}>处理</Button>
+                <Button icon={<AimOutlined />} onClick={manualDetectColor} disabled={!src || mode === "white"}>重新检测背景色</Button>
                 <Button icon={<DownloadOutlined />} onClick={download} disabled={!src}>下载 PNG</Button>
               </Space>
             </Form>
           </Card>
         </Col>
 
-        <Col xs={24} lg={16}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div>
-              <Text style={{ color: "#71717a", fontSize: 12, display: "block", marginBottom: 8 }}>原图（点击取色）</Text>
-              <div className="checker-bg" style={{ borderRadius: 8, minHeight: 240, padding: 10, textAlign: "center" }}>
-                {src ? (
-                  <img
-                    ref={imgRef}
-                    src={src}
-                    onLoad={onImageLoad}
-                    onClick={pickColor}
-                    alt="原图"
-                    style={{ maxWidth: "100%", maxHeight: "calc(100vh - 280px)", cursor: "crosshair", display: "block", margin: "0 auto" }}
-                  />
-                ) : (
-                  <div style={{ height: 240, display: "grid", placeItems: "center" }}>
-                    <Text style={{ color: "#52525b" }}>上传或从生图送入</Text>
-                  </div>
+        <Col xs={24} lg={14} xl={15} xxl={16}>
+          <Card
+            style={{ background: "#18181b", borderColor: "#27272a", minHeight: 480 }}
+            styles={{ body: { padding: 14 } }}
+            title={
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <Text style={{ color: "#a1a1aa" }}>抠图预览</Text>
+                {detectedColor && mode === "chroma" && src && (
+                  <Tag color="green" style={{ fontSize: 11, margin: 0 }}>检测: {detectedColor}</Tag>
                 )}
               </div>
-            </div>
-            <div>
-              <Text style={{ color: "#71717a", fontSize: 12, display: "block", marginBottom: 8 }}>结果</Text>
-              <div className="checker-bg" style={{ borderRadius: 8, minHeight: 240, padding: 10, textAlign: "center" }}>
-                <canvas
-                  ref={canvasRef}
-                  style={{ maxWidth: "100%", maxHeight: "calc(100vh - 280px)", display: "block", margin: "0 auto" }}
-                />
-              </div>
-            </div>
-          </div>
+            }
+          >
+            {!src ? (
+              <EmptyState
+                icon={<ScissorOutlined />}
+                title="上传图片后开始抠图"
+                description="选择本地图片或从生图页送入，自动提取背景色并抠图。"
+                minHeight={360}
+              />
+            ) : (
+              <Row gutter={[12, 12]}>
+                <Col xs={24} lg={12}>
+                  <Text style={{ color: "#71717a", fontSize: 12, display: "block", marginBottom: 8 }}>原图（点击取色）</Text>
+                  <div className="checker-bg" style={{ borderRadius: 8, padding: 10, textAlign: "center" }}>
+                    <img
+                      ref={imgRef}
+                      src={src}
+                      onLoad={onImageLoad}
+                      onClick={pickColor}
+                      alt="原图"
+                      style={{ maxWidth: "100%", maxHeight: "calc(100vh - 220px)", cursor: "crosshair", display: "block", margin: "0 auto" }}
+                    />
+                  </div>
+                </Col>
+                <Col xs={24} lg={12}>
+                  <Text style={{ color: "#71717a", fontSize: 12, display: "block", marginBottom: 8 }}>结果</Text>
+                  <div className="checker-bg" style={{ borderRadius: 8, padding: 10, textAlign: "center" }}>
+                    <canvas
+                      ref={canvasRef}
+                      style={{ maxWidth: "100%", maxHeight: "calc(100vh - 220px)", display: "block", margin: "0 auto" }}
+                    />
+                  </div>
+                </Col>
+              </Row>
+            )}
+          </Card>
         </Col>
       </Row>
     </div>

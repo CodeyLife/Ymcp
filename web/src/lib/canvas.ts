@@ -1,5 +1,7 @@
 /** 图像/画布共享工具函数，迁移自 src/ymcp/web/v2f_static.py 的纯前端逻辑 */
 
+import { applyChromaKey } from "@/lib/chromaKey";
+
 export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) =>
     canvas.toBlob(
@@ -46,7 +48,7 @@ export function rgbToHex(r: number, g: number, b: number) {
     .join("")}`;
 }
 
-/** 颜色键抠像，修改 canvas 的 alpha 通道 */
+/** 颜色键抠像，修改 canvas 的 alpha 通道。委托 chromaKey.ts 的改进算法 */
 export function applyCanvasKey(
   canvas: HTMLCanvasElement,
   key: string,
@@ -54,23 +56,17 @@ export function applyCanvasKey(
   feather: number
 ) {
   if (!key) return;
-  const [tr, tg, tb] = hexToRgb(key);
   const ctx = canvas.getContext("2d")!;
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
   const soft = Math.max(1, feather);
-  for (let i = 0; i < data.length; i += 4) {
-    const dist = Math.sqrt(
-      (data[i] - tr) ** 2 + (data[i + 1] - tg) ** 2 + (data[i + 2] - tb) ** 2
-    );
-    const alpha =
-      dist <= tolerance
-        ? 0
-        : dist >= tolerance + soft
-        ? 255
-        : Math.round(((dist - tolerance) / soft) * 255);
-    data[i + 3] = Math.min(data[i + 3], alpha);
-  }
+  applyChromaKey(imageData, {
+    key: hexToRgb(key) as [number, number, number],
+    tolerance,
+    transparentThreshold: tolerance,
+    opaqueThreshold: tolerance + soft,
+    softMatte: true,
+    spillCleanup: false,
+  });
   ctx.putImageData(imageData, 0, 0);
 }
 
