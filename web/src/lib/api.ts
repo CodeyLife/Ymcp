@@ -12,6 +12,16 @@ export const api = axios.create({
 
 const localImageCache = new Map<string, Promise<string>>();
 
+const SUPPORTED_RASTER_IMAGE_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+  "image/bmp",
+]);
+
 api.interceptors.response.use(
   (res) => res,
   (error) => {
@@ -80,14 +90,62 @@ export async function cacheImageLocally(url: string): Promise<string> {
   if (cached) return cached;
 
   const localUrl = fetch(safeUrl)
-    .then((response) => response.blob())
-    .then((blob) => URL.createObjectURL(blob))
+    .then(async (response) => {
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(formatRemoteImageError(response.status, errorText));
+      }
+
+      const blob = await response.blob();
+      const contentType = normalizeMime(response.headers.get("content-type"));
+      const blobType = normalizeMime(blob.type) || contentType;
+      const hasImageSignature = await hasRasterImageSignature(blob);
+
+      if (blobType && !SUPPORTED_RASTER_IMAGE_MIME.has(blobType)) {
+        if (hasImageSignature) return URL.createObjectURL(blob);
+        const errorText = await blob.text().catch(() => "");
+        throw new Error(formatRemoteImageError(response.status, errorText || `非图片响应：${blobType}`));
+      }
+      if (!blobType && !hasImageSignature) {
+        const errorText = await blob.text().catch(() => "");
+        throw new Error(formatRemoteImageError(response.status, errorText || "响应不是有效图片"));
+      }
+
+      return URL.createObjectURL(blob);
+    })
     .catch((error) => {
       localImageCache.delete(safeUrl);
       throw error;
     });
   localImageCache.set(safeUrl, localUrl);
   return localUrl;
+}
+
+function normalizeMime(value: string | null): string {
+  return (value || "").split(";")[0].trim().toLowerCase();
+}
+
+function formatRemoteImageError(status: number, body: string): string {
+  const text = body.trim().replace(/\s+/g, " ").slice(0, 180);
+  return text ? `图片下载失败（HTTP ${status}）：${text}` : `图片下载失败（HTTP ${status}）`;
+}
+
+async function hasRasterImageSignature(blob: Blob): Promise<boolean> {
+  const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+  if (bytes.length < 4) return false;
+  const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46;
+  const isWebp =
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50;
+  return isPng || isJpeg || isGif || isWebp;
 }
 
 /** 从 base64 创建 blob URL */
@@ -168,6 +226,50 @@ function resolveBaseUrl(baseUrl: string): string {
   return baseUrl;
 }
 
+function isImageDataUrl(value: string): boolean {
+  return /^data:image\/(png|jpe?g|webp|gif|avif|bmp);base64,/i.test(value);
+}
+
+function isImageLikeBase64(value: string): boolean {
+  const normalized = value.replace(/\s+/g, "");
+  if (normalized.length < 32 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) return false;
+  return (
+    normalized.startsWith("iVBORw0KGgo") ||
+    normalized.startsWith("/9j/") ||
+    normalized.startsWith("UklGR") ||
+    normalized.startsWith("R0lGOD")
+  );
+}
+
+function extractApiErrorMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const item = payload as Record<string, unknown>;
+  const candidates = [item.error, item.message, item.detail];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    if (candidate && typeof candidate === "object") {
+      const nested = candidate as Record<string, unknown>;
+      const nestedMessage = nested.message || nested.detail || nested.error;
+      if (typeof nestedMessage === "string" && nestedMessage.trim()) return nestedMessage.trim();
+    }
+  }
+
+  return null;
+}
+
+async function readApiError(response: Response): Promise<string> {
+  const text = await response.text().catch(() => "");
+  if (!text.trim()) return `HTTP ${response.status}`;
+
+  try {
+    const json = JSON.parse(text);
+    return extractApiErrorMessage(json) || text;
+  } catch {
+    return text;
+  }
+}
+
 async function extractImageSources(
   payload: unknown,
   seenSources: Set<string> = new Set()
@@ -179,7 +281,7 @@ async function extractImageSources(
     const src = value.trim();
     const key = `url:${src}`;
     if (seenSources.has(key)) return;
-    if (src.startsWith("data:") || src.startsWith("blob:")) {
+    if (isImageDataUrl(src) || src.startsWith("blob:")) {
       seenSources.add(key);
       images.push(src);
     } else if (/^https?:\/\//i.test(src)) {
@@ -191,7 +293,7 @@ async function extractImageSources(
   const addBase64 = (value: unknown) => {
     if (typeof value !== "string" || !value.trim()) return;
     const src = value.trim();
-    if (src.startsWith("data:") || src.startsWith("blob:")) {
+    if (isImageDataUrl(src) || src.startsWith("blob:")) {
       const key = `url:${src}`;
       if (seenSources.has(key)) return;
       seenSources.add(key);
@@ -199,6 +301,7 @@ async function extractImageSources(
       return;
     }
     if (/^https?:\/\//i.test(src)) return;
+    if (!isImageLikeBase64(src)) return;
     const key = `b64:${src}`;
     if (seenSources.has(key)) return;
     seenSources.add(key);
@@ -208,9 +311,9 @@ async function extractImageSources(
   const addAmbiguousImage = async (value: unknown) => {
     if (typeof value !== "string" || !value.trim()) return;
     const src = value.trim();
-    if (src.startsWith("data:") || src.startsWith("blob:") || /^https?:\/\//i.test(src)) {
+    if (isImageDataUrl(src) || src.startsWith("blob:") || /^https?:\/\//i.test(src)) {
       await addUrl(src);
-    } else {
+    } else if (isImageLikeBase64(src)) {
       addBase64(src);
     }
   };
@@ -325,8 +428,7 @@ export async function generateImageStream(
     }
 
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(errText || `HTTP ${response.status}`);
+      throw new Error(await readApiError(response));
     }
 
     // 检查是否是 SSE 流
@@ -335,6 +437,10 @@ export async function generateImageStream(
       // 非流式响应，直接解析 JSON
       const json = await response.json();
       const images = await extractImageSources(json);
+      if (images.length === 0) {
+        const apiError = extractApiErrorMessage(json);
+        if (apiError) throw new Error(apiError);
+      }
       callbacks.onComplete?.(images);
       return;
     }
@@ -361,27 +467,32 @@ export async function generateImageStream(
         const dataStr = trimmed.slice(5).trim();
         if (dataStr === "[DONE]") continue;
 
+        let event: Record<string, unknown>;
         try {
-          const event = JSON.parse(dataStr);
-          // OpenAI SSE 事件类型
-          if (event.type === "image_edit.partial_image" || event.type === "image.partial") {
-            const [src] = await extractImageSources(event);
-            if (src) callbacks.onPartial?.(src, event.partial_index ?? 0);
-          } else if (event.type === "image_edit.completed" || event.type === "image.completed") {
-            finalImages.push(...await extractImageSources(event, finalImageSources));
-          } else if (event.type === "error") {
-            throw new Error(event.message || event.error || "生成失败");
-          } else if (event.data) {
-            // 兼容其他格式
-            const images = await extractImageSources(event.data, finalImageSources);
-            if (event.type?.includes("partial")) {
-              images.forEach((src, index) => callbacks.onPartial?.(src, index));
-            } else {
-              finalImages.push(...images);
-            }
-          }
+          event = JSON.parse(dataStr);
         } catch {
-          // 忽略单行解析错误
+          // 忽略非 JSON SSE 心跳/日志行
+          continue;
+        }
+
+        // OpenAI SSE 事件类型
+        if (event.type === "image_edit.partial_image" || event.type === "image.partial") {
+          const [src] = await extractImageSources(event);
+          if (src) callbacks.onPartial?.(src, Number(event.partial_index) || 0);
+        } else if (event.type === "image_edit.completed" || event.type === "image.completed") {
+          finalImages.push(...await extractImageSources(event, finalImageSources));
+        } else if (event.type === "error") {
+          throw new Error(extractApiErrorMessage(event) || "生成失败");
+        } else if (event.data) {
+          const apiError = extractApiErrorMessage(event.data);
+          if (apiError) throw new Error(apiError);
+          // 兼容其他格式
+          const images = await extractImageSources(event.data, finalImageSources);
+          if (typeof event.type === "string" && event.type.includes("partial")) {
+            images.forEach((src, index) => callbacks.onPartial?.(src, index));
+          } else {
+            finalImages.push(...images);
+          }
         }
       }
     }

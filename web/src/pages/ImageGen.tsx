@@ -377,6 +377,7 @@ export default function ImageGen() {
 
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [favorited, setFavorited] = useState<Set<string>>(new Set());
+  const [resultRatios, setResultRatios] = useState<Record<string, number>>({});
   const [polishing, setPolishing] = useState(false);
   const [undoPrompt, setUndoPrompt] = useState<string | null>(null);
   const reduceMotion = useMotionMode();
@@ -1229,6 +1230,9 @@ export default function ImageGen() {
                       lockedSize && lockedSize.tier !== "auto"
                         ? `${lockedSize.w} / ${lockedSize.h}`
                         : "1 / 1";
+                    const previewRatio =
+                      resultRatios[card.favoriteId] ??
+                      (lockedSize && lockedSize.tier !== "auto" ? lockedSize.w / lockedSize.h : 1);
                     return (
                       <motion.div
                         key={card.key}
@@ -1240,7 +1244,7 @@ export default function ImageGen() {
                           ease: [0.16, 1, 0.3, 1],
                         }}
                       >
-                        <div className="task-card">
+                        <div className={`task-card${isDone && genMode !== "spritesheet" ? " result-task-card" : ""}`}>
                           {/* header：序号 + 状态 + 重试 */}
                           <div className="task-header">
                             <span className="task-index">#{String(i + 1).padStart(2, "0")}</span>
@@ -1380,11 +1384,12 @@ export default function ImageGen() {
                                 style={{ cursor: "pointer" }}
                               >
                                 <div
-                                  className="checker-bg"
+                                  className="checker-bg result-preview-frame"
                                   style={{
                                     maxHeight: "var(--cell-max-h)",
                                     maxWidth: "100%",
-                                    aspectRatio,
+                                    width: `min(100%, calc(var(--cell-max-h) * ${previewRatio}))`,
+                                    aspectRatio: `${previewRatio}`,
                                     borderRadius: 10,
                                     overflow: "hidden",
                                     position: "relative",
@@ -1395,13 +1400,29 @@ export default function ImageGen() {
                                     alignItems: "center",
                                     justifyContent: "center",
                                     margin: "0 auto",
-                                    width: "100%",
                                   }}
                                 >
                                   <img
                                     src={card.src}
                                     alt={`结果 ${i + 1}`}
-                                    style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                                    style={{
+                                      display: "block",
+                                      width: "100%",
+                                      height: "100%",
+                                      maxWidth: "100%",
+                                      maxHeight: "var(--cell-max-h)",
+                                      objectFit: "contain",
+                                    }}
+                                    onLoad={(event) => {
+                                      const { naturalWidth, naturalHeight } = event.currentTarget;
+                                      if (naturalWidth <= 0 || naturalHeight <= 0) return;
+                                      const nextRatio = naturalWidth / naturalHeight;
+                                      setResultRatios((prev) => (
+                                        Math.abs((prev[card.favoriteId] ?? 0) - nextRatio) < 0.001
+                                          ? prev
+                                          : { ...prev, [card.favoriteId]: nextRatio }
+                                      ));
+                                    }}
                                   />
                                   {/* 顶部 emerald 扫描高光 - 入场瞬间扫过 */}
                                   <div
