@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag,
 } from "antd";
-import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined } from "@ant-design/icons";
+import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, UploadOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
 import { useImageGenStore, type TaskStatus } from "@/stores/imageGen";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
@@ -338,7 +338,8 @@ export default function ImageGen() {
 
   const mode = useImageGenStore((s) => s.mode);
   const genMode = useImageGenStore((s) => s.genMode);
-  const prompt = useImageGenStore((s) => s.prompt);
+  const textPrompt = useImageGenStore((s) => s.textPrompt);
+  const imgPrompt = useImageGenStore((s) => s.imgPrompt);
   const size = useImageGenStore((s) => s.size);
   const n = useImageGenStore((s) => s.n);
   const spritesheetN = useImageGenStore((s) => s.spritesheetN);
@@ -350,7 +351,8 @@ export default function ImageGen() {
   const error = useImageGenStore((s) => s.error);
   const setMode = useImageGenStore((s) => s.setMode);
   const setGenMode = useImageGenStore((s) => s.setGenMode);
-  const setPrompt = useImageGenStore((s) => s.setPrompt);
+  const setTextPrompt = useImageGenStore((s) => s.setTextPrompt);
+  const setImgPrompt = useImageGenStore((s) => s.setImgPrompt);
   const setSize = useImageGenStore((s) => s.setSize);
   const setN = useImageGenStore((s) => s.setN);
   const setSpritesheetN = useImageGenStore((s) => s.setSpritesheetN);
@@ -423,6 +425,8 @@ export default function ImageGen() {
 
   const currentSize = SIZE_OPTIONS.find((s) => s.value === size);
   const currentStylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
+  const prompt = mode === "img2img" ? imgPrompt : textPrompt;
+  const setPrompt = mode === "img2img" ? setImgPrompt : setTextPrompt;
 
   function handleRefImageFiles(files: FileList) {
     const file = files[0];
@@ -735,40 +739,46 @@ export default function ImageGen() {
             )}
             <Form layout="vertical">
               {mode === "img2img" && (
-                <Form.Item label="参考图">
-                  <FileUploadTrigger
-                    accept="image/png,image/jpeg,image/webp"
-                    variant="dropzone"
-                    label="点击或拖拽上传参考图"
-                    hint="PNG / JPEG / WebP"
-                    selectedText={refImage ? "已载入参考图" : undefined}
-                    icon={<InboxOutlined />}
-                    onFiles={handleRefImageFiles}
-                  />
-                  {refImage && (
-                    <div style={{ marginTop: 8, position: "relative" }}>
+                <Form.Item label="参考图" className="reference-image-field">
+                  {refImage ? (
+                    <div className="reference-image-compact">
                       <img
                         src={refImage}
                         alt="参考图"
-                        style={{
-                          maxWidth: "100%",
-                          maxHeight: 200,
-                          borderRadius: 8,
-                          objectFit: "contain",
-                          background: "#131316",
-                          display: "block",
-                          margin: "0 auto",
-                        }}
+                        className="reference-image-thumb"
                       />
-                      <Button
-                        size="small"
-                        danger
-                        icon={<DeleteOutlined />}
-                        onClick={() => setRefImage(null)}
-                        style={{ position: "absolute", top: 8, right: 8 }}
-                      >
-                        移除
-                      </Button>
+                      <div className="reference-image-meta">
+                        <Text className="reference-image-title">参考图已载入</Text>
+                        <Text className="reference-image-hint">用于图生图生成，可随时替换</Text>
+                      </div>
+                      <Space size={6} className="reference-image-actions">
+                        <FileUploadTrigger
+                          accept="image/png,image/jpeg,image/webp"
+                          variant="button"
+                          label="替换"
+                          icon={<UploadOutlined />}
+                          onFiles={handleRefImageFiles}
+                        />
+                        <Button
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => setRefImage(null)}
+                        >
+                          移除
+                        </Button>
+                      </Space>
+                    </div>
+                  ) : (
+                    <div className="reference-image-empty">
+                      <FileUploadTrigger
+                        accept="image/png,image/jpeg,image/webp"
+                        variant="dropzone"
+                        label="上传参考图"
+                        hint="点击或拖拽，PNG / JPEG / WebP"
+                        icon={<InboxOutlined />}
+                        onFiles={handleRefImageFiles}
+                      />
                     </div>
                   )}
                 </Form.Item>

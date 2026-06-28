@@ -17,7 +17,8 @@ export interface GenTask {
 interface ImageGenState {
   mode: "text2img" | "img2img";
   genMode: GenMode;
-  prompt: string;
+  textPrompt: string;
+  imgPrompt: string;
   size: string;
   n: number;
   spritesheetN: number;
@@ -29,7 +30,8 @@ interface ImageGenState {
   error: string | null;
   setMode: (mode: "text2img" | "img2img") => void;
   setGenMode: (mode: GenMode) => void;
-  setPrompt: (prompt: string) => void;
+  setTextPrompt: (prompt: string) => void;
+  setImgPrompt: (prompt: string) => void;
   setSize: (size: string) => void;
   setN: (n: number) => void;
   setSpritesheetN: (n: number) => void;
@@ -47,7 +49,8 @@ interface ImageGenState {
 const DEFAULTS = {
   mode: "text2img" as const,
   genMode: "normal" as const,
-  prompt: "",
+  textPrompt: "",
+  imgPrompt: "",
   size: "auto",
   n: 1,
   spritesheetN: 4,
@@ -63,7 +66,8 @@ export const useImageGenStore = create<ImageGenState>((set) => ({
   ...DEFAULTS,
   setMode: (mode) => set({ mode }),
   setGenMode: (genMode) => set({ genMode }),
-  setPrompt: (prompt) => set({ prompt }),
+  setTextPrompt: (textPrompt) => set({ textPrompt }),
+  setImgPrompt: (imgPrompt) => set({ imgPrompt }),
   setSize: (size) => set({ size }),
   setN: (n) => set({ n }),
   setSpritesheetN: (n) => set({ spritesheetN: n }),

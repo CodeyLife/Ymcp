@@ -27,7 +27,7 @@ interface UIState {
 }
 
 const DEFAULT_BASE_URL = "https://image.yujin8.top/v1";
-const DEFAULT_API_KEY = "sk-amzlkl7Tk3kogYUMtBA2PL46xF8LZFLv";
+const DEFAULT_API_KEY = "sk-0QBDAU5dN6urtcJ56aQwqHLawZ8DvsGz";
 
 export const useUIStore = create<UIState>()(
   persist(

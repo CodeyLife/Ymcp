@@ -10,6 +10,8 @@ export const api = axios.create({
   headers: { "content-type": "application/json" },
 });
 
+const localImageCache = new Map<string, Promise<string>>();
+
 api.interceptors.response.use(
   (res) => res,
   (error) => {
@@ -74,9 +76,18 @@ export async function cacheImageLocally(url: string): Promise<string> {
   if (url.startsWith("data:") || url.startsWith("blob:")) return url;
   // HTTPS 页面禁止加载 HTTP 资源（Mixed Content），强制升级为 HTTPS
   const safeUrl = url.replace(/^http:\/\//i, "https://");
-  const response = await fetch(safeUrl);
-  const blob = await response.blob();
-  return URL.createObjectURL(blob);
+  const cached = localImageCache.get(safeUrl);
+  if (cached) return cached;
+
+  const localUrl = fetch(safeUrl)
+    .then((response) => response.blob())
+    .then((blob) => URL.createObjectURL(blob))
+    .catch((error) => {
+      localImageCache.delete(safeUrl);
+      throw error;
+    });
+  localImageCache.set(safeUrl, localUrl);
+  return localUrl;
 }
 
 /** 从 base64 创建 blob URL */
@@ -157,18 +168,22 @@ function resolveBaseUrl(baseUrl: string): string {
   return baseUrl;
 }
 
-async function extractImageSources(payload: unknown): Promise<string[]> {
+async function extractImageSources(
+  payload: unknown,
+  seenSources: Set<string> = new Set()
+): Promise<string[]> {
   const images: string[] = [];
-  const seen = new Set<string>();
 
   const addUrl = async (value: unknown) => {
     if (typeof value !== "string" || !value.trim()) return;
     const src = value.trim();
-    if (seen.has(src)) return;
-    seen.add(src);
+    const key = `url:${src}`;
+    if (seenSources.has(key)) return;
     if (src.startsWith("data:") || src.startsWith("blob:")) {
+      seenSources.add(key);
       images.push(src);
     } else if (/^https?:\/\//i.test(src)) {
+      seenSources.add(key);
       images.push(await cacheImageLocally(src));
     }
   };
@@ -176,14 +191,28 @@ async function extractImageSources(payload: unknown): Promise<string[]> {
   const addBase64 = (value: unknown) => {
     if (typeof value !== "string" || !value.trim()) return;
     const src = value.trim();
-    if (seen.has(src)) return;
-    seen.add(src);
     if (src.startsWith("data:") || src.startsWith("blob:")) {
+      const key = `url:${src}`;
+      if (seenSources.has(key)) return;
+      seenSources.add(key);
       images.push(src);
       return;
     }
     if (/^https?:\/\//i.test(src)) return;
+    const key = `b64:${src}`;
+    if (seenSources.has(key)) return;
+    seenSources.add(key);
     images.push(base64ToBlobUrl(src));
+  };
+
+  const addAmbiguousImage = async (value: unknown) => {
+    if (typeof value !== "string" || !value.trim()) return;
+    const src = value.trim();
+    if (src.startsWith("data:") || src.startsWith("blob:") || /^https?:\/\//i.test(src)) {
+      await addUrl(src);
+    } else {
+      addBase64(src);
+    }
   };
 
   const visit = async (value: unknown): Promise<void> => {
@@ -192,23 +221,40 @@ async function extractImageSources(payload: unknown): Promise<string[]> {
       for (const item of value) await visit(item);
       return;
     }
+    if (typeof value === "string") {
+      await addAmbiguousImage(value);
+      return;
+    }
     if (typeof value !== "object") return;
 
     const item = value as Record<string, unknown>;
+    const hasPrimaryImage =
+      (typeof item.url === "string" && item.url.trim()) ||
+      (typeof item.image_url === "string" && item.image_url.trim()) ||
+      (typeof item.src === "string" && item.src.trim());
+
     await addUrl(item.url);
-    await addUrl(item.image_url);
-    await addUrl(item.src);
-    addBase64(item.b64_json);
-    addBase64(item.image_base64);
-    addBase64(item.base64);
-    addBase64(item.result);
+    await addAmbiguousImage(item.image_url);
+    await addAmbiguousImage(item.src);
+
+    if (!hasPrimaryImage) {
+      addBase64(item.b64_json);
+      addBase64(item.image_base64);
+      addBase64(item.base64);
+      await addAmbiguousImage(item.result);
+    }
 
     await visit(item.data);
     await visit(item.output);
+    await visit(item.urls);
     await visit(item.images);
     await visit(item.image_url);
-    await visit(item.result);
-    await visit(item.content);
+    if (!hasPrimaryImage || (typeof item.result === "object" && item.result !== null)) {
+      await visit(item.result);
+    }
+    if (!hasPrimaryImage || (typeof item.content === "object" && item.content !== null)) {
+      await visit(item.content);
+    }
   };
 
   await visit(payload);
@@ -298,6 +344,7 @@ export async function generateImageStream(
     const decoder = new TextDecoder();
     let buffer = "";
     const finalImages: string[] = [];
+    const finalImageSources = new Set<string>();
 
     while (true) {
       const { done, value } = await reader.read();
@@ -321,12 +368,12 @@ export async function generateImageStream(
             const [src] = await extractImageSources(event);
             if (src) callbacks.onPartial?.(src, event.partial_index ?? 0);
           } else if (event.type === "image_edit.completed" || event.type === "image.completed") {
-            finalImages.push(...await extractImageSources(event));
+            finalImages.push(...await extractImageSources(event, finalImageSources));
           } else if (event.type === "error") {
             throw new Error(event.message || event.error || "生成失败");
           } else if (event.data) {
             // 兼容其他格式
-            const images = await extractImageSources(event.data);
+            const images = await extractImageSources(event.data, finalImageSources);
             if (event.type?.includes("partial")) {
               images.forEach((src, index) => callbacks.onPartial?.(src, index));
             } else {
@@ -343,7 +390,7 @@ export async function generateImageStream(
       // 没有收到完成事件，可能整个响应就是最终结果
       try {
         const json = JSON.parse(buffer);
-        finalImages.push(...await extractImageSources(json));
+        finalImages.push(...await extractImageSources(json, finalImageSources));
       } catch {
         // 忽略
       }
