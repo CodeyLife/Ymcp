@@ -43,6 +43,28 @@ const WAVE_HOLD = 0.16;
 /** 波前平坦段宽度（周期比例）：到达前保持暗，避免 ease 曲线提前爬升 */
 const WAVE_PRE = 0.03;
 
+export interface DiffusionGridMetrics {
+  cols: number;
+  rows: number;
+  cellSize: number;
+  width: number;
+  height: number;
+}
+
+export function computeDiffusionGridMetrics(width: number, height: number): DiffusionGridMetrics {
+  const cols = Math.max(2, Math.round(width / TARGET_CELL));
+  const rows = Math.max(2, Math.round(height / TARGET_CELL));
+  const cellSize = Math.max(width / cols, height / rows);
+
+  return {
+    cols,
+    rows,
+    cellSize,
+    width: cols * cellSize,
+    height: rows * cellSize,
+  };
+}
+
 export function DiffusionLoader({
   width = 320,
   height = 320,
@@ -51,7 +73,9 @@ export function DiffusionLoader({
 }: DiffusionLoaderProps) {
   const reduce = useMotionMode();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState({ cols: 6, rows: 6 });
+  const [grid, setGrid] = useState<DiffusionGridMetrics | null>(() =>
+    fill ? null : computeDiffusionGridMetrics(width, height)
+  );
 
   // 监听容器尺寸，按宽高比计算 cols/rows 保持每格方形
   useEffect(() => {
@@ -61,9 +85,15 @@ export function DiffusionLoader({
       const w = el.clientWidth;
       const h = el.clientHeight;
       if (w === 0 || h === 0) return;
-      const cols = Math.max(2, Math.round(w / TARGET_CELL));
-      const rows = Math.max(2, Math.round(h / TARGET_CELL));
-      setDims((prev) => (prev.cols === cols && prev.rows === rows ? prev : { cols, rows }));
+      const next = computeDiffusionGridMetrics(w, h);
+      setGrid((prev) =>
+        prev &&
+        prev.cols === next.cols &&
+        prev.rows === next.rows &&
+        prev.cellSize === next.cellSize
+          ? prev
+          : next
+      );
     };
     update();
     const ro = new ResizeObserver(update);
@@ -71,10 +101,11 @@ export function DiffusionLoader({
     return () => ro.disconnect();
   }, []);
 
-  const { cols, rows } = dims;
+  const { cols, rows } = grid ?? computeDiffusionGridMetrics(width, height);
   const total = cols * rows;
   const centerCol = (cols - 1) / 2;
   const centerRow = (rows - 1) / 2;
+  const gridKey = `${cols}x${rows}`;
   // 最远格到中心的距离，用于归一化波到达时刻
   const maxDist = Math.sqrt(centerCol * centerCol + centerRow * centerRow) || 1;
 
@@ -97,11 +128,16 @@ export function DiffusionLoader({
       }}
     >
       {/* 像素方格：从噪点降噪为微光，cols/rows 按容器宽高比计算保持每格方形 */}
-      {!reduce && (
+      {!reduce && grid && (
         <div
+          key={gridKey}
           style={{
             position: "absolute",
-            inset: 0,
+            left: "50%",
+            top: "50%",
+            width: grid.width,
+            height: grid.height,
+            transform: "translate(-50%, -50%)",
             display: "grid",
             gridTemplateColumns: `repeat(${cols}, 1fr)`,
             gridTemplateRows: `repeat(${rows}, 1fr)`,
@@ -122,24 +158,28 @@ export function DiffusionLoader({
             return (
               <motion.div
                 key={i}
-                initial={{ opacity: 0.06, background: "rgba(82, 82, 91, 0.25)" }}
-                animate={{
-                  opacity: [0.06, 0.06, 0.75, 0.1, 0.06],
-                  background: [
-                    "rgba(82, 82, 91, 0.25)",
-                    "rgba(82, 82, 91, 0.25)",
-                    "rgba(52, 211, 153, 0.55)",
-                    "rgba(16, 185, 129, 0.12)",
-                    "rgba(82, 82, 91, 0.25)",
-                  ],
+                style={{
+                  position: "relative",
+                  background: "rgba(82, 82, 91, 0.25)",
+                  overflow: "hidden",
                 }}
-                transition={{
-                  duration: WAVE_PERIOD,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                  times: [0, pre, arrive, fade, 1],
-                }}
-              />
+              >
+                <motion.div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: "rgba(52, 211, 153, 0.55)",
+                  }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: [0, 0, 1, 0.12, 0] }}
+                  transition={{
+                    duration: WAVE_PERIOD,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                    times: [0, pre, arrive, fade, 1],
+                  }}
+                />
+              </motion.div>
             );
           })}
         </div>

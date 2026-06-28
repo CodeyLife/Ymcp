@@ -157,6 +157,64 @@ function resolveBaseUrl(baseUrl: string): string {
   return baseUrl;
 }
 
+async function extractImageSources(payload: unknown): Promise<string[]> {
+  const images: string[] = [];
+  const seen = new Set<string>();
+
+  const addUrl = async (value: unknown) => {
+    if (typeof value !== "string" || !value.trim()) return;
+    const src = value.trim();
+    if (seen.has(src)) return;
+    seen.add(src);
+    if (src.startsWith("data:") || src.startsWith("blob:")) {
+      images.push(src);
+    } else if (/^https?:\/\//i.test(src)) {
+      images.push(await cacheImageLocally(src));
+    }
+  };
+
+  const addBase64 = (value: unknown) => {
+    if (typeof value !== "string" || !value.trim()) return;
+    const src = value.trim();
+    if (seen.has(src)) return;
+    seen.add(src);
+    if (src.startsWith("data:") || src.startsWith("blob:")) {
+      images.push(src);
+      return;
+    }
+    if (/^https?:\/\//i.test(src)) return;
+    images.push(base64ToBlobUrl(src));
+  };
+
+  const visit = async (value: unknown): Promise<void> => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const item of value) await visit(item);
+      return;
+    }
+    if (typeof value !== "object") return;
+
+    const item = value as Record<string, unknown>;
+    await addUrl(item.url);
+    await addUrl(item.image_url);
+    await addUrl(item.src);
+    addBase64(item.b64_json);
+    addBase64(item.image_base64);
+    addBase64(item.base64);
+    addBase64(item.result);
+
+    await visit(item.data);
+    await visit(item.output);
+    await visit(item.images);
+    await visit(item.image_url);
+    await visit(item.result);
+    await visit(item.content);
+  };
+
+  await visit(payload);
+  return images;
+}
+
 /** 流式生图 - 通过 SSE 接收中间帧和最终结果 */
 export async function generateImageStream(
   data: {
@@ -230,15 +288,7 @@ export async function generateImageStream(
     if (!contentType.includes("text/event-stream") && !contentType.includes("application/x-ndjson")) {
       // 非流式响应，直接解析 JSON
       const json = await response.json();
-      const images: string[] = [];
-      for (const item of json.data || []) {
-        const src = item.url
-          ? await cacheImageLocally(item.url)
-          : item.b64_json
-          ? base64ToBlobUrl(item.b64_json)
-          : "";
-        if (src) images.push(src);
-      }
+      const images = await extractImageSources(json);
       callbacks.onComplete?.(images);
       return;
     }
@@ -268,33 +318,19 @@ export async function generateImageStream(
           const event = JSON.parse(dataStr);
           // OpenAI SSE 事件类型
           if (event.type === "image_edit.partial_image" || event.type === "image.partial") {
-            const src = event.url
-              ? await cacheImageLocally(event.url)
-              : event.b64_json
-              ? base64ToBlobUrl(event.b64_json)
-              : "";
+            const [src] = await extractImageSources(event);
             if (src) callbacks.onPartial?.(src, event.partial_index ?? 0);
           } else if (event.type === "image_edit.completed" || event.type === "image.completed") {
-            const src = event.url
-              ? await cacheImageLocally(event.url)
-              : event.b64_json
-              ? base64ToBlobUrl(event.b64_json)
-              : "";
-            if (src) finalImages.push(src);
+            finalImages.push(...await extractImageSources(event));
           } else if (event.type === "error") {
             throw new Error(event.message || event.error || "生成失败");
           } else if (event.data) {
             // 兼容其他格式
-            const inner = event.data;
-            if (inner.url || inner.b64_json) {
-              const src = inner.url
-                ? await cacheImageLocally(inner.url)
-                : base64ToBlobUrl(inner.b64_json);
-              if (event.type?.includes("partial")) {
-                callbacks.onPartial?.(src, 0);
-              } else {
-                finalImages.push(src);
-              }
+            const images = await extractImageSources(event.data);
+            if (event.type?.includes("partial")) {
+              images.forEach((src, index) => callbacks.onPartial?.(src, index));
+            } else {
+              finalImages.push(...images);
             }
           }
         } catch {
@@ -307,14 +343,7 @@ export async function generateImageStream(
       // 没有收到完成事件，可能整个响应就是最终结果
       try {
         const json = JSON.parse(buffer);
-        for (const item of json.data || []) {
-          const src = item.url
-            ? await cacheImageLocally(item.url)
-            : item.b64_json
-            ? base64ToBlobUrl(item.b64_json)
-            : "";
-          if (src) finalImages.push(src);
-        }
+        finalImages.push(...await extractImageSources(json));
       } catch {
         // 忽略
       }

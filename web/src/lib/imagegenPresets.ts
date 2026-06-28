@@ -120,11 +120,11 @@ export const STYLE_PRESETS: PromptPreset[] = [
   },
   {
     id: "k-style-2.5d",
-    label: "韩系半写实",
+    label: "半写实动漫",
     category: "style",
     fragment:
-      "Style/medium: K-style 2.5D semi-realistic anime, anime facial proportions (large eyes, small nose, refined jawline) blended with realistic bone structure and muscle definition, deep-set eye sockets, full lips, innocent or cool gaze. Skin with oily/dewy highlights on collarbone, knees, shoulders and hands, giving a moist luminous sheen. Clothing rendered with photorealistic fabric textures, metal zipper reflections, visible material thickness. Strong directional sunlight creating hard light with sharp contrast between highlights and shadows.",
-    description: "韩系半写实二次元：水光肌肤、写实材质、硬光对比",
+      "Style/medium: semi-realistic anime, 2.5D, stylized proportions, soft shading.",
+    description: "半写实动漫 + 光泽皮肤 + 柔光 + 精致五官",
   },
 ];
 

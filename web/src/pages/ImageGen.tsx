@@ -801,7 +801,7 @@ export default function ImageGen() {
                   </Space>
                 </div>
                 <TextArea
-                  rows={9}
+                  rows={6}
                   value={prompt}
                   onChange={(e) => {
                     setPrompt(e.target.value);
@@ -938,16 +938,26 @@ export default function ImageGen() {
                 />
               </Form.Item>
 
-              <Space>
+              <div className="image-gen-action-bar">
+                <div style={{ minWidth: 0 }}>
+                  <Text style={{ color: "#d4d4d8", fontSize: 12, fontWeight: 600, display: "block" }}>
+                    {mode === "img2img" ? "图生图" : "文生图"} · {currentSize?.ratio ?? "auto"}
+                  </Text>
+                  <Text style={{ color: "#71717a", fontSize: 11 }}>
+                    {hasOwnKey ? `${n} 张` : "默认接口限制 1 张"} · {quality === "auto" ? "自动质量" : `${quality} 质量`}
+                  </Text>
+                </div>
                 <MagneticButton strength={0.35}>
                   <Button
                     type="primary"
                     loading={loading}
                     onClick={handleGenerate}
+                    size="large"
                     style={{
                       background: "linear-gradient(135deg, #10b981 0%, #047857 100%)",
                       border: "none",
                       fontWeight: 600,
+                      minWidth: 112,
                       boxShadow: loading
                         ? "0 0 0 1px rgba(16, 185, 129, 0.4), 0 6px 18px rgba(16, 185, 129, 0.28)"
                         : "0 8px 22px rgba(16, 185, 129, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.18)",
@@ -957,7 +967,7 @@ export default function ImageGen() {
                     {loading ? "生成中" : "生成"}
                   </Button>
                 </MagneticButton>
-              </Space>
+              </div>
             </Form>
           </Card>
         </Col>
