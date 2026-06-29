@@ -1,6 +1,21 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { readFileSync } from "node:fs";
+
+/**
+ * 从 src/config/defaults.ts 解析 DEFAULT_BASE_URL，避免在 vite.config 中重复维护默认值。
+ * vite.config 属于构建期（独立 TS 项目），无法静态 import src/ 下的文件，
+ * 故在配置加载时通过 fs 读取该唯一来源。
+ */
+function readDefaultBaseUrl(): string {
+  const src = readFileSync(path.resolve(__dirname, "src/config/defaults.ts"), "utf8");
+  const match = src.match(/DEFAULT_BASE_URL\s*=\s*"([^"]+)"/);
+  if (!match) throw new Error("无法从 src/config/defaults.ts 解析 DEFAULT_BASE_URL");
+  return match[1];
+}
+
+const DEV_PROXY_TARGET = new URL(readDefaultBaseUrl()).origin;
 
 export default defineConfig({
   plugins: [react()],
@@ -17,7 +32,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/ai-proxy": {
-        target: "https://image.yujin8.top",
+        target: DEV_PROXY_TARGET,
         changeOrigin: true,
         secure: false,
         rewrite: (p) => p.replace(/^\/ai-proxy/, "/v1"),

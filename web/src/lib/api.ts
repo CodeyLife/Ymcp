@@ -3,6 +3,7 @@ import {
   IMAGEGEN_SYSTEM_PROMPT,
   buildPolishUserMessage,
 } from "@/lib/imagegenPresets";
+import { DEFAULT_BASE_URL } from "@/config/defaults";
 
 export const api = axios.create({
   baseURL: "/api",
@@ -220,7 +221,7 @@ export interface StreamCallbacks {
 }
 
 function resolveBaseUrl(baseUrl: string): string {
-  const isDefault = baseUrl === "https://image.yujin8.top/v1";
+  const isDefault = baseUrl === DEFAULT_BASE_URL;
   // 仅开发环境用 Vite proxy (/ai-proxy) 绕过 CORS；生产环境直连原始 URL
   if (isDefault && import.meta.env.DEV) return "/ai-proxy";
   return baseUrl;

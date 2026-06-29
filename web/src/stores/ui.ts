@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { DEFAULT_BASE_URL, DEFAULT_API_KEY } from "@/config/defaults";
 
 // 窄屏断点：小于该宽度时侧边栏默认收折
 export const SIDEBAR_COLLAPSE_BREAKPOINT = 768;
@@ -25,10 +26,6 @@ interface UIState {
   setGreenscreenPrompt: (prompt: string) => void;
   setSpritesheetPrompt: (prompt: string) => void;
 }
-
-// const DEFAULT_BASE_URL = "https://eromaa.com/gpt/v1";
-const DEFAULT_BASE_URL = "https://image.yujin8.top/v1";
-const DEFAULT_API_KEY = "sk-0QBDAU5dN6urtcJ56aQwqHLawZ8DvsGz";
 
 export const useUIStore = create<UIState>()(
   persist(
