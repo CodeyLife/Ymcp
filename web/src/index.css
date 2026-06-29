@@ -88,18 +88,21 @@ body {
 /* ===== 侧边栏 =====
  * 多层玻璃质感：顶部 emerald 弱光 + 主体多层渐变 + 内侧双向边缘高光 + 外投影
  * ::before 顶部 hairline accent；::after 极弱噪点纹理叠层
+ * 配色抬升：整体明度比 main 区高 1.5 step，让 sidebar 物理上"浮"出来
  */
 .sidebar-shell {
   position: relative;
   background:
-    radial-gradient(140% 50% at 50% 0%, rgba(16, 185, 129, 0.08), transparent 55%),
-    radial-gradient(80% 60% at 0% 100%, rgba(20, 184, 166, 0.05), transparent 55%),
-    linear-gradient(180deg, #0d0d10 0%, #0a0a0c 50%, #08080a 100%);
-  border-right: 1px solid #18181b;
+    radial-gradient(140% 50% at 50% 0%, rgba(16, 185, 129, 0.1), transparent 55%),
+    radial-gradient(80% 60% at 0% 100%, rgba(20, 184, 166, 0.06), transparent 55%),
+    linear-gradient(180deg, #14141a 0%, #101015 50%, #0c0c10 100%);
+  border-right: 1px solid rgba(52, 211, 153, 0.18);
   box-shadow:
-    inset 1px 0 0 rgba(255, 255, 255, 0.03),
+    inset 1px 0 0 rgba(255, 255, 255, 0.05),
     inset -1px 0 0 rgba(0, 0, 0, 0.5),
-    1px 0 24px rgba(0, 0, 0, 0.4);
+    1px 0 24px rgba(0, 0, 0, 0.4),
+    /* 右边界外侧 emerald 光晕：与 hairline 共同形成"双层光带" */
+    6px 0 18px -4px rgba(16, 185, 129, 0.16);
   backdrop-filter: blur(10px) saturate(125%);
   -webkit-backdrop-filter: blur(10px) saturate(125%);
 }
@@ -125,30 +128,47 @@ body {
   mix-blend-mode: overlay;
 }
 
-/* 右边缘垂直流光：沿 sidebar 右边缓慢上下漂移的极弱 emerald 光带 */
+/* 右边缘垂直流光：升级为双层光带
+ * ① 2px 实线 emerald 渐变（基底）② 其上 1px 高亮流光循环漂移
+ * 配合 box-shadow 外侧 6px 模糊光晕，形成立体"光带"质感
+ */
 .sidebar-edge-beam {
   position: absolute;
   top: 0;
   bottom: 0;
   right: 0;
-  width: 1px;
+  width: 2px;
   background: linear-gradient(180deg,
     transparent 0%,
-    rgba(52, 211, 153, 0.55) 30%,
-    rgba(110, 231, 183, 0.85) 50%,
-    rgba(52, 211, 153, 0.55) 70%,
+    rgba(52, 211, 153, 0.45) 20%,
+    rgba(110, 231, 183, 0.7) 50%,
+    rgba(52, 211, 153, 0.45) 80%,
     transparent 100%);
-  background-size: 100% 35vh;
-  background-repeat: no-repeat;
-  animation: edge-beam-drift 7s ease-in-out infinite;
+  box-shadow:
+    0 0 8px rgba(52, 211, 153, 0.5),
+    4px 0 14px -2px rgba(16, 185, 129, 0.35);
   pointer-events: none;
   z-index: 3;
-  filter: blur(0.3px);
-  opacity: 0.7;
+}
+/* 高亮流光层：更窄更亮的 1px 光点沿光带循环漂移 */
+.sidebar-edge-beam::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    rgba(167, 243, 208, 0.95) 45%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(167, 243, 208, 0.95) 55%,
+    transparent 100%);
+  background-size: 100% 28vh;
+  background-repeat: no-repeat;
+  filter: blur(0.4px);
+  animation: edge-beam-drift 6s ease-in-out infinite;
 }
 @keyframes edge-beam-drift {
-  0% { background-position: 0 -35vh; }
-  100% { background-position: 0 135vh; }
+  0% { background-position: 0 -28vh; }
+  100% { background-position: 0 128vh; }
 }
 
 /* nav 容器：上下滚动渐隐 mask + 自定义滚动条 */
@@ -260,15 +280,38 @@ body {
   opacity: 1;
 }
 
+/* Logo 呼吸光晕：logo 后方的 emerald 柔光，缓慢呼吸
+ * 让 logo 看起来"发光"，强化品牌标识存在感
+ */
+.sidebar-logo-aura {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(52, 211, 153, 0.45), transparent 60%);
+  filter: blur(8px);
+  opacity: 0.5;
+  animation: logo-aura-breath 3.6s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+@keyframes logo-aura-breath {
+  0%, 100% { opacity: 0.35; transform: scale(0.92); }
+  50% { opacity: 0.75; transform: scale(1.12); }
+}
+.sidebar-logo-wrap:hover .sidebar-logo-aura {
+  animation-duration: 1.8s;
+  opacity: 0.9;
+}
+
 .sidebar-group-label {
   position: relative;
   display: flex;
   align-items: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #52525b;
+  color: #71717a;
   padding: 0 14px;
   margin: 18px 0 6px;
   user-select: none;
@@ -279,7 +322,7 @@ body {
   display: inline-block;
   width: 8px;
   height: 1px;
-  background: rgba(82, 82, 91, 0.55);
+  background: rgba(113, 113, 122, 0.6);
   margin-right: 8px;
   flex-shrink: 0;
 }
@@ -293,7 +336,7 @@ body {
   padding: 0 14px;
   margin: 2px 10px;
   border-radius: 9px;
-  color: #a1a1aa;
+  color: #d4d4d8;
   font-size: 13.5px;
   font-weight: 500;
   cursor: pointer;
@@ -301,18 +344,19 @@ body {
   overflow: hidden;
 }
 .sidebar-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: #e4e4e7;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f4f5;
 }
 .sidebar-item .sidebar-item-icon {
   font-size: 17px;
-  color: #71717a;
-  transition: color 0.18s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  color: #a1a1aa;
+  transition: color 0.18s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), filter 0.22s ease;
   flex-shrink: 0;
 }
 .sidebar-item:hover .sidebar-item-icon {
-  color: #d4d4d8;
+  color: #34d399;
   transform: scale(1.12) rotate(-3deg);
+  filter: drop-shadow(0 0 6px rgba(52, 211, 153, 0.45));
 }
 
 .sidebar-item-active {
@@ -366,7 +410,7 @@ body {
 
 /* 激活态指示器：流光 + 顶部光点
  * SlidingIndicator 是 motion.div，挂载时自带 layout 动画
- * ::before 顶部高亮光点；::after 沿垂直方向流动的光带
+ * ::before 顶部高亮光点；::after 沿垂直方向流动的 emerald 光带
  */
 .sidebar-active-indicator {
   overflow: visible;
@@ -377,31 +421,39 @@ body {
   top: -3px;
   left: 50%;
   transform: translateX(-50%);
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #6ee7b7;
-  box-shadow: 0 0 8px rgba(110, 231, 183, 0.9), 0 0 2px #fff;
+  box-shadow:
+    0 0 10px rgba(110, 231, 183, 0.95),
+    0 0 4px rgba(255, 255, 255, 0.6);
   animation: indicator-pulse 2s ease-in-out infinite;
 }
 .sidebar-active-indicator::after {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: -2px -1px;
   border-radius: inherit;
-  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.55), transparent);
-  background-size: 100% 50%;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    rgba(167, 243, 208, 0.85) 40%,
+    rgba(255, 255, 255, 0.95) 50%,
+    rgba(167, 243, 208, 0.85) 60%,
+    transparent 100%);
+  background-size: 100% 45%;
   background-repeat: no-repeat;
-  animation: indicator-flow 1.8s ease-in-out infinite;
+  animation: indicator-flow 1.6s ease-in-out infinite;
   mix-blend-mode: screen;
+  filter: blur(0.3px);
 }
 @keyframes indicator-pulse {
   0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
   50% { opacity: 0.5; transform: translateX(-50%) scale(0.7); }
 }
 @keyframes indicator-flow {
-  0% { background-position: 0 -50%; }
-  100% { background-position: 0 150%; }
+  0% { background-position: 0 -45%; }
+  100% { background-position: 0 145%; }
 }
 
 .sidebar-badge {
@@ -709,6 +761,27 @@ body {
   background: radial-gradient(50% 100% at 50% 100%, rgba(16, 185, 129, 0.04), transparent 70%);
   filter: blur(50px);
   pointer-events: none;
+}
+
+/* 主区鼠标 spotlight：跟随光标的径向 emerald 微光
+ * 位置由 JS 注入 CSS var（--mx, --my），不进 React state（符合 skill 3.B）
+ * 默认 opacity 0，鼠标进入 main 时通过 .is-hovering 类点亮
+ */
+.main-spotlight {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    420px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(52, 211, 153, 0.06),
+    transparent 55%
+  );
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+  will-change: background, opacity;
+}
+.main-spotlight.is-hovering {
+  opacity: 1;
 }
 
 /* prefers-reduced-transparency：关闭 mesh 与噪点（部分浏览器支持） */

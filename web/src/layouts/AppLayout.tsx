@@ -14,8 +14,10 @@ import {
   MenuUnfoldOutlined,
 } from "@ant-design/icons";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { motion } from "motion/react";
 import { useUIStore, SIDEBAR_COLLAPSE_BREAKPOINT } from "@/stores/ui";
-import { SlidingIndicator, GlowPulse } from "@/components/motion";
+import { SlidingIndicator, GlowPulse, ScrambleText } from "@/components/motion";
+import { useMotionMode } from "@/hooks/useMotionMode";
 import { NoiseOverlay } from "@/components/Background";
 import { PageTransition, ScrollProgressBar } from "@/components/showtime";
 
@@ -71,11 +73,40 @@ export default function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const mainRef = useRef<HTMLElement>(null);
+  const spotlightRef = useRef<HTMLSpanElement>(null);
+  const reduce = useMotionMode();
 
   const currentKey = useMemo(() => {
     const path = location.pathname.replace(/^\//, "");
     return path === "" ? "" : path;
   }, [location.pathname]);
+
+  // 为每个 item 分配全局递增 index，用于首次入场 stagger 延迟
+  const groupedItems = useMemo(() => {
+    let i = 0;
+    return groups.map((g) => ({
+      ...g,
+      items: g.items.map((item) => ({ ...item, globalIndex: i++ })),
+    }));
+  }, []);
+
+  // 主区鼠标 spotlight：仅写 CSS var，不触发 React re-render（符合 skill 3.B）
+  const handleMainMouseMove = (e: React.MouseEvent) => {
+    const el = spotlightRef.current;
+    if (!el) return;
+    const sidebarWidth = collapsed ? 72 : 240;
+    const w = window.innerWidth - sidebarWidth;
+    const x = w > 0 ? ((e.clientX - sidebarWidth) / w) * 100 : 50;
+    const y = (e.clientY / window.innerHeight) * 100;
+    el.style.setProperty("--mx", `${x}%`);
+    el.style.setProperty("--my", `${y}%`);
+  };
+  const handleMainMouseEnter = () => {
+    spotlightRef.current?.classList.add("is-hovering");
+  };
+  const handleMainMouseLeave = () => {
+    spotlightRef.current?.classList.remove("is-hovering");
+  };
 
   // 窄屏响应：窗口收窄到断点以下时自动收折侧边栏
   // 注意：不在变宽时自动展开，避免打断用户已主动折叠的状态
@@ -114,8 +145,10 @@ export default function AppLayout() {
         <span className="ambient-blob ambient-blob-3" />
         {/* 底部冷色微光，给画面"地面" */}
         <span className="ambient-floor-glow" />
-        {/* 角落 vignette：让中心更聚焦（最顶层） */}
+        {/* 角落 vignette：让中心更聚焦 */}
         <span className="ambient-vignette" />
+        {/* 鼠标 spotlight：跟随光标的 emerald 径向微光，最顶层 */}
+        <span ref={spotlightRef} className="main-spotlight" />
       </div>
 
       {/* 全局噪点叠层（最顶层，pointer-events-none） */}
@@ -151,15 +184,16 @@ export default function AppLayout() {
           }}
         >
           <div className="sidebar-logo-wrap">
+            <span className="sidebar-logo-aura" aria-hidden />
             <span className="sidebar-logo-ring" aria-hidden />
             <div className="sidebar-logo">Y</div>
           </div>
           {!collapsed && (
             <div className="sidebar-brand-text" style={{ lineHeight: 1.15 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#f4f4f5", letterSpacing: 0.2 }}>
-                Creative Studio
+                <ScrambleText text="Creative Studio" speed={0.55} />
               </div>
-              <div style={{ fontSize: 11, color: "#52525b", letterSpacing: 0.4 }}>Ymcp v0.1</div>
+              <div style={{ fontSize: 11, color: "#71717a", letterSpacing: 0.4 }}>Ymcp v0.1</div>
             </div>
           )}
         </div>
@@ -169,14 +203,21 @@ export default function AppLayout() {
           className="sidebar-nav"
           style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingTop: 4 }}
         >
-          {groups.map((group) => (
+          {groupedItems.map((group) => (
             <div key={group.label}>
               {!collapsed && <div className="sidebar-group-label">{group.label}</div>}
               {group.items.map((item) => {
                 const active = currentKey === item.key;
                 const content = (
-                  <div
+                  <motion.div
                     className={`sidebar-item ${active ? "sidebar-item-active" : ""}`}
+                    initial={reduce ? false : { opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{
+                      duration: 0.4,
+                      delay: item.globalIndex * 0.04,
+                      ease: [0.16, 1, 0.3, 1],
+                    }}
                     onClick={() => navigate(`/${item.key}`)}
                     role="button"
                     tabIndex={0}
@@ -199,11 +240,11 @@ export default function AppLayout() {
                           left: -10,
                           top: "50%",
                           transform: "translateY(-50%)",
-                          width: 3,
-                          height: 26,
-                          borderRadius: "0 3px 3px 0",
+                          width: 4,
+                          height: 28,
+                          borderRadius: "0 4px 4px 0",
                           background: "linear-gradient(180deg, #6ee7b7 0%, #34d399 50%, #10b981 100%)",
-                          boxShadow: "0 0 14px rgba(16, 185, 129, 0.8), 0 0 4px rgba(110, 231, 183, 0.6)",
+                          boxShadow: "0 0 16px rgba(16, 185, 129, 0.85), 0 0 5px rgba(110, 231, 183, 0.7)",
                         }}
                       />
                     )}
@@ -216,7 +257,7 @@ export default function AppLayout() {
                         {item.badge && <span className="sidebar-badge">{item.badge}</span>}
                       </>
                     )}
-                  </div>
+                  </motion.div>
                 );
                 return collapsed ? (
                   <Tooltip key={item.key} title={item.label} placement="right">
@@ -267,6 +308,9 @@ export default function AppLayout() {
       <main
         ref={mainRef}
         className="grid-bg"
+        onMouseMove={handleMainMouseMove}
+        onMouseEnter={handleMainMouseEnter}
+        onMouseLeave={handleMainMouseLeave}
         style={{
           flex: 1,
           minWidth: 0,
