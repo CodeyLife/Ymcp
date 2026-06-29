@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "ymcp-offline-tools",
+  "objective": "在 F:\\GitHubProject\\Ymcp\\web 中持续扩展适合浏览器本地离线运行、并且与本项目图片/创作工作流相关的工具；以现有暗色 creative studio 语言为基础，新增工具页面要美观、易用、与项目 IA 融合，保持动效强制开启策略，不引入无关设计系统；完成前用真实构建和功能级证据证明新增工具能离线运行、页面体验达标。",
+  "status": "complete",
+  "createdAt": "2026-06-28T16:33:56.210Z",
+  "updatedAt": "2026-06-28T16:56:54.430Z",
+  "loopCount": 1,
+  "lastDecision": "complete",
+  "lastCheckpoint": "Audit the existing image tools page, add a compact set of project-relevant offline browser image utilities, improve the page structure using the existing dark studio visual system, then verify build and production preview evidence. Read current route, layout, ImageTools implemen...",
+  "completionEvidence": "result=pass TypeScript project build and Vite production build completed successfully; only the pre-existing vendor-antd chunk-size warning remains. command npm run build exitCode=0; result=pass Production preview rendered the ImageTools route with hero content, six tabs, and default format-export panel. command vite preview on http://127.0.0.1:4174/image-tools plus in-app browser DOM snapshot; result=pass Browser console error check returned no error logs for the production preview route.; result=pass No em-dash or en-dash characters found in the changed user-facing tool page files. command Select-String -Path 'src\\\\pages\\\\ImageTools.tsx','src\\\\index.css' -Pattern '—|–' -SimpleMatch",
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "artifact-goal-brief"
+      ]
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "artifact-verification"
+      ]
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "artifact-implemented-slice"
+      ]
+    },
+    {
+      "id": "offline-tools-expanded",
+      "text": "The project contains more browser-local, project-relevant image tools presented in a coherent and usable tool page.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "artifact-implemented-slice",
+        "artifact-preview"
+      ]
+    }
+  ],
+  "strategy": {
+    "current": "Refine the broad goal only enough to choose the next evidence-seeking loop; avoid pre-building a task list.",
+    "lastChangeReason": "Initial strategy.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 1
+}
