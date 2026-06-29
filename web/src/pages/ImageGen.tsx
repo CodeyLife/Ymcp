@@ -2,11 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag,
 } from "antd";
-import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, UploadOutlined } from "@ant-design/icons";
+import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, UploadOutlined, BlockOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
 import { useImageGenStore, type TaskStatus } from "@/stores/imageGen";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
+import { usePsdTaskStore } from "@/stores/psdTask";
 import { generateImageStream, generateImageBatch, cacheImageLocally, polishPrompt, toDataUrl, type BatchTaskParams } from "@/lib/api";
 import { STYLE_PRESETS } from "@/lib/imagegenPresets";
 import { downloadBlob } from "@/lib/canvas";
@@ -15,6 +16,7 @@ import { DiffusionLoader } from "@/components/DiffusionLoader";
 import { MagneticButton } from "@/components/motion";
 import { PageHeader, TiltCard } from "@/components/showtime";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
+import { PsdTaskPanel } from "@/components/PsdTaskPanel";
 import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
 
@@ -369,6 +371,8 @@ export default function ImageGen() {
 
   const addHistory = useHistoryStore((s) => s.add);
   const addAsset = useAssetStore((s) => s.add);
+  const setPsdPendingImages = usePsdTaskStore((s) => s.setPendingBase64Images);
+  const setPsdPendingPrompt = usePsdTaskStore((s) => s.setPendingPrompt);
 
   // 派生：已完成的图列表（一个任务可能返回多张，全部扁平化）
   const doneImages = tasks.flatMap((t) =>
@@ -536,7 +540,8 @@ export default function ImageGen() {
     const historyItem: HistoryItem = {
       id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type: "image",
-      mode,
+      // persistTaskHistory 仅在文生图/图生图流程内调用，PSD 模式不会走到这里
+      mode: mode === "psd" ? "text2img" : mode,
       prompt,
       model: "gpt-image-2",
       size,
@@ -654,6 +659,19 @@ export default function ImageGen() {
     }
   }
 
+  // 拆分为 PSD：将结果图转为 data URL，预填到 PSD 任务表单并切换 tab
+  async function splitToPsd(src: string) {
+    try {
+      const dataUrl = await toDataUrl(src);
+      setPsdPendingImages([dataUrl]);
+      setPsdPendingPrompt(prompt ? `基于以下参考图拆分为可编辑的 PSD 图层：\n${prompt}` : "将这张图片拆分为可编辑的 PSD 图层，保留文字、形状、图层结构");
+      setMode("psd");
+      message.success("已切换到 PSD 任务，参考图已载入");
+    } catch {
+      message.error("图片读取失败，无法拆分为 PSD");
+    }
+  }
+
   async function handlePolish() {
     if (!prompt.trim()) {
       message.warning("请输入提示词");
@@ -686,23 +704,29 @@ export default function ImageGen() {
     <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 28px 48px" }}>
       <PageHeader
         title="AI 生图"
-        description="基于 OpenAI gpt-image-2 的文生图与图生图。生成结果可一键送入抠图。"
+        description="基于 OpenAI gpt-image-2 的文生图与图生图。生成结果可一键送入抠图或拆分为 PSD。"
         icon={<PictureOutlined />}
       />
 
+      <Segmented
+        value={mode}
+        onChange={(v) => setMode(v as typeof mode)}
+        block
+        options={[
+          { label: "文生图", value: "text2img" },
+          { label: "图生图", value: "img2img" },
+          { label: "PSD任务", value: "psd" },
+        ]}
+        style={{ marginBottom: 12, maxWidth: 360 }}
+      />
+
+      {mode === "psd" ? (
+        <PsdTaskPanel />
+      ) : (
+        <>
       <Row gutter={16}>
         <Col xs={24} lg={10} xl={9} xxl={8}>
           <Card style={{ background: "#18181b", borderColor: "#27272a" }} styles={{ body: { padding: 18 } }}>
-            <Segmented
-              value={mode}
-              onChange={(v) => setMode(v as typeof mode)}
-              block
-              options={[
-                { label: "文生图", value: "text2img" },
-                { label: "图生图", value: "img2img" },
-              ]}
-              style={{ marginBottom: 12 }}
-            />
             <Segmented
               value={genMode}
               onChange={(v) => setGenMode(v as typeof genMode)}
@@ -1475,6 +1499,14 @@ export default function ImageGen() {
                                     </button>
                                     <button
                                       type="button"
+                                      aria-label="拆分为 PSD"
+                                      title="拆分为 PSD"
+                                      onClick={() => splitToPsd(card.src!)}
+                                    >
+                                      <BlockOutlined />
+                                    </button>
+                                    <button
+                                      type="button"
                                       aria-label="下载"
                                       title="下载"
                                       onClick={() => downloadImage(card.src!)}
@@ -1513,6 +1545,8 @@ export default function ImageGen() {
             ))}
           </Image.PreviewGroup>
         </div>
+      )}
+        </>
       )}
     </div>
   );

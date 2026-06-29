@@ -26,6 +26,7 @@ interface UIState {
   setSpritesheetPrompt: (prompt: string) => void;
 }
 
+// const DEFAULT_BASE_URL = "https://eromaa.com/gpt/v1";
 const DEFAULT_BASE_URL = "https://image.yujin8.top/v1";
 const DEFAULT_API_KEY = "sk-0QBDAU5dN6urtcJ56aQwqHLawZ8DvsGz";
 

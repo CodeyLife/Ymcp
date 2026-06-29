@@ -15,7 +15,7 @@ export interface GenTask {
 }
 
 interface ImageGenState {
-  mode: "text2img" | "img2img";
+  mode: "text2img" | "img2img" | "psd";
   genMode: GenMode;
   textPrompt: string;
   imgPrompt: string;
@@ -28,7 +28,7 @@ interface ImageGenState {
   tasks: GenTask[];
   loading: boolean;
   error: string | null;
-  setMode: (mode: "text2img" | "img2img") => void;
+  setMode: (mode: "text2img" | "img2img" | "psd") => void;
   setGenMode: (mode: GenMode) => void;
   setTextPrompt: (prompt: string) => void;
   setImgPrompt: (prompt: string) => void;

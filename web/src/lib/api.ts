@@ -641,3 +641,117 @@ export async function polishPrompt(params: {
   }
   return content.trim();
 }
+
+/* ---- 可编辑文件（PSD/PPT）任务 API ---- */
+
+export type EditableFileKind = "psd" | "ppt";
+export type EditableFileTaskStatus = "queued" | "running" | "success" | "error";
+
+export interface EditableFileTaskResult {
+  primary_url?: string;
+  zip_url?: string;
+  [key: string]: unknown;
+}
+
+export interface EditableFileTask {
+  id: string;
+  taskId?: string;
+  status: EditableFileTaskStatus;
+  kind: EditableFileKind;
+  created_at: string;
+  updated_at: string;
+  result?: EditableFileTaskResult;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface EditableFileTaskQueryResponse {
+  items: EditableFileTask[];
+  missing_ids?: string[];
+  [key: string]: unknown;
+}
+
+export interface CreatePsdTaskParams {
+  prompt: string;
+  base64_images?: string[];
+  client_task_id?: string;
+}
+
+/**
+ * 创建 PSD 任务：POST /v1/psd/generations
+ * 重复提交相同 client_task_id 会返回已有任务（幂等）。
+ */
+export async function createPsdTask(
+  params: CreatePsdTaskParams,
+  config: { baseUrl: string; apiKey: string }
+): Promise<EditableFileTask> {
+  const endpoint = resolveBaseUrl(config.baseUrl);
+  const response = await fetch(`${endpoint}/psd/generations`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+  return (await response.json()) as EditableFileTask;
+}
+
+/**
+ * 查询可编辑文件任务状态：GET /v1/editable-file-tasks?ids=
+ * 不传 ids 时返回当前用户全部任务。
+ */
+export async function queryEditableFileTasks(
+  ids: string[] | undefined,
+  config: { baseUrl: string; apiKey: string }
+): Promise<EditableFileTaskQueryResponse> {
+  const endpoint = resolveBaseUrl(config.baseUrl);
+  const search = ids && ids.length ? `?ids=${ids.map(encodeURIComponent).join(",")}` : "";
+  const response = await fetch(`${endpoint}/editable-file-tasks${search}`, {
+    headers: { authorization: `Bearer ${config.apiKey}` },
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+  return (await response.json()) as EditableFileTaskQueryResponse;
+}
+
+/**
+ * 构造结果文件下载 URL：GET /files/{file_path}
+ * - 若 file_path 已是完整 URL（http/https），直接返回。
+ * - 若是 /files/... 相对路径，基于 baseUrl 的 origin 拼接。
+ * - 否则按相对路径处理，附加到 baseUrl origin 上。
+ */
+export function buildEditableFileUrl(
+  filePath: string,
+  config: { baseUrl: string }
+): string {
+  if (!filePath) return "";
+  if (/^https?:\/\//i.test(filePath)) return filePath;
+  const origin = config.baseUrl.replace(/\/v\d+\/?$/, "");
+  const trimmed = filePath.replace(/^\/+/, "");
+  return `${origin}/${trimmed}`;
+}
+
+/**
+ * 下载结果文件（pptx/psd/zip 二进制流），返回 Blob。
+ */
+export async function downloadEditableFile(
+  filePath: string,
+  config: { baseUrl: string; apiKey: string }
+): Promise<Blob> {
+  const url = buildEditableFileUrl(filePath, config);
+  const response = await fetch(url, {
+    headers: { authorization: `Bearer ${config.apiKey}` },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || `下载失败（HTTP ${response.status}）`);
+  }
+  return response.blob();
+}
