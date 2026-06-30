@@ -468,32 +468,6 @@ export default function ImageGen() {
     }
   }
 
-  // 图生图模式：监听 Ctrl+V 粘贴剪切板图片作为参考图
-  // 仅在 img2img 模式生效，避免影响文本输入框的正常粘贴
-  const handleRefImageFilesRef = useRef(handleRefImageFiles);
-  handleRefImageFilesRef.current = handleRefImageFiles;
-  useEffect(() => {
-    if (mode !== "img2img") return;
-    function onPaste(e: ClipboardEvent) {
-      // 焦点在输入框/文本域时放行，让用户正常粘贴文字
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      const imageItem = Array.from(items).find((it) => it.type.startsWith("image/"));
-      if (!imageItem) return;
-      const file = imageItem.getAsFile();
-      if (!file) return;
-      e.preventDefault();
-      // 构造 FileList 替代品（FileList 无法直接构造，用 DataTransfer）
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      handleRefImageFilesRef.current(dt.files);
-    }
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, [mode]);
-
   async function handleGenerate() {
     if (!prompt.trim()) {
       message.warning("请输入提示词");
