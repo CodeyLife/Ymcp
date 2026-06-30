@@ -13,6 +13,32 @@ import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 const { Text } = Typography;
 
 const WHITE_KEY: RGB = [255, 255, 255];
+const IMAGE_EXTENSION_RE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
+const PNG_EXTENSION_RE = /\.png$/i;
+const ILLEGAL_FILENAME_CHARS_RE = /[\\/:*?"<>|]+/g;
+
+function removeImageExtension(name: string) {
+  return name.trim().replace(IMAGE_EXTENSION_RE, "");
+}
+
+function sanitizeFileName(name: string) {
+  return name
+    .trim()
+    .replace(ILLEGAL_FILENAME_CHARS_RE, "_")
+    .replace(/\s+/g, " ")
+    .replace(/[. ]+$/g, "")
+    .trim();
+}
+
+function buildOutputNames(name: string, timestamp = Date.now()) {
+  const fallbackBaseName = `matte-${timestamp}`;
+  const withoutPng = name.trim().replace(PNG_EXTENSION_RE, "");
+  const baseName = sanitizeFileName(withoutPng) || fallbackBaseName;
+  return {
+    assetName: baseName,
+    downloadName: `${baseName}.png`,
+  };
+}
 
 export default function Matte() {
   const { message } = App.useApp();
@@ -21,6 +47,7 @@ export default function Matte() {
   const addAsset = useAssetStore((s) => s.add);
   const [src, setSrc] = useState<string | null>(null);
   const [uploadName, setUploadName] = useState("");
+  const [outputName, setOutputName] = useState("");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [color, setColor] = useState("#00ff00");
@@ -110,6 +137,7 @@ export default function Matte() {
       .then((cached) => {
         setSrc(cached);
         setUploadName(`来自 ${from}`);
+        setOutputName(removeImageExtension(`matte-${from}`) || "matte");
         message.info(`已从 ${from} 载入图片`);
       })
       .catch(() => message.error("图片加载失败"));
@@ -121,6 +149,7 @@ export default function Matte() {
     if (!f) return;
     setSrc(URL.createObjectURL(f));
     setUploadName(f.name);
+    setOutputName(removeImageExtension(f.name));
   }
 
   function manualDetectColor() {
@@ -152,11 +181,12 @@ export default function Matte() {
     if (!canvas) return;
     canvas.toBlob(async (blob) => {
       if (!blob) return;
+      const outputNames = buildOutputNames(outputName);
       // 图片 Blob 直接存入 IndexedDB，store 只保存 imageId 引用
       const imageId = await setImage(blob);
       addAsset({
         id: `asset-matte-${Date.now()}`,
-        name: `抠图结果_${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`,
+        name: outputNames.assetName,
         type: "image",
         imageId,
         tags: ["抠图"],
@@ -164,7 +194,7 @@ export default function Matte() {
         metadata: { width: canvas.width, height: canvas.height },
         createdAt: Date.now(),
       });
-      downloadBlob(blob, `matte-${Date.now()}.png`);
+      downloadBlob(blob, outputNames.downloadName);
       message.success("已下载并保存到素材库");
     }, "image/png");
   }
@@ -190,6 +220,13 @@ export default function Matte() {
                   selectedText={uploadName || undefined}
                   icon={<UploadOutlined />}
                   onFiles={onFile}
+                />
+              </Form.Item>
+              <Form.Item label="导出文件名">
+                <Input
+                  value={outputName}
+                  onChange={(e) => setOutputName(e.target.value)}
+                  placeholder="matte"
                 />
               </Form.Item>
               <Form.Item label="算法">

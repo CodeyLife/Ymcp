@@ -38,7 +38,7 @@ export const useUIStore = create<UIState>()(
       apiBaseUrl: "",
       apiKey: "",
       thumbSize: 256,
-      greenscreenPrompt: "Pure chroma key green background (#00FF00), no shadows, no gradients, no highlights, flat even lighting, subject fully visible and centered, isolated on solid green screen",
+      greenscreenPrompt: "Pure chroma key green background (#00FF00), no shadows, no gradients, no highlights, isolated on solid green screen,background=opaque",
       spritesheetPrompt: "A seamless sprite sheet animation arranged in a grid layout, consisting of multiple frames showing sequential motion, each frame evenly spaced in a regular grid, consistent character scale and positioning, transparent or uniform background, clear visual progression of movement, designed for frame-by-frame animation extraction",
       setApiConfig: (baseUrl, apiKey) => set({ apiBaseUrl: baseUrl, apiKey }),
       setThumbSize: (size) => set({ thumbSize: size }),
