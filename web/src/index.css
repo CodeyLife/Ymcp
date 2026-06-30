@@ -1258,6 +1258,51 @@ body {
   color: #a1a1aa;
 }
 
+/* 粘贴激活态：当前为 Ctrl+V 粘贴目标时的高亮 */
+.file-upload-trigger-paste-active {
+  border-color: rgba(52, 211, 153, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(110, 231, 183, 0.18),
+    0 0 0 3px rgba(52, 211, 153, 0.2),
+    0 0 28px rgba(52, 211, 153, 0.22);
+  animation: file-upload-paste-active-pulse 1.6s ease-in-out infinite;
+}
+.file-upload-trigger-paste-active::before {
+  opacity: 0.8;
+}
+@keyframes file-upload-paste-active-pulse {
+  0%, 100% {
+    box-shadow:
+      inset 0 1px 0 rgba(110, 231, 183, 0.18),
+      0 0 0 3px rgba(52, 211, 153, 0.2),
+      0 0 20px rgba(52, 211, 153, 0.16);
+  }
+  50% {
+    box-shadow:
+      inset 0 1px 0 rgba(110, 231, 183, 0.22),
+      0 0 0 4px rgba(52, 211, 153, 0.28),
+      0 0 32px rgba(52, 211, 153, 0.32);
+  }
+}
+.file-upload-trigger-paste-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  white-space: nowrap;
+}
+.file-upload-trigger-button .file-upload-trigger-paste-hint {
+  margin-top: 2px;
+}
+
 /* AI 生图参考图上传：紧凑化图生图参数区，避免上传入口和预览图纵向堆叠 */
 .reference-image-field {
   margin-bottom: 14px;
