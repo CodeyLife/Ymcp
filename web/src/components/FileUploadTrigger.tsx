@@ -5,8 +5,8 @@ export type FileUploadTriggerProps = {
   accept: string;
   multiple?: boolean;
   label: string;
-  hint?: string;
-  selectedText?: string;
+  hint?: ReactNode;
+  selectedText?: ReactNode;
   icon?: ReactNode;
   block?: boolean;
   variant?: "button" | "dropzone";

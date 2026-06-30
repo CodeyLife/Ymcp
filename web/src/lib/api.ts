@@ -397,10 +397,14 @@ export async function generateImageStream(
       formData.append("n", String(body.n));
       formData.append("size", body.size);
       if (body.quality) formData.append("quality", body.quality);
-      // image 是 data URL (data:image/png;base64,...)，转为 Blob
-      const base64Data = body.image!.split(",")[1] || body.image!;
-      const imageBlob = await (await fetch(`data:image/png;base64,${base64Data}`)).blob();
-      formData.append("image", imageBlob, "reference.png");
+      // image 是 data URL (data:image/<mime>;base64,...)，按实际 MIME 转为 Blob
+      const dataUrl = body.image!;
+      const mimeMatch = dataUrl.match(/^data:(image\/[a-z+]+);/i);
+      const mime = mimeMatch?.[1] || "image/png";
+      const base64Data = dataUrl.split(",")[1] || dataUrl;
+      const imageBlob = await (await fetch(`data:${mime};base64,${base64Data}`)).blob();
+      const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+      formData.append("image", imageBlob, `reference.${ext}`);
 
       response = await fetch(`${endpoint}${path}`, {
         method: "POST",

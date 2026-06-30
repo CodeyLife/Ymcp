@@ -11,6 +11,7 @@ import { usePsdTaskStore } from "@/stores/psdTask";
 import { generateImageStream, generateImageBatch, cacheImageLocally, polishPrompt, toDataUrl, type BatchTaskParams } from "@/lib/api";
 import { STYLE_PRESETS } from "@/lib/imagegenPresets";
 import { downloadBlob } from "@/lib/canvas";
+import { compressImage } from "@/lib/imageCompress";
 import { useNavigate } from "react-router-dom";
 import { DiffusionLoader } from "@/components/DiffusionLoader";
 import { MagneticButton } from "@/components/motion";
@@ -42,6 +43,14 @@ const SIZE_OPTIONS: SizeOption[] = [
   { ratio: "9:16", value: "1024x1792", w: 1024, h: 1792, tier: "1k" },
   { ratio: "16:9", value: "1792x1024", w: 1792, h: 1024, tier: "1k" },
 ];
+
+/** 字节数格式化为人类可读字符串 */
+function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
 
 /**
  * 根据结果数量、容器宽高比、图片宽高比，算出能装下全部卡片且总高不超过可用高度的最优列数。
@@ -433,11 +442,57 @@ export default function ImageGen() {
   const prompt = mode === "img2img" ? imgPrompt : textPrompt;
   const setPrompt = mode === "img2img" ? setImgPrompt : setTextPrompt;
 
-  function handleRefImageFiles(files: FileList) {
+  async function handleRefImageFiles(files: FileList) {
     const file = files[0];
     if (!file) return;
-    setRefImage(URL.createObjectURL(file));
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+      message.error("仅支持 PNG/JPEG/WebP 格式");
+      return;
+    }
+    message.loading({ key: "ref-compress", content: "正在优化参考图..." });
+    try {
+      const result = await compressImage(file);
+      // 释放旧的 blob URL，避免内存泄漏
+      const prev = refImage;
+      if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+      setRefImage(result.url);
+      const ratio = result.skipped
+        ? ""
+        : `，压缩 ${((1 - result.compressedSize / result.originalSize) * 100).toFixed(0)}%`;
+      message.success({
+        key: "ref-compress",
+        content: `参考图已就绪 ${result.width}×${result.height}，${formatSize(result.compressedSize)}${ratio}`,
+      });
+    } catch (e) {
+      message.error({ key: "ref-compress", content: "参考图处理失败，请重试" });
+    }
   }
+
+  // 图生图模式：监听 Ctrl+V 粘贴剪切板图片作为参考图
+  // 仅在 img2img 模式生效，避免影响文本输入框的正常粘贴
+  const handleRefImageFilesRef = useRef(handleRefImageFiles);
+  handleRefImageFilesRef.current = handleRefImageFiles;
+  useEffect(() => {
+    if (mode !== "img2img") return;
+    function onPaste(e: ClipboardEvent) {
+      // 焦点在输入框/文本域时放行，让用户正常粘贴文字
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageItem = Array.from(items).find((it) => it.type.startsWith("image/"));
+      if (!imageItem) return;
+      const file = imageItem.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      // 构造 FileList 替代品（FileList 无法直接构造，用 DataTransfer）
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      handleRefImageFilesRef.current(dt.files);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [mode]);
 
   async function handleGenerate() {
     if (!prompt.trim()) {
@@ -774,7 +829,9 @@ export default function ImageGen() {
                       />
                       <div className="reference-image-meta">
                         <Text className="reference-image-title">参考图已载入</Text>
-                        <Text className="reference-image-hint">用于图生图生成，可随时替换</Text>
+                        <Text className="reference-image-hint">
+                          用于图生图生成，可替换或 <span className="reference-image-kbd">Ctrl+V</span> 粘贴新图
+                        </Text>
                       </div>
                       <Space size={6} className="reference-image-actions">
                         <FileUploadTrigger
@@ -800,7 +857,11 @@ export default function ImageGen() {
                         accept="image/png,image/jpeg,image/webp"
                         variant="dropzone"
                         label="上传参考图"
-                        hint="点击或拖拽，PNG / JPEG / WebP"
+                        hint={(
+                          <>
+                            点击、拖拽或 <span className="reference-image-kbd">Ctrl+V</span> 粘贴，PNG / JPEG / WebP
+                          </>
+                        )}
                         icon={<InboxOutlined />}
                         onFiles={handleRefImageFiles}
                       />

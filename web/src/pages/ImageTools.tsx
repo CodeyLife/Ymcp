@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Card, Typography, Form, InputNumber, Button, Row, Col, Space, App, Tabs, Segmented, Input, Slider, Tag,
+  Card, Typography, Form, InputNumber, Button, Row, Col, Space, App, Tabs, Segmented, Input, Slider, Tag, Checkbox,
 } from "antd";
 import {
   AppstoreOutlined, ColumnHeightOutlined, BlockOutlined, DownloadOutlined, PlusOutlined,
-  BgColorsOutlined, CompressOutlined, ScissorOutlined,
+  BgColorsOutlined, CompressOutlined, ScissorOutlined, ShrinkOutlined,
 } from "@ant-design/icons";
 import { loadImageFromFile, loadImagesFromFiles, downloadBlob, canvasToBlob } from "@/lib/canvas";
 import { PageHeader, EmptyState, GlassCard } from "@/components/showtime";
@@ -317,16 +317,14 @@ function StitchPanel() {
   );
 }
 
-/* ===== 像素化/缩放 ===== */
-function PixelPanel() {
+/* ===== 像素化 ===== */
+function PixelatePanel() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [imgUrl, setImgUrl] = useState("");
-  const [mode, setMode] = useState<"pixel" | "scale">("pixel");
   const [blockSize, setBlockSize] = useState(8);
-  const [targetW, setTargetW] = useState(64);
-  const [targetH, setTargetH] = useState(64);
-  const [outputInfo, setOutputInfo] = useState({ w: 0, h: 0, scale: 1 });
+  const [displayScale, setDisplayScale] = useState(8);
+  const [outputInfo, setOutputInfo] = useState({ w: 0, h: 0 });
   useObjectUrlCleanup(imgUrl);
 
   function onFile(files: FileList) {
@@ -344,30 +342,20 @@ function PixelPanel() {
     const canvas = canvasRef.current;
     if (!canvas || !img) return;
     const ctx = canvas.getContext("2d")!;
-    let w: number, h: number;
-    if (mode === "pixel") {
-      w = Math.max(1, Math.floor(img.naturalWidth / blockSize));
-      h = Math.max(1, Math.floor(img.naturalHeight / blockSize));
-      canvas.width = w;
-      canvas.height = h;
-      ctx.imageSmoothingEnabled = false;
-    } else {
-      w = Math.max(1, targetW);
-      h = Math.max(1, targetH);
-      canvas.width = w;
-      canvas.height = h;
-      ctx.imageSmoothingEnabled = true;
-    }
+    const w = Math.max(1, Math.floor(img.naturalWidth / blockSize));
+    const h = Math.max(1, Math.floor(img.naturalHeight / blockSize));
+    canvas.width = w;
+    canvas.height = h;
+    ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0, w, h);
-    const scale = mode === "pixel" ? Math.min(16, Math.max(1, Math.floor(320 / Math.max(w, 1)))) : 1;
-    setOutputInfo({ w, h, scale });
-  }, [img, mode, blockSize, targetW, targetH]);
+    setOutputInfo({ w, h });
+  }, [img, blockSize]);
 
   function download() {
     const canvas = canvasRef.current;
     if (!canvas || !canvas.width) return;
-    canvas.toBlob((blob) => blob && downloadBlob(blob, "pixel_out.png"), "image/png");
+    canvas.toBlob((blob) => blob && downloadBlob(blob, "pixelated.png"), "image/png");
   }
 
   return (
@@ -382,28 +370,163 @@ function PixelPanel() {
               <ToolStat label="原始" value={img ? `${img.naturalWidth}×${img.naturalHeight}` : "待上传"} />
               <ToolStat label="输出" value={outputInfo.w ? `${outputInfo.w}×${outputInfo.h}` : "待处理"} />
             </div>
-            <Form.Item label="模式">
-              <Segmented block value={mode} onChange={(v) => setMode(v as typeof mode)} options={[{ label: "像素化", value: "pixel" }, { label: "缩放", value: "scale" }]} />
+            <Form.Item label={`像素块大小: ${blockSize}px`}>
+              <InputNumber min={2} max={64} value={blockSize} onChange={(v) => setBlockSize(v ?? 8)} style={{ width: "100%" }} />
             </Form.Item>
-            {mode === "pixel" ? (
-              <Form.Item label={`像素块大小: ${blockSize}px`}>
-                <InputNumber min={2} max={64} value={blockSize} onChange={(v) => setBlockSize(v ?? 8)} style={{ width: "100%" }} />
-              </Form.Item>
-            ) : (
-              <Row gutter={10}>
-                <Col span={12}><Form.Item label="目标宽"><InputNumber min={1} max={4096} value={targetW} onChange={(v) => setTargetW(v ?? 64)} style={{ width: "100%" }} /></Form.Item></Col>
-                <Col span={12}><Form.Item label="目标高"><InputNumber min={1} max={4096} value={targetH} onChange={(v) => setTargetH(v ?? 64)} style={{ width: "100%" }} /></Form.Item></Col>
-              </Row>
-            )}
+            <Form.Item label={`预览放大: ×${displayScale}`}>
+              <Slider min={1} max={16} value={displayScale} onChange={setDisplayScale} />
+            </Form.Item>
             <Button icon={<DownloadOutlined />} onClick={download} disabled={!img}>下载</Button>
           </Form>
         </Card>
       </Col>
       <Col xs={24} lg={16}>
-        <Card style={{ ...CARD_STYLE, minHeight: 480 }} styles={{ body: { padding: 14 } }} title={<Text style={{ color: "#a1a1aa" }}>处理结果</Text>}>
-          {!img ? <EmptyState icon={<AppstoreOutlined />} title="上传图片后处理" description="支持像素化与尺寸重采样，适合做头像、图标和像素风素材。" minHeight={300} /> : (
-            <div className="checker-bg tool-preview-stage">
-              <canvas ref={canvasRef} style={{ maxWidth: "100%", imageRendering: "pixelated", width: outputInfo.scale > 1 ? `${outputInfo.w * outputInfo.scale}px` : "auto", height: "auto" }} />
+        <Card style={{ ...CARD_STYLE, minHeight: 480 }} styles={{ body: { padding: 14 } }} title={<Text style={{ color: "#a1a1aa" }}>原图 / 像素化效果</Text>}>
+          {!img ? <EmptyState icon={<AppstoreOutlined />} title="上传图片后像素化" description="把图片按块大小下采样，适合做头像、图标和像素风素材。" minHeight={300} /> : (
+            <div className="pixel-workspace">
+              <div className="pixel-source">
+                <span className="pixel-label">原图</span>
+                <img src={imgUrl} alt="原图预览" />
+              </div>
+              <div className="pixel-effect">
+                <span className="pixel-label">效果</span>
+                <div className="tool-result-strip">
+                  <Tag color="green">{outputInfo.w ? `${outputInfo.w}×${outputInfo.h}` : "待处理"}</Tag>
+                  <Tag>块 {blockSize}px</Tag>
+                </div>
+                <div className="checker-bg tool-preview-stage">
+                  <canvas ref={canvasRef} style={{ width: `${outputInfo.w * displayScale}px`, height: "auto", imageRendering: "pixelated" }} />
+                </div>
+              </div>
+            </div>
+          )}
+        </Card>
+      </Col>
+    </Row>
+  );
+}
+
+/* ===== 缩放 ===== */
+function ScalePanel() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [imgUrl, setImgUrl] = useState("");
+  const [targetW, setTargetW] = useState(64);
+  const [targetH, setTargetH] = useState(64);
+  const [lockRatio, setLockRatio] = useState(true);
+  const [preset, setPreset] = useState<"custom" | "50" | "100" | "200">("custom");
+  const [outputInfo, setOutputInfo] = useState({ w: 0, h: 0 });
+  useObjectUrlCleanup(imgUrl);
+
+  function onFile(files: FileList) {
+    const f = files[0];
+    if (!f) return;
+    if (imgUrl) URL.revokeObjectURL(imgUrl);
+    const url = URL.createObjectURL(f);
+    const image = new Image();
+    image.onload = () => {
+      setImg(image);
+      setTargetW(image.naturalWidth);
+      setTargetH(image.naturalHeight);
+      setPreset("100");
+    };
+    image.src = url;
+    setImgUrl(url);
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !img) return;
+    const ctx = canvas.getContext("2d")!;
+    const w = Math.max(1, targetW);
+    const h = Math.max(1, targetH);
+    canvas.width = w;
+    canvas.height = h;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    setOutputInfo({ w, h });
+  }, [img, targetW, targetH]);
+
+  function applyPreset(value: "custom" | "50" | "100" | "200") {
+    setPreset(value);
+    if (!img || value === "custom") return;
+    const ratio = Number(value) / 100;
+    setTargetW(Math.max(1, Math.round(img.naturalWidth * ratio)));
+    setTargetH(Math.max(1, Math.round(img.naturalHeight * ratio)));
+  }
+
+  function onWidthChange(v: number | null) {
+    const next = v ?? 1;
+    setTargetW(next);
+    setPreset("custom");
+    if (lockRatio && img) {
+      setTargetH(Math.max(1, Math.round((next / img.naturalWidth) * img.naturalHeight)));
+    }
+  }
+
+  function onHeightChange(v: number | null) {
+    const next = v ?? 1;
+    setTargetH(next);
+    setPreset("custom");
+    if (lockRatio && img) {
+      setTargetW(Math.max(1, Math.round((next / img.naturalHeight) * img.naturalWidth)));
+    }
+  }
+
+  function download() {
+    const canvas = canvasRef.current;
+    if (!canvas || !canvas.width) return;
+    canvas.toBlob((blob) => blob && downloadBlob(blob, "scaled.png"), "image/png");
+  }
+
+  const scalePct = img && outputInfo.w ? Math.round((outputInfo.w / img.naturalWidth) * 100) : 0;
+
+  return (
+    <Row gutter={[16, 16]}>
+      <Col xs={24} lg={8}>
+        <Card className="tool-control-card" style={CARD_STYLE} styles={{ body: PANEL_BODY }}>
+          <Form layout="vertical">
+            <Form.Item label="图片">
+              <FileUploadTrigger accept="image/*" block label="选择图片" hint="PNG / JPEG / WebP" selectedText={img ? "已载入图片" : undefined} icon={<PlusOutlined />} onFiles={onFile} />
+            </Form.Item>
+            <div className="tool-meta-row">
+              <ToolStat label="原始" value={img ? `${img.naturalWidth}×${img.naturalHeight}` : "待上传"} />
+              <ToolStat label="输出" value={outputInfo.w ? `${outputInfo.w}×${outputInfo.h}` : "待处理"} />
+            </div>
+            <Form.Item label="预设">
+              <Segmented block value={preset} onChange={(v) => applyPreset(v as typeof preset)} options={[{ label: "自定义", value: "custom" }, { label: "50%", value: "50" }, { label: "100%", value: "100" }, { label: "200%", value: "200" }]} />
+            </Form.Item>
+            <Form.Item>
+              <Checkbox checked={lockRatio} onChange={(e) => setLockRatio(e.target.checked)}>锁定宽高比</Checkbox>
+            </Form.Item>
+            <Row gutter={10}>
+              <Col span={12}><Form.Item label="目标宽"><InputNumber min={1} max={8192} value={targetW} onChange={(v) => onWidthChange(v ?? 1)} style={{ width: "100%" }} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="目标高"><InputNumber min={1} max={8192} value={targetH} onChange={(v) => onHeightChange(v ?? 1)} style={{ width: "100%" }} /></Form.Item></Col>
+            </Row>
+            <Button icon={<DownloadOutlined />} onClick={download} disabled={!img}>下载</Button>
+          </Form>
+        </Card>
+      </Col>
+      <Col xs={24} lg={16}>
+        <Card style={{ ...CARD_STYLE, minHeight: 480 }} styles={{ body: { padding: 14 } }} title={<Text style={{ color: "#a1a1aa" }}>原图 / 缩放效果</Text>}>
+          {!img ? <EmptyState icon={<ShrinkOutlined />} title="上传图片后缩放" description="高质量重采样到指定尺寸，支持按比例与自定义。" minHeight={300} /> : (
+            <div className="pixel-workspace">
+              <div className="pixel-source">
+                <span className="pixel-label">原图</span>
+                <img src={imgUrl} alt="原图预览" />
+              </div>
+              <div className="pixel-effect">
+                <span className="pixel-label">效果</span>
+                <div className="tool-result-strip">
+                  <Tag color="green">{outputInfo.w ? `${outputInfo.w}×${outputInfo.h}` : "待处理"}</Tag>
+                  {scalePct > 0 && <Tag color="cyan">{scalePct}%</Tag>}
+                </div>
+                <div className="checker-bg tool-preview-stage">
+                  <canvas ref={canvasRef} style={{ maxWidth: "100%", maxHeight: "calc(100vh - 320px)", imageRendering: "auto" }} />
+                </div>
+              </div>
             </div>
           )}
         </Card>
@@ -732,7 +855,8 @@ export default function ImageTools() {
     { key: "palette", label: <span><BgColorsOutlined /> 调色板</span>, children: <PalettePanel /> },
     { key: "compose", label: <span><BlockOutlined /> 合成帧表</span>, children: <ComposePanel /> },
     { key: "stitch", label: <span><ColumnHeightOutlined /> 简单拼接</span>, children: <StitchPanel /> },
-    { key: "pixel", label: <span><AppstoreOutlined /> 像素化/缩放</span>, children: <PixelPanel /> },
+    { key: "pixelate", label: <span><AppstoreOutlined /> 像素化</span>, children: <PixelatePanel /> },
+    { key: "scale", label: <span><ShrinkOutlined /> 缩放</span>, children: <ScalePanel /> },
   ];
 
   return (
