@@ -8,6 +8,8 @@ import {
 import { useAssetStore, type AssetItem } from "@/stores/asset";
 import { useUIStore } from "@/stores/ui";
 import { downloadBlob } from "@/lib/canvas";
+import { getImage, setImage } from "@/lib/imageStore";
+import { useImageUrl } from "@/hooks/useImageUrl";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
 import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
@@ -47,7 +49,8 @@ export default function Assets() {
   const removeMany = useAssetStore((s) => s.removeMany);
   const [filter, setFilter] = useState<FilterType>("all");
   const [search, setSearch] = useState("");
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+  const previewSrc = useImageUrl(previewImageId);
 
   const filtered = items.filter((item) => {
     if (filter !== "all" && item.source !== filter) return false;
@@ -63,7 +66,7 @@ export default function Assets() {
     if (sizeStr) metas.push({ label: "size", value: sizeStr });
     return {
       id: a.id,
-      images: [a.src],
+      imageIds: [a.imageId],
       title: a.name,
       metas,
       badge: SOURCE_BADGE[a.source],
@@ -71,37 +74,44 @@ export default function Assets() {
     };
   });
 
-  async function downloadImage(src: string) {
+  async function downloadImage(imageId: string) {
     try {
-      const response = await fetch(src);
-      const blob = await response.blob();
+      const blob = await getImage(imageId);
+      if (!blob) {
+        message.error("图片加载失败");
+        return;
+      }
       downloadBlob(blob, `asset-${Date.now()}.png`);
     } catch {
       message.error("下载失败");
     }
   }
 
-  function sendToMatte(src: string) {
-    setIncomingImage({ src, from: "assets" });
-    navigate("/matte");
+  async function sendToMatte(imageId: string) {
+    try {
+      const blob = await getImage(imageId);
+      if (!blob) {
+        message.error("图片加载失败");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      setIncomingImage({ src: url, from: "assets" });
+      navigate("/matte");
+    } catch {
+      message.error("图片加载失败");
+    }
   }
 
   async function handleUpload(files: FileList) {
     let count = 0;
     for (const file of Array.from(files)) {
-      // 用 data URL 持久化，避免 blob URL 刷新后失效
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      // 直接将 File（Blob 子类）存入 IndexedDB，返回 imageId 持久化引用
+      const imageId = await setImage(file);
       add({
         id: `asset-upload-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         name: file.name,
         type: "image",
-        src: dataUrl,
-        thumbnail: dataUrl,
+        imageId,
         tags: ["上传"],
         source: "uploaded",
         metadata: { size: file.size },
@@ -162,19 +172,19 @@ export default function Assets() {
         emptyIcon={<AppstoreOutlined />}
         emptyTitle="暂无素材"
         emptyDescription="点击右上角上传，或在生图页保存生成结果到素材库。"
-        onPreview={(src) => setPreviewSrc(src)}
-        onDownload={(src) => downloadImage(src)}
-        onMatte={(src) => sendToMatte(src)}
+        onPreview={(imageId) => setPreviewImageId(imageId)}
+        onDownload={(imageId) => downloadImage(imageId)}
+        onMatte={(imageId) => sendToMatte(imageId)}
         onDelete={handleDelete}
       />
 
       {/* 大图预览 */}
-      {previewSrc && (
+      {previewImageId && previewSrc && (
         <Image
           style={{ display: "none" }}
           preview={{
-            visible: !!previewSrc,
-            onVisibleChange: (v) => !v && setPreviewSrc(null),
+            visible: !!previewImageId,
+            onVisibleChange: (v) => !v && setPreviewImageId(null),
             src: previewSrc,
           }}
           src={previewSrc}

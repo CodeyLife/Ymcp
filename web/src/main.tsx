@@ -1,3 +1,4 @@
+import "@/lib/migrateLegacy";
 import "@ant-design/v5-patch-for-react-19";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";

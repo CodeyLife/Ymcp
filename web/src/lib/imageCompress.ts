@@ -4,18 +4,18 @@
  * 策略：像素为主 + 文件大小触发
  *   1. file.size <= sizeThreshold 且为高压缩格式(jpeg/webp) → 跳过压缩
  *   2. 否则解码读 naturalWidth/Height，长边 > maxLongEdge 触发 resize
- *   3. 检测 alpha 通道：有透明→PNG，无透明→JPEG(0.85)
+ *   3. 检测 alpha 通道：有透明→PNG，无透明→JPEG(0.9)
  *   4. 体积兜底：压缩后更大且未 resize → 保留原文件
  *
  * 全程使用浏览器原生 Canvas API，零依赖。
  */
 
 export interface CompressOptions {
-  /** 最大长边像素，默认 1536 */
+  /** 最大长边像素，默认 2048 */
   maxLongEdge?: number;
   /** 文件大小触发阈值（字节），小于此值且为高压缩格式则跳过，默认 1MB */
   sizeThreshold?: number;
-  /** JPEG 导出质量 0-1，默认 0.85 */
+  /** JPEG 导出质量 0-1，默认 0.9 */
   jpegQuality?: number;
 }
 
@@ -35,9 +35,9 @@ export interface CompressResult {
 }
 
 const DEFAULTS: Required<CompressOptions> = {
-  maxLongEdge: 1536,
+  maxLongEdge: 2048,
   sizeThreshold: 1024 * 1024,
-  jpegQuality: 0.85,
+  jpegQuality: 0.9,
 };
 
 const ALLOWED_MIME = /^image\/(png|jpeg|webp)$/i;

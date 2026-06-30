@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 type GenMode = "normal" | "greenscreen" | "spritesheet";
 
-export type TaskStatus = "pending" | "loading" | "done" | "error";
+export type TaskStatus = "pending" | "loading" | "waiting" | "done" | "error";
 
 export interface GenTask {
   id: string;            // 唯一 id（用于 React key、收藏集合）

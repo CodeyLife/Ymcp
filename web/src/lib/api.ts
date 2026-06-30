@@ -378,7 +378,8 @@ export async function generateImageStream(
     apiKey: string;
     image?: string; // base64 for img2img
   },
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  options?: { signal?: AbortSignal }
 ): Promise<void> {
   const { baseUrl, apiKey, ...body } = data;
   const endpoint = resolveBaseUrl(baseUrl);
@@ -410,6 +411,7 @@ export async function generateImageStream(
         method: "POST",
         headers: { authorization: `Bearer ${apiKey}` },
         body: formData,
+        signal: options?.signal,
       });
     } else {
       // /images/generations 用 JSON
@@ -429,6 +431,7 @@ export async function generateImageStream(
           authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(requestBody),
+        signal: options?.signal,
       });
     }
 
@@ -446,6 +449,7 @@ export async function generateImageStream(
         const apiError = extractApiErrorMessage(json);
         if (apiError) throw new Error(apiError);
       }
+      if (options?.signal?.aborted) return;
       callbacks.onComplete?.(images);
       return;
     }
@@ -499,6 +503,7 @@ export async function generateImageStream(
             finalImages.push(...images);
           }
         }
+        if (options?.signal?.aborted) return;
       }
     }
 
@@ -512,8 +517,9 @@ export async function generateImageStream(
       }
     }
 
-    callbacks.onComplete?.(finalImages);
+    if (!options?.signal?.aborted) callbacks.onComplete?.(finalImages);
   } catch (e) {
+    if (options?.signal?.aborted) return;
     // 流式失败时回退到非流式
     callbacks.onError?.(String((e as Error).message));
   }
@@ -583,7 +589,8 @@ export async function generateImageBatch(
               summary[idx] = { index: idx, error: err };
               callbacks.onTaskError?.(idx, err);
             },
-          }
+          },
+          { signal: options?.signal }
         ).finally(() => {
           active--;
           resolved++;

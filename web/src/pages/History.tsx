@@ -9,6 +9,8 @@ import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
 import { useUIStore } from "@/stores/ui";
 import { downloadBlob } from "@/lib/canvas";
+import { getImage, setImage } from "@/lib/imageStore";
+import { useImageUrl } from "@/hooks/useImageUrl";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
 import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
@@ -37,9 +39,10 @@ export default function History() {
   const assets = useAssetStore((s) => s.items);
   const addAsset = useAssetStore((s) => s.add);
   const removeByHistoryId = useAssetStore((s) => s.removeByHistoryId);
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+  const previewSrc = useImageUrl(previewImageId);
 
-  // 从素材库派生“已收藏的历史项 id 集合”：收藏 = 写入素材库并附带 historyId
+  // 从素材库派生"已收藏的历史项 id 集合"：收藏 = 写入素材库并附带 historyId
   const favoritedIds = useMemo(() => {
     const set = new Set<string>();
     for (const a of assets) {
@@ -52,7 +55,7 @@ export default function History() {
   // 归一化为 MediaItem（与 Assets 使用相同结构）
   const mediaItems: MediaItem[] = items.map((h) => ({
     id: h.id,
-    images: h.images,
+    imageIds: h.imageIds,
     title: h.prompt || "(无提示词)",
     metas: [
       { label: "time", value: formatTime(h.createdAt) },
@@ -63,19 +66,32 @@ export default function History() {
     raw: h,
   }));
 
-  async function downloadImage(src: string) {
+  async function downloadImage(imageId: string) {
     try {
-      const response = await fetch(src);
-      const blob = await response.blob();
+      const blob = await getImage(imageId);
+      if (!blob) {
+        message.error("图片加载失败");
+        return;
+      }
       downloadBlob(blob, `history-${Date.now()}.png`);
     } catch {
       message.error("下载失败");
     }
   }
 
-  function sendToMatte(src: string) {
-    setIncomingImage({ src, from: "history" });
-    navigate("/matte");
+  async function sendToMatte(imageId: string) {
+    try {
+      const blob = await getImage(imageId);
+      if (!blob) {
+        message.error("图片加载失败");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      setIncomingImage({ src: url, from: "history" });
+      navigate("/matte");
+    } catch {
+      message.error("图片加载失败");
+    }
   }
 
   function reuseParams(item: MediaItem) {
@@ -97,30 +113,39 @@ export default function History() {
     }
   }
 
-  function handleFavorite(item: MediaItem) {
+  async function handleFavorite(item: MediaItem) {
     const h = item.raw as HistoryItem | undefined;
     if (!h) return;
-    const src = h.images[0];
-    if (!src) return;
+    const imageId = h.imageIds[0];
+    if (!imageId) return;
 
     if (favoritedIds.has(h.id)) {
       // 取消收藏：移除由该历史项收藏而来的素材
       removeByHistoryId(h.id);
       message.info("已取消收藏");
     } else {
-      // 收藏：将图片作为独立素材写入素材库，附带 historyId 反向关联
-      addAsset({
-        id: `asset-fav-${h.id}-${Date.now().toString(36)}`,
-        name: h.prompt ? h.prompt.slice(0, 20) : "历史收藏",
-        type: "image",
-        src,
-        thumbnail: src,
-        tags: ["收藏", h.mode],
-        source: "generated",
-        metadata: { historyId: h.id },
-        createdAt: Date.now(),
-      });
-      message.success("已收藏到素材库");
+      // 收藏：复制图片到独立 imageId（避免 history 删除时清理影响 asset）
+      try {
+        const blob = await getImage(imageId);
+        if (!blob) {
+          message.error("图片加载失败");
+          return;
+        }
+        const newImageId = await setImage(blob);
+        addAsset({
+          id: `asset-fav-${h.id}-${Date.now().toString(36)}`,
+          name: h.prompt ? h.prompt.slice(0, 20) : "历史收藏",
+          type: "image",
+          imageId: newImageId,
+          tags: ["收藏", h.mode],
+          source: "generated",
+          metadata: { historyId: h.id },
+          createdAt: Date.now(),
+        });
+        message.success("已收藏到素材库");
+      } catch {
+        message.error("收藏失败");
+      }
     }
   }
 
@@ -137,21 +162,21 @@ export default function History() {
         emptyIcon={<HistoryOutlined />}
         emptyTitle="暂无历史记录"
         emptyDescription="生成的作品会自动保存在这里，支持回看、复用参数与收藏。"
-        onPreview={(src) => setPreviewSrc(src)}
-        onDownload={(src) => downloadImage(src)}
-        onMatte={(src) => sendToMatte(src)}
+        onPreview={(imageId) => setPreviewImageId(imageId)}
+        onDownload={(imageId) => downloadImage(imageId)}
+        onMatte={(imageId) => sendToMatte(imageId)}
         onReuse={reuseParams}
         onFavorite={handleFavorite}
         onDelete={handleDelete}
       />
 
       {/* 大图预览 */}
-      {previewSrc && (
+      {previewImageId && previewSrc && (
         <Image
           style={{ display: "none" }}
           preview={{
-            visible: !!previewSrc,
-            onVisibleChange: (v) => !v && setPreviewSrc(null),
+            visible: !!previewImageId,
+            onVisibleChange: (v) => !v && setPreviewImageId(null),
             src: previewSrc,
           }}
           src={previewSrc}

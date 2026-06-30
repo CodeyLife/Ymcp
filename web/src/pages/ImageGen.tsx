@@ -9,6 +9,7 @@ import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
 import { usePsdTaskStore } from "@/stores/psdTask";
 import { generateImageStream, generateImageBatch, cacheImageLocally, polishPrompt, toDataUrl, type BatchTaskParams } from "@/lib/api";
+import { setImage } from "@/lib/imageStore";
 import { STYLE_PRESETS } from "@/lib/imagegenPresets";
 import { downloadBlob } from "@/lib/canvas";
 import { compressImage } from "@/lib/imageCompress";
@@ -23,6 +24,10 @@ import { useMotionMode } from "@/hooks/useMotionMode";
 
 const { Text } = Typography;
 const { TextArea } = Input;
+const IMAGE_GEN_SOFT_TIMEOUT_MS = 180_000;
+const GREENSCREEN_BG = "#00ff00";
+const GREENSCREEN_REFERENCE_MIME = "image/jpeg";
+const GREENSCREEN_REFERENCE_QUALITY = 0.95;
 
 /* gpt-image-2 支持的尺寸 */
 interface SizeOption {
@@ -50,6 +55,52 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const image = new window.Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("图片解码失败"));
+    };
+    image.src = url;
+  });
+}
+
+async function flattenImageOnGreen(blob: Blob): Promise<Blob> {
+  const image = await loadImageFromBlob(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 上下文不可用");
+
+  ctx.fillStyle = GREENSCREEN_BG;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(image, 0, 0);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (out) => (out ? resolve(out) : reject(new Error("绿幕参考图导出失败"))),
+      GREENSCREEN_REFERENCE_MIME,
+      GREENSCREEN_REFERENCE_QUALITY
+    );
+  });
 }
 
 /**
@@ -138,6 +189,7 @@ function TaskStatusTag({ status }: { status: TaskStatus }) {
   const map: Record<TaskStatus, { color: string; text: string }> = {
     pending: { color: "default", text: "等待中" },
     loading: { color: "processing", text: "生成中" },
+    waiting: { color: "warning", text: "仍在等待" },
     done: { color: "success", text: "完成" },
     error: { color: "error", text: "失败" },
   };
@@ -394,6 +446,17 @@ export default function ImageGen() {
   const [polishing, setPolishing] = useState(false);
   const [undoPrompt, setUndoPrompt] = useState<string | null>(null);
   const reduceMotion = useMotionMode();
+  const activeBatchRef = useRef<{
+    id: number;
+    controller: AbortController;
+    softTimeoutId: number | null;
+  } | null>(null);
+  const retryRequestsRef = useRef<Map<number, {
+    id: number;
+    controller: AbortController;
+    softTimeoutId: number | null;
+  }>>(new Map());
+  const batchSeqRef = useRef(0);
 
   // 暂存最近一次批量生成的参数，供单任务重试复用
   const lastBatchRef = useRef<{
@@ -412,6 +475,45 @@ export default function ImageGen() {
   const [gridDims, setGridDims] = useState({ w: 0, h: 0 });
 
   const { hasOwnKey } = getEffectiveApiConfig();
+
+  const clearActiveBatchTimer = useCallback(() => {
+    const active = activeBatchRef.current;
+    if (active?.softTimeoutId !== null && active?.softTimeoutId !== undefined) {
+      window.clearTimeout(active.softTimeoutId);
+      active.softTimeoutId = null;
+    }
+  }, []);
+
+  const isActiveBatch = useCallback((batchId: number) => activeBatchRef.current?.id === batchId, []);
+
+  const abortActiveBatch = useCallback(() => {
+    const active = activeBatchRef.current;
+    if (!active) return;
+    if (active.softTimeoutId !== null) window.clearTimeout(active.softTimeoutId);
+    active.controller.abort();
+    activeBatchRef.current = null;
+  }, []);
+
+  const abortRetryRequest = useCallback((index: number) => {
+    const retry = retryRequestsRef.current.get(index);
+    if (!retry) return;
+    if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
+    retry.controller.abort();
+    retryRequestsRef.current.delete(index);
+  }, []);
+
+  const abortAllRetryRequests = useCallback(() => {
+    retryRequestsRef.current.forEach((retry) => {
+      if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
+      retry.controller.abort();
+    });
+    retryRequestsRef.current.clear();
+  }, []);
+
+  useEffect(() => () => {
+    abortActiveBatch();
+    abortAllRetryRequests();
+  }, [abortActiveBatch, abortAllRetryRequests]);
 
   useEffect(() => {
     if (!hasOwnKey && n > 1) setN(1);
@@ -452,16 +554,27 @@ export default function ImageGen() {
     message.loading({ key: "ref-compress", content: "正在优化参考图..." });
     try {
       const result = await compressImage(file);
+      let refBlob = result.blob;
+      let refUrl = result.url;
+      let flattenedForGreenscreen = false;
+
+      if (genMode === "greenscreen") {
+        refBlob = await flattenImageOnGreen(refBlob);
+        refUrl = URL.createObjectURL(refBlob);
+        flattenedForGreenscreen = true;
+        URL.revokeObjectURL(result.url);
+      }
+
       // 释放旧的 blob URL，避免内存泄漏
       const prev = refImage;
       if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
-      setRefImage(result.url);
-      const ratio = result.skipped
+      setRefImage(refUrl);
+      const ratio = result.skipped && !flattenedForGreenscreen
         ? ""
-        : `，压缩 ${((1 - result.compressedSize / result.originalSize) * 100).toFixed(0)}%`;
+        : `，压缩 ${((1 - refBlob.size / result.originalSize) * 100).toFixed(0)}%`;
       message.success({
         key: "ref-compress",
-        content: `参考图已就绪 ${result.width}×${result.height}，${formatSize(result.compressedSize)}${ratio}`,
+        content: `参考图已就绪 ${result.width}×${result.height}，${formatSize(refBlob.size)}${ratio}${flattenedForGreenscreen ? "，已合成绿幕 JPG" : ""}`,
       });
     } catch (e) {
       message.error({ key: "ref-compress", content: "参考图处理失败，请重试" });
@@ -473,11 +586,6 @@ export default function ImageGen() {
       message.warning("请输入提示词");
       return;
     }
-    setError(null);
-    setFavorited(new Set());
-    // 锁定本次生成使用的 size，后续切换 size 不影响已渲染格子
-    lockedSizeRef.current = size;
-
     const { baseUrl, apiKey } = getEffectiveApiConfig();
     const effectiveN = hasOwnKey ? n : 1;
 
@@ -507,25 +615,46 @@ export default function ImageGen() {
       }
       try {
         const response = await fetch(refImage);
-        const blob = await response.blob();
-        imageBase64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
+        let blob = await response.blob();
+        if (genMode === "greenscreen") {
+          blob = await flattenImageOnGreen(blob);
+        }
+        imageBase64 = await blobToDataUrl(blob);
       } catch {
         message.error("参考图加载失败");
         return;
       }
     }
 
+    abortActiveBatch();
+    abortAllRetryRequests();
+    setError(null);
+    setFavorited(new Set());
+    // 锁定本次生成使用的 size，后续切换 size 不影响已渲染格子
+    lockedSizeRef.current = size;
+
     // 暂存参数，供单任务重试复用
     lastBatchRef.current = { finalPrompt, imageBase64, baseUrl, apiKey, quality };
 
     // 初始化 N 个 pending 任务
+    const batchId = ++batchSeqRef.current;
+    const controller = new AbortController();
     resetTasks(effectiveN);
     setLoading(true);
+    activeBatchRef.current = {
+      id: batchId,
+      controller,
+      softTimeoutId: window.setTimeout(() => {
+        if (!isActiveBatch(batchId)) return;
+        setLoading(false);
+        useImageGenStore.getState().tasks.forEach((task) => {
+          if (task.status === "pending" || task.status === "loading") {
+            updateTask(task.index, { status: "waiting" });
+          }
+        });
+        message.warning("生成仍在等待，你可以继续等结果，或直接开始下一次生成");
+      }, IMAGE_GEN_SOFT_TIMEOUT_MS),
+    };
 
     const batchTasks: BatchTaskParams[] = Array.from({ length: effectiveN }, () => ({
       prompt: finalPrompt,
@@ -540,14 +669,24 @@ export default function ImageGen() {
     await generateImageBatch(
       batchTasks,
       {
-        onTaskPartial: (idx, src) => updateTask(idx, { status: "loading", partial: src }),
+        onTaskPartial: (idx, src) => {
+          if (!isActiveBatch(batchId)) return;
+          updateTask(idx, { status: "loading", partial: src });
+        },
         onTaskComplete: (idx, images) => {
+          if (!isActiveBatch(batchId)) return;
           updateTask(idx, { status: "done", results: images, partial: undefined, error: undefined });
           // 增量写入历史：每张完成即写，不等全部完成
-          images.forEach((src) => persistTaskHistory(src).catch(() => {}));
+          images.forEach((src) => persistTaskHistory(src).catch(() => message.warning("历史记录保存失败")));
         },
-        onTaskError: (idx, err) => updateTask(idx, { status: "error", error: err, partial: undefined }),
+        onTaskError: (idx, err) => {
+          if (!isActiveBatch(batchId)) return;
+          updateTask(idx, { status: "error", error: err, partial: undefined });
+        },
         onAllDone: (summary) => {
+          if (!isActiveBatch(batchId)) return;
+          clearActiveBatchTimer();
+          activeBatchRef.current = null;
           setLoading(false);
           const ok = summary.reduce((acc, s) => acc + (s.images?.length ?? 0), 0);
           const fail = summary.filter((s) => s.error).length;
@@ -559,13 +698,15 @@ export default function ImageGen() {
           }
         },
       },
-      { concurrency: 3 }
+      { concurrency: 3, signal: controller.signal }
     );
   }
 
   // 持久化单张图到历史记录（每张独立一条，n=1）
   async function persistTaskHistory(src: string) {
-    const dataUrl = await toDataUrl(src);
+    const response = await fetch(src);
+    const blob = await response.blob();
+    const imageId = await setImage(blob);
     const historyItem: HistoryItem = {
       id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type: "image",
@@ -576,7 +717,7 @@ export default function ImageGen() {
       size,
       n: 1,
       quality,
-      images: [dataUrl],
+      imageIds: [imageId],
       status: "completed",
       createdAt: Date.now(),
     };
@@ -590,6 +731,19 @@ export default function ImageGen() {
       message.warning("参数已失效，请重新生成");
       return;
     }
+    abortRetryRequest(index);
+    const retryId = ++batchSeqRef.current;
+    const controller = new AbortController();
+    retryRequestsRef.current.set(index, {
+      id: retryId,
+      controller,
+      softTimeoutId: window.setTimeout(() => {
+        const retry = retryRequestsRef.current.get(index);
+        if (retry?.id !== retryId) return;
+        updateTask(index, { status: "waiting" });
+        message.warning("该任务仍在等待，你可以继续等结果或再次重试");
+      }, IMAGE_GEN_SOFT_TIMEOUT_MS),
+    });
     updateTask(index, { status: "loading", partial: undefined, error: undefined });
     await generateImageStream(
       {
@@ -603,17 +757,32 @@ export default function ImageGen() {
         image: last.imageBase64,
       },
       {
-        onPartial: (src) => updateTask(index, { status: "loading", partial: src }),
+        onPartial: (src) => {
+          const retry = retryRequestsRef.current.get(index);
+          if (retry?.id !== retryId) return;
+          updateTask(index, { status: "loading", partial: src });
+        },
         onComplete: (images) => {
+          const retry = retryRequestsRef.current.get(index);
+          if (retry?.id !== retryId) return;
+          if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
+          retryRequestsRef.current.delete(index);
           if (images.length > 0) {
             updateTask(index, { status: "done", results: images, partial: undefined, error: undefined });
-            images.forEach((src) => persistTaskHistory(src).catch(() => {}));
+            images.forEach((src) => persistTaskHistory(src).catch(() => message.warning("历史记录保存失败")));
           } else {
             updateTask(index, { status: "error", error: "未收到结果" });
           }
         },
-        onError: (err) => updateTask(index, { status: "error", error: err, partial: undefined }),
-      }
+        onError: (err) => {
+          const retry = retryRequestsRef.current.get(index);
+          if (retry?.id !== retryId) return;
+          if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
+          retryRequestsRef.current.delete(index);
+          updateTask(index, { status: "error", error: err, partial: undefined });
+        },
+      },
+      { signal: controller.signal }
     );
   }
 
@@ -658,13 +827,13 @@ export default function ImageGen() {
       next.add(taskId);
       setFavorited(next);
       try {
-        const dataUrl = await toDataUrl(src);
+        const blob = await (await fetch(src)).blob();
+        const imageId = await setImage(blob);
         addAsset({
           id: `asset-${Date.now()}-${taskId}`,
           name: `${prompt.slice(0, 20) || "生成图"}_${displayIndex + 1}`,
           type: "image",
-          src: dataUrl,
-          thumbnail: dataUrl,
+          imageId,
           tags: ["AI生成", mode],
           source: "generated",
           metadata: { size: size === "auto" ? undefined : Number(size) },
@@ -1324,7 +1493,7 @@ export default function ImageGen() {
                           {/* body：预览图 */}
                           <div className="task-body">
                             {/* pending / loading 无 partial：DiffusionLoader 占满整个格子背景 */}
-                            {(card.status === "pending" || (card.status === "loading" && !task.partial)) && (
+                            {(card.status === "pending" || card.status === "waiting" || (card.status === "loading" && !task.partial)) && (
                               <div
                                 style={{
                                   maxHeight: "var(--cell-max-h)",
@@ -1340,7 +1509,7 @@ export default function ImageGen() {
                               >
                                 <DiffusionLoader
                                   fill
-                                  label={card.status === "loading" ? "生成中" : "等待中"}
+                                  label={card.status === "waiting" ? "仍在等待" : card.status === "loading" ? "生成中" : "等待中"}
                                 />
                               </div>
                             )}

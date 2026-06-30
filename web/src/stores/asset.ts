@@ -1,12 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { deleteImage } from "@/lib/imageStore";
 
 export interface AssetItem {
   id: string;
   name: string;
   type: "image" | "video";
-  src: string; // blob URL or data URL
-  thumbnail: string;
+  /** 图片引用 id（指向 IndexedDB 中的 Blob） */
+  imageId: string;
   tags: string[];
   source: "generated" | "uploaded" | "matte";
   metadata: {
@@ -36,14 +37,26 @@ export const useAssetStore = create<AssetState>()(
     (set) => ({
       items: [],
       add: (item) => set((s) => ({ items: [item, ...s.items].slice(0, 500) })),
-      remove: (id) => set((s) => ({ items: s.items.filter((i) => i.id !== id) })),
+      remove: (id) =>
+        set((s) => {
+          const target = s.items.find((i) => i.id === id);
+          if (target) deleteImage(target.imageId).catch(() => {});
+          return { items: s.items.filter((i) => i.id !== id) };
+        }),
       removeMany: (ids) =>
         set((s) => {
           if (ids.length === 0) return s;
           const idSet = new Set(ids);
+          s.items.forEach((i) => {
+            if (idSet.has(i.id)) deleteImage(i.imageId).catch(() => {});
+          });
           return { items: s.items.filter((i) => !idSet.has(i.id)) };
         }),
-      clear: () => set({ items: [] }),
+      clear: () =>
+        set((s) => {
+          s.items.forEach((i) => deleteImage(i.imageId).catch(() => {}));
+          return { items: [] };
+        }),
       addTag: (id, tag) =>
         set((s) => ({
           items: s.items.map((i) =>
@@ -59,9 +72,13 @@ export const useAssetStore = create<AssetState>()(
           ),
         })),
       removeByHistoryId: (historyId) =>
-        set((s) => ({
-          items: s.items.filter((i) => i.metadata.historyId !== historyId),
-        })),
+        set((s) => {
+          const targets = s.items.filter((i) => i.metadata.historyId === historyId);
+          targets.forEach((t) => deleteImage(t.imageId).catch(() => {}));
+          return {
+            items: s.items.filter((i) => i.metadata.historyId !== historyId),
+          };
+        }),
     }),
     { name: "ymcp-assets" }
   )

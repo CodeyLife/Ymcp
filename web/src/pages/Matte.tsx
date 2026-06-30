@@ -3,6 +3,7 @@ import { Card, Typography, Row, Col, Form, InputNumber, Select, Button, Input, S
 import { ScissorOutlined, DownloadOutlined, AimOutlined, UploadOutlined } from "@ant-design/icons";
 import { useUIStore } from "@/stores/ui";
 import { cacheImageLocally } from "@/lib/api";
+import { setImage } from "@/lib/imageStore";
 import { useAssetStore } from "@/stores/asset";
 import { hexToRgb, rgbToHex, downloadBlob } from "@/lib/canvas";
 import { applyChromaKey, contractAlpha, sampleBorderKey, type RGB } from "@/lib/chromaKey";
@@ -149,16 +150,15 @@ export default function Matte() {
   function download() {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.toBlob((blob) => {
+    canvas.toBlob(async (blob) => {
       if (!blob) return;
-      // 用 data URL 持久化到素材库，避免 blob URL 刷新后失效
-      const dataUrl = canvas.toDataURL("image/png");
+      // 图片 Blob 直接存入 IndexedDB，store 只保存 imageId 引用
+      const imageId = await setImage(blob);
       addAsset({
         id: `asset-matte-${Date.now()}`,
         name: `抠图结果_${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`,
         type: "image",
-        src: dataUrl,
-        thumbnail: dataUrl,
+        imageId,
         tags: ["抠图"],
         source: "matte",
         metadata: { width: canvas.width, height: canvas.height },

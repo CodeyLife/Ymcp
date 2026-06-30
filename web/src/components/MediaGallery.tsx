@@ -26,6 +26,7 @@ import {
 } from "@ant-design/icons";
 import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
+import { useImageUrl } from "@/hooks/useImageUrl";
 import { EmptyState } from "./showtime";
 
 /* ============================================================
@@ -44,8 +45,8 @@ export interface MediaMeta {
 
 export interface MediaItem {
   id: string;
-  /** 图片地址数组，单图卡片仅 1 项；多图支持左右切换 */
-  images: string[];
+  /** 图片引用 id 数组（指向 IndexedDB 中的 Blob），单图卡片仅 1 项；多图支持左右切换 */
+  imageIds: string[];
   title: string;
   metas: MediaMeta[];
   badge?: MediaBadge;
@@ -60,9 +61,9 @@ export interface MediaGalleryProps {
   emptyIcon?: ReactNode;
   emptyTitle: string;
   emptyDescription?: string;
-  onPreview?: (src: string, item: MediaItem) => void;
-  onDownload?: (src: string, item: MediaItem) => void;
-  onMatte?: (src: string, item: MediaItem) => void;
+  onPreview?: (imageId: string, item: MediaItem) => void;
+  onDownload?: (imageId: string, item: MediaItem) => void;
+  onMatte?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   /** 收藏/取消收藏回调，传入时卡片渲染星标按钮 */
   onFavorite?: (item: MediaItem) => void;
@@ -89,9 +90,9 @@ interface MediaCardProps {
   item: MediaItem;
   selected: boolean;
   onToggleSelect: (id: string) => void;
-  onPreview?: (src: string, item: MediaItem) => void;
-  onDownload?: (src: string, item: MediaItem) => void;
-  onMatte?: (src: string, item: MediaItem) => void;
+  onPreview?: (imageId: string, item: MediaItem) => void;
+  onDownload?: (imageId: string, item: MediaItem) => void;
+  onMatte?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   onFavorite?: (item: MediaItem) => void;
 }
@@ -101,8 +102,9 @@ function MediaCard({
 }: MediaCardProps) {
   const reduce = useMotionMode();
   const [imgIdx, setImgIdx] = useState(0);
-  const total = item.images.length;
-  const current = item.images[imgIdx];
+  const total = item.imageIds.length;
+  const currentId = item.imageIds[imgIdx];
+  const current = useImageUrl(currentId);
   const badgeStyle = item.badge ? BADGE_STYLES[item.badge.color] : null;
 
   const stop = (e: React.MouseEvent) => e.stopPropagation();
@@ -117,13 +119,13 @@ function MediaCard({
         },
       }}
       whileHover={reduce ? undefined : { y: -4, transition: { duration: 0.22 } }}
-      onClick={() => current && onPreview?.(current, item)}
+      onClick={() => currentId && onPreview?.(currentId, item)}
       style={{
         position: "relative",
         aspectRatio: "3 / 4",
         borderRadius: 10,
         overflow: "hidden",
-        cursor: current ? "pointer" : "default",
+        cursor: currentId ? "pointer" : "default",
         border: selected
           ? "2px solid #34d399"
           : "1px solid #27272a",
@@ -161,7 +163,7 @@ function MediaCard({
             fontSize: 36,
           }}
         >
-          <PictureOutlined />
+          {currentId ? <PictureOutlined spin /> : <PictureOutlined />}
         </div>
       )}
 
@@ -349,7 +351,7 @@ function MediaCard({
 
         {/* 操作按钮行 */}
         <div style={{ display: "flex", gap: 4 }}>
-          {onFavorite && current && (
+          {onFavorite && currentId && (
             <CardActionButton
               icon={item.favorited ? <StarFilled /> : <StarOutlined />}
               tip={item.favorited ? "取消收藏" : "收藏到素材库"}
@@ -357,18 +359,18 @@ function MediaCard({
               onClick={(e) => { stop(e); onFavorite(item); }}
             />
           )}
-          {onDownload && current && (
+          {onDownload && currentId && (
             <CardActionButton
               icon={<DownloadOutlined />}
               tip="下载"
-              onClick={(e) => { stop(e); onDownload(current, item); }}
+              onClick={(e) => { stop(e); onDownload(currentId, item); }}
             />
           )}
-          {onMatte && current && (
+          {onMatte && currentId && (
             <CardActionButton
               icon={<ScissorOutlined />}
               tip="送入抠图"
-              onClick={(e) => { stop(e); onMatte(current, item); }}
+              onClick={(e) => { stop(e); onMatte(currentId, item); }}
             />
           )}
           {onReuse && (
