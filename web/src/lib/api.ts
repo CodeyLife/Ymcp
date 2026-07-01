@@ -397,6 +397,7 @@ export async function generateImageStream(
       formData.append("prompt", body.prompt);
       formData.append("n", String(body.n));
       formData.append("size", body.size);
+      formData.append("response_format", "url");
       if (body.quality) formData.append("quality", body.quality);
       // image 是 data URL (data:image/<mime>;base64,...)，按实际 MIME 转为 Blob
       const dataUrl = body.image!;
@@ -421,6 +422,7 @@ export async function generateImageStream(
         n: body.n,
         size: body.size,
         quality: body.quality,
+        response_format: "url",
       };
       if (body.style) requestBody.style = body.style;
 
