@@ -54,32 +54,21 @@ export function isImageAccept(accept: string): boolean {
 }
 
 function handlePaste(e: ClipboardEvent): void {
-  // 1. 焦点在可编辑元素上时放行，让浏览器默认粘贴文本
-  const target = e.target as HTMLElement | null;
-  if (
-    target &&
-    (target.isContentEditable ||
-      target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA")
-  ) {
-    return;
-  }
-
-  // 2. 读取剪切板文件
+  // 1. 先读取剪切板文件；如果没有图片文件，再放行给输入框做普通文本粘贴
   const files = e.clipboardData?.files;
   if (!files || files.length === 0) return;
 
-  // 3. 解析激活目标
+  // 2. 解析激活目标
   const activeId = getActiveId();
   if (!activeId) return;
   const pasteTarget = targets.get(activeId);
   if (!pasteTarget) return;
 
-  // 4. 按 accept 过滤
+  // 3. 按 accept 过滤
   const accepted = filterFilesByAccept(files, pasteTarget.accept);
   if (accepted.length === 0) return;
 
-  // 5. 按 multiple 决定取全部还是首个，转回 FileList 调用 handler
+  // 4. 按 multiple 决定取全部还是首个，转回 FileList 调用 handler
   e.preventDefault();
   const dt = new DataTransfer();
   accepted
