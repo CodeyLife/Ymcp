@@ -8,25 +8,23 @@ const { TextArea } = Input;
 
 export default function Settings() {
   const { message } = App.useApp();
-  const apiBaseUrl = useUIStore((s) => s.apiBaseUrl);
   const apiKey = useUIStore((s) => s.apiKey);
   const thumbSize = useUIStore((s) => s.thumbSize);
   const greenscreenPrompt = useUIStore((s) => s.greenscreenPrompt);
   const spritesheetPrompt = useUIStore((s) => s.spritesheetPrompt);
-  const setApiConfig = useUIStore((s) => s.setApiConfig);
+  const setApiKey = useUIStore((s) => s.setApiKey);
   const setThumbSize = useUIStore((s) => s.setThumbSize);
   const setGreenscreenPrompt = useUIStore((s) => s.setGreenscreenPrompt);
   const setSpritesheetPrompt = useUIStore((s) => s.setSpritesheetPrompt);
   const { hasOwnKey } = getEffectiveApiConfig();
 
   function onSave(values: {
-    base_url: string;
     api_key: string;
     thumb_size: number;
     greenscreen_prompt: string;
     spritesheet_prompt: string;
   }) {
-    setApiConfig(values.base_url || "", values.api_key || "");
+    setApiKey(values.api_key || "");
     setThumbSize(values.thumb_size || 256);
     setGreenscreenPrompt(values.greenscreen_prompt || "");
     setSpritesheetPrompt(values.spritesheet_prompt || "");
@@ -53,7 +51,6 @@ export default function Settings() {
         <Form
           layout="vertical"
           initialValues={{
-            base_url: apiBaseUrl,
             api_key: apiKey,
             thumb_size: thumbSize,
             greenscreen_prompt: greenscreenPrompt,
@@ -61,9 +58,6 @@ export default function Settings() {
           }}
           onFinish={onSave}
         >
-          <Form.Item label="Base URL" name="base_url" help={apiBaseUrl ? "使用自有接口" : "留空使用默认接口"}>
-            <Input placeholder="https://api.openai.com/v1" />
-          </Form.Item>
           <Form.Item label="API Key" name="api_key" help={apiKey ? "使用自有 Key" : "留空使用默认 Key（不显示）"}>
             <Input.Password placeholder="sk-..." />
           </Form.Item>

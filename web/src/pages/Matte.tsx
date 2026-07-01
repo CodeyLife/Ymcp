@@ -14,7 +14,6 @@ const { Text } = Typography;
 
 const WHITE_KEY: RGB = [255, 255, 255];
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
-const PNG_EXTENSION_RE = /\.png$/i;
 const ILLEGAL_FILENAME_CHARS_RE = /[\\/:*?"<>|]+/g;
 
 function removeImageExtension(name: string) {
@@ -32,8 +31,7 @@ function sanitizeFileName(name: string) {
 
 function buildOutputNames(name: string, timestamp = Date.now()) {
   const fallbackBaseName = `matte-${timestamp}`;
-  const withoutPng = name.trim().replace(PNG_EXTENSION_RE, "");
-  const baseName = sanitizeFileName(withoutPng) || fallbackBaseName;
+  const baseName = sanitizeFileName(removeImageExtension(name)) || fallbackBaseName;
   return {
     assetName: baseName,
     downloadName: `${baseName}.png`,

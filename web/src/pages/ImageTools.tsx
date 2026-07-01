@@ -4,11 +4,13 @@ import {
 } from "antd";
 import {
   AppstoreOutlined, ColumnHeightOutlined, BlockOutlined, DownloadOutlined, PlusOutlined,
-  BgColorsOutlined, CompressOutlined, ScissorOutlined, ShrinkOutlined,
+  BgColorsOutlined, CompressOutlined, ScissorOutlined, ShrinkOutlined, ThunderboltOutlined,
 } from "@ant-design/icons";
+import { useSearchParams } from "react-router-dom";
 import { loadImageFromFile, loadImagesFromFiles, downloadBlob, canvasToBlob } from "@/lib/canvas";
 import { PageHeader, EmptyState, GlassCard } from "@/components/showtime";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
+import SuperResPanel from "./ImageTools/SuperResPanel";
 
 const { Text } = Typography;
 
@@ -74,7 +76,7 @@ function ToolStat({ label, value }: { label: string; value: string }) {
 
 function ToolIntro() {
   const stats = [
-    { label: "本地处理", value: "6 个工具" },
+    { label: "本地处理", value: "8 个工具" },
     { label: "图片出入", value: "PNG / JPEG / WebP" },
     { label: "适合场景", value: "生图资产整理" },
   ];
@@ -849,7 +851,11 @@ function PalettePanel() {
 }
 
 export default function ImageTools() {
+  const [searchParams] = useSearchParams();
+  const initialTool = searchParams.get("tool") || "format";
+
   const tools = [
+    { key: "superres", label: <span><ThunderboltOutlined /> 超分 4K</span>, children: <SuperResPanel /> },
     { key: "format", label: <span><CompressOutlined /> 格式导出</span>, children: <FormatPanel /> },
     { key: "trim", label: <span><ScissorOutlined /> 透明裁切</span>, children: <TrimPanel /> },
     { key: "palette", label: <span><BgColorsOutlined /> 调色板</span>, children: <PalettePanel /> },
@@ -868,7 +874,7 @@ export default function ImageTools() {
       />
       <ToolIntro />
       <GlassCard className="image-tools-tabs-card" padding={16} spotlight>
-        <Tabs defaultActiveKey="format" items={tools} />
+        <Tabs defaultActiveKey={initialTool} items={tools} />
       </GlassCard>
     </div>
   );

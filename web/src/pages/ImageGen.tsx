@@ -104,6 +104,32 @@ async function flattenImageOnGreen(blob: Blob): Promise<Blob> {
 }
 
 /**
+ * 将图片转为 JPEG blob URL。
+ * 用于超分前预处理：JPG 无 alpha 通道、体积更小，可加速推理并避免透明区域伪影。
+ */
+async function pngToJpegUrl(src: string): Promise<string> {
+  const response = await fetch(src);
+  const blob = await response.blob();
+  const image = await loadImageFromBlob(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 上下文不可用");
+  // JPG 不支持透明，填充白色背景
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(image, 0, 0);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (out) => (out ? resolve(URL.createObjectURL(out)) : reject(new Error("JPEG 导出失败"))),
+      "image/jpeg",
+      0.95
+    );
+  });
+}
+
+/**
  * 根据结果数量、容器宽高比、图片宽高比，算出能装下全部卡片且总高不超过可用高度的最优列数。
  * 目标：每格尽量大、行数最少、不溢出视口。
  *
@@ -799,6 +825,18 @@ export default function ImageGen() {
       navigate("/matte");
     } catch {
       message.error("图片缓存失败");
+    }
+  }
+
+  async function sendToSuperRes(src: string) {
+    try {
+      const cachedSrc = await cacheImageLocally(src);
+      // PNG → JPEG：减小输入体积加速推理，移除 alpha 通道（超分对纯 RGB 更友好）
+      const jpegUrl = await pngToJpegUrl(cachedSrc);
+      setIncomingImage({ src: jpegUrl, from: "image-gen" });
+      navigate("/image-tools?tool=superres");
+    } catch {
+      message.error("图片处理失败");
     }
   }
 
@@ -1708,6 +1746,14 @@ export default function ImageGen() {
                                       onClick={() => splitToPsd(card.src!)}
                                     >
                                       <BlockOutlined />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label="超分 4K"
+                                      title="超分 4K（本地）"
+                                      onClick={() => sendToSuperRes(card.src!)}
+                                    >
+                                      <ThunderboltOutlined />
                                     </button>
                                     <button
                                       type="button"

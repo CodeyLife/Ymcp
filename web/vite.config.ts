@@ -1,7 +1,26 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { readFileSync } from "node:fs";
+
+/**
+ * 排除 onnxruntime-web 的 wasm 资源被打包进 dist。
+ *
+ * onnxruntime-web 在 build 时会被 Vite 检测到 wasm 引用并拷贝到 dist/assets，
+ * 但运行时 superRes.worker.ts 已通过 ort.env.wasm.wasmPaths 指向 CDN，
+ * dist 里的 wasm 文件根本不会被加载。删除可减少 ~24MB 产物体积。
+ */
+function excludeOnnxWasm(): Plugin {
+  return {
+    name: "exclude-onnx-wasm",
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      for (const key of Object.keys(bundle)) {
+        if (key.endsWith(".wasm")) delete bundle[key];
+      }
+    },
+  };
+}
 
 /**
  * 从 src/config/defaults.ts 解析 DEFAULT_BASE_URL，避免在 vite.config 中重复维护默认值。
@@ -18,11 +37,14 @@ function readDefaultBaseUrl(): string {
 const DEV_PROXY_TARGET = new URL(readDefaultBaseUrl()).origin;
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), excludeOnnxWasm()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+  },
+  optimizeDeps: {
+    exclude: ["onnxruntime-web"],
   },
   server: {
     port: 5173,
@@ -40,6 +62,7 @@ export default defineConfig({
     },
   },
   build: {
+    target: "esnext",
     rollupOptions: {
       output: {
         manualChunks(id) {
