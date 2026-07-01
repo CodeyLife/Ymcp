@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag,
+  Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag, Drawer, Empty, Popconfirm,
 } from "antd";
-import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, UploadOutlined, BlockOutlined } from "@ant-design/icons";
+import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, UploadOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
 import { useImageGenStore, type TaskStatus } from "@/stores/imageGen";
+import { usePromptFavoriteStore, createPromptFavoriteTitle, type PromptFavorite } from "@/stores/promptFavorites";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
 import { usePsdTaskStore } from "@/stores/psdTask";
@@ -221,6 +222,120 @@ function TaskStatusTag({ status }: { status: TaskStatus }) {
   };
   const cfg = map[status];
   return <Tag color={cfg.color} style={{ marginInlineEnd: 0 }}>{cfg.text}</Tag>;
+}
+
+function formatFavoriteTime(time: number | null): string {
+  if (!time) return "尚未使用";
+  return new Date(time).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function PromptFavoriteDrawer({
+  open,
+  items,
+  activeId,
+  search,
+  onSearchChange,
+  onClose,
+  onUse,
+  onDelete,
+  onRename,
+}: {
+  open: boolean;
+  items: PromptFavorite[];
+  activeId: string | null;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onClose: () => void;
+  onUse: (item: PromptFavorite) => void;
+  onDelete: (id: string) => void;
+  onRename: (id: string, title: string) => void;
+}) {
+  const [titleDrafts, setTitleDrafts] = useState<Record<string, string>>({});
+
+  const commitTitle = (item: PromptFavorite) => {
+    const nextTitle = (titleDrafts[item.id] ?? item.title).trim();
+    if (nextTitle && nextTitle !== item.title) onRename(item.id, nextTitle);
+  };
+
+  return (
+    <Drawer
+      title={(
+        <div className="prompt-favorite-drawer-title">
+          <BookOutlined />
+          <span>提示词收藏库</span>
+          <Tag color="green" style={{ marginInlineStart: 8 }}>{items.length}</Tag>
+        </div>
+      )}
+      open={open}
+      onClose={onClose}
+      width={520}
+      className="prompt-favorite-drawer"
+      styles={{
+        body: { padding: 16 },
+        header: { borderBottom: "1px solid rgba(63, 63, 70, 0.72)" },
+      }}
+    >
+      <Input
+        allowClear
+        value={search}
+        onChange={(event) => onSearchChange(event.target.value)}
+        placeholder="搜索标题或提示词"
+        className="prompt-favorite-search"
+      />
+
+      {items.length === 0 ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={search.trim() ? "没有匹配的收藏" : "还没有收藏提示词"}
+          style={{ color: "#71717a", marginTop: 48 }}
+        />
+      ) : (
+        <div className="prompt-favorite-list">
+          {items.map((item) => {
+            const active = item.id === activeId;
+            return (
+              <div key={item.id} className={`prompt-favorite-card${active ? " is-active" : ""}`}>
+                <div className="prompt-favorite-card-head">
+                  <Input
+                    size="small"
+                    value={titleDrafts[item.id] ?? item.title}
+                    onChange={(event) => setTitleDrafts((prev) => ({ ...prev, [item.id]: event.target.value }))}
+                    onBlur={() => commitTitle(item)}
+                    onPressEnter={() => commitTitle(item)}
+                    className="prompt-favorite-title-input"
+                  />
+                  <Space size={6}>
+                    <Button size="small" type={active ? "primary" : "default"} onClick={() => onUse(item)}>
+                      使用
+                    </Button>
+                    <Popconfirm
+                      title="删除这条提示词收藏？"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => onDelete(item.id)}
+                    >
+                      <Button size="small" danger icon={<DeleteOutlined />} />
+                    </Popconfirm>
+                  </Space>
+                </div>
+                <div className="prompt-favorite-preview">{item.prompt}</div>
+                <div className="prompt-favorite-meta">
+                  <span>{item.sourceMode === "img2img" ? "图生图" : "文生图"} · {item.genMode}</span>
+                  <span>使用 {item.usageCount} 次 · {formatFavoriteTime(item.lastUsedAt)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Drawer>
+  );
 }
 
 /* 序列帧模式：原图 + N×N 拆分动画预览（两板块垂直分布） */
@@ -458,6 +573,12 @@ export default function ImageGen() {
 
   const addHistory = useHistoryStore((s) => s.add);
   const addAsset = useAssetStore((s) => s.add);
+  const promptFavorites = usePromptFavoriteStore((s) => s.items);
+  const addPromptFavorite = usePromptFavoriteStore((s) => s.add);
+  const updatePromptFavorite = usePromptFavoriteStore((s) => s.update);
+  const removePromptFavorite = usePromptFavoriteStore((s) => s.remove);
+  const markPromptFavoriteUsed = usePromptFavoriteStore((s) => s.markUsed);
+  const findDuplicatePromptFavorite = usePromptFavoriteStore((s) => s.findDuplicate);
   const setPsdPendingImages = usePsdTaskStore((s) => s.setPendingBase64Images);
   const setPsdPendingPrompt = usePsdTaskStore((s) => s.setPendingPrompt);
 
@@ -471,6 +592,12 @@ export default function ImageGen() {
   const [resultRatios, setResultRatios] = useState<Record<string, number>>({});
   const [polishing, setPolishing] = useState(false);
   const [undoPrompt, setUndoPrompt] = useState<string | null>(null);
+  const [promptFavoriteDrawerOpen, setPromptFavoriteDrawerOpen] = useState(false);
+  const [promptFavoriteSearch, setPromptFavoriteSearch] = useState("");
+  const [activePromptFavoriteIds, setActivePromptFavoriteIds] = useState<Record<"text2img" | "img2img", string | null>>({
+    text2img: null,
+    img2img: null,
+  });
   const reduceMotion = useMotionMode();
   const activeBatchRef = useRef<{
     id: number;
@@ -569,6 +696,37 @@ export default function ImageGen() {
   const currentStylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
   const prompt = mode === "img2img" ? imgPrompt : textPrompt;
   const setPrompt = mode === "img2img" ? setImgPrompt : setTextPrompt;
+  const currentPromptSourceMode = mode === "img2img" ? "img2img" : "text2img";
+  const activePromptFavoriteId = activePromptFavoriteIds[currentPromptSourceMode];
+  const activePromptFavorite = activePromptFavoriteId
+    ? promptFavorites.find((item) => item.id === activePromptFavoriteId)
+    : undefined;
+  const promptFavoriteDirty = !!activePromptFavorite && prompt.trim() !== activePromptFavorite.prompt;
+  const filteredPromptFavorites = useMemo(() => {
+    const q = promptFavoriteSearch.trim().toLowerCase();
+    const sorted = [...promptFavorites].sort((a, b) => {
+      const aTime = a.lastUsedAt ?? a.updatedAt;
+      const bTime = b.lastUsedAt ?? b.updatedAt;
+      return bTime - aTime;
+    });
+    if (!q) return sorted;
+    return sorted.filter((item) =>
+      item.title.toLowerCase().includes(q) ||
+      item.prompt.toLowerCase().includes(q)
+    );
+  }, [promptFavorites, promptFavoriteSearch]);
+
+  useEffect(() => {
+    const existingIds = new Set(promptFavorites.map((item) => item.id));
+    setActivePromptFavoriteIds((prev) => ({
+      text2img: prev.text2img && !existingIds.has(prev.text2img) ? null : prev.text2img,
+      img2img: prev.img2img && !existingIds.has(prev.img2img) ? null : prev.img2img,
+    }));
+  }, [promptFavorites]);
+
+  function setCurrentActivePromptFavoriteId(id: string | null) {
+    setActivePromptFavoriteIds((prev) => ({ ...prev, [currentPromptSourceMode]: id }));
+  }
 
   async function handleRefImageFiles(files: FileList) {
     const file = files[0];
@@ -936,6 +1094,87 @@ export default function ImageGen() {
     }
   }
 
+  function getCurrentPromptSourceMode() {
+    return mode === "img2img" ? "img2img" : "text2img";
+  }
+
+  function handleSaveCurrentPromptFavorite() {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      message.warning("请输入提示词");
+      return;
+    }
+    const duplicate = findDuplicatePromptFavorite(trimmed);
+    if (duplicate) {
+      setCurrentActivePromptFavoriteId(duplicate.id);
+      message.info("已关联到已有提示词收藏");
+      return;
+    }
+    const item = addPromptFavorite({
+      title: createPromptFavoriteTitle(trimmed),
+      prompt: trimmed,
+      sourceMode: getCurrentPromptSourceMode(),
+      genMode,
+      styleId,
+    });
+    setCurrentActivePromptFavoriteId(item.id);
+    message.success("已收藏当前提示词");
+  }
+
+  function handleUsePromptFavorite(item: PromptFavorite) {
+    if (prompt !== item.prompt) {
+      setUndoPrompt(prompt);
+    }
+    setPrompt(item.prompt);
+    setCurrentActivePromptFavoriteId(item.id);
+    markPromptFavoriteUsed(item.id);
+    setPromptFavoriteDrawerOpen(false);
+    message.success("已替换为收藏提示词");
+  }
+
+  function handleUpdateActivePromptFavorite() {
+    if (!activePromptFavorite) return;
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      message.warning("请输入提示词");
+      return;
+    }
+    updatePromptFavorite(activePromptFavorite.id, {
+      prompt: trimmed,
+      sourceMode: getCurrentPromptSourceMode(),
+      genMode,
+      styleId,
+    });
+    message.success("已更新当前收藏");
+  }
+
+  function handleSavePromptFavoriteAsNew() {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      message.warning("请输入提示词");
+      return;
+    }
+    const item = addPromptFavorite({
+      title: createPromptFavoriteTitle(trimmed),
+      prompt: trimmed,
+      sourceMode: getCurrentPromptSourceMode(),
+      genMode,
+      styleId,
+    });
+    setCurrentActivePromptFavoriteId(item.id);
+    message.success("已另存为新收藏");
+  }
+
+  function handleDeletePromptFavorite(id: string) {
+    removePromptFavorite(id);
+    if (activePromptFavoriteId === id) setCurrentActivePromptFavoriteId(null);
+    message.info("已删除提示词收藏");
+  }
+
+  function handleRenamePromptFavorite(id: string, title: string) {
+    updatePromptFavorite(id, { title });
+  }
+
   return (
     <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 28px 48px" }}>
       <PageHeader
@@ -1069,6 +1308,20 @@ export default function ImageGen() {
                     )}
                     <Button
                       size="small"
+                      icon={<PlusOutlined />}
+                      onClick={handleSaveCurrentPromptFavorite}
+                    >
+                      收藏当前
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<BookOutlined />}
+                      onClick={() => setPromptFavoriteDrawerOpen(true)}
+                    >
+                      选择收藏
+                    </Button>
+                    <Button
+                      size="small"
                       icon={<ThunderboltOutlined />}
                       loading={polishing}
                       onClick={handlePolish}
@@ -1087,6 +1340,35 @@ export default function ImageGen() {
                   placeholder="一只在窗台上看雨的橘猫，胶片质感，柔和光线"
                   style={{ resize: "vertical" }}
                 />
+                {activePromptFavorite && (
+                  <div className={`prompt-favorite-status${promptFavoriteDirty ? " is-dirty" : ""}`}>
+                    <div className="prompt-favorite-status-copy">
+                      <BookOutlined />
+                      <span>正在使用收藏：{activePromptFavorite.title}</span>
+                      <Tag color={promptFavoriteDirty ? "gold" : "green"} style={{ marginInlineEnd: 0 }}>
+                        {promptFavoriteDirty ? "已修改" : "已同步"}
+                      </Tag>
+                    </div>
+                    <Space size={6} wrap>
+                      {promptFavoriteDirty && (
+                        <Button
+                          size="small"
+                          type="primary"
+                          icon={<SaveOutlined />}
+                          onClick={handleUpdateActivePromptFavorite}
+                        >
+                          更新收藏
+                        </Button>
+                      )}
+                      <Button size="small" onClick={handleSavePromptFavoriteAsNew}>
+                        另存为
+                      </Button>
+                      <Button size="small" type="text" onClick={() => setCurrentActivePromptFavoriteId(null)}>
+                        断开关联
+                      </Button>
+                    </Space>
+                  </div>
+                )}
               </div>
 
               <div style={{ marginBottom: 16 }}>
@@ -1796,6 +2078,18 @@ export default function ImageGen() {
           </Image.PreviewGroup>
         </div>
       )}
+
+      <PromptFavoriteDrawer
+        open={promptFavoriteDrawerOpen}
+        items={filteredPromptFavorites}
+        activeId={activePromptFavoriteId}
+        search={promptFavoriteSearch}
+        onSearchChange={setPromptFavoriteSearch}
+        onClose={() => setPromptFavoriteDrawerOpen(false)}
+        onUse={handleUsePromptFavorite}
+        onDelete={handleDeletePromptFavorite}
+        onRename={handleRenamePromptFavorite}
+      />
         </>
       )}
     </div>

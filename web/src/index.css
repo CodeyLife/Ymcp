@@ -1089,6 +1089,124 @@ body {
   color: #fbbf24;
 }
 
+/* AI 生图提示词收藏库 */
+.prompt-favorite-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(52, 211, 153, 0.26);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(24, 24, 27, 0.74)),
+    rgba(12, 12, 14, 0.72);
+}
+.prompt-favorite-status.is-dirty {
+  border-color: rgba(245, 158, 11, 0.38);
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(24, 24, 27, 0.74)),
+    rgba(12, 12, 14, 0.72);
+}
+.prompt-favorite-status-copy {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #d4d4d8;
+  font-size: 12px;
+  font-weight: 600;
+}
+.prompt-favorite-status-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-favorite-drawer .ant-drawer-content {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(16, 185, 129, 0.16), transparent 34%),
+    linear-gradient(180deg, rgba(24, 24, 27, 0.98), rgba(9, 9, 11, 0.98)) !important;
+  color: #d4d4d8;
+  border-left: 1px solid rgba(52, 211, 153, 0.2);
+}
+.prompt-favorite-drawer .ant-drawer-header {
+  background: rgba(9, 9, 11, 0.72) !important;
+}
+.prompt-favorite-drawer .ant-drawer-title,
+.prompt-favorite-drawer .ant-drawer-close {
+  color: #f4f4f5 !important;
+}
+.prompt-favorite-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.prompt-favorite-search {
+  margin-bottom: 14px;
+}
+.prompt-favorite-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.prompt-favorite-card {
+  position: relative;
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid rgba(63, 63, 70, 0.72);
+  border-radius: 14px;
+  background:
+    linear-gradient(145deg, rgba(39, 39, 42, 0.72), rgba(12, 12, 14, 0.82)),
+    rgba(24, 24, 27, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.prompt-favorite-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(52, 211, 153, 0.34);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(52, 211, 153, 0.08);
+}
+.prompt-favorite-card.is-active {
+  border-color: rgba(52, 211, 153, 0.72);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.28), 0 12px 30px rgba(16, 185, 129, 0.12);
+}
+.prompt-favorite-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+.prompt-favorite-title-input {
+  flex: 1;
+  min-width: 0;
+  color: #f4f4f5 !important;
+  font-weight: 650;
+  background: rgba(0, 0, 0, 0.2) !important;
+  border-color: rgba(63, 63, 70, 0.58) !important;
+}
+.prompt-favorite-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: #a1a1aa;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+.prompt-favorite-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  color: #71717a;
+  font-size: 11px;
+}
+
 /* AI 生图主操作条：让生成按钮始终留在参数卡底部可见区域 */
 .image-gen-action-bar {
   position: sticky;
@@ -1110,6 +1228,19 @@ body {
 }
 
 @media (max-width: 767px) {
+  .prompt-favorite-status,
+  .prompt-favorite-card-head,
+  .prompt-favorite-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .prompt-favorite-status .ant-space {
+    width: 100%;
+  }
+  .prompt-favorite-status .ant-btn,
+  .prompt-favorite-card-head .ant-btn {
+    width: 100%;
+  }
   .image-gen-action-bar {
     position: static;
     margin-top: 14px;
