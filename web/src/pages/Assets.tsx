@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  App, Image, Segmented, Input,
+  App, Segmented, Input,
 } from "antd";
 import {
   AppstoreOutlined, UploadOutlined, SearchOutlined,
@@ -14,6 +14,8 @@ import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
 import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
+import { ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
+import { sendImageToImageGenReference } from "@/lib/imageGenReference";
 
 type FilterType = "all" | "generated" | "uploaded" | "matte";
 
@@ -73,6 +75,14 @@ export default function Assets() {
       raw: a,
     };
   });
+  const previewImageIds = useMemo(
+    () => mediaItems.flatMap((item) => item.imageIds),
+    [mediaItems]
+  );
+  const previewItem = useMemo(
+    () => mediaItems.find((item) => previewImageId ? item.imageIds.includes(previewImageId) : false),
+    [mediaItems, previewImageId]
+  );
 
   async function downloadImage(imageId: string) {
     try {
@@ -102,6 +112,15 @@ export default function Assets() {
     }
   }
 
+  async function sendToImageGen(imageId: string) {
+    await sendImageToImageGenReference(imageId, {
+      navigate,
+      onSuccess: () => setPreviewImageId(null),
+      showSuccess: (content) => message.success(content),
+      showError: (content) => message.error(content),
+    });
+  }
+
   async function handleUpload(files: FileList) {
     let count = 0;
     for (const file of Array.from(files)) {
@@ -125,6 +144,18 @@ export default function Assets() {
   function handleDelete(ids: string[]) {
     removeMany(ids);
     message.success(`已删除 ${ids.length} 项`);
+  }
+
+  function handleDeleteCurrent(item: MediaItem) {
+    handleDelete([item.id]);
+    setPreviewImageId(null);
+  }
+
+  function buildPreviewDownloadName(item?: MediaItem) {
+    const raw = item?.raw as AssetItem | undefined;
+    const name = raw?.name?.trim();
+    if (!name) return `asset-${Date.now()}.png`;
+    return /\.[a-z0-9]{2,5}$/i.test(name) ? name : `${name}.png`;
   }
 
   return (
@@ -175,19 +206,24 @@ export default function Assets() {
         onPreview={(imageId) => setPreviewImageId(imageId)}
         onDownload={(imageId) => downloadImage(imageId)}
         onMatte={(imageId) => sendToMatte(imageId)}
+        onImg2Img={(imageId) => void sendToImageGen(imageId)}
         onDelete={handleDelete}
       />
 
       {/* 大图预览 */}
       {previewImageId && previewSrc && (
-        <Image
-          style={{ display: "none" }}
-          preview={{
-            visible: !!previewImageId,
-            onVisibleChange: (v) => !v && setPreviewImageId(null),
-            src: previewSrc,
-          }}
+        <ImagePreviewWithToolbar
+          imageId={previewImageId}
           src={previewSrc}
+          imageIds={previewImageIds}
+          currentItem={previewItem}
+          downloadFilename={buildPreviewDownloadName(previewItem)}
+          onClose={() => setPreviewImageId(null)}
+          onImageChange={setPreviewImageId}
+          onDownload={downloadImage}
+          onMatte={sendToMatte}
+          onImg2Img={(imageId) => void sendToImageGen(imageId)}
+          onDeleteCurrent={handleDeleteCurrent}
         />
       )}
     </div>

@@ -10,6 +10,10 @@ function isNarrowScreen() {
   return typeof window !== "undefined" && window.innerWidth < SIDEBAR_COLLAPSE_BREAKPOINT;
 }
 
+function normalizeApiBaseUrl(baseUrl: string) {
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
 interface UIState {
   collapsed: boolean;
   toggleCollapsed: () => void;
@@ -41,7 +45,7 @@ export const useUIStore = create<UIState>()(
       thumbSize: 256,
       greenscreenPrompt: "Pure chroma key green background (#00FF00), no shadows, no gradients, no highlights，background=opaque",
       spritesheetPrompt: "A seamless sprite sheet animation arranged in a grid layout, consisting of multiple frames showing sequential motion, each frame evenly spaced in a regular grid, consistent character scale and positioning, transparent or uniform background, clear visual progression of movement, designed for frame-by-frame animation extraction",
-      setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl }),
+      setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) }),
       setApiKey: (apiKey) => set({ apiKey }),
       setThumbSize: (size) => set({ thumbSize: size }),
       setGreenscreenPrompt: (prompt) => set({ greenscreenPrompt: prompt }),
@@ -50,6 +54,7 @@ export const useUIStore = create<UIState>()(
     {
       name: "ymcp-ui",
       partialize: (state) => ({
+        apiBaseUrl: state.apiBaseUrl,
         apiKey: state.apiKey,
         thumbSize: state.thumbSize,
         greenscreenPrompt: state.greenscreenPrompt,
@@ -61,8 +66,11 @@ export const useUIStore = create<UIState>()(
 
 export function getEffectiveApiConfig() {
   const state = useUIStore.getState();
-  const baseUrl = DEFAULT_BASE_URL;
-  const apiKey = state.apiKey.trim() || DEFAULT_API_KEY;
+  const customBaseUrl = normalizeApiBaseUrl(state.apiBaseUrl);
+  const defaultBaseUrl = normalizeApiBaseUrl(DEFAULT_BASE_URL);
+  const baseUrl = customBaseUrl || defaultBaseUrl;
+  const usesDefaultBaseUrl = baseUrl === defaultBaseUrl;
+  const apiKey = state.apiKey.trim() || (usesDefaultBaseUrl ? DEFAULT_API_KEY : "");
   const hasOwnKey = !!state.apiKey.trim();
-  return { baseUrl, apiKey, hasOwnKey };
+  return { baseUrl, apiKey, hasOwnKey, usesDefaultBaseUrl };
 }

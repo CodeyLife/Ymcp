@@ -25,8 +25,10 @@ interface ImageGenState {
   spritesheetN: number;
   quality: string;
   styleId: string;
+  img2imgReferenceGuideId: string | null;
   refImage: string | null;
   tasks: GenTask[];
+  extraResults: string[];
   loading: boolean;
   error: string | null;
   setMode: (mode: "text2img" | "img2img" | "psd") => void;
@@ -38,9 +40,11 @@ interface ImageGenState {
   setSpritesheetN: (n: number) => void;
   setQuality: (quality: string) => void;
   setStyleId: (styleId: string) => void;
+  setImg2imgReferenceGuideId: (guideId: string | null) => void;
   setRefImage: (url: string | null) => void;
   setTasks: (tasks: GenTask[]) => void;
   updateTask: (index: number, patch: Partial<GenTask>) => void;
+  addExtraResult: (src: string) => void;
   resetTasks: (count: number) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -57,8 +61,10 @@ const DEFAULTS = {
   spritesheetN: 4,
   quality: "auto",
   styleId: "none",
+  img2imgReferenceGuideId: null,
   refImage: null,
   tasks: [] as GenTask[],
+  extraResults: [] as string[],
   loading: false,
   error: null as string | null,
 };
@@ -74,11 +80,16 @@ export const useImageGenStore = create<ImageGenState>((set) => ({
   setSpritesheetN: (n) => set({ spritesheetN: n }),
   setQuality: (quality) => set({ quality }),
   setStyleId: (styleId) => set({ styleId }),
+  setImg2imgReferenceGuideId: (img2imgReferenceGuideId) => set({ img2imgReferenceGuideId }),
   setRefImage: (refImage) => set({ refImage }),
   setTasks: (tasks) => set({ tasks }),
   updateTask: (index, patch) =>
     set((state) => ({
       tasks: state.tasks.map((t) => (t.index === index ? { ...t, ...patch } : t)),
+    })),
+  addExtraResult: (src) =>
+    set((state) => ({
+      extraResults: [...state.extraResults, src],
     })),
   resetTasks: (count) =>
     set({
@@ -88,8 +99,9 @@ export const useImageGenStore = create<ImageGenState>((set) => ({
         status: "pending" as TaskStatus,
         startedAt: Date.now(),
       })),
+      extraResults: [],
     }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
-  reset: () => set(DEFAULTS),
+  reset: () => set({ ...DEFAULTS, tasks: [], extraResults: [] }),
 }));

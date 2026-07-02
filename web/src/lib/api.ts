@@ -263,6 +263,75 @@ function extractApiErrorMessage(payload: unknown): string | null {
   return null;
 }
 
+function extractStreamErrorMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const error = extractStreamErrorMessage(item);
+      if (error) return error;
+    }
+    return null;
+  }
+
+  const item = payload as Record<string, unknown>;
+  const kind = String(item.object || item.type || "").toLowerCase();
+  const status = String(item.status || "").toLowerCase();
+  const isFailedStatus = status === "failed" || status === "error";
+  const isErrorEvent = kind === "error" || kind.endsWith(".error");
+
+  if (isFailedStatus || isErrorEvent) {
+    return extractApiErrorMessage(item) || "生成失败";
+  }
+
+  if ("error" in item && item.error) {
+    const explicitError = extractApiErrorMessage({ error: item.error });
+    if (explicitError) return explicitError;
+  }
+
+  return extractStreamErrorMessage(item.data);
+}
+
+function isInternalImageMessage(message: string): boolean {
+  return /\bskipped_[a-z0-9_]+\s*:/i.test(message);
+}
+
+function splitSseBlocks(buffer: string): { payloads: string[]; rest: string } {
+  if (!buffer.includes("\n\n") && !buffer.includes("\r\n\r\n")) {
+    const lines = buffer.split(/\r?\n/);
+    const rest = lines.pop() || "";
+    return {
+      payloads: lines
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .filter(Boolean),
+      rest,
+    };
+  }
+
+  const blocks = buffer.split(/\r?\n\r?\n/);
+  const rest = blocks.pop() || "";
+  const payloads = blocks
+    .map((block) => block
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n")
+      .trim())
+    .filter(Boolean);
+  return { payloads, rest };
+}
+
+function splitNdjsonLines(buffer: string): { payloads: string[]; rest: string } {
+  const lines = buffer.split(/\r?\n/);
+  const rest = lines.pop() || "";
+  return {
+    payloads: lines.map((line) => line.trim()).filter(Boolean),
+    rest,
+  };
+}
+
 async function readApiError(response: Response): Promise<string> {
   const text = await response.text().catch(() => "");
   if (!text.trim()) return `HTTP ${response.status}`;
@@ -401,7 +470,7 @@ export async function generateImageStream(
       formData.append("prompt", body.prompt);
       formData.append("n", String(body.n));
       formData.append("size", body.size);
-      formData.append("response_format", "url");
+      formData.append("response_format", "b64_json");
       formData.append("stream", "true");
       if (body.quality) formData.append("quality", body.quality);
       // image 是 data URL (data:image/<mime>;base64,...)，按实际 MIME 转为 Blob
@@ -427,7 +496,7 @@ export async function generateImageStream(
         n: body.n,
         size: body.size,
         quality: body.quality,
-        response_format: "url",
+        response_format: "b64_json",
         stream: true,
       };
       if (body.style) requestBody.style = body.style;
@@ -447,7 +516,7 @@ export async function generateImageStream(
       throw new Error(await readApiError(response));
     }
 
-    // 检查是否是 SSE 流
+    // 检查是否是流式响应
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("text/event-stream") && !contentType.includes("application/x-ndjson")) {
       // 非流式响应，直接解析 JSON
@@ -462,27 +531,39 @@ export async function generateImageStream(
       return;
     }
 
-    // 解析 SSE 流
+    // 解析 SSE / NDJSON 流
+    const isNdjson = contentType.includes("application/x-ndjson");
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const finalImages: string[] = [];
     const finalImageSources = new Set<string>();
+    let nextImplicitResultIndex = 1;
+    let sawDoneEvent = false;
+    let sawStreamEvent = false;
+
+    const emitImages = (index: number, images: string[]) => {
+      if (images.length === 0) return;
+      finalImages.push(...images);
+      callbacks.onResult?.(index, images);
+      nextImplicitResultIndex = Math.max(nextImplicitResultIndex, index + images.length);
+    };
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
-      // 按 SSE 事件分隔
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+      const parsed = isNdjson ? splitNdjsonLines(buffer) : splitSseBlocks(buffer);
+      buffer = parsed.rest;
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data:")) continue;
-        const dataStr = trimmed.slice(5).trim();
-        if (dataStr === "[DONE]") continue;
+      for (const dataStr of parsed.payloads) {
+        if (!dataStr) continue;
+        sawStreamEvent = true;
+        if (dataStr === "[DONE]") {
+          sawDoneEvent = true;
+          continue;
+        }
 
         let event: Record<string, unknown>;
         try {
@@ -492,6 +573,9 @@ export async function generateImageStream(
           continue;
         }
 
+        const streamError = extractStreamErrorMessage(event);
+        if (streamError) throw new Error(streamError);
+
         // 后端 SSE 事件类型（chatgpt2api 使用 event.object 标识）
         const obj = String(event.object || event.type || "");
         if (obj === "image.generation.chunk") {
@@ -500,14 +584,11 @@ export async function generateImageStream(
         } else if (obj === "image.generation.result") {
           const idx = Number(event.index) || 1;
           const images = await extractImageSources(event, finalImageSources);
-          if (images.length > 0) {
-            finalImages.push(...images);
-            callbacks.onResult?.(idx, images);
-          }
+          emitImages(idx, images);
         } else if (obj === "image.generation.message") {
           // message 可能是上游文本/警告，作为进度信息呈现
           const msg = String(event.message || "").trim();
-          if (msg) callbacks.onProgress?.(msg);
+          if (msg && !isInternalImageMessage(msg)) callbacks.onProgress?.(msg);
         } else if (obj === "error" || event.type === "error") {
           throw new Error(extractApiErrorMessage(event) || "生成失败");
         } else if (event.data) {
@@ -515,20 +596,36 @@ export async function generateImageStream(
           const apiError = extractApiErrorMessage(event.data);
           if (apiError) throw new Error(apiError);
           const images = await extractImageSources(event.data, finalImageSources);
-          finalImages.push(...images);
+          emitImages(nextImplicitResultIndex, images);
         }
         if (options?.signal?.aborted) return;
       }
     }
 
-    if (finalImages.length === 0) {
-      // 没有收到完成事件，可能整个响应就是最终结果
+    const tail = buffer.trim();
+    if (tail && tail !== "[DONE]") {
+      let json: unknown = null;
       try {
-        const json = JSON.parse(buffer);
-        finalImages.push(...await extractImageSources(json, finalImageSources));
+        json = JSON.parse(tail.startsWith("data:") ? tail.slice(5).trim() : tail);
       } catch {
-        // 忽略
+        // 忽略不完整的流尾碎片
       }
+      if (json) {
+        const streamError = extractStreamErrorMessage(json);
+        if (streamError) throw new Error(streamError);
+        const images = await extractImageSources(json, finalImageSources);
+        emitImages(nextImplicitResultIndex, images);
+      }
+    }
+
+    if (finalImages.length === 0) {
+      throw new Error(
+        sawStreamEvent
+          ? sawDoneEvent
+            ? "生成结束，但未收到生成结果"
+            : "SSE 连接已中断，未收到生成结果"
+          : "SSE 连接已结束，未收到任何生成事件"
+      );
     }
 
     if (!options?.signal?.aborted) callbacks.onComplete?.(finalImages);
@@ -555,13 +652,16 @@ export interface MultiCallbacks {
   onTaskProgress?: (text: string) => void;
   /** taskIndex 0-based；单张图完成 */
   onTaskResult?: (taskIndex: number, images: string[]) => void;
+  onExtraResult?: (src: string) => void;
   onTaskError?: (taskIndex: number, error: string) => void;
-  onAllDone?: (summary: { ok: number; fail: number }) => void;
+  onAllDone?: (summary: { ok: number; fail: number; extra: number }) => void;
 }
 
+const MAX_IMAGES_PER_REQUEST = 4;
+
 /**
- * 单请求多图生图：发起一次 n=N 请求，后端线程池内部并行生成。
- * 通过 onResult 回调按完成顺序渐进式返回每张图，后端负责并发与部分失败容错。
+ * 多图生图：后端单请求最多 4 张；更大的批次会拆成多个 n<=4 请求并发提交。
+ * 通过 onResult 回调按完成顺序渐进式返回每张图，前端负责把子请求下标映射回全局任务。
  */
 export async function generateImageMulti(
   task: BatchTaskParams & { n: number },
@@ -569,50 +669,83 @@ export async function generateImageMulti(
   options?: { signal?: AbortSignal }
 ): Promise<void> {
   const n = task.n;
-  const received = new Set<number>(); // 已通过 onResult 收到的 1-based index
-  const failed = new Set<number>(); // 已上报真实错误的 1-based index
+  const received = new Set<number>(); // 已通过 onResult 收到的全局 1-based index
+  const failed = new Set<number>(); // 已上报真实错误的全局 1-based index
+  let extra = 0;
 
   callbacks.onTaskStart?.();
 
-  await generateImageStream(
-    task,
-    {
-      onProgress: (text) => callbacks.onTaskProgress?.(text),
-      onResult: (index, images) => {
-        received.add(index);
-        callbacks.onTaskResult?.(index - 1, images);
-      },
-      onComplete: (images) => {
-        // 非流式兜底：若未收到任何 onResult，按顺序把图片分配给各 task
-        if (received.size === 0 && images.length > 0) {
-          images.forEach((src, i) => {
-            received.add(i + 1);
-            callbacks.onTaskResult?.(i, [src]);
-          });
+  const runChunk = async (offset: number, count: number) => {
+    const localReceived = new Set<number>(); // 子请求 1-based index
+    const toGlobalIndex = (localIndex: number) => offset + localIndex;
+
+    const markReceived = (localIndex: number, images: string[]) => {
+      images.forEach((src, i) => {
+        const mappedLocalIndex = localIndex + i;
+        const globalIndex = toGlobalIndex(mappedLocalIndex);
+        if (globalIndex <= n) {
+          localReceived.add(mappedLocalIndex);
+          received.add(globalIndex);
+          callbacks.onTaskResult?.(globalIndex - 1, [src]);
+          return;
         }
-      },
-      onError: (err) => {
-        for (let i = 0; i < n; i++) {
-          const resultIndex = i + 1;
-          if (!received.has(resultIndex)) {
-            failed.add(resultIndex);
-            callbacks.onTaskError?.(i, err);
+        extra += 1;
+        callbacks.onExtraResult?.(src);
+      });
+    };
+
+    const markMissingAsError = (error: string) => {
+      for (let localIndex = 1; localIndex <= count; localIndex++) {
+        const globalIndex = toGlobalIndex(localIndex);
+        if (!localReceived.has(localIndex) && !received.has(globalIndex) && !failed.has(globalIndex)) {
+          failed.add(globalIndex);
+          callbacks.onTaskError?.(globalIndex - 1, error);
+        }
+      }
+    };
+
+    await generateImageStream(
+      { ...task, n: count },
+      {
+        onProgress: (text) => callbacks.onTaskProgress?.(text),
+        onResult: (index, images) => {
+          markReceived(index, images);
+        },
+        onComplete: (images) => {
+          // 非流式兜底：若这个子请求未收到任何 onResult，按顺序把图片分配给对应全局 task
+          if (localReceived.size === 0 && images.length > 0) {
+            markReceived(1, images);
           }
-        }
+        },
+        onError: (err) => {
+          markMissingAsError(err);
+        },
       },
-    },
-    options
-  );
+      options
+    );
+
+    markMissingAsError("未收到结果");
+  };
+
+  const chunks: Array<{ offset: number; count: number }> = [];
+  for (let offset = 0; offset < n; offset += MAX_IMAGES_PER_REQUEST) {
+    chunks.push({ offset, count: Math.min(MAX_IMAGES_PER_REQUEST, n - offset) });
+  }
+
+  await Promise.allSettled(chunks.map((chunk) => runChunk(chunk.offset, chunk.count)));
 
   // 标记未收到 result 的 task 为 error（后端部分失败容错后缺失的张）
   for (let i = 0; i < n; i++) {
     const resultIndex = i + 1;
-    if (!received.has(resultIndex) && !failed.has(resultIndex)) callbacks.onTaskError?.(i, "未收到结果");
+    if (!received.has(resultIndex) && !failed.has(resultIndex)) {
+      failed.add(resultIndex);
+      callbacks.onTaskError?.(i, "未收到结果");
+    }
   }
 
   const ok = received.size;
   const fail = n - ok;
-  callbacks.onAllDone?.({ ok, fail });
+  callbacks.onAllDone?.({ ok, fail, extra });
 }
 
 /**

@@ -22,7 +22,7 @@ import { Checkbox, Button, Popconfirm, Tooltip, Pagination } from "antd";
 import {
   DeleteOutlined, DownloadOutlined, ScissorOutlined, ReloadOutlined,
   LeftOutlined, RightOutlined, PictureOutlined,
-  StarOutlined, StarFilled,
+  StarOutlined, StarFilled, FileImageOutlined,
 } from "@ant-design/icons";
 import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
@@ -64,6 +64,7 @@ export interface MediaGalleryProps {
   onPreview?: (imageId: string, item: MediaItem) => void;
   onDownload?: (imageId: string, item: MediaItem) => void;
   onMatte?: (imageId: string, item: MediaItem) => void;
+  onImg2Img?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   /** 收藏/取消收藏回调，传入时卡片渲染星标按钮 */
   onFavorite?: (item: MediaItem) => void;
@@ -93,12 +94,13 @@ interface MediaCardProps {
   onPreview?: (imageId: string, item: MediaItem) => void;
   onDownload?: (imageId: string, item: MediaItem) => void;
   onMatte?: (imageId: string, item: MediaItem) => void;
+  onImg2Img?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   onFavorite?: (item: MediaItem) => void;
 }
 
 function MediaCard({
-  item, selected, onToggleSelect, onPreview, onDownload, onMatte, onReuse, onFavorite,
+  item, selected, onToggleSelect, onPreview, onDownload, onMatte, onImg2Img, onReuse, onFavorite,
 }: MediaCardProps) {
   const reduce = useMotionMode();
   const [imgIdx, setImgIdx] = useState(0);
@@ -373,6 +375,13 @@ function MediaCard({
               onClick={(e) => { stop(e); onMatte(currentId, item); }}
             />
           )}
+          {onImg2Img && currentId && (
+            <CardActionButton
+              icon={<FileImageOutlined />}
+              tip="图生图"
+              onClick={(e) => { stop(e); onImg2Img(currentId, item); }}
+            />
+          )}
           {onReuse && (
             <CardActionButton
               icon={<ReloadOutlined />}
@@ -476,6 +485,7 @@ export function MediaGallery({
   onPreview,
   onDownload,
   onMatte,
+  onImg2Img,
   onReuse,
   onFavorite,
   onDelete,
@@ -657,6 +667,7 @@ export function MediaGallery({
             onPreview={onPreview}
             onDownload={onDownload}
             onMatte={onMatte}
+            onImg2Img={onImg2Img}
             onReuse={onReuse}
             onFavorite={onFavorite}
           />

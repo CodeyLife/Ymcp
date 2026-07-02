@@ -12,7 +12,7 @@ import { useAssetStore } from "@/stores/asset";
 import { usePsdTaskStore } from "@/stores/psdTask";
 import { generateImageMulti, cacheImageLocally, polishPrompt, toDataUrl } from "@/lib/api";
 import { setImage } from "@/lib/imageStore";
-import { STYLE_PRESETS } from "@/lib/imagegenPresets";
+import { IMG2IMG_REFERENCE_GUIDES, STYLE_PRESETS } from "@/lib/imagegenPresets";
 import { downloadBlob } from "@/lib/canvas";
 import { compressImage } from "@/lib/imageCompress";
 import { useNavigate } from "react-router-dom";
@@ -578,6 +578,88 @@ interface TaskCardProps {
   onResultRatio: (favoriteId: string, ratio: number) => void;
 }
 
+interface ResultActionButtonsProps {
+  src: string;
+  favoriteId: string;
+  displayIndex: number;
+  isFavorited: boolean;
+  onDownload: (src: string) => void;
+  onToggleFavorite: (favoriteId: string, src: string, displayIndex: number) => void;
+  onEditImage: (src: string) => void;
+  onSendToMatte: (src: string) => void;
+  onSendToSuperRes: (src: string) => void;
+  onSplitToPsd: (src: string) => void;
+}
+
+function ResultActionButtons({
+  src,
+  favoriteId,
+  displayIndex,
+  isFavorited,
+  onDownload,
+  onToggleFavorite,
+  onEditImage,
+  onSendToMatte,
+  onSendToSuperRes,
+  onSplitToPsd,
+}: ResultActionButtonsProps) {
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={isFavorited ? "取消收藏" : "收藏"}
+        title={isFavorited ? "取消收藏" : "收藏"}
+        className={isFavorited ? "is-active" : undefined}
+        onClick={() => onToggleFavorite(favoriteId, src, displayIndex)}
+      >
+        {isFavorited
+          ? <StarFilled style={{ color: "#fbbf24" }} />
+          : <StarOutlined />}
+      </button>
+      <button
+        type="button"
+        aria-label="编辑（送入图生图）"
+        title="编辑（送入图生图）"
+        onClick={() => onEditImage(src)}
+      >
+        <EditOutlined />
+      </button>
+      <button
+        type="button"
+        aria-label="送入抠图"
+        title="送入抠图"
+        onClick={() => onSendToMatte(src)}
+      >
+        <ScissorOutlined />
+      </button>
+      <button
+        type="button"
+        aria-label="拆分为 PSD"
+        title="拆分为 PSD"
+        onClick={() => onSplitToPsd(src)}
+      >
+        <BlockOutlined />
+      </button>
+      <button
+        type="button"
+        aria-label="超分 4K"
+        title="超分 4K（本地）"
+        onClick={() => onSendToSuperRes(src)}
+      >
+        <ThunderboltOutlined />
+      </button>
+      <button
+        type="button"
+        aria-label="下载"
+        title="下载"
+        onClick={() => onDownload(src)}
+      >
+        <DownloadOutlined />
+      </button>
+    </>
+  );
+}
+
 const TaskCard = memo(function TaskCard({
   task, status, src, favoriteId, displayIndex, doneIdx,
   isFavorited, previewRatio, aspectRatio, cellMaxH,
@@ -741,108 +823,88 @@ const TaskCard = memo(function TaskCard({
             />
           )}
           {isDone && genMode !== "spritesheet" && (
-            <TiltCard
-              max={6}
-              className="result-tilt"
-              onClick={() => doneIdx !== undefined && onOpenPreview(doneIdx)}
-              style={{ cursor: "pointer" }}
-            >
-              <div
-                className="checker-bg result-preview-frame"
-                style={frameStyle}
+            <>
+              <TiltCard
+                max={6}
+                className="result-tilt"
+                onClick={() => doneIdx !== undefined && onOpenPreview(doneIdx)}
+                style={{ cursor: "pointer" }}
               >
-                <img
-                  src={src}
-                  alt={`结果 ${displayIndex + 1}`}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    height: "100%",
-                    maxWidth: "100%",
-                    maxHeight: cellMaxH,
-                    objectFit: "contain",
-                  }}
-                  onLoad={(event) => {
-                    const { naturalWidth, naturalHeight } = event.currentTarget;
-                    if (naturalWidth <= 0 || naturalHeight <= 0) return;
-                    const nextRatio = naturalWidth / naturalHeight;
-                    onResultRatio(favoriteId, nextRatio);
-                  }}
-                />
                 <div
-                  aria-hidden
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    height: "50%",
-                    background:
-                      "linear-gradient(180deg, rgba(52, 211, 153, 0.18) 0%, transparent 100%)",
-                    pointerEvents: "none",
-                    mixBlendMode: "screen",
-                    animation: "scan-down 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards",
-                    animationDelay: `${displayIndex * 0.06}s`,
-                  }}
-                />
-                <div
-                  className="result-actions"
-                  onClick={(e) => e.stopPropagation()}
+                  className="checker-bg result-preview-frame"
+                  style={frameStyle}
                 >
-                  <button
-                    type="button"
-                    aria-label={isFavorited ? "取消收藏" : "收藏"}
-                    title={isFavorited ? "取消收藏" : "收藏"}
-                    className={isFavorited ? "is-active" : undefined}
-                    onClick={() => onToggleFavorite(favoriteId, src!, displayIndex)}
+                  <img
+                    src={src}
+                    alt={`结果 ${displayIndex + 1}`}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      height: "100%",
+                      maxWidth: "100%",
+                      maxHeight: cellMaxH,
+                      objectFit: "contain",
+                    }}
+                    onLoad={(event) => {
+                      const { naturalWidth, naturalHeight } = event.currentTarget;
+                      if (naturalWidth <= 0 || naturalHeight <= 0) return;
+                      const nextRatio = naturalWidth / naturalHeight;
+                      onResultRatio(favoriteId, nextRatio);
+                    }}
+                  />
+                  <div
+                    aria-hidden
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      top: 0,
+                      height: "50%",
+                      background:
+                        "linear-gradient(180deg, rgba(52, 211, 153, 0.18) 0%, transparent 100%)",
+                      pointerEvents: "none",
+                      mixBlendMode: "screen",
+                      animation: "scan-down 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards",
+                      animationDelay: `${displayIndex * 0.06}s`,
+                    }}
+                  />
+                  <div
+                    className="result-actions"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    {isFavorited
-                      ? <StarFilled style={{ color: "#fbbf24" }} />
-                      : <StarOutlined />}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="编辑（送入图生图）"
-                    title="编辑（送入图生图）"
-                    onClick={() => onEditImage(src!)}
-                  >
-                    <EditOutlined />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="送入抠图"
-                    title="送入抠图"
-                    onClick={() => onSendToMatte(src!)}
-                  >
-                    <ScissorOutlined />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="拆分为 PSD"
-                    title="拆分为 PSD"
-                    onClick={() => onSplitToPsd(src!)}
-                  >
-                    <BlockOutlined />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="超分 4K"
-                    title="超分 4K（本地）"
-                    onClick={() => onSendToSuperRes(src!)}
-                  >
-                    <ThunderboltOutlined />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="下载"
-                    title="下载"
-                    onClick={() => onDownload(src!)}
-                  >
-                    <DownloadOutlined />
-                  </button>
+                    <ResultActionButtons
+                      src={src}
+                      favoriteId={favoriteId}
+                      displayIndex={displayIndex}
+                      isFavorited={isFavorited}
+                      onDownload={onDownload}
+                      onToggleFavorite={onToggleFavorite}
+                      onEditImage={onEditImage}
+                      onSendToMatte={onSendToMatte}
+                      onSendToSuperRes={onSendToSuperRes}
+                      onSplitToPsd={onSplitToPsd}
+                    />
+                  </div>
                 </div>
+              </TiltCard>
+              <div
+                className="result-actions-mobile"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ResultActionButtons
+                  src={src}
+                  favoriteId={favoriteId}
+                  displayIndex={displayIndex}
+                  isFavorited={isFavorited}
+                  onDownload={onDownload}
+                  onToggleFavorite={onToggleFavorite}
+                  onEditImage={onEditImage}
+                  onSendToMatte={onSendToMatte}
+                  onSendToSuperRes={onSendToSuperRes}
+                  onSplitToPsd={onSplitToPsd}
+                />
               </div>
-            </TiltCard>
+            </>
           )}
         </div>
       </div>
@@ -866,8 +928,10 @@ export default function ImageGen() {
   const spritesheetN = useImageGenStore((s) => s.spritesheetN);
   const quality = useImageGenStore((s) => s.quality);
   const styleId = useImageGenStore((s) => s.styleId);
+  const img2imgReferenceGuideId = useImageGenStore((s) => s.img2imgReferenceGuideId);
   const refImage = useImageGenStore((s) => s.refImage);
   const tasks = useImageGenStore((s) => s.tasks);
+  const extraResults = useImageGenStore((s) => s.extraResults);
   const loading = useImageGenStore((s) => s.loading);
   const error = useImageGenStore((s) => s.error);
   const setMode = useImageGenStore((s) => s.setMode);
@@ -879,8 +943,10 @@ export default function ImageGen() {
   const setSpritesheetN = useImageGenStore((s) => s.setSpritesheetN);
   const setQuality = useImageGenStore((s) => s.setQuality);
   const setStyleId = useImageGenStore((s) => s.setStyleId);
+  const setImg2imgReferenceGuideId = useImageGenStore((s) => s.setImg2imgReferenceGuideId);
   const setRefImage = useImageGenStore((s) => s.setRefImage);
   const updateTask = useImageGenStore((s) => s.updateTask);
+  const addExtraResult = useImageGenStore((s) => s.addExtraResult);
   const resetTasks = useImageGenStore((s) => s.resetTasks);
   const setLoading = useImageGenStore((s) => s.setLoading);
   const setError = useImageGenStore((s) => s.setError);
@@ -902,10 +968,13 @@ export default function ImageGen() {
   // 派生：已完成的图列表（一个任务可能返回多张，全部扁平化）
   // useMemo：避免每次 partial 更新都重新 flatMap（仅 done 任务变化才重算）
   const doneImages = useMemo(
-    () => tasks.flatMap((t) =>
-      t.status === "done" && t.results ? t.results.map((src) => ({ task: t, src })) : []
-    ),
-    [tasks]
+    () => [
+      ...tasks.flatMap((t) =>
+        t.status === "done" && t.results ? t.results.map((src) => ({ key: t.id, src })) : []
+      ),
+      ...extraResults.map((src, index) => ({ key: `extra-result-${index}`, src })),
+    ],
+    [tasks, extraResults]
   );
 
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
@@ -1010,6 +1079,7 @@ export default function ImageGen() {
 
   const currentSize = SIZE_OPTIONS.find((s) => s.value === size);
   const currentStylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
+  const currentImg2imgReferenceGuide = IMG2IMG_REFERENCE_GUIDES.find((p) => p.id === img2imgReferenceGuideId);
   const prompt = mode === "img2img" ? imgPrompt : textPrompt;
   const setPrompt = mode === "img2img" ? setImgPrompt : setTextPrompt;
   const currentPromptSourceMode = mode === "img2img" ? "img2img" : "text2img";
@@ -1093,22 +1163,27 @@ export default function ImageGen() {
     const { baseUrl, apiKey } = getEffectiveApiConfig();
     const effectiveN = hasOwnKey ? n : 1;
 
-    // 画风片段：调用时注入（与 greenscreen/spritesheet 一致），输入框保持干净
-    let finalPrompt = prompt;
+    // 调用时注入额外片段，输入框保持干净。
+    const promptParts: string[] = [];
     const stylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
     if (stylePreset?.fragment) {
-      finalPrompt = `${stylePreset.fragment}\n\n${finalPrompt}`;
+      promptParts.push(stylePreset.fragment);
     }
 
     // 根据生成模式构建最终提示词
     if (genMode === "greenscreen" && greenscreenPrompt.trim()) {
-      finalPrompt = `${greenscreenPrompt.trim()}\n\n${finalPrompt}`;
+      promptParts.push(greenscreenPrompt.trim());
     } else if (genMode === "spritesheet" && spritesheetPrompt.trim()) {
       const nn = `${spritesheetN}x${spritesheetN}`;
       // 将提示词模板里的 NxN 占位符替换为实际数值
       const basePrompt = spritesheetPrompt.trim().replace(/n\s*x\s*n/gi, nn);
-      finalPrompt = `${basePrompt}\n\nGrid: exactly ${nn} (${spritesheetN} rows × ${spritesheetN} columns, ${spritesheetN * spritesheetN} frames total)\n\n${finalPrompt}`;
+      promptParts.push(`${basePrompt}\n\nGrid: exactly ${nn} (${spritesheetN} rows × ${spritesheetN} columns, ${spritesheetN * spritesheetN} frames total)`);
     }
+
+    if (mode === "img2img" && currentImg2imgReferenceGuide?.fragment) {
+      promptParts.push(currentImg2imgReferenceGuide.fragment);
+    }
+    const finalPrompt = [...promptParts, prompt].join("\n\n");
 
     // 图生图需要先转 base64
     let imageBase64: string | undefined;
@@ -1205,51 +1280,72 @@ export default function ImageGen() {
       }, IMAGE_GEN_SOFT_TIMEOUT_MS),
     };
 
-    await generateImageMulti(
-      {
-        prompt: params.finalPrompt,
-        model: "gpt-image-2",
-        size: params.size,
-        n: params.n,
-        quality: params.quality,
-        baseUrl: params.baseUrl,
-        apiKey: params.apiKey,
-        image: params.imageBase64,
-      },
-      {
-        onTaskProgress: (text) => {
-          if (!isActiveBatch(batchId)) return;
-          useImageGenStore.getState().tasks.forEach((task) => {
-            if (task.status === "pending" || task.status === "loading") {
-              updateTask(task.index, { status: "loading", progress: text });
+    try {
+      await generateImageMulti(
+        {
+          prompt: params.finalPrompt,
+          model: "gpt-image-2",
+          size: params.size,
+          n: params.n,
+          quality: params.quality,
+          baseUrl: params.baseUrl,
+          apiKey: params.apiKey,
+          image: params.imageBase64,
+        },
+        {
+          onTaskProgress: (text) => {
+            if (!isActiveBatch(batchId)) return;
+            useImageGenStore.getState().tasks.forEach((task) => {
+              if (task.status === "pending" || task.status === "loading") {
+                updateTask(task.index, { status: "loading", progress: text });
+              }
+            });
+          },
+          onTaskResult: (taskIndex, images) => {
+            if (!isActiveBatch(batchId)) return;
+            updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
+            images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
+          },
+          onExtraResult: (src) => {
+            if (!isActiveBatch(batchId)) return;
+            addExtraResult(src);
+            persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败"));
+          },
+          onTaskError: (taskIndex, err) => {
+            if (!isActiveBatch(batchId)) return;
+            updateTask(taskIndex, { status: "error", error: err, progress: undefined });
+          },
+          onAllDone: ({ ok, fail, extra }) => {
+            if (!isActiveBatch(batchId)) return;
+            clearActiveBatchTimer();
+            activeBatchRef.current = null;
+            setLoading(false);
+            const totalOk = ok + extra;
+            if (totalOk > 0) {
+              message.success(`生成完成 ${totalOk} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
+            } else if (fail > 0) {
+              setError(`全部失败 ${fail} 张`);
+              message.error(`全部失败 ${fail} 张`);
             }
-          });
+          },
         },
-        onTaskResult: (taskIndex, images) => {
-          if (!isActiveBatch(batchId)) return;
-          updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
-          images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
-        },
-        onTaskError: (taskIndex, err) => {
-          if (!isActiveBatch(batchId)) return;
-          updateTask(taskIndex, { status: "error", error: err, progress: undefined });
-        },
-        onAllDone: ({ ok, fail }) => {
-          if (!isActiveBatch(batchId)) return;
-          clearActiveBatchTimer();
-          activeBatchRef.current = null;
-          setLoading(false);
-          if (ok > 0) {
-            message.success(`生成完成 ${ok} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
-          } else if (fail > 0) {
-            setError(`全部失败 ${fail} 张`);
-            message.error(`全部失败 ${fail} 张`);
-          }
-        },
-      },
-      { signal: controller.signal }
-    );
-  }, [abortActiveBatch, abortAllRetryRequests, isActiveBatch, clearActiveBatchTimer, persistTaskHistory, message, updateTask, resetTasks, setLoading, setError, setFavorited]);
+        { signal: controller.signal }
+      );
+    } catch (e) {
+      if (!isActiveBatch(batchId)) return;
+      const err = String((e as Error).message || e || "生成失败");
+      clearActiveBatchTimer();
+      activeBatchRef.current = null;
+      setLoading(false);
+      useImageGenStore.getState().tasks.forEach((task) => {
+        if (task.status === "pending" || task.status === "loading" || task.status === "waiting") {
+          updateTask(task.index, { status: "error", error: err, progress: undefined });
+        }
+      });
+      setError(err);
+      message.error(err);
+    }
+  }, [abortActiveBatch, abortAllRetryRequests, isActiveBatch, clearActiveBatchTimer, persistTaskHistory, message, updateTask, addExtraResult, resetTasks, setLoading, setError, setFavorited]);
 
   // 整体重试：后端 n=N 为整体请求，无法单独重试某张，此处重新发起整批
   const retryTask = useCallback(async (_index: number) => {
@@ -1501,10 +1597,11 @@ export default function ImageGen() {
     src?: string;
     favoriteId: string;
     doneIdx?: number;
+    isExtra?: boolean;
   };
 
   const cards = useMemo<CardEntry[]>(() => {
-    if (tasks.length === 0) return [];
+    if (tasks.length === 0 && extraResults.length === 0) return [];
     const result: CardEntry[] = [];
     let doneCounter = 0;
     tasks.forEach((task) => {
@@ -1528,8 +1625,27 @@ export default function ImageGen() {
         });
       }
     });
+    extraResults.forEach((src, index) => {
+      const taskIndex = tasks.length + index;
+      const extraTask: GenTask = {
+        id: `extra-result-${index}`,
+        index: taskIndex,
+        status: "done",
+        results: [src],
+        startedAt: 0,
+      };
+      result.push({
+        key: extraTask.id,
+        task: extraTask,
+        status: "done",
+        src,
+        favoriteId: extraTask.id,
+        doneIdx: doneCounter++,
+        isExtra: true,
+      });
+    });
     return result;
-  }, [tasks]);
+  }, [tasks, extraResults]);
 
   const gridLayout = useMemo(() => {
     if (cards.length === 0) {
@@ -1682,17 +1798,19 @@ export default function ImageGen() {
                   )}
                 </Form.Item>
               )}
-              <div style={{ marginBottom: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <span>
-                    <Text style={{ color: "#ff4d4f", marginRight: 4 }}>*</Text>
-                    <Text style={{ color: "#a1a1aa", fontSize: 14 }}>提示词</Text>
+              <div className="prompt-editor-field">
+                <div className="prompt-editor-head">
+                  <span className="prompt-editor-label">
+                    <Text className="prompt-editor-required">*</Text>
+                    <Text className="prompt-editor-title">提示词</Text>
                   </span>
-                  <Space size={4}>
+                  <div className="prompt-editor-actions">
                     {undoPrompt !== null && (
                       <Button
                         size="small"
                         type="link"
+                        title="撤销润色"
+                        aria-label="撤销润色"
                         onClick={undoPolish}
                         style={{ padding: "0 4px", fontSize: 12, height: 24 }}
                       >
@@ -1702,6 +1820,8 @@ export default function ImageGen() {
                     <Button
                       size="small"
                       icon={<PlusOutlined />}
+                      title="收藏当前"
+                      aria-label="收藏当前"
                       onClick={handleSaveCurrentPromptFavorite}
                     >
                       收藏当前
@@ -1709,6 +1829,8 @@ export default function ImageGen() {
                     <Button
                       size="small"
                       icon={<BookOutlined />}
+                      title="选择收藏"
+                      aria-label="选择收藏"
                       onClick={() => setPromptFavoriteDrawerOpen(true)}
                     >
                       选择收藏
@@ -1717,11 +1839,13 @@ export default function ImageGen() {
                       size="small"
                       icon={<ThunderboltOutlined />}
                       loading={polishing}
+                      title="AI 润色"
+                      aria-label="AI 润色"
                       onClick={handlePolish}
                     >
                       AI 润色
                     </Button>
-                  </Space>
+                  </div>
                 </div>
                 <TextArea
                   rows={6}
@@ -1764,33 +1888,50 @@ export default function ImageGen() {
                 )}
               </div>
 
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-                  <Text style={{ color: "#a1a1aa", fontSize: 13 }}>画风</Text>
+              {mode === "img2img" && (
+                <div className="imagegen-preset-section">
+                  <div className="imagegen-preset-head">
+                    <Text className="imagegen-preset-title">参考约束</Text>
+                    <Text className="imagegen-preset-desc">
+                      {currentImg2imgReferenceGuide?.description ?? "选择生成时自动注入的参考图约束"}
+                    </Text>
+                  </div>
+                  <div className="imagegen-preset-options">
+                    {IMG2IMG_REFERENCE_GUIDES.map((p) => {
+                      const active = p.id === img2imgReferenceGuideId;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className={`imagegen-preset-option${active ? " is-active" : ""}`}
+                          onClick={() => setImg2imgReferenceGuideId(active ? null : p.id)}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="imagegen-preset-section">
+                <div className="imagegen-preset-head">
+                  <Text className="imagegen-preset-title">画风</Text>
                   {currentStylePreset?.description && (
-                    <Text style={{ color: "#52525b", fontSize: 11 }}>
+                    <Text className="imagegen-preset-desc">
                       {currentStylePreset.description}
                     </Text>
                   )}
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div className="imagegen-preset-options">
                   {STYLE_PRESETS.map((p) => {
                     const active = p.id === styleId;
                     return (
                       <button
                         key={p.id}
+                        type="button"
                         onClick={() => setStyleId(p.id)}
-                        style={{
-                          padding: "4px 12px",
-                          borderRadius: 14,
-                          border: active ? "1px solid #10b981" : "1px solid #27272a",
-                          background: active ? "rgba(16, 185, 129, 0.1)" : "#18181b",
-                          color: active ? "#34d399" : "#a1a1aa",
-                          cursor: "pointer",
-                          fontSize: 12,
-                          fontWeight: active ? 600 : 500,
-                          transition: "all 0.15s ease",
-                        }}
+                        className={`imagegen-preset-option${active ? " is-active" : ""}`}
                       >
                         {p.label}
                       </button>
@@ -1863,11 +2004,11 @@ export default function ImageGen() {
               <Form.Item label={`生成数量: ${n}`}>
                 <Slider
                   min={1}
-                  max={10}
+                  max={8}
                   value={n}
                   onChange={setN}
                   disabled={!hasOwnKey}
-                  marks={{ 1: "1", 5: "5", 10: "10" }}
+                  marks={{ 1: "1", 4: "4", 8: "8" }}
                 />
                 {!hasOwnKey && (
                   <Text style={{ color: "#71717a", fontSize: 11 }}>
@@ -2158,7 +2299,7 @@ export default function ImageGen() {
             }}
           >
             {doneImages.map((item, i) => (
-              <Image key={`${item.task.id}-${i}`} src={item.src} />
+              <Image key={`${item.key}-${i}`} src={item.src} />
             ))}
           </Image.PreviewGroup>
         </div>

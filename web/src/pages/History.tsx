@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import {
-  App, Image,
+  App,
 } from "antd";
 import {
   HistoryOutlined,
@@ -14,6 +14,8 @@ import { useImageUrl } from "@/hooks/useImageUrl";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
 import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
+import { ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
+import { sendImageToImageGenReference } from "@/lib/imageGenReference";
 
 const MODE_BADGE: Record<HistoryItem["mode"], MediaBadge> = {
   text2img: { label: "文生图", color: "emerald" },
@@ -65,6 +67,14 @@ export default function History() {
     favorited: favoritedIds.has(h.id),
     raw: h,
   }));
+  const previewImageIds = useMemo(
+    () => mediaItems.flatMap((item) => item.imageIds),
+    [mediaItems]
+  );
+  const previewItem = useMemo(
+    () => mediaItems.find((item) => previewImageId ? item.imageIds.includes(previewImageId) : false),
+    [mediaItems, previewImageId]
+  );
 
   async function downloadImage(imageId: string) {
     try {
@@ -94,6 +104,15 @@ export default function History() {
     }
   }
 
+  async function sendToImageGen(imageId: string) {
+    await sendImageToImageGenReference(imageId, {
+      navigate,
+      onSuccess: () => setPreviewImageId(null),
+      showSuccess: (content) => message.success(content),
+      showError: (content) => message.error(content),
+    });
+  }
+
   function reuseParams(item: MediaItem) {
     // TODO P1: 恢复参数到生图页面（提示词、尺寸、模式、模型等）
     const raw = item.raw as HistoryItem | undefined;
@@ -111,6 +130,16 @@ export default function History() {
     } else {
       message.success(`已删除 ${ids.length} 项`);
     }
+  }
+
+  function handleDeleteCurrent(item: MediaItem) {
+    handleDelete([item.id]);
+    setPreviewImageId(null);
+  }
+
+  function buildPreviewDownloadName(item?: MediaItem) {
+    const raw = item?.raw as HistoryItem | undefined;
+    return `history-${raw?.id ?? Date.now()}.png`;
   }
 
   async function handleFavorite(item: MediaItem) {
@@ -165,6 +194,7 @@ export default function History() {
         onPreview={(imageId) => setPreviewImageId(imageId)}
         onDownload={(imageId) => downloadImage(imageId)}
         onMatte={(imageId) => sendToMatte(imageId)}
+        onImg2Img={(imageId) => void sendToImageGen(imageId)}
         onReuse={reuseParams}
         onFavorite={handleFavorite}
         onDelete={handleDelete}
@@ -172,14 +202,20 @@ export default function History() {
 
       {/* 大图预览 */}
       {previewImageId && previewSrc && (
-        <Image
-          style={{ display: "none" }}
-          preview={{
-            visible: !!previewImageId,
-            onVisibleChange: (v) => !v && setPreviewImageId(null),
-            src: previewSrc,
-          }}
+        <ImagePreviewWithToolbar
+          imageId={previewImageId}
           src={previewSrc}
+          imageIds={previewImageIds}
+          currentItem={previewItem}
+          downloadFilename={buildPreviewDownloadName(previewItem)}
+          onClose={() => setPreviewImageId(null)}
+          onImageChange={setPreviewImageId}
+          onDownload={downloadImage}
+          onMatte={sendToMatte}
+          onImg2Img={(imageId) => void sendToImageGen(imageId)}
+          onReuse={reuseParams}
+          onFavorite={(item) => void handleFavorite(item)}
+          onDeleteCurrent={handleDeleteCurrent}
         />
       )}
     </div>

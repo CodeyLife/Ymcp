@@ -39,6 +39,14 @@ export const STYLE_PRESETS: PromptPreset[] = [
     description: "真实摄影质感、自然光影、胶片颗粒",
   },
   {
+    id: "casual-snapshot",
+    label: "随手拍",
+    category: "style",
+    fragment:
+      '请生成一张类似你iPhone随拍的照：没有明确主题，没有刻意构图，只是很普通，甚至有点失败的快照。照略带运动模糊，光线不均，轻微曝光过度，角度尴尬，构图混乱，整体呈现出一种"过于真实的随手一拍感"，就像是从口袋里拿出手机不小心按到的自拍。',
+    description: "iPhone 随拍、普通快照、轻微失败感",
+  },
+  {
     id: "cinematic",
     label: "电影感",
     category: "style",
@@ -125,6 +133,30 @@ export const STYLE_PRESETS: PromptPreset[] = [
     fragment:
       "Style/medium: semi-realistic anime, 2.5D, stylized proportions, soft shading.",
     description: "半写实动漫 + 光泽皮肤 + 柔光 + 精致五官",
+  },
+];
+
+export interface Img2ImgReferenceGuide {
+  id: string;
+  label: string;
+  fragment: string;
+  description?: string;
+}
+
+export const IMG2IMG_REFERENCE_GUIDES: Img2ImgReferenceGuide[] = [
+  {
+    id: "identity-consistency",
+    label: "人物一致性",
+    fragment:
+      "参考图只作为人物身份和整体辨识度参考，不要复制粘贴原图脸部。\n生成同一人物在新场景中的自然变化状态。\n\n保留年龄感、发型气质、肤色范围、脸部轮廓倾向和大致面部比例。\n表情、眼神、五官细节、头部角度、动作、姿势、服装、背景、光线和构图都应根据新场景重新生成。\n\n新画面描述：",
+    description: "参考人物身份和整体辨识度，在新场景中自然重生成",
+  },
+  {
+    id: "same-scene-second-shot",
+    label: "同场景二次拍摄",
+    fragment:
+      "参考图作为同一场景和主体连续性的参考，不要像素级复刻原图。\n\n请生成一张像是在同一个地点、相近时间段再次拍摄的第二张照片：保留参考图中的主要环境、空间布局、背景氛围、主体身份和整体辨识度，但允许背景细节、背景人物、物品位置、光线状态和构图产生自然的轻微变化。\n\n画面应看起来是“同一地方的另一张真实照片”，而不是对原图的复制粘贴。\n\n主体需根据新画面描述重新生成：在保持人物身份、年龄感、发型气质、肤色范围、脸部轮廓倾向和大致面部比例的前提下，重新生成表情、眼神、头部角度、动作、姿势、服装细节和与场景的互动。\n\n不要直接复制原图脸部、肢体姿势、背景人物或局部构图。\n\n新画面描述：",
+    description: "保留同一地点和主体连续性，像第二次真实拍摄",
   },
 ];
 

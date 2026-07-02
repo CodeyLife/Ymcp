@@ -1,6 +1,7 @@
 import { Card, Typography, Form, Input, InputNumber, Button, Divider, App, Alert } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
+import { DEFAULT_BASE_URL } from "@/config/defaults";
 import { PageHeader } from "@/components/showtime";
 
 const { Text } = Typography;
@@ -8,22 +9,26 @@ const { TextArea } = Input;
 
 export default function Settings() {
   const { message } = App.useApp();
+  const apiBaseUrl = useUIStore((s) => s.apiBaseUrl);
   const apiKey = useUIStore((s) => s.apiKey);
   const thumbSize = useUIStore((s) => s.thumbSize);
   const greenscreenPrompt = useUIStore((s) => s.greenscreenPrompt);
   const spritesheetPrompt = useUIStore((s) => s.spritesheetPrompt);
+  const setApiBaseUrl = useUIStore((s) => s.setApiBaseUrl);
   const setApiKey = useUIStore((s) => s.setApiKey);
   const setThumbSize = useUIStore((s) => s.setThumbSize);
   const setGreenscreenPrompt = useUIStore((s) => s.setGreenscreenPrompt);
   const setSpritesheetPrompt = useUIStore((s) => s.setSpritesheetPrompt);
-  const { hasOwnKey } = getEffectiveApiConfig();
+  const { hasOwnKey, usesDefaultBaseUrl } = getEffectiveApiConfig();
 
   function onSave(values: {
+    api_base_url: string;
     api_key: string;
     thumb_size: number;
     greenscreen_prompt: string;
     spritesheet_prompt: string;
   }) {
+    setApiBaseUrl(values.api_base_url || "");
     setApiKey(values.api_key || "");
     setThumbSize(values.thumb_size || 256);
     setGreenscreenPrompt(values.greenscreen_prompt || "");
@@ -40,7 +45,7 @@ export default function Settings() {
       />
 
       <Card style={{ background: "#18181b", borderColor: "#27272a", maxWidth: 640 }} styles={{ body: { padding: 20 } }}>
-        {!hasOwnKey && (
+        {!hasOwnKey && usesDefaultBaseUrl && (
           <Alert
             type="info"
             showIcon
@@ -48,9 +53,18 @@ export default function Settings() {
             style={{ marginBottom: 16 }}
           />
         )}
+        {!hasOwnKey && !usesDefaultBaseUrl && (
+          <Alert
+            type="warning"
+            showIcon
+            message="当前使用自定义接口地址，请填写该接口对应的 API Key。"
+            style={{ marginBottom: 16 }}
+          />
+        )}
         <Form
           layout="vertical"
           initialValues={{
+            api_base_url: apiBaseUrl,
             api_key: apiKey,
             thumb_size: thumbSize,
             greenscreen_prompt: greenscreenPrompt,
@@ -58,6 +72,9 @@ export default function Settings() {
           }}
           onFinish={onSave}
         >
+          <Form.Item label="API Base URL" name="api_base_url" help="留空使用默认接口地址">
+            <Input placeholder={DEFAULT_BASE_URL} />
+          </Form.Item>
           <Form.Item label="API Key" name="api_key" help={apiKey ? "使用自有 Key" : "留空使用默认 Key（不显示）"}>
             <Input.Password placeholder="sk-..." />
           </Form.Item>
