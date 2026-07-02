@@ -215,7 +215,11 @@ export const workflowsApi = {
 };
 
 export interface StreamCallbacks {
-  onPartial?: (imageSrc: string, index: number) => void;
+  /** 后端进度文本（image.generation.chunk.progress_text） */
+  onProgress?: (text: string) => void;
+  /** 单张图完成（image.generation.result），index 为 1-based */
+  onResult?: (index: number, images: string[]) => void;
+  /** 全部完成（流式末尾或非流式兜底），images 为全部图片 */
   onComplete?: (images: string[]) => void;
   onError?: (error: string) => void;
 }
@@ -398,6 +402,7 @@ export async function generateImageStream(
       formData.append("n", String(body.n));
       formData.append("size", body.size);
       formData.append("response_format", "url");
+      formData.append("stream", "true");
       if (body.quality) formData.append("quality", body.quality);
       // image 是 data URL (data:image/<mime>;base64,...)，按实际 MIME 转为 Blob
       const dataUrl = body.image!;
@@ -423,6 +428,7 @@ export async function generateImageStream(
         size: body.size,
         quality: body.quality,
         response_format: "url",
+        stream: true,
       };
       if (body.style) requestBody.style = body.style;
 
@@ -486,24 +492,30 @@ export async function generateImageStream(
           continue;
         }
 
-        // OpenAI SSE 事件类型
-        if (event.type === "image_edit.partial_image" || event.type === "image.partial") {
-          const [src] = await extractImageSources(event);
-          if (src) callbacks.onPartial?.(src, Number(event.partial_index) || 0);
-        } else if (event.type === "image_edit.completed" || event.type === "image.completed") {
-          finalImages.push(...await extractImageSources(event, finalImageSources));
-        } else if (event.type === "error") {
+        // 后端 SSE 事件类型（chatgpt2api 使用 event.object 标识）
+        const obj = String(event.object || event.type || "");
+        if (obj === "image.generation.chunk") {
+          const text = String(event.progress_text || "").trim();
+          if (text) callbacks.onProgress?.(text);
+        } else if (obj === "image.generation.result") {
+          const idx = Number(event.index) || 1;
+          const images = await extractImageSources(event, finalImageSources);
+          if (images.length > 0) {
+            finalImages.push(...images);
+            callbacks.onResult?.(idx, images);
+          }
+        } else if (obj === "image.generation.message") {
+          // message 可能是上游文本/警告，作为进度信息呈现
+          const msg = String(event.message || "").trim();
+          if (msg) callbacks.onProgress?.(msg);
+        } else if (obj === "error" || event.type === "error") {
           throw new Error(extractApiErrorMessage(event) || "生成失败");
         } else if (event.data) {
+          // 兼容其他后端格式：尝试提取图片
           const apiError = extractApiErrorMessage(event.data);
           if (apiError) throw new Error(apiError);
-          // 兼容其他格式
           const images = await extractImageSources(event.data, finalImageSources);
-          if (typeof event.type === "string" && event.type.includes("partial")) {
-            images.forEach((src, index) => callbacks.onPartial?.(src, index));
-          } else {
-            finalImages.push(...images);
-          }
+          finalImages.push(...images);
         }
         if (options?.signal?.aborted) return;
       }
@@ -538,75 +550,69 @@ export interface BatchTaskParams {
   image?: string;
 }
 
-export interface BatchCallbacks {
-  onTaskStart?: (index: number) => void;
-  onTaskPartial?: (index: number, imageSrc: string) => void;
-  onTaskComplete?: (index: number, images: string[]) => void;
-  onTaskError?: (index: number, error: string) => void;
-  onAllDone?: (summary: { index: number; images?: string[]; error?: string }[]) => void;
+export interface MultiCallbacks {
+  onTaskStart?: () => void;
+  onTaskProgress?: (text: string) => void;
+  /** taskIndex 0-based；单张图完成 */
+  onTaskResult?: (taskIndex: number, images: string[]) => void;
+  onTaskError?: (taskIndex: number, error: string) => void;
+  onAllDone?: (summary: { ok: number; fail: number }) => void;
 }
 
 /**
- * 批量生图：把 N 张拆成 N 个 n=1 并行请求，并发池控制。
- * 每个任务独立 onPartial/onComplete/onError，单任务失败不影响其他。
+ * 单请求多图生图：发起一次 n=N 请求，后端线程池内部并行生成。
+ * 通过 onResult 回调按完成顺序渐进式返回每张图，后端负责并发与部分失败容错。
  */
-export async function generateImageBatch(
-  tasks: BatchTaskParams[],
-  callbacks: BatchCallbacks,
-  options?: { concurrency?: number; signal?: AbortSignal }
+export async function generateImageMulti(
+  task: BatchTaskParams & { n: number },
+  callbacks: MultiCallbacks,
+  options?: { signal?: AbortSignal }
 ): Promise<void> {
-  const total = tasks.length;
-  const concurrency = Math.max(1, Math.min(options?.concurrency ?? 3, total || 1));
-  const summary: { index: number; images?: string[]; error?: string }[] = new Array(total);
-  let cursor = 0;
-  let active = 0;
-  let resolved = 0;
+  const n = task.n;
+  const received = new Set<number>(); // 已通过 onResult 收到的 1-based index
+  const failed = new Set<number>(); // 已上报真实错误的 1-based index
 
-  await new Promise<void>((resolveAll) => {
-    const scheduleNext = () => {
-      if (options?.signal?.aborted) {
-        resolveAll();
-        return;
-      }
-      while (active < concurrency && cursor < total) {
-        const idx = cursor++;
-        active++;
-        callbacks.onTaskStart?.(idx);
+  callbacks.onTaskStart?.();
 
-        generateImageStream(
-          { ...tasks[idx], n: 1 },
-          {
-            onPartial: (src) => callbacks.onTaskPartial?.(idx, src),
-            onComplete: (images) => {
-              // 透传整个 images 数组，支持单任务返回多张
-              if (images.length > 0) {
-                summary[idx] = { index: idx, images };
-                callbacks.onTaskComplete?.(idx, images);
-              } else {
-                summary[idx] = { index: idx, error: "未收到结果" };
-                callbacks.onTaskError?.(idx, "未收到结果");
-              }
-            },
-            onError: (err) => {
-              summary[idx] = { index: idx, error: err };
-              callbacks.onTaskError?.(idx, err);
-            },
-          },
-          { signal: options?.signal }
-        ).finally(() => {
-          active--;
-          resolved++;
-          if (resolved === total) {
-            callbacks.onAllDone?.(summary.filter(Boolean));
-            resolveAll();
-          } else {
-            scheduleNext();
+  await generateImageStream(
+    task,
+    {
+      onProgress: (text) => callbacks.onTaskProgress?.(text),
+      onResult: (index, images) => {
+        received.add(index);
+        callbacks.onTaskResult?.(index - 1, images);
+      },
+      onComplete: (images) => {
+        // 非流式兜底：若未收到任何 onResult，按顺序把图片分配给各 task
+        if (received.size === 0 && images.length > 0) {
+          images.forEach((src, i) => {
+            received.add(i + 1);
+            callbacks.onTaskResult?.(i, [src]);
+          });
+        }
+      },
+      onError: (err) => {
+        for (let i = 0; i < n; i++) {
+          const resultIndex = i + 1;
+          if (!received.has(resultIndex)) {
+            failed.add(resultIndex);
+            callbacks.onTaskError?.(i, err);
           }
-        });
-      }
-    };
-    scheduleNext();
-  });
+        }
+      },
+    },
+    options
+  );
+
+  // 标记未收到 result 的 task 为 error（后端部分失败容错后缺失的张）
+  for (let i = 0; i < n; i++) {
+    const resultIndex = i + 1;
+    if (!received.has(resultIndex) && !failed.has(resultIndex)) callbacks.onTaskError?.(i, "未收到结果");
+  }
+
+  const ok = received.size;
+  const fail = n - ok;
+  callbacks.onAllDone?.({ ok, fail });
 }
 
 /**

@@ -16,10 +16,12 @@ interface UIState {
   setCollapsed: (collapsed: boolean) => void;
   incomingImage: { src: string; from: string } | null;
   setIncomingImage: (img: { src: string; from: string } | null) => void;
+  apiBaseUrl: string;
   apiKey: string;
   thumbSize: number;
   greenscreenPrompt: string;
   spritesheetPrompt: string;
+  setApiBaseUrl: (baseUrl: string) => void;
   setApiKey: (apiKey: string) => void;
   setThumbSize: (size: number) => void;
   setGreenscreenPrompt: (prompt: string) => void;
@@ -34,10 +36,12 @@ export const useUIStore = create<UIState>()(
       setCollapsed: (collapsed) => set({ collapsed }),
       incomingImage: null,
       setIncomingImage: (img) => set({ incomingImage: img }),
+      apiBaseUrl: "",
       apiKey: "",
       thumbSize: 256,
       greenscreenPrompt: "Pure chroma key green background (#00FF00), no shadows, no gradients, no highlights，background=opaque",
       spritesheetPrompt: "A seamless sprite sheet animation arranged in a grid layout, consisting of multiple frames showing sequential motion, each frame evenly spaced in a regular grid, consistent character scale and positioning, transparent or uniform background, clear visual progression of movement, designed for frame-by-frame animation extraction",
+      setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl }),
       setApiKey: (apiKey) => set({ apiKey }),
       setThumbSize: (size) => set({ thumbSize: size }),
       setGreenscreenPrompt: (prompt) => set({ greenscreenPrompt: prompt }),

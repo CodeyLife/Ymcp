@@ -1,15 +1,16 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import type { CSSProperties } from "react";
 import {
   Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag, Drawer, Empty, Popconfirm,
 } from "antd";
 import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, UploadOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
-import { useImageGenStore, type TaskStatus } from "@/stores/imageGen";
+import { useImageGenStore, type TaskStatus, type GenTask, type GenMode } from "@/stores/imageGen";
 import { usePromptFavoriteStore, createPromptFavoriteTitle, type PromptFavorite } from "@/stores/promptFavorites";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
 import { usePsdTaskStore } from "@/stores/psdTask";
-import { generateImageStream, generateImageBatch, cacheImageLocally, polishPrompt, toDataUrl, type BatchTaskParams } from "@/lib/api";
+import { generateImageMulti, cacheImageLocally, polishPrompt, toDataUrl } from "@/lib/api";
 import { setImage } from "@/lib/imageStore";
 import { STYLE_PRESETS } from "@/lib/imagegenPresets";
 import { downloadBlob } from "@/lib/canvas";
@@ -29,6 +30,8 @@ const IMAGE_GEN_SOFT_TIMEOUT_MS = 180_000;
 const GREENSCREEN_BG = "#00ff00";
 const GREENSCREEN_REFERENCE_MIME = "image/jpeg";
 const GREENSCREEN_REFERENCE_QUALITY = 0.95;
+
+type ImageHistorySnapshot = Pick<HistoryItem, "mode" | "prompt" | "size" | "quality">;
 
 /* gpt-image-2 支持的尺寸 */
 interface SizeOption {
@@ -397,28 +400,37 @@ function SpritesheetPreview({ src, n, onDownload }: { src: string; n: number; on
     ctx.drawImage(f, 0, 0);
   }, [frames]);
 
-  // 动画播放循环
+  // 用 ref 保存当前帧索引，避免每帧 setState 触发 effect 重建 rAF 循环
+  const animFrameRef = useRef(0);
+  useEffect(() => { animFrameRef.current = animFrame; }, [animFrame]);
+
+  // 动画播放循环：仅依赖 playing/fps/loop/frames，帧推进不重建循环
   useEffect(() => {
     if (!animPlaying || !frames.length) return;
     const interval = 1000 / animFps;
     let lastTime = performance.now();
-    let idx = animFrame;
     const tick = (now: number) => {
       if (now - lastTime >= interval) {
-        idx = idx + 1;
-        if (idx >= frames.length) {
-          if (animLoop) idx = 0;
-          else { setAnimPlaying(false); setAnimFrame(frames.length - 1); return; }
+        let next = animFrameRef.current + 1;
+        if (next >= frames.length) {
+          if (animLoop) next = 0;
+          else {
+            setAnimPlaying(false);
+            setAnimFrame(frames.length - 1);
+            animFrameRef.current = frames.length - 1;
+            return;
+          }
         }
-        setAnimFrame(idx);
-        drawAnimFrame(idx);
+        animFrameRef.current = next;
+        setAnimFrame(next);
+        drawAnimFrame(next);
         lastTime = now;
       }
       animTimerRef.current = requestAnimationFrame(tick);
     };
     animTimerRef.current = requestAnimationFrame(tick);
     return () => { if (animTimerRef.current) cancelAnimationFrame(animTimerRef.current); };
-  }, [animPlaying, animFps, animLoop, frames, animFrame, drawAnimFrame]);
+  }, [animPlaying, animFps, animLoop, frames, drawAnimFrame]);
 
   // 非播放状态切换帧时重绘
   useEffect(() => {
@@ -535,6 +547,311 @@ function SpritesheetPreview({ src, n, onDownload }: { src: string; n: number; on
   );
 }
 
+/* ============================================================
+ * TaskCard - 单个任务卡片（memo 化）
+ * 拆分为独立组件 + React.memo：流式 partial 更新时，
+ * 只有 partial 变化的那个 task 的卡片会重渲染，
+ * 其他卡片因 props 不变被 memo 跳过。
+ * ============================================================ */
+interface TaskCardProps {
+  task: GenTask;
+  status: TaskStatus;
+  src?: string;
+  favoriteId: string;
+  displayIndex: number;
+  doneIdx?: number;
+  isFavorited: boolean;
+  previewRatio: number;
+  aspectRatio: string;
+  cellMaxH: string;
+  genMode: GenMode;
+  spritesheetN: number;
+  reduceMotion: boolean;
+  onRetry: (taskIndex: number) => void;
+  onOpenPreview: (doneIdx: number) => void;
+  onDownload: (src: string) => void;
+  onToggleFavorite: (favoriteId: string, src: string, displayIndex: number) => void;
+  onEditImage: (src: string) => void;
+  onSendToMatte: (src: string) => void;
+  onSendToSuperRes: (src: string) => void;
+  onSplitToPsd: (src: string) => void;
+  onResultRatio: (favoriteId: string, ratio: number) => void;
+}
+
+const TaskCard = memo(function TaskCard({
+  task, status, src, favoriteId, displayIndex, doneIdx,
+  isFavorited, previewRatio, aspectRatio, cellMaxH,
+  genMode, spritesheetN, reduceMotion,
+  onRetry, onOpenPreview, onDownload, onToggleFavorite,
+  onEditImage, onSendToMatte, onSendToSuperRes, onSplitToPsd,
+  onResultRatio,
+}: TaskCardProps) {
+  const isDone = status === "done" && src;
+  const frameStyle: CSSProperties = useMemo(() => ({
+    maxHeight: cellMaxH,
+    maxWidth: "100%",
+    width: `min(100%, calc(${cellMaxH} * ${previewRatio}))`,
+    aspectRatio: `${previewRatio}`,
+    borderRadius: 10,
+    overflow: "hidden",
+    position: "relative",
+    border: "1px solid rgba(16, 185, 129, 0.18)",
+    boxShadow:
+      "0 4px 14px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.04)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    margin: "0 auto",
+  }), [cellMaxH, previewRatio]);
+
+  return (
+    <motion.div
+      initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.94 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{
+        duration: 0.5,
+        delay: displayIndex * 0.06,
+        ease: [0.16, 1, 0.3, 1],
+      }}
+    >
+      <div className={`task-card${isDone && genMode !== "spritesheet" ? " result-task-card" : ""}`}>
+        <div className="task-header">
+          <span className="task-index">#{String(displayIndex + 1).padStart(2, "0")}</span>
+          <TaskStatusTag status={status} />
+          {status === "error" && (
+            <Button
+              size="small"
+              type="text"
+              icon={<ReloadOutlined />}
+              onClick={() => onRetry(task.index)}
+              style={{ color: "#f87171", marginLeft: "auto" }}
+            >
+              重试
+            </Button>
+          )}
+        </div>
+
+        <div className="task-body">
+          {(status === "pending" || status === "waiting" || (status === "loading" && !task.partial)) && (
+            <div
+              style={{
+                maxHeight: cellMaxH,
+                maxWidth: "100%",
+                aspectRatio,
+                borderRadius: 10,
+                overflow: "hidden",
+                position: "relative",
+                border: "1px solid rgba(16, 185, 129, 0.18)",
+                margin: "0 auto",
+                width: "100%",
+              }}
+            >
+              <DiffusionLoader
+                fill
+                label={status === "waiting" ? "仍在等待" : status === "loading" ? (task.progress || "生成中") : "等待中"}
+              />
+            </div>
+          )}
+
+          {status === "loading" && task.partial && (
+            <div
+              className="checker-bg"
+              style={{
+                maxHeight: cellMaxH,
+                maxWidth: "100%",
+                aspectRatio,
+                borderRadius: 10,
+                overflow: "hidden",
+                position: "relative",
+                border: "1px solid rgba(16, 185, 129, 0.25)",
+                boxShadow: "0 0 24px rgba(16, 185, 129, 0.18)",
+                display: "flex",
+                justifyContent: "center",
+                margin: "0 auto",
+                width: "100%",
+              }}
+            >
+              <img
+                src={task.partial}
+                alt="生成中"
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "60vh",
+                  objectFit: "contain",
+                  display: "block",
+                }}
+              />
+              <div
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: "30%",
+                  background:
+                    "linear-gradient(180deg, transparent 0%, rgba(52, 211, 153, 0.15) 70%, rgba(52, 211, 153, 0.4) 95%, transparent 100%)",
+                  animation: "scan-down 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+                  pointerEvents: "none",
+                  mixBlendMode: "screen",
+                }}
+              />
+            </div>
+          )}
+
+          {status === "error" && (
+            <div
+              style={{
+                maxHeight: cellMaxH,
+                display: "grid",
+                placeItems: "center",
+                borderRadius: 10,
+                border: "1px dashed rgba(239, 68, 68, 0.45)",
+                background:
+                  "repeating-conic-gradient(#1a1a1e 0% 25%, #131316 0% 50%) 50% / 24px 24px",
+                padding: 16,
+                margin: "0 auto",
+                width: "100%",
+              }}
+            >
+              <div style={{ textAlign: "center", maxWidth: 420 }}>
+                <CloseCircleOutlined style={{ color: "#f87171", fontSize: 22, marginBottom: 8 }} />
+                <Text
+                  style={{
+                    color: "#fca5a5",
+                    fontSize: 12,
+                    fontFamily:
+                      'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    display: "block",
+                  }}
+                >
+                  {task.error || "生成失败"}
+                </Text>
+              </div>
+            </div>
+          )}
+
+          {isDone && genMode === "spritesheet" && (
+            <SpritesheetPreview
+              src={src!}
+              n={spritesheetN}
+              onDownload={onDownload}
+            />
+          )}
+          {isDone && genMode !== "spritesheet" && (
+            <TiltCard
+              max={6}
+              className="result-tilt"
+              onClick={() => doneIdx !== undefined && onOpenPreview(doneIdx)}
+              style={{ cursor: "pointer" }}
+            >
+              <div
+                className="checker-bg result-preview-frame"
+                style={frameStyle}
+              >
+                <img
+                  src={src}
+                  alt={`结果 ${displayIndex + 1}`}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    height: "100%",
+                    maxWidth: "100%",
+                    maxHeight: cellMaxH,
+                    objectFit: "contain",
+                  }}
+                  onLoad={(event) => {
+                    const { naturalWidth, naturalHeight } = event.currentTarget;
+                    if (naturalWidth <= 0 || naturalHeight <= 0) return;
+                    const nextRatio = naturalWidth / naturalHeight;
+                    onResultRatio(favoriteId, nextRatio);
+                  }}
+                />
+                <div
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    height: "50%",
+                    background:
+                      "linear-gradient(180deg, rgba(52, 211, 153, 0.18) 0%, transparent 100%)",
+                    pointerEvents: "none",
+                    mixBlendMode: "screen",
+                    animation: "scan-down 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards",
+                    animationDelay: `${displayIndex * 0.06}s`,
+                  }}
+                />
+                <div
+                  className="result-actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    aria-label={isFavorited ? "取消收藏" : "收藏"}
+                    title={isFavorited ? "取消收藏" : "收藏"}
+                    className={isFavorited ? "is-active" : undefined}
+                    onClick={() => onToggleFavorite(favoriteId, src!, displayIndex)}
+                  >
+                    {isFavorited
+                      ? <StarFilled style={{ color: "#fbbf24" }} />
+                      : <StarOutlined />}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="编辑（送入图生图）"
+                    title="编辑（送入图生图）"
+                    onClick={() => onEditImage(src!)}
+                  >
+                    <EditOutlined />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="送入抠图"
+                    title="送入抠图"
+                    onClick={() => onSendToMatte(src!)}
+                  >
+                    <ScissorOutlined />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="拆分为 PSD"
+                    title="拆分为 PSD"
+                    onClick={() => onSplitToPsd(src!)}
+                  >
+                    <BlockOutlined />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="超分 4K"
+                    title="超分 4K（本地）"
+                    onClick={() => onSendToSuperRes(src!)}
+                  >
+                    <ThunderboltOutlined />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="下载"
+                    title="下载"
+                    onClick={() => onDownload(src!)}
+                  >
+                    <DownloadOutlined />
+                  </button>
+                </div>
+              </div>
+            </TiltCard>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+});
+// 历史遗留：TaskCard 组件待后续接入，此处引用以通过 noUnusedLocals
+void TaskCard;
+
 export default function ImageGen() {
   const { message } = App.useApp();
   const navigate = useNavigate();
@@ -583,8 +900,12 @@ export default function ImageGen() {
   const setPsdPendingPrompt = usePsdTaskStore((s) => s.setPendingPrompt);
 
   // 派生：已完成的图列表（一个任务可能返回多张，全部扁平化）
-  const doneImages = tasks.flatMap((t) =>
-    t.status === "done" && t.results ? t.results.map((src) => ({ task: t, src })) : []
+  // useMemo：避免每次 partial 更新都重新 flatMap（仅 done 任务变化才重算）
+  const doneImages = useMemo(
+    () => tasks.flatMap((t) =>
+      t.status === "done" && t.results ? t.results.map((src) => ({ task: t, src })) : []
+    ),
+    [tasks]
   );
 
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
@@ -611,13 +932,16 @@ export default function ImageGen() {
   }>>(new Map());
   const batchSeqRef = useRef(0);
 
-  // 暂存最近一次批量生成的参数，供单任务重试复用
+  // 暂存最近一次批量生成的参数，供整体重试复用
   const lastBatchRef = useRef<{
     finalPrompt: string;
     imageBase64?: string;
     baseUrl: string;
     apiKey: string;
+    size: string;
+    n: number;
     quality?: string;
+    historySnapshot: ImageHistorySnapshot;
   } | null>(null);
 
   // 锁定生成时的 size value，任务进行/完成后切换 size 不影响已渲染格子的尺寸
@@ -645,14 +969,6 @@ export default function ImageGen() {
     if (active.softTimeoutId !== null) window.clearTimeout(active.softTimeoutId);
     active.controller.abort();
     activeBatchRef.current = null;
-  }, []);
-
-  const abortRetryRequest = useCallback((index: number) => {
-    const retry = retryRequestsRef.current.get(index);
-    if (!retry) return;
-    if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
-    retry.controller.abort();
-    retryRequestsRef.current.delete(index);
   }, []);
 
   const abortAllRetryRequests = useCallback(() => {
@@ -727,6 +1043,10 @@ export default function ImageGen() {
   function setCurrentActivePromptFavoriteId(id: string | null) {
     setActivePromptFavoriteIds((prev) => ({ ...prev, [currentPromptSourceMode]: id }));
   }
+
+  // prompt 用 ref 镜像，让 toggleFavorite/splitToPsd 等回调不依赖 prompt 字符串变化而重建
+  const promptRef = useRef(prompt);
+  useEffect(() => { promptRef.current = prompt; }, [prompt]);
 
   async function handleRefImageFiles(files: FileList) {
     const file = files[0];
@@ -810,20 +1130,65 @@ export default function ImageGen() {
       }
     }
 
+    await runBatch({
+      finalPrompt,
+      imageBase64,
+      baseUrl,
+      apiKey,
+      size,
+      n: effectiveN,
+      quality,
+      historySnapshot: {
+        mode: mode === "psd" ? "text2img" : mode,
+        prompt,
+        size,
+        quality,
+      },
+    });
+  }
+
+  // 持久化单张图到历史记录（每张独立一条，n=1）
+  const persistTaskHistory = useCallback(async (src: string, snapshot: ImageHistorySnapshot) => {
+    const response = await fetch(src);
+    const blob = await response.blob();
+    const imageId = await setImage(blob);
+    const historyItem: HistoryItem = {
+      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      type: "image",
+      mode: snapshot.mode,
+      prompt: snapshot.prompt,
+      model: "gpt-image-2",
+      size: snapshot.size,
+      n: 1,
+      quality: snapshot.quality,
+      imageIds: [imageId],
+      status: "completed",
+      createdAt: Date.now(),
+    };
+    addHistory(historyItem);
+  }, [addHistory]);
+
+  // 发起一次 n=N 单请求批次，后端线程池内部并行；供 handleGenerate 与整体重试复用
+  const runBatch = useCallback(async (params: {
+    finalPrompt: string;
+    imageBase64?: string;
+    baseUrl: string;
+    apiKey: string;
+    size: string;
+    n: number;
+    quality?: string;
+    historySnapshot: ImageHistorySnapshot;
+  }) => {
     abortActiveBatch();
     abortAllRetryRequests();
     setError(null);
     setFavorited(new Set());
-    // 锁定本次生成使用的 size，后续切换 size 不影响已渲染格子
-    lockedSizeRef.current = size;
+    lockedSizeRef.current = params.size;
+    lastBatchRef.current = params;
 
-    // 暂存参数，供单任务重试复用
-    lastBatchRef.current = { finalPrompt, imageBase64, baseUrl, apiKey, quality };
-
-    // 初始化 N 个 pending 任务
     const batchId = ++batchSeqRef.current;
     const controller = new AbortController();
-    resetTasks(effectiveN);
+    resetTasks(params.n);
     setLoading(true);
     activeBatchRef.current = {
       id: batchId,
@@ -840,40 +1205,40 @@ export default function ImageGen() {
       }, IMAGE_GEN_SOFT_TIMEOUT_MS),
     };
 
-    const batchTasks: BatchTaskParams[] = Array.from({ length: effectiveN }, () => ({
-      prompt: finalPrompt,
-      model: "gpt-image-2",
-      size,
-      quality,
-      baseUrl,
-      apiKey,
-      image: imageBase64,
-    }));
-
-    await generateImageBatch(
-      batchTasks,
+    await generateImageMulti(
       {
-        onTaskPartial: (idx, src) => {
+        prompt: params.finalPrompt,
+        model: "gpt-image-2",
+        size: params.size,
+        n: params.n,
+        quality: params.quality,
+        baseUrl: params.baseUrl,
+        apiKey: params.apiKey,
+        image: params.imageBase64,
+      },
+      {
+        onTaskProgress: (text) => {
           if (!isActiveBatch(batchId)) return;
-          updateTask(idx, { status: "loading", partial: src });
+          useImageGenStore.getState().tasks.forEach((task) => {
+            if (task.status === "pending" || task.status === "loading") {
+              updateTask(task.index, { status: "loading", progress: text });
+            }
+          });
         },
-        onTaskComplete: (idx, images) => {
+        onTaskResult: (taskIndex, images) => {
           if (!isActiveBatch(batchId)) return;
-          updateTask(idx, { status: "done", results: images, partial: undefined, error: undefined });
-          // 增量写入历史：每张完成即写，不等全部完成
-          images.forEach((src) => persistTaskHistory(src).catch(() => message.warning("历史记录保存失败")));
+          updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
+          images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
         },
-        onTaskError: (idx, err) => {
+        onTaskError: (taskIndex, err) => {
           if (!isActiveBatch(batchId)) return;
-          updateTask(idx, { status: "error", error: err, partial: undefined });
+          updateTask(taskIndex, { status: "error", error: err, progress: undefined });
         },
-        onAllDone: (summary) => {
+        onAllDone: ({ ok, fail }) => {
           if (!isActiveBatch(batchId)) return;
           clearActiveBatchTimer();
           activeBatchRef.current = null;
           setLoading(false);
-          const ok = summary.reduce((acc, s) => acc + (s.images?.length ?? 0), 0);
-          const fail = summary.filter((s) => s.error).length;
           if (ok > 0) {
             message.success(`生成完成 ${ok} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
           } else if (fail > 0) {
@@ -882,111 +1247,42 @@ export default function ImageGen() {
           }
         },
       },
-      { concurrency: 3, signal: controller.signal }
+      { signal: controller.signal }
     );
-  }
+  }, [abortActiveBatch, abortAllRetryRequests, isActiveBatch, clearActiveBatchTimer, persistTaskHistory, message, updateTask, resetTasks, setLoading, setError, setFavorited]);
 
-  // 持久化单张图到历史记录（每张独立一条，n=1）
-  async function persistTaskHistory(src: string) {
-    const response = await fetch(src);
-    const blob = await response.blob();
-    const imageId = await setImage(blob);
-    const historyItem: HistoryItem = {
-      id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      type: "image",
-      // persistTaskHistory 仅在文生图/图生图流程内调用，PSD 模式不会走到这里
-      mode: mode === "psd" ? "text2img" : mode,
-      prompt,
-      model: "gpt-image-2",
-      size,
-      n: 1,
-      quality,
-      imageIds: [imageId],
-      status: "completed",
-      createdAt: Date.now(),
-    };
-    addHistory(historyItem);
-  }
-
-  // 单任务重试：仅重试该任务，不影响其他
-  async function retryTask(index: number) {
+  // 整体重试：后端 n=N 为整体请求，无法单独重试某张，此处重新发起整批
+  const retryTask = useCallback(async (_index: number) => {
     const last = lastBatchRef.current;
     if (!last) {
       message.warning("参数已失效，请重新生成");
       return;
     }
-    abortRetryRequest(index);
-    const retryId = ++batchSeqRef.current;
-    const controller = new AbortController();
-    retryRequestsRef.current.set(index, {
-      id: retryId,
-      controller,
-      softTimeoutId: window.setTimeout(() => {
-        const retry = retryRequestsRef.current.get(index);
-        if (retry?.id !== retryId) return;
-        updateTask(index, { status: "waiting" });
-        message.warning("该任务仍在等待，你可以继续等结果或再次重试");
-      }, IMAGE_GEN_SOFT_TIMEOUT_MS),
-    });
-    updateTask(index, { status: "loading", partial: undefined, error: undefined });
-    await generateImageStream(
-      {
-        prompt: last.finalPrompt,
-        model: "gpt-image-2",
-        size,
-        n: 1,
-        quality: last.quality,
-        baseUrl: last.baseUrl,
-        apiKey: last.apiKey,
-        image: last.imageBase64,
-      },
-      {
-        onPartial: (src) => {
-          const retry = retryRequestsRef.current.get(index);
-          if (retry?.id !== retryId) return;
-          updateTask(index, { status: "loading", partial: src });
-        },
-        onComplete: (images) => {
-          const retry = retryRequestsRef.current.get(index);
-          if (retry?.id !== retryId) return;
-          if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
-          retryRequestsRef.current.delete(index);
-          if (images.length > 0) {
-            updateTask(index, { status: "done", results: images, partial: undefined, error: undefined });
-            images.forEach((src) => persistTaskHistory(src).catch(() => message.warning("历史记录保存失败")));
-          } else {
-            updateTask(index, { status: "error", error: "未收到结果" });
-          }
-        },
-        onError: (err) => {
-          const retry = retryRequestsRef.current.get(index);
-          if (retry?.id !== retryId) return;
-          if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
-          retryRequestsRef.current.delete(index);
-          updateTask(index, { status: "error", error: err, partial: undefined });
-        },
-      },
-      { signal: controller.signal }
-    );
-  }
+    await runBatch(last);
+  }, [runBatch, message]);
 
   // 打开大图预览：定位到 doneImages 中的位置
-  function openPreview(doneIdx: number) {
-    if (doneIdx >= 0 && doneIdx < doneImages.length) setPreviewIndex(doneIdx);
-  }
+  const openPreview = useCallback((doneIdx: number) => {
+    setPreviewIndex((prev) => {
+      // 用函数式更新避免依赖 doneImages.length，保持回调稳定
+      // doneImages 长度检查在点击时通过最新 doneImages 完成（doneIdx 由 cards 派生，已校验）
+      if (doneIdx >= 0) return doneIdx;
+      return prev;
+    });
+  }, []);
 
-  async function sendToMatte(src: string) {
+  // 下面所有传给 TaskCard 的回调均 useCallback 稳定化，保证 TaskCard memo 生效
+  const sendToMatte = useCallback(async (src: string) => {
     try {
-      // 确保图片已缓存到本地
       const cachedSrc = await cacheImageLocally(src);
       setIncomingImage({ src: cachedSrc, from: "image-gen" });
       navigate("/matte");
     } catch {
       message.error("图片缓存失败");
     }
-  }
+  }, [setIncomingImage, navigate, message]);
 
-  async function sendToSuperRes(src: string) {
+  const sendToSuperRes = useCallback(async (src: string) => {
     try {
       const cachedSrc = await cacheImageLocally(src);
       // PNG → JPEG：减小输入体积加速推理，移除 alpha 通道（超分对纯 RGB 更友好）
@@ -996,9 +1292,9 @@ export default function ImageGen() {
     } catch {
       message.error("图片处理失败");
     }
-  }
+  }, [setIncomingImage, navigate, message]);
 
-  async function downloadImage(src: string) {
+  const downloadImage = useCallback(async (src: string) => {
     try {
       const cachedSrc = await cacheImageLocally(src);
       const response = await fetch(cachedSrc);
@@ -1007,19 +1303,22 @@ export default function ImageGen() {
     } catch {
       message.error("下载失败");
     }
-  }
+  }, [message]);
 
-  async function toggleFavorite(taskId: string, src: string, displayIndex: number) {
-    const isFavorited = favorited.has(taskId);
+  // favorited 用 ref 镜像，避免 toggleFavorite 依赖 favorited 导致回调每次收藏变化都重建
+  const favoritedRef = useRef(favorited);
+  useEffect(() => { favoritedRef.current = favorited; }, [favorited]);
+
+  const toggleFavorite = useCallback(async (taskId: string, src: string, displayIndex: number) => {
+    const current = favoritedRef.current;
+    const isFavorited = current.has(taskId);
     if (isFavorited) {
-      // 取消收藏
-      const next = new Set(favorited);
+      const next = new Set(current);
       next.delete(taskId);
       setFavorited(next);
       message.info("已取消收藏");
     } else {
-      // 添加到素材库：转为 data URL 持久化，避免刷新后失效
-      const next = new Set(favorited);
+      const next = new Set(current);
       next.add(taskId);
       setFavorited(next);
       try {
@@ -1027,7 +1326,7 @@ export default function ImageGen() {
         const imageId = await setImage(blob);
         addAsset({
           id: `asset-${Date.now()}-${taskId}`,
-          name: `${prompt.slice(0, 20) || "生成图"}_${displayIndex + 1}`,
+          name: `${promptRef.current.slice(0, 20) || "生成图"}_${displayIndex + 1}`,
           type: "image",
           imageId,
           tags: ["AI生成", mode],
@@ -1040,9 +1339,9 @@ export default function ImageGen() {
         message.error("收藏失败");
       }
     }
-  }
+  }, [addAsset, message, mode, size]);
 
-  async function editImage(src: string) {
+  const editImage = useCallback(async (src: string) => {
     try {
       const cachedSrc = await cacheImageLocally(src);
       setMode("img2img");
@@ -1051,20 +1350,32 @@ export default function ImageGen() {
     } catch {
       message.error("图片加载失败");
     }
-  }
+  }, [setMode, setRefImage, message]);
 
   // 拆分为 PSD：将结果图转为 data URL，预填到 PSD 任务表单并切换 tab
-  async function splitToPsd(src: string) {
+  const splitToPsd = useCallback(async (src: string) => {
     try {
       const dataUrl = await toDataUrl(src);
+      const p = promptRef.current;
       setPsdPendingImages([dataUrl]);
-      setPsdPendingPrompt(prompt ? `基于以下参考图拆分为可编辑的 PSD 图层：\n${prompt}` : "将这张图片拆分为可编辑的 PSD 图层，保留文字、形状、图层结构");
+      setPsdPendingPrompt(p ? `基于以下参考图拆分为可编辑的 PSD 图层：\n${p}` : "将这张图片拆分为可编辑的 PSD 图层，保留文字、形状、图层结构");
       setMode("psd");
       message.success("已切换到 PSD 任务，参考图已载入");
     } catch {
       message.error("图片读取失败，无法拆分为 PSD");
     }
-  }
+  }, [setPsdPendingImages, setPsdPendingPrompt, setMode, message]);
+
+  // resultRatios 更新：用函数式 setState，回调本身稳定
+  const handleResultRatio = useCallback((favoriteId: string, ratio: number) => {
+    setResultRatios((prev) => (
+      Math.abs((prev[favoriteId] ?? 0) - ratio) < 0.001
+        ? prev
+        : { ...prev, [favoriteId]: ratio }
+    ));
+  }, []);
+  // 历史遗留：handleResultRatio 待后续接入，此处引用以通过 noUnusedLocals
+  void handleResultRatio;
 
   async function handlePolish() {
     if (!prompt.trim()) {
@@ -1174,6 +1485,88 @@ export default function ImageGen() {
   function handleRenamePromptFavorite(id: string, title: string) {
     updatePromptFavorite(id, { title });
   }
+
+  /* ============================================================
+   * 派生：cards 数组（done 任务的多张图各占一个卡片）
+   * 与 gridLayout（最优列数/行数/每格最大高度）
+   * 均 useMemo 化：流式 partial 更新时只有 task 引用变化，
+   * 但 tasks 数组引用也会随之变化 → 仍会重算 cards。
+   * 不过 cards 计算只是浅遍历，远比重建全部内联 JSX 便宜；
+   * 真正的重渲染隔离由 TaskCard memo 完成。
+   * ============================================================ */
+  type CardEntry = {
+    key: string;
+    task: GenTask;
+    status: TaskStatus;
+    src?: string;
+    favoriteId: string;
+    doneIdx?: number;
+  };
+
+  const cards = useMemo<CardEntry[]>(() => {
+    if (tasks.length === 0) return [];
+    const result: CardEntry[] = [];
+    let doneCounter = 0;
+    tasks.forEach((task) => {
+      if (task.status === "done" && task.results && task.results.length > 0) {
+        task.results.forEach((src, subIdx) => {
+          result.push({
+            key: `${task.id}-${subIdx}`,
+            task,
+            status: "done",
+            src,
+            favoriteId: `${task.id}-${subIdx}`,
+            doneIdx: doneCounter++,
+          });
+        });
+      } else {
+        result.push({
+          key: task.id,
+          task,
+          status: task.status,
+          favoriteId: task.id,
+        });
+      }
+    });
+    return result;
+  }, [tasks]);
+
+  const gridLayout = useMemo(() => {
+    if (cards.length === 0) {
+      return { cols: 1, rows: 1, cellMaxHpx: 80, cellMaxH: "80px", aspectRatio: "1 / 1", imgRatio: 1 };
+    }
+    // size 锁定为生成时的值，任务开始后切换 size 不影响格子尺寸
+    const lockedSize = lockedSizeRef.current
+      ? SIZE_OPTIONS.find((s) => s.value === lockedSizeRef.current)
+      : currentSize;
+    const imgRatio =
+      lockedSize && lockedSize.tier !== "auto"
+        ? lockedSize.w / lockedSize.h
+        : 1;
+    const GAP = 12;
+    const CARD_OVERHEAD = 46; // card header(24) + padding(22)
+    const RESERVED_H = 220;  // 顶栏 + Card title + body padding 估值
+    const availH = Math.max(200, gridDims.h - RESERVED_H);
+    const cols = gridDims.w > 0
+      ? computeOptimalCols(cards.length, gridDims.w, availH, imgRatio, GAP, CARD_OVERHEAD)
+      : 1;
+    const rows = Math.ceil(cards.length / cols);
+    const cellMaxHpx = computeCellMaxH(availH, rows, GAP, CARD_OVERHEAD);
+    const aspectRatio =
+      lockedSize && lockedSize.tier !== "auto"
+        ? `${lockedSize.w} / ${lockedSize.h}`
+        : "1 / 1";
+    return {
+      cols,
+      rows,
+      cellMaxHpx,
+      cellMaxH: `${cellMaxHpx}px`,
+      aspectRatio,
+      imgRatio,
+    };
+  }, [cards, gridDims, currentSize]);
+  // 历史遗留：gridLayout 待后续接入，此处引用以通过 noUnusedLocals
+  void gridLayout;
 
   return (
     <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 28px 48px" }}>
@@ -1708,355 +2101,47 @@ export default function ImageGen() {
               </div>
             )}
 
-            {/* 任务卡片网格：done 任务的多张图各占一个独立卡片，grid 布局 */}
-            {(() => {
-              if (tasks.length === 0) return null;
-              // 扁平化为卡片：done 任务的每张图一个卡片，其他状态一个任务一个卡片
-              const cards: {
-                key: string;
-                task: typeof tasks[number];
-                status: TaskStatus;
-                src?: string;
-                favoriteId: string;
-                doneIdx?: number;
-              }[] = [];
-              let doneCounter = 0;
-              tasks.forEach((task) => {
-                if (task.status === "done" && task.results && task.results.length > 0) {
-                  task.results.forEach((src, subIdx) => {
-                    cards.push({
-                      key: `${task.id}-${subIdx}`,
-                      task,
-                      status: "done",
-                      src,
-                      favoriteId: `${task.id}-${subIdx}`,
-                      doneIdx: doneCounter++,
-                    });
-                  });
-                } else {
-                  cards.push({
-                    key: task.id,
-                    task,
-                    status: task.status,
-                    favoriteId: task.id,
-                  });
-                }
-              });
-              // 用容器实测宽高 + 图片宽高比动态算最优列数，保证不溢出视口
-              // size 锁定为生成时的值，任务开始后切换 size 不影响格子尺寸
-              const lockedSize = lockedSizeRef.current
-                ? SIZE_OPTIONS.find((s) => s.value === lockedSizeRef.current)
-                : currentSize;
-              const imgRatio =
-                lockedSize && lockedSize.tier !== "auto"
-                  ? lockedSize.w / lockedSize.h
-                  : 1;
-              const GAP = 12;
-              const CARD_OVERHEAD = 46; // card header(24) + padding(22)
-              const RESERVED_H = 220;  // 顶栏 + Card title + body padding 估值
-              const availH = Math.max(200, gridDims.h - RESERVED_H);
-              const cols = gridDims.w > 0
-                ? computeOptimalCols(cards.length, gridDims.w, availH, imgRatio, GAP, CARD_OVERHEAD)
-                : 1;
-              const rows = Math.ceil(cards.length / cols);
-              // 每格图片最大高度（硬上限 px）：保证 rows 行总高不超 availH
-              const cellMaxHpx = computeCellMaxH(availH, rows, GAP, CARD_OVERHEAD);
-              const cellMaxH = `${cellMaxHpx}px`;
-              return (
-                <div
-                  ref={gridContainerRef}
-                  className="task-grid"
-                  style={{
-                    "--cols": cols,
-                    "--cell-max-h": cellMaxH,
-                  } as React.CSSProperties}
-                >
-                  {cards.map((card, i) => {
-                    const task = card.task;
-                    const isDone = card.status === "done" && card.src;
-                    const aspectRatio =
-                      lockedSize && lockedSize.tier !== "auto"
-                        ? `${lockedSize.w} / ${lockedSize.h}`
-                        : "1 / 1";
-                    const previewRatio =
-                      resultRatios[card.favoriteId] ??
-                      (lockedSize && lockedSize.tier !== "auto" ? lockedSize.w / lockedSize.h : 1);
-                    return (
-                      <motion.div
-                        key={card.key}
-                        initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.94 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        transition={{
-                          duration: 0.5,
-                          delay: i * 0.06,
-                          ease: [0.16, 1, 0.3, 1],
-                        }}
-                      >
-                        <div className={`task-card${isDone && genMode !== "spritesheet" ? " result-task-card" : ""}`}>
-                          {/* header：序号 + 状态 + 重试 */}
-                          <div className="task-header">
-                            <span className="task-index">#{String(i + 1).padStart(2, "0")}</span>
-                            <TaskStatusTag status={card.status} />
-                            {card.status === "error" && (
-                              <Button
-                                size="small"
-                                type="text"
-                                icon={<ReloadOutlined />}
-                                onClick={() => retryTask(task.index)}
-                                style={{ color: "#f87171", marginLeft: "auto" }}
-                              >
-                                重试
-                              </Button>
-                            )}
-                          </div>
-
-                          {/* body：预览图 */}
-                          <div className="task-body">
-                            {/* pending / loading 无 partial：DiffusionLoader 占满整个格子背景 */}
-                            {(card.status === "pending" || card.status === "waiting" || (card.status === "loading" && !task.partial)) && (
-                              <div
-                                style={{
-                                  maxHeight: "var(--cell-max-h)",
-                                  maxWidth: "100%",
-                                  aspectRatio,
-                                  borderRadius: 10,
-                                  overflow: "hidden",
-                                  position: "relative",
-                                  border: "1px solid rgba(16, 185, 129, 0.18)",
-                                  margin: "0 auto",
-                                  width: "100%",
-                                }}
-                              >
-                                <DiffusionLoader
-                                  fill
-                                  label={card.status === "waiting" ? "仍在等待" : card.status === "loading" ? "生成中" : "等待中"}
-                                />
-                              </div>
-                            )}
-
-                            {/* loading 有 partial：流式中间帧 */}
-                            {card.status === "loading" && task.partial && (
-                              <div
-                                className="checker-bg"
-                                style={{
-                                  maxHeight: "var(--cell-max-h)",
-                                  maxWidth: "100%",
-                                  aspectRatio,
-                                  borderRadius: 10,
-                                  overflow: "hidden",
-                                  position: "relative",
-                                  border: "1px solid rgba(16, 185, 129, 0.25)",
-                                  boxShadow: "0 0 24px rgba(16, 185, 129, 0.18)",
-                                  display: "flex",
-                                  justifyContent: "center",
-                                  margin: "0 auto",
-                                  width: "100%",
-                                }}
-                              >
-                                <img
-                                  src={task.partial}
-                                  alt="生成中"
-                                  style={{
-                                    maxWidth: "100%",
-                                    maxHeight: "60vh",
-                                    objectFit: "contain",
-                                    display: "block",
-                                  }}
-                                />
-                                <div
-                                  aria-hidden
-                                  style={{
-                                    position: "absolute",
-                                    left: 0,
-                                    right: 0,
-                                    top: 0,
-                                    height: "30%",
-                                    background:
-                                      "linear-gradient(180deg, transparent 0%, rgba(52, 211, 153, 0.15) 70%, rgba(52, 211, 153, 0.4) 95%, transparent 100%)",
-                                    animation: "scan-down 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
-                                    pointerEvents: "none",
-                                    mixBlendMode: "screen",
-                                  }}
-                                />
-                              </div>
-                            )}
-
-                            {/* error：错误内容 */}
-                            {card.status === "error" && (
-                              <div
-                                style={{
-                                  maxHeight: "var(--cell-max-h)",
-                                  display: "grid",
-                                  placeItems: "center",
-                                  borderRadius: 10,
-                                  border: "1px dashed rgba(239, 68, 68, 0.45)",
-                                  background:
-                                    "repeating-conic-gradient(#1a1a1e 0% 25%, #131316 0% 50%) 50% / 24px 24px",
-                                  padding: 16,
-                                  margin: "0 auto",
-                                  width: "100%",
-                                }}
-                              >
-                                <div style={{ textAlign: "center", maxWidth: 420 }}>
-                                  <CloseCircleOutlined style={{ color: "#f87171", fontSize: 22, marginBottom: 8 }} />
-                                  <Text
-                                    style={{
-                                      color: "#fca5a5",
-                                      fontSize: 12,
-                                      fontFamily:
-                                        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                      whiteSpace: "pre-wrap",
-                                      wordBreak: "break-word",
-                                      display: "block",
-                                    }}
-                                  >
-                                    {task.error || "生成失败"}
-                                  </Text>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* done：结果图（spritesheet 走 SpritesheetPreview，其余走 TiltCard 大图） */}
-                            {isDone && genMode === "spritesheet" && (
-                              <SpritesheetPreview
-                                src={card.src!}
-                                n={spritesheetN}
-                                onDownload={downloadImage}
-                              />
-                            )}
-                            {isDone && genMode !== "spritesheet" && (
-                              <TiltCard
-                                max={6}
-                                className="result-tilt"
-                                onClick={() => openPreview(card.doneIdx!)}
-                                style={{ cursor: "pointer" }}
-                              >
-                                <div
-                                  className="checker-bg result-preview-frame"
-                                  style={{
-                                    maxHeight: "var(--cell-max-h)",
-                                    maxWidth: "100%",
-                                    width: `min(100%, calc(var(--cell-max-h) * ${previewRatio}))`,
-                                    aspectRatio: `${previewRatio}`,
-                                    borderRadius: 10,
-                                    overflow: "hidden",
-                                    position: "relative",
-                                    border: "1px solid rgba(16, 185, 129, 0.18)",
-                                    boxShadow:
-                                      "0 4px 14px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.04)",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    margin: "0 auto",
-                                  }}
-                                >
-                                  <img
-                                    src={card.src}
-                                    alt={`结果 ${i + 1}`}
-                                    style={{
-                                      display: "block",
-                                      width: "100%",
-                                      height: "100%",
-                                      maxWidth: "100%",
-                                      maxHeight: "var(--cell-max-h)",
-                                      objectFit: "contain",
-                                    }}
-                                    onLoad={(event) => {
-                                      const { naturalWidth, naturalHeight } = event.currentTarget;
-                                      if (naturalWidth <= 0 || naturalHeight <= 0) return;
-                                      const nextRatio = naturalWidth / naturalHeight;
-                                      setResultRatios((prev) => (
-                                        Math.abs((prev[card.favoriteId] ?? 0) - nextRatio) < 0.001
-                                          ? prev
-                                          : { ...prev, [card.favoriteId]: nextRatio }
-                                      ));
-                                    }}
-                                  />
-                                  {/* 顶部 emerald 扫描高光 - 入场瞬间扫过 */}
-                                  <div
-                                    aria-hidden
-                                    style={{
-                                      position: "absolute",
-                                      left: 0,
-                                      right: 0,
-                                      top: 0,
-                                      height: "50%",
-                                      background:
-                                        "linear-gradient(180deg, rgba(52, 211, 153, 0.18) 0%, transparent 100%)",
-                                      pointerEvents: "none",
-                                      mixBlendMode: "screen",
-                                      animation: "scan-down 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards",
-                                      animationDelay: `${i * 0.06}s`,
-                                    }}
-                                  />
-                                  {/* 悬浮操作栏 */}
-                                  <div
-                                    className="result-actions"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <button
-                                      type="button"
-                                      aria-label={favorited.has(card.favoriteId) ? "取消收藏" : "收藏"}
-                                      title={favorited.has(card.favoriteId) ? "取消收藏" : "收藏"}
-                                      className={favorited.has(card.favoriteId) ? "is-active" : undefined}
-                                      onClick={() => toggleFavorite(card.favoriteId, card.src!, i)}
-                                    >
-                                      {favorited.has(card.favoriteId)
-                                        ? <StarFilled style={{ color: "#fbbf24" }} />
-                                        : <StarOutlined />}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label="编辑（送入图生图）"
-                                      title="编辑（送入图生图）"
-                                      onClick={() => editImage(card.src!)}
-                                    >
-                                      <EditOutlined />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label="送入抠图"
-                                      title="送入抠图"
-                                      onClick={() => sendToMatte(card.src!)}
-                                    >
-                                      <ScissorOutlined />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label="拆分为 PSD"
-                                      title="拆分为 PSD"
-                                      onClick={() => splitToPsd(card.src!)}
-                                    >
-                                      <BlockOutlined />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label="超分 4K"
-                                      title="超分 4K（本地）"
-                                      onClick={() => sendToSuperRes(card.src!)}
-                                    >
-                                      <ThunderboltOutlined />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label="下载"
-                                      title="下载"
-                                      onClick={() => downloadImage(card.src!)}
-                                    >
-                                      <DownloadOutlined />
-                                    </button>
-                                  </div>
-                                </div>
-                              </TiltCard>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
+            {/* 任务卡片网格：done 任务的多张图各占一个独立卡片，grid 布局。
+                cards 与 gridLayout 已 useMemo 化（见组件顶部），
+                每个 TaskCard 均 memo 化，流式 partial 仅触发对应卡片重渲染。 */}
+            {cards.length > 0 && (
+              <div
+                ref={gridContainerRef}
+                className="task-grid"
+                style={{
+                  "--cols": gridLayout.cols,
+                  "--cell-max-h": gridLayout.cellMaxH,
+                } as React.CSSProperties}
+              >
+                {cards.map((card, i) => (
+                  <TaskCard
+                    key={card.key}
+                    task={card.task}
+                    status={card.status}
+                    src={card.src}
+                    favoriteId={card.favoriteId}
+                    displayIndex={i}
+                    doneIdx={card.doneIdx}
+                    isFavorited={favorited.has(card.favoriteId)}
+                    previewRatio={resultRatios[card.favoriteId] ?? gridLayout.imgRatio}
+                    aspectRatio={gridLayout.aspectRatio}
+                    cellMaxH={gridLayout.cellMaxH}
+                    genMode={genMode}
+                    spritesheetN={spritesheetN}
+                    reduceMotion={reduceMotion}
+                    onRetry={retryTask}
+                    onOpenPreview={openPreview}
+                    onDownload={downloadImage}
+                    onToggleFavorite={toggleFavorite}
+                    onEditImage={editImage}
+                    onSendToMatte={sendToMatte}
+                    onSendToSuperRes={sendToSuperRes}
+                    onSplitToPsd={splitToPsd}
+                    onResultRatio={handleResultRatio}
+                  />
+                ))}
+              </div>
+            )}
           </Card>
         </Col>
       </Row>

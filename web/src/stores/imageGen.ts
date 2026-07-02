@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-type GenMode = "normal" | "greenscreen" | "spritesheet";
+export type GenMode = "normal" | "greenscreen" | "spritesheet";
 
 export type TaskStatus = "pending" | "loading" | "waiting" | "done" | "error";
 
@@ -8,7 +8,8 @@ export interface GenTask {
   id: string;            // 唯一 id（用于 React key、收藏集合）
   index: number;         // 任务序号 0..N-1
   status: TaskStatus;
-  partial?: string;      // 流式中间帧
+  partial?: string;      // 流式中间帧（保留兼容，当前后端不产生）
+  progress?: string;     // 后端进度文本（image.generation.chunk.progress_text）
   results?: string[];    // 最终图（blob URL / data URL），支持单任务返回多张
   error?: string;
   startedAt: number;
