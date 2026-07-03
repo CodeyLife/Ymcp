@@ -26,11 +26,22 @@ const SUPPORTED_RASTER_IMAGE_MIME = new Set([
 api.interceptors.response.use(
   (res) => res,
   (error) => {
-    const message =
-      error?.response?.data?.detail ||
-      error?.response?.data?.error ||
-      error?.message ||
-      "请求失败";
+    const rawMessage = error?.message || "";
+    let message: string;
+    // 识别网络层错误（手机后台切换/断网等），替换为友好提示
+    if (
+      rawMessage === "Failed to fetch" ||
+      rawMessage === "Network Error" ||
+      error?.name === "TypeError"
+    ) {
+      message = "网络连接失败，请检查网络或 API 地址";
+    } else {
+      message =
+        error?.response?.data?.detail ||
+        error?.response?.data?.error ||
+        rawMessage ||
+        "请求失败";
+    }
     return Promise.reject(new Error(String(message)));
   }
 );
@@ -346,7 +357,7 @@ async function readApiError(response: Response): Promise<string> {
   }
 }
 
-async function extractImageSources(
+export async function extractImageSources(
   payload: unknown,
   seenSources: Set<string> = new Set()
 ): Promise<string[]> {
@@ -660,13 +671,16 @@ export interface MultiCallbacks {
   onExtraResult?: (src: string) => void;
   onTaskError?: (taskIndex: number, error: string) => void;
   onAllDone?: (summary: { ok: number; fail: number; extra: number }) => void;
+  /** 任务提交后触发，暴露 clientTaskId 供外部用于断线恢复查询（globalIndex 1-based） */
+  onTaskSubmit?: (globalIndex: number, clientTaskId: string) => void;
 }
 
-const MAX_IMAGES_PER_REQUEST = 4;
+const IMAGE_TASK_POLL_INTERVAL_MS = 3000;
+const IMAGE_TASK_QUERY_FAILURE_LIMIT = 3;
 
 /**
- * 多图生图：后端单请求最多 4 张；更大的批次会拆成多个 n<=4 请求并发提交。
- * 通过 onResult 回调按完成顺序渐进式返回每张图，前端负责把子请求下标映射回全局任务。
+ * 多图生图：基于后端异步任务接口（/api/image-tasks/*），为每张图生成 clientTaskId 并发提交，
+ * 然后轮询任务状态直到全部终态。clientTaskId 作为幂等键，支持断线后用相同 ID 查询恢复。
  */
 export async function generateImageMulti(
   task: BatchTaskParams & { n: number },
@@ -677,69 +691,197 @@ export async function generateImageMulti(
   const received = new Set<number>(); // 已通过 onResult 收到的全局 1-based index
   const failed = new Set<number>(); // 已上报真实错误的全局 1-based index
   let extra = 0;
+  const imageTaskConfig = { baseUrl: task.baseUrl, apiKey: task.apiKey };
 
   callbacks.onTaskStart?.();
 
-  const runChunk = async (offset: number, count: number) => {
-    const localReceived = new Set<number>(); // 子请求 1-based index
-    const toGlobalIndex = (localIndex: number) => offset + localIndex;
-
-    const markReceived = (localIndex: number, images: string[]) => {
-      images.forEach((src, i) => {
-        const mappedLocalIndex = localIndex + i;
-        const globalIndex = toGlobalIndex(mappedLocalIndex);
-        if (globalIndex <= n) {
-          localReceived.add(mappedLocalIndex);
-          received.add(globalIndex);
-          callbacks.onTaskResult?.(globalIndex - 1, [src]);
-          return;
-        }
-        extra += 1;
+  const emitTaskImages = async (globalIndex: number, data: unknown) => {
+    const images = await extractImageSources({ data });
+    if (images.length === 0) {
+      failed.add(globalIndex);
+      callbacks.onTaskError?.(globalIndex - 1, "生成成功但未返回图片");
+      return;
+    }
+    images.forEach((src, j) => {
+      const idx = globalIndex + j;
+      if (idx <= n) {
+        received.add(idx);
+        callbacks.onTaskResult?.(idx - 1, [src]);
+      } else {
+        extra++;
         callbacks.onExtraResult?.(src);
-      });
-    };
-
-    const markMissingAsError = (error: string) => {
-      for (let localIndex = 1; localIndex <= count; localIndex++) {
-        const globalIndex = toGlobalIndex(localIndex);
-        if (!localReceived.has(localIndex) && !received.has(globalIndex) && !failed.has(globalIndex)) {
-          failed.add(globalIndex);
-          callbacks.onTaskError?.(globalIndex - 1, error);
-        }
       }
-    };
-
-    await generateImageRequest(
-      { ...task, n: count },
-      {
-        onProgress: (text) => callbacks.onTaskProgress?.(text),
-        onResult: (index, images) => {
-          markReceived(index, images);
-        },
-        onComplete: (images) => {
-          // 非流式兜底：若这个子请求未收到任何 onResult，按顺序把图片分配给对应全局 task
-          if (localReceived.size === 0 && images.length > 0) {
-            markReceived(1, images);
-          }
-        },
-        onError: (err) => {
-          markMissingAsError(err);
-        },
-      },
-      options
-    );
-
-    markMissingAsError("未收到结果");
+    });
   };
 
-  const chunks: Array<{ offset: number; count: number }> = [];
-  for (let offset = 0; offset < n; offset += MAX_IMAGES_PER_REQUEST) {
-    chunks.push({ offset, count: Math.min(MAX_IMAGES_PER_REQUEST, n - offset) });
+  // 1. 为每个 task 生成 clientTaskId，并发提交
+  const batchTs = Date.now();
+  const taskMeta: Array<{ globalIndex: number; clientTaskId: string }> = [];
+  for (let i = 0; i < n; i++) {
+    taskMeta.push({
+      globalIndex: i + 1, // 1-based
+      clientTaskId: `img-${batchTs}-${i + 1}`,
+    });
   }
 
-  await Promise.allSettled(chunks.map((chunk) => runChunk(chunk.offset, chunk.count)));
+  // 图生图需要先把 base64 data URL 转 Blob
+  let imageBlobs: { blob: Blob; filename: string }[] | undefined;
+  if (task.images && task.images.length > 0) {
+    imageBlobs = [];
+    for (let i = 0; i < task.images.length; i++) {
+      const dataUrl = task.images[i];
+      const mimeMatch = dataUrl.match(/^data:(image\/[a-z+]+);/i);
+      const mime = mimeMatch?.[1] || "image/png";
+      const base64Data = dataUrl.split(",")[1] || dataUrl;
+      const blob = await (await fetch(`data:${mime};base64,${base64Data}`)).blob();
+      const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+      imageBlobs.push({ blob, filename: `reference-${i}.${ext}` });
+    }
+  }
 
-  // 标记未收到 result 的 task 为 error（后端部分失败容错后缺失的张）
+  // 通知外部每个 task 的 clientTaskId（供 visibilitychange 断线恢复使用）
+  for (const meta of taskMeta) {
+    callbacks.onTaskSubmit?.(meta.globalIndex, meta.clientTaskId);
+  }
+
+  // 并发提交（allSettled，单个失败不影响其他）
+  const submitResults = await Promise.allSettled(
+    taskMeta.map(async (meta) => {
+      try {
+        if (imageBlobs && imageBlobs.length > 0) {
+          return await submitImageEditTask(
+            {
+              clientTaskId: meta.clientTaskId,
+              prompt: task.prompt,
+              model: task.model,
+              size: task.size,
+              quality: task.quality,
+              images: imageBlobs,
+            },
+            imageTaskConfig
+          );
+        }
+        return await submitImageGenerationTask(
+          {
+            clientTaskId: meta.clientTaskId,
+            prompt: task.prompt,
+            model: task.model,
+            size: task.size,
+            quality: task.quality,
+          },
+          imageTaskConfig
+        );
+      } catch (e) {
+        // 提交失败：可能是网络错误，但任务可能已在后端创建（幂等）
+        // 不立即标记 error，留给轮询阶段用 clientTaskId 查询确认
+        return { _submitError: String((e as Error).message), clientTaskId: meta.clientTaskId };
+      }
+    })
+  );
+
+  // 收集需要轮询的 clientTaskId（提交失败也加入，用查询确认）
+  const pendingTaskIds = new Map<string, number>(); // clientTaskId -> globalIndex
+  const submitErrors = new Map<string, string>();
+  const queryFailureCounts = new Map<string, number>();
+  for (let i = 0; i < submitResults.length; i++) {
+    const meta = taskMeta[i];
+    const result = submitResults[i];
+    if (result.status === "fulfilled") {
+      const value = result.value;
+      if (value && typeof value === "object" && "_submitError" in value) {
+        // 提交时出错，但仍尝试查询（幂等，可能后端已创建）
+        submitErrors.set(meta.clientTaskId, String(value._submitError || "提交失败"));
+        pendingTaskIds.set(meta.clientTaskId, meta.globalIndex);
+      } else if (value && value.status === "success" && value.data) {
+        // 提交即完成（极少数情况，幂等命中已成功任务）
+        await emitTaskImages(meta.globalIndex, value.data);
+      } else {
+        // queued 或 running，加入轮询
+        pendingTaskIds.set(meta.clientTaskId, meta.globalIndex);
+      }
+    } else {
+      // rejected（不应发生，submit 内部已 catch），仍尝试查询
+      submitErrors.set(meta.clientTaskId, String((result.reason as Error)?.message || result.reason || "提交失败"));
+      pendingTaskIds.set(meta.clientTaskId, meta.globalIndex);
+    }
+  }
+
+  // 2. 轮询未完成任务
+  while (pendingTaskIds.size > 0) {
+    if (options?.signal?.aborted) return;
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, IMAGE_TASK_POLL_INTERVAL_MS);
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true }
+      );
+    });
+    if (options?.signal?.aborted) return;
+
+    let resp: ImageTaskQueryResponse;
+    try {
+      resp = await queryImageTasks([...pendingTaskIds.keys()], imageTaskConfig);
+      for (const taskId of pendingTaskIds.keys()) {
+        queryFailureCounts.delete(taskId);
+      }
+    } catch (e) {
+      const queryError = String((e as Error).message || e || "查询任务状态失败");
+      for (const [taskId, globalIndex] of [...pendingTaskIds]) {
+        const failures = (queryFailureCounts.get(taskId) || 0) + 1;
+        queryFailureCounts.set(taskId, failures);
+        if (failures < IMAGE_TASK_QUERY_FAILURE_LIMIT) continue;
+
+        pendingTaskIds.delete(taskId);
+        failed.add(globalIndex);
+        const submitError = submitErrors.get(taskId);
+        const message = submitError
+          ? `提交失败，且无法查询任务状态：${queryError}`
+          : `查询任务状态失败：${queryError}`;
+        callbacks.onTaskError?.(globalIndex - 1, message);
+      }
+      continue;
+    }
+
+    for (const item of resp.items) {
+      const globalIndex = pendingTaskIds.get(item.id);
+      if (globalIndex === undefined) continue;
+
+      if (item.status === "queued" || item.status === "running") {
+        if (item.progress) {
+          callbacks.onTaskProgress?.(item.progress);
+        }
+        continue;
+      }
+
+      // 终态：success 或 error
+      pendingTaskIds.delete(item.id);
+
+      if (item.status === "success" && item.data) {
+        await emitTaskImages(globalIndex, item.data);
+      } else {
+        // error
+        failed.add(globalIndex);
+        callbacks.onTaskError?.(globalIndex - 1, item.error || "生成失败");
+      }
+    }
+
+    // missing_ids：任务不存在或被清理
+    for (const missingId of resp.missing_ids || []) {
+      const globalIndex = pendingTaskIds.get(missingId);
+      if (globalIndex !== undefined) {
+        pendingTaskIds.delete(missingId);
+        failed.add(globalIndex);
+        callbacks.onTaskError?.(globalIndex - 1, "任务不存在或已被清理");
+      }
+    }
+  }
+
+  // 3. 兜底：标记未收到 result 的 task
   for (let i = 0; i < n; i++) {
     const resultIndex = i + 1;
     if (!received.has(resultIndex) && !failed.has(resultIndex)) {
@@ -912,4 +1054,118 @@ export async function downloadEditableFile(
     throw new Error(text || `下载失败（HTTP ${response.status}）`);
   }
   return response.blob();
+}
+
+/* ---- 图片异步任务 API（/api/image-tasks/*） ---- */
+
+export type ImageTaskStatus = "queued" | "running" | "success" | "error";
+
+export interface ImageTaskData {
+  url?: string;
+  b64_json?: string;
+  [key: string]: unknown;
+}
+
+export interface ImageTask {
+  id: string;
+  status: ImageTaskStatus;
+  mode: "generate" | "edit";
+  model: string;
+  size: string;
+  quality: string;
+  created_at: string;
+  updated_at: string;
+  data?: ImageTaskData[];
+  error?: string;
+  progress?: string;
+  elapsed_secs?: number;
+  duration_ms?: number;
+  conversation_id?: string;
+  usage?: Record<string, unknown>;
+}
+
+export interface ImageTaskQueryResponse {
+  items: ImageTask[];
+  missing_ids: string[];
+}
+
+/** 提交文生图任务（幂等：相同 client_task_id 返回已有任务） */
+export async function submitImageGenerationTask(
+  params: {
+    clientTaskId: string;
+    prompt: string;
+    model: string;
+    size?: string;
+    quality?: string;
+  },
+  config: { baseUrl: string; apiKey: string }
+): Promise<ImageTask> {
+  const endpoint = resolveBaseUrl(config.baseUrl);
+  const response = await fetch(`${endpoint}/image-tasks/generations`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      client_task_id: params.clientTaskId,
+      prompt: params.prompt,
+      model: params.model,
+      size: params.size ?? null,
+      quality: params.quality ?? "auto",
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+  return (await response.json()) as ImageTask;
+}
+
+/** 提交图生图任务（multipart/form-data，幂等） */
+export async function submitImageEditTask(
+  params: {
+    clientTaskId: string;
+    prompt: string;
+    model: string;
+    size?: string;
+    quality?: string;
+    images: { blob: Blob; filename: string }[];
+  },
+  config: { baseUrl: string; apiKey: string }
+): Promise<ImageTask> {
+  const endpoint = resolveBaseUrl(config.baseUrl);
+  const formData = new FormData();
+  formData.append("client_task_id", params.clientTaskId);
+  formData.append("prompt", params.prompt);
+  formData.append("model", params.model);
+  formData.append("size", params.size ?? "");
+  formData.append("quality", params.quality ?? "auto");
+  for (const img of params.images) {
+    formData.append("image", img.blob, img.filename);
+  }
+  const response = await fetch(`${endpoint}/image-tasks/edits`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${config.apiKey}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+  return (await response.json()) as ImageTask;
+}
+
+/** 批量查询任务状态 */
+export async function queryImageTasks(
+  ids: string[],
+  config: { baseUrl: string; apiKey: string }
+): Promise<ImageTaskQueryResponse> {
+  const endpoint = resolveBaseUrl(config.baseUrl);
+  const search = ids.length ? `?ids=${ids.map(encodeURIComponent).join(",")}` : "";
+  const response = await fetch(`${endpoint}/image-tasks${search}`, {
+    headers: { authorization: `Bearer ${config.apiKey}` },
+  });
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+  return (await response.json()) as ImageTaskQueryResponse;
 }

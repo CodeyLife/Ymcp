@@ -3,14 +3,15 @@ import type { CSSProperties } from "react";
 import {
   Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag, Drawer, Empty, Popconfirm,
 } from "antd";
-import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined } from "@ant-design/icons";
+import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined, EyeOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
+import { DEFAULT_GREENSCREEN_PROMPT, DEFAULT_SPRITESHEET_PROMPT } from "@/config/defaults";
 import { useImageGenStore, type TaskStatus, type GenTask, type GenMode, MAX_REF_IMAGES } from "@/stores/imageGen";
 import { usePromptFavoriteStore, createPromptFavoriteTitle, type PromptFavorite } from "@/stores/promptFavorites";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
 import { usePsdTaskStore } from "@/stores/psdTask";
-import { generateImageMulti, cacheImageLocally, polishPrompt, toDataUrl } from "@/lib/api";
+import { generateImageMulti, cacheImageLocally, polishPrompt, toDataUrl, queryImageTasks, extractImageSources } from "@/lib/api";
 import { setImage } from "@/lib/imageStore";
 import { IMG2IMG_REFERENCE_GUIDES, STYLE_PRESETS } from "@/lib/imagegenPresets";
 import { downloadBlob } from "@/lib/canvas";
@@ -37,6 +38,9 @@ interface ActiveBatch {
   id: number;
   controller: AbortController;
   softTimeoutId: number | null;
+  clientTaskIds: Map<string, number>; // clientTaskId -> globalIndex（1-based），用于断线恢复查询
+  handleTaskResult: (taskIndex: number, images: string[]) => void;
+  handleTaskError: (taskIndex: number, error: string) => void;
 }
 let activeBatch: ActiveBatch | null = null;
 let batchSeq = 0;
@@ -998,6 +1002,7 @@ export default function ImageGen() {
   );
 
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [previewCompareActive, setPreviewCompareActive] = useState(false);
   const [favorited, setFavorited] = useState<Set<string>>(new Set());
   const [resultRatios, setResultRatios] = useState<Record<string, number>>({});
   const [polishing, setPolishing] = useState(false);
@@ -1059,6 +1064,7 @@ export default function ImageGen() {
   const currentImg2imgReferenceGuide = IMG2IMG_REFERENCE_GUIDES.find((p) => p.id === img2imgReferenceGuideId);
   const prompt = mode === "img2img" ? imgPrompt : textPrompt;
   const setPrompt = mode === "img2img" ? setImgPrompt : setTextPrompt;
+  const firstCompareReferenceImage = mode === "img2img" ? refImages[0] : undefined;
   const currentPromptSourceMode = mode === "img2img" ? "img2img" : "text2img";
   const activePromptFavoriteId = activePromptFavoriteIds[currentPromptSourceMode];
   const activePromptFavorite = activePromptFavoriteId
@@ -1086,6 +1092,12 @@ export default function ImageGen() {
       img2img: prev.img2img && !existingIds.has(prev.img2img) ? null : prev.img2img,
     }));
   }, [promptFavorites]);
+
+  useEffect(() => {
+    if (previewIndex === null || !firstCompareReferenceImage) {
+      setPreviewCompareActive(false);
+    }
+  }, [firstCompareReferenceImage, previewIndex]);
 
   function setCurrentActivePromptFavoriteId(id: string | null) {
     setActivePromptFavoriteIds((prev) => ({ ...prev, [currentPromptSourceMode]: id }));
@@ -1149,34 +1161,41 @@ export default function ImageGen() {
   }
 
   async function handleGenerate() {
-    if (!prompt.trim()) {
-      message.warning("请输入提示词");
+    const trimmedPrompt = prompt.trim();
+    const stylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
+    const styleFragment = stylePreset?.fragment.trim();
+    if (!trimmedPrompt && !styleFragment) {
+      message.warning("请输入提示词或选择画风");
       return;
     }
     const { baseUrl, apiKey } = getEffectiveApiConfig();
     const effectiveN = hasOwnKey ? n : 1;
 
     // 调用时注入额外片段，输入框保持干净。
+    // 画风片段放到用户提示词之后，避免前置画风削弱用户主语权重。
     const promptParts: string[] = [];
-    const stylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
-    if (stylePreset?.fragment) {
-      promptParts.push(stylePreset.fragment);
-    }
+    const tailParts: string[] = [];
 
     // 根据生成模式构建最终提示词
-    if (genMode === "greenscreen" && greenscreenPrompt.trim()) {
-      promptParts.push(greenscreenPrompt.trim());
-    } else if (genMode === "spritesheet" && spritesheetPrompt.trim()) {
+    // 提示词为空（用户未配置）时回退到默认配置
+    if (genMode === "greenscreen") {
+      const gs = greenscreenPrompt.trim() || DEFAULT_GREENSCREEN_PROMPT;
+      promptParts.push(gs);
+    } else if (genMode === "spritesheet") {
+      const ss = spritesheetPrompt.trim() || DEFAULT_SPRITESHEET_PROMPT;
       const nn = `${spritesheetN}x${spritesheetN}`;
       // 将提示词模板里的 NxN 占位符替换为实际数值
-      const basePrompt = spritesheetPrompt.trim().replace(/n\s*x\s*n/gi, nn);
+      const basePrompt = ss.replace(/n\s*x\s*n/gi, nn);
       promptParts.push(`${basePrompt}\n\nGrid: exactly ${nn} (${spritesheetN} rows × ${spritesheetN} columns, ${spritesheetN * spritesheetN} frames total)`);
     }
 
     if (mode === "img2img" && currentImg2imgReferenceGuide?.fragment) {
       promptParts.push(currentImg2imgReferenceGuide.fragment);
     }
-    const finalPrompt = [...promptParts, prompt].join("\n\n");
+    if (styleFragment) {
+      tailParts.push(styleFragment);
+    }
+    const finalPrompt = [...promptParts, trimmedPrompt, ...tailParts].filter(Boolean).join("\n\n");
 
     // 图生图需要先把所有参考图转 base64
     let imagesBase64: string[] | undefined;
@@ -1260,6 +1279,18 @@ export default function ImageGen() {
     const controller = new AbortController();
     resetTasks(params.n);
     setLoading(true);
+    const clientTaskIds = new Map<string, number>();
+    const completedTaskIndexes = new Set<number>();
+    const handleTaskResult = (taskIndex: number, images: string[]) => {
+      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      completedTaskIndexes.add(taskIndex);
+      updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
+      images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
+    };
+    const handleTaskError = (taskIndex: number, err: string) => {
+      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      updateTask(taskIndex, { status: "error", error: err, progress: undefined });
+    };
     activeBatch = {
       id: batchId,
       controller,
@@ -1273,6 +1304,9 @@ export default function ImageGen() {
         });
         message.warning("生成仍在等待，你可以继续等结果，或直接开始下一次生成");
       }, IMAGE_GEN_SOFT_TIMEOUT_MS),
+      clientTaskIds,
+      handleTaskResult,
+      handleTaskError,
     };
 
     try {
@@ -1288,6 +1322,10 @@ export default function ImageGen() {
           images: params.imagesBase64,
         },
         {
+          onTaskSubmit: (globalIndex, taskId) => {
+            if (!isActiveBatch(batchId)) return;
+            clientTaskIds.set(taskId, globalIndex);
+          },
           onTaskProgress: (text) => {
             if (!isActiveBatch(batchId)) return;
             useImageGenStore.getState().tasks.forEach((task) => {
@@ -1297,9 +1335,7 @@ export default function ImageGen() {
             });
           },
           onTaskResult: (taskIndex, images) => {
-            if (!isActiveBatch(batchId)) return;
-            updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
-            images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
+            handleTaskResult(taskIndex, images);
           },
           onExtraResult: (src) => {
             if (!isActiveBatch(batchId)) return;
@@ -1307,8 +1343,7 @@ export default function ImageGen() {
             persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败"));
           },
           onTaskError: (taskIndex, err) => {
-            if (!isActiveBatch(batchId)) return;
-            updateTask(taskIndex, { status: "error", error: err, progress: undefined });
+            handleTaskError(taskIndex, err);
           },
           onAllDone: ({ ok, fail, extra }) => {
             if (!isActiveBatch(batchId)) return;
@@ -1351,6 +1386,42 @@ export default function ImageGen() {
     }
     await runBatch(last);
   }, [runBatch, message]);
+
+  // 页面回前台时立即查询任务状态，弥补后台 fetch 被中断导致的状态丢失
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== "visible") return;
+      const batch = activeBatch;
+      if (!batch || batch.clientTaskIds.size === 0) return;
+
+      const { baseUrl, apiKey } = getEffectiveApiConfig();
+      try {
+        const resp = await queryImageTasks([...batch.clientTaskIds.keys()], { baseUrl, apiKey });
+        for (const item of resp.items) {
+          const globalIndex = batch.clientTaskIds.get(item.id);
+          if (globalIndex === undefined) continue;
+          if (!isActiveBatch(batch.id)) return;
+          if (item.status === "success") {
+            const images = item.data ? await extractImageSources({ data: item.data }) : [];
+            if (!isActiveBatch(batch.id)) return;
+            if (images.length > 0) {
+              batch.handleTaskResult(globalIndex - 1, images);
+            } else {
+              batch.handleTaskError(globalIndex - 1, "生成成功但未返回图片");
+            }
+          } else if (item.status === "error") {
+            if (isActiveBatch(batch.id)) {
+              batch.handleTaskError(globalIndex - 1, item.error || "生成失败");
+            }
+          }
+        }
+      } catch {
+        // 静默，generateImageMulti 内部轮询会处理
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [updateTask]);
 
   // 打开大图预览：定位到 doneImages 中的位置
   const openPreview = useCallback((doneIdx: number) => {
@@ -2304,8 +2375,16 @@ export default function ImageGen() {
             preview={{
               visible: previewIndex !== null,
               current: Math.min(previewIndex, doneImages.length - 1),
-              onVisibleChange: (v: boolean) => !v && setPreviewIndex(null),
-              onChange: (idx: number) => setPreviewIndex(idx),
+              onVisibleChange: (v: boolean) => {
+                if (!v) {
+                  setPreviewCompareActive(false);
+                  setPreviewIndex(null);
+                }
+              },
+              onChange: (idx: number) => {
+                setPreviewCompareActive(false);
+                setPreviewIndex(idx);
+              },
               toolbarRender: (originalNode, info) => {
                 // info.current 为 antd 内部追踪的当前索引，比 previewIndex 状态更即时
                 const idx = info.current ?? previewIndex ?? 0;
@@ -2352,6 +2431,18 @@ export default function ImageGen() {
                     onClick: () => downloadImage(cardInfo.src),
                   },
                 ];
+                if (firstCompareReferenceImage) {
+                  actions.unshift({
+                    key: "compare-reference",
+                    title: "按住查看第一张参考图",
+                    icon: <EyeOutlined />,
+                    pressed: previewCompareActive,
+                    onPointerDown: () => setPreviewCompareActive(true),
+                    onPointerUp: () => setPreviewCompareActive(false),
+                    onPointerLeave: () => setPreviewCompareActive(false),
+                    onPointerCancel: () => setPreviewCompareActive(false),
+                  });
+                }
                 return (
                   <ImagePreviewActionToolbar
                     originalNode={cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon)}
@@ -2365,6 +2456,11 @@ export default function ImageGen() {
               <Image key={`${item.key}-${i}`} src={item.src} />
             ))}
           </Image.PreviewGroup>
+        </div>
+      )}
+      {previewCompareActive && firstCompareReferenceImage && (
+        <div className="image-preview-reference-compare" aria-hidden>
+          <img src={firstCompareReferenceImage} alt="" />
         </div>
       )}
 

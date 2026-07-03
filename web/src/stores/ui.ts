@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { DEFAULT_BASE_URL, DEFAULT_API_KEY } from "@/config/defaults";
+import {
+  DEFAULT_BASE_URL,
+  DEFAULT_API_KEY,
+  DEFAULT_GREENSCREEN_PROMPT,
+  DEFAULT_SPRITESHEET_PROMPT,
+} from "@/config/defaults";
 
 // 窄屏断点：小于该宽度时侧边栏默认收折
 export const SIDEBAR_COLLAPSE_BREAKPOINT = 768;
@@ -43,8 +48,8 @@ export const useUIStore = create<UIState>()(
       apiBaseUrl: "",
       apiKey: "",
       thumbSize: 256,
-      greenscreenPrompt: "Pure chroma key green background (#00FF00), no shadows, no gradients, no highlights，background=opaque",
-      spritesheetPrompt: "A seamless sprite sheet animation arranged in a grid layout, consisting of multiple frames showing sequential motion, each frame evenly spaced in a regular grid, consistent character scale and positioning, transparent or uniform background, clear visual progression of movement, designed for frame-by-frame animation extraction",
+      greenscreenPrompt: "",
+      spritesheetPrompt: "",
       setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) }),
       setApiKey: (apiKey) => set({ apiKey }),
       setThumbSize: (size) => set({ thumbSize: size }),
@@ -53,6 +58,20 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "ymcp-ui",
+      version: 1,
+      // 老版本将默认提示词写入了 localStorage；迁移时把等于旧默认值的字段清空，
+      // 让这些字段回到"未配置"状态，从而走默认配置读取逻辑。
+      migrate: (persistedState: any, version: number) => {
+        if (version === 0 && persistedState) {
+          if (persistedState.greenscreenPrompt === DEFAULT_GREENSCREEN_PROMPT) {
+            persistedState.greenscreenPrompt = "";
+          }
+          if (persistedState.spritesheetPrompt === DEFAULT_SPRITESHEET_PROMPT) {
+            persistedState.spritesheetPrompt = "";
+          }
+        }
+        return persistedState;
+      },
       partialize: (state) => ({
         apiBaseUrl: state.apiBaseUrl,
         apiKey: state.apiKey,

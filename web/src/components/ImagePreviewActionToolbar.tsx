@@ -1,15 +1,20 @@
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent, PointerEvent, ReactNode } from "react";
 
 export interface ImagePreviewAction {
   key: string;
   title: string;
   icon: ReactNode;
   active?: boolean;
+  pressed?: boolean;
   danger?: boolean;
   disabled?: boolean;
   href?: string;
   download?: string;
   onClick?: () => void;
+  onPointerDown?: () => void;
+  onPointerUp?: () => void;
+  onPointerLeave?: () => void;
+  onPointerCancel?: () => void;
 }
 
 interface ImagePreviewActionToolbarProps {
@@ -26,6 +31,7 @@ export function ImagePreviewActionToolbar({ originalNode, actions }: ImagePrevie
         const className = [
           "image-preview-img2img-button",
           action.active ? "image-preview-favorite-active" : "",
+          action.pressed ? "image-preview-button-pressed" : "",
           action.danger ? "image-preview-danger-button" : "",
         ].filter(Boolean).join(" ");
         const commonProps = {
@@ -35,6 +41,24 @@ export function ImagePreviewActionToolbar({ originalNode, actions }: ImagePrevie
           onClick: (event: MouseEvent<HTMLElement>) => {
             event.stopPropagation();
             action.onClick?.();
+          },
+          onPointerDown: (event: PointerEvent<HTMLElement>) => {
+            event.stopPropagation();
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+            action.onPointerDown?.();
+          },
+          onPointerUp: (event: PointerEvent<HTMLElement>) => {
+            event.stopPropagation();
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+            action.onPointerUp?.();
+          },
+          onPointerLeave: (event: PointerEvent<HTMLElement>) => {
+            event.stopPropagation();
+            action.onPointerLeave?.();
+          },
+          onPointerCancel: (event: PointerEvent<HTMLElement>) => {
+            event.stopPropagation();
+            action.onPointerCancel?.();
           },
         };
 

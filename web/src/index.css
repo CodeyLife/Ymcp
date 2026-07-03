@@ -1015,6 +1015,17 @@ a.image-preview-img2img-button {
   background: rgba(0, 0, 0, 0.2);
 }
 
+.image-preview-button-pressed {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.2);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.38);
+}
+
+.image-preview-button-pressed:hover {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.26);
+}
+
 .image-preview-favorite-active {
   color: #fbbf24;
   background: rgba(251, 191, 36, 0.16);
@@ -1042,6 +1053,24 @@ a.image-preview-img2img-button {
 
 .image-preview-img2img-button .anticon {
   font-size: 18px;
+}
+
+.image-preview-reference-compare {
+  position: fixed;
+  inset: 64px 0 88px;
+  z-index: 1085;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  padding: 0 4vw;
+}
+
+.image-preview-reference-compare img {
+  display: block;
+  max-width: 92vw;
+  max-height: calc(100vh - 152px);
+  object-fit: contain;
+  filter: drop-shadow(0 18px 42px rgba(0, 0, 0, 0.6));
 }
 
 /* 大图预览：左右侧切换悬浮按钮 */

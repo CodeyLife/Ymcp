@@ -1,6 +1,7 @@
 import { Card, Typography, Form, Input, InputNumber, Button, Divider, App, Alert } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
+import { DEFAULT_GREENSCREEN_PROMPT, DEFAULT_SPRITESHEET_PROMPT } from "@/config/defaults";
 import { PageHeader } from "@/components/showtime";
 
 const { Text } = Typography;
@@ -82,19 +83,27 @@ export default function Settings() {
             <InputNumber min={64} max={512} style={{ width: "100%" }} />
           </Form.Item>
           <Divider style={{ borderColor: "#27272a" }} />
-          <Form.Item  
+          <Form.Item
             label="绿幕模式提示词"
             name="greenscreen_prompt"
-            help="生成时自动插入到用户提示词前，要求纯绿背景无光影"
+            help="留空使用默认配置。生成时自动插入到用户提示词前，要求纯绿背景无光影"
           >
-            <TextArea rows={3} style={{ resize: "vertical" }} />
+            <TextArea
+              rows={3}
+              style={{ resize: "vertical" }}
+              placeholder={DEFAULT_GREENSCREEN_PROMPT}
+            />
           </Form.Item>
           <Form.Item
             label="序列帧模式提示词"
             name="spritesheet_prompt"
-            help="生成时自动插入到用户提示词前，要求输出 NxN 网格序列帧图集"
+            help="留空使用默认配置。生成时自动插入到用户提示词前，要求输出 NxN 网格序列帧图集"
           >
-            <TextArea rows={4} style={{ resize: "vertical" }} />
+            <TextArea
+              rows={4}
+              style={{ resize: "vertical" }}
+              placeholder={DEFAULT_SPRITESHEET_PROMPT}
+            />
           </Form.Item>
           <Button type="primary" htmlType="submit">
             保存
