@@ -198,6 +198,7 @@ export default function History() {
         emptyDescription="生成的作品会自动保存在这里，支持回看、复用参数与收藏。"
         onPreview={(imageId) => setPreviewImageId(imageId)}
         onDownload={(imageId) => downloadImage(imageId)}
+        getDownloadFilename={(_, item) => buildPreviewDownloadName(item)}
         onMatte={(imageId) => sendToMatte(imageId)}
         onImg2Img={(imageId) => void sendToImageGen(imageId)}
         onReuse={reuseParams}

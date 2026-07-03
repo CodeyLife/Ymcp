@@ -206,6 +206,7 @@ export default function Assets() {
         emptyDescription="点击右上角上传，或在生图页保存生成结果到素材库。"
         onPreview={(imageId) => setPreviewImageId(imageId)}
         onDownload={(imageId) => downloadImage(imageId)}
+        getDownloadFilename={(_, item) => buildPreviewDownloadName(item)}
         onMatte={(imageId) => sendToMatte(imageId)}
         onImg2Img={(imageId) => void sendToImageGen(imageId)}
         onDelete={handleDelete}

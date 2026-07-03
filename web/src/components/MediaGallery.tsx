@@ -63,6 +63,7 @@ export interface MediaGalleryProps {
   emptyDescription?: string;
   onPreview?: (imageId: string, item: MediaItem) => void;
   onDownload?: (imageId: string, item: MediaItem) => void;
+  getDownloadFilename?: (imageId: string, item: MediaItem) => string;
   onMatte?: (imageId: string, item: MediaItem) => void;
   onImg2Img?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
@@ -93,6 +94,7 @@ interface MediaCardProps {
   onToggleSelect: (id: string) => void;
   onPreview?: (imageId: string, item: MediaItem) => void;
   onDownload?: (imageId: string, item: MediaItem) => void;
+  getDownloadFilename?: (imageId: string, item: MediaItem) => string;
   onMatte?: (imageId: string, item: MediaItem) => void;
   onImg2Img?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
@@ -100,7 +102,7 @@ interface MediaCardProps {
 }
 
 function MediaCard({
-  item, selected, onToggleSelect, onPreview, onDownload, onMatte, onImg2Img, onReuse, onFavorite,
+  item, selected, onToggleSelect, onPreview, onDownload, getDownloadFilename, onMatte, onImg2Img, onReuse, onFavorite,
 }: MediaCardProps) {
   const reduce = useMotionMode();
   const [imgIdx, setImgIdx] = useState(0);
@@ -108,6 +110,7 @@ function MediaCard({
   const currentId = item.imageIds[imgIdx];
   const current = useImageUrl(currentId);
   const badgeStyle = item.badge ? BADGE_STYLES[item.badge.color] : null;
+  const downloadFilename = currentId ? getDownloadFilename?.(currentId, item) : undefined;
 
   const stop = (e: React.MouseEvent) => e.stopPropagation();
 
@@ -361,11 +364,13 @@ function MediaCard({
               onClick={(e) => { stop(e); onFavorite(item); }}
             />
           )}
-          {onDownload && currentId && (
+          {onDownload && currentId && current && (
             <CardActionButton
               icon={<DownloadOutlined />}
               tip="下载"
-              onClick={(e) => { stop(e); onDownload(currentId, item); }}
+              href={current}
+              download={downloadFilename}
+              onClick={stop}
             />
           )}
           {onMatte && currentId && (
@@ -422,53 +427,73 @@ function navBtnStyle(side: "left" | "right"): React.CSSProperties {
  * ============================================================ */
 
 function CardActionButton({
-  icon, tip, onClick, active, activeColor = "#fbbf24",
+  icon, tip, onClick, active, activeColor = "#fbbf24", href, download,
 }: {
   icon: ReactNode;
   tip: string;
-  onClick: (e: React.MouseEvent) => void;
+  onClick?: (e: React.MouseEvent<HTMLElement>) => void;
   /** 激活态（如已收藏）：常驻高亮，悬浮不再变绿 */
   active?: boolean;
   activeColor?: string;
+  href?: string;
+  download?: string;
 }) {
   const idleBg = "rgba(24, 24, 27, 0.78)";
   const idleBorder = "rgba(255, 255, 255, 0.1)";
   const idleColor = "#d4d4d8";
+  const style: React.CSSProperties = {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    border: active ? `1px solid ${activeColor}66` : `1px solid ${idleBorder}`,
+    background: active ? `${activeColor}26` : idleBg,
+    backdropFilter: "blur(6px)",
+    WebkitBackdropFilter: "blur(6px)",
+    color: active ? activeColor : idleColor,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 12,
+    transition: "all 0.15s ease",
+    textDecoration: "none",
+  };
+  const hoverHandlers = {
+    onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
+      if (active) return;
+      e.currentTarget.style.background = "rgba(16, 185, 129, 0.22)";
+      e.currentTarget.style.borderColor = "rgba(16, 185, 129, 0.45)";
+      e.currentTarget.style.color = "#34d399";
+    },
+    onMouseLeave: (e: React.MouseEvent<HTMLElement>) => {
+      if (active) return;
+      e.currentTarget.style.background = idleBg;
+      e.currentTarget.style.borderColor = idleBorder;
+      e.currentTarget.style.color = idleColor;
+    },
+  };
   return (
     <Tooltip title={tip} mouseEnterDelay={0.4}>
-      <button
-        onClick={onClick}
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          border: active ? `1px solid ${activeColor}66` : `1px solid ${idleBorder}`,
-          background: active ? `${activeColor}26` : idleBg,
-          backdropFilter: "blur(6px)",
-          WebkitBackdropFilter: "blur(6px)",
-          color: active ? activeColor : idleColor,
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 12,
-          transition: "all 0.15s ease",
-        }}
-        onMouseEnter={(e) => {
-          if (active) return;
-          e.currentTarget.style.background = "rgba(16, 185, 129, 0.22)";
-          e.currentTarget.style.borderColor = "rgba(16, 185, 129, 0.45)";
-          e.currentTarget.style.color = "#34d399";
-        }}
-        onMouseLeave={(e) => {
-          if (active) return;
-          e.currentTarget.style.background = idleBg;
-          e.currentTarget.style.borderColor = idleBorder;
-          e.currentTarget.style.color = idleColor;
-        }}
-      >
-        {icon}
-      </button>
+      {href ? (
+        <a
+          href={href}
+          download={download}
+          onClick={onClick}
+          style={style}
+          {...hoverHandlers}
+        >
+          {icon}
+        </a>
+      ) : (
+        <button
+          type="button"
+          onClick={onClick}
+          style={style}
+          {...hoverHandlers}
+        >
+          {icon}
+        </button>
+      )}
     </Tooltip>
   );
 }
@@ -484,6 +509,7 @@ export function MediaGallery({
   emptyDescription,
   onPreview,
   onDownload,
+  getDownloadFilename,
   onMatte,
   onImg2Img,
   onReuse,
@@ -666,6 +692,7 @@ export function MediaGallery({
             onToggleSelect={toggleSelect}
             onPreview={onPreview}
             onDownload={onDownload}
+            getDownloadFilename={getDownloadFilename}
             onMatte={onMatte}
             onImg2Img={onImg2Img}
             onReuse={onReuse}
