@@ -6,14 +6,10 @@ export async function setImageAsImg2ImgReference(imageId: string): Promise<boole
   if (!blob) return false;
 
   const url = URL.createObjectURL(blob);
-  const { refImage, setMode, setRefImage } = useImageGenStore.getState();
-
-  if (refImage?.startsWith("blob:")) {
-    URL.revokeObjectURL(refImage);
-  }
+  const { setMode, setRefImages } = useImageGenStore.getState();
 
   setMode("img2img");
-  setRefImage(url);
+  setRefImages([url]);
   return true;
 }
 

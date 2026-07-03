@@ -14,7 +14,7 @@ import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
 import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
-import { ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
+import { getNextPreviewImageIdAfterDelete, ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
 import { sendImageToImageGenReference } from "@/lib/imageGenReference";
 
 type FilterType = "all" | "generated" | "uploaded" | "matte";
@@ -147,8 +147,9 @@ export default function Assets() {
   }
 
   function handleDeleteCurrent(item: MediaItem) {
+    const nextId = getNextPreviewImageIdAfterDelete(previewImageIds, previewImageId);
     handleDelete([item.id]);
-    setPreviewImageId(null);
+    setPreviewImageId(nextId ?? null);
   }
 
   function buildPreviewDownloadName(item?: MediaItem) {

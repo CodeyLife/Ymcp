@@ -2,6 +2,13 @@ import { create } from "zustand";
 
 export type GenMode = "normal" | "greenscreen" | "spritesheet";
 
+/** 图生图参考图数量上限，对齐 OpenAI gpt-image-1 /images/edits 多图上限 */
+export const MAX_REF_IMAGES = 16;
+
+function revokeBlobUrl(url: string) {
+  if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+}
+
 export type TaskStatus = "pending" | "loading" | "waiting" | "done" | "error";
 
 export interface GenTask {
@@ -26,7 +33,7 @@ interface ImageGenState {
   quality: string;
   styleId: string;
   img2imgReferenceGuideId: string | null;
-  refImage: string | null;
+  refImages: string[];
   tasks: GenTask[];
   extraResults: string[];
   loading: boolean;
@@ -41,7 +48,14 @@ interface ImageGenState {
   setQuality: (quality: string) => void;
   setStyleId: (styleId: string) => void;
   setImg2imgReferenceGuideId: (guideId: string | null) => void;
-  setRefImage: (url: string | null) => void;
+  /** 整体替换参考图数组（程序化送图用，会 revoke 旧 blob URL） */
+  setRefImages: (urls: string[]) => void;
+  /** 追加参考图（上传用，内部裁剪到 MAX_REF_IMAGES） */
+  addRefImages: (urls: string[]) => number;
+  /** 移除指定下标的参考图并 revoke 其 blob URL */
+  removeRefImage: (index: number) => void;
+  /** 清空全部参考图并 revoke 所有 blob URL */
+  clearRefImages: () => void;
   setTasks: (tasks: GenTask[]) => void;
   updateTask: (index: number, patch: Partial<GenTask>) => void;
   addExtraResult: (src: string) => void;
@@ -62,7 +76,7 @@ const DEFAULTS = {
   quality: "auto",
   styleId: "none",
   img2imgReferenceGuideId: null,
-  refImage: null,
+  refImages: [] as string[],
   tasks: [] as GenTask[],
   extraResults: [] as string[],
   loading: false,
@@ -81,7 +95,40 @@ export const useImageGenStore = create<ImageGenState>((set) => ({
   setQuality: (quality) => set({ quality }),
   setStyleId: (styleId) => set({ styleId }),
   setImg2imgReferenceGuideId: (img2imgReferenceGuideId) => set({ img2imgReferenceGuideId }),
-  setRefImage: (refImage) => set({ refImage }),
+  setRefImages: (refImages) =>
+    set((state) => {
+      const kept = refImages.slice(0, MAX_REF_IMAGES);
+      const keptSet = new Set(kept);
+      state.refImages.forEach((url) => {
+        if (!keptSet.has(url)) revokeBlobUrl(url);
+      });
+      refImages.slice(MAX_REF_IMAGES).forEach((url) => {
+        if (!keptSet.has(url)) revokeBlobUrl(url);
+      });
+      return { refImages: kept };
+    }),
+  addRefImages: (urls) => {
+    let acceptedCount = 0;
+    set((state) => {
+      const remaining = Math.max(0, MAX_REF_IMAGES - state.refImages.length);
+      const accepted = urls.slice(0, remaining);
+      acceptedCount = accepted.length;
+      urls.slice(remaining).forEach(revokeBlobUrl);
+      return { refImages: [...state.refImages, ...accepted] };
+    });
+    return acceptedCount;
+  },
+  removeRefImage: (index) =>
+    set((state) => {
+      const removed = state.refImages[index];
+      if (removed) revokeBlobUrl(removed);
+      return { refImages: state.refImages.filter((_, i) => i !== index) };
+    }),
+  clearRefImages: () =>
+    set((state) => {
+      state.refImages.forEach(revokeBlobUrl);
+      return { refImages: [] };
+    }),
   setTasks: (tasks) => set({ tasks }),
   updateTask: (index, patch) =>
     set((state) => ({
@@ -103,5 +150,9 @@ export const useImageGenStore = create<ImageGenState>((set) => ({
     }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
-  reset: () => set({ ...DEFAULTS, tasks: [], extraResults: [] }),
+  reset: () =>
+    set((state) => {
+      state.refImages.forEach(revokeBlobUrl);
+      return { ...DEFAULTS, tasks: [], extraResults: [] };
+    }),
 }));

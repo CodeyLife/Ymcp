@@ -14,7 +14,7 @@ import { useImageUrl } from "@/hooks/useImageUrl";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
 import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
-import { ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
+import { getNextPreviewImageIdAfterDelete, ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
 import { sendImageToImageGenReference } from "@/lib/imageGenReference";
 
 const MODE_BADGE: Record<HistoryItem["mode"], MediaBadge> = {
@@ -38,6 +38,7 @@ export default function History() {
   const setIncomingImage = useUIStore((s) => s.setIncomingImage);
   const items = useHistoryStore((s) => s.items);
   const removeMany = useHistoryStore((s) => s.removeMany);
+  const removeImage = useHistoryStore((s) => s.removeImage);
   const assets = useAssetStore((s) => s.items);
   const addAsset = useAssetStore((s) => s.add);
   const removeByHistoryId = useAssetStore((s) => s.removeByHistoryId);
@@ -133,8 +134,12 @@ export default function History() {
   }
 
   function handleDeleteCurrent(item: MediaItem) {
-    handleDelete([item.id]);
-    setPreviewImageId(null);
+    const removedImageId = previewImageId;
+    if (!removedImageId) return;
+    const nextId = getNextPreviewImageIdAfterDelete(previewImageIds, removedImageId);
+    removeImage(item.id, removedImageId);
+    message.success("已删除");
+    setPreviewImageId(nextId ?? null);
   }
 
   function buildPreviewDownloadName(item?: MediaItem) {

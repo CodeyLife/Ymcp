@@ -449,14 +449,14 @@ export async function generateImageStream(
     style?: string;
     baseUrl: string;
     apiKey: string;
-    image?: string; // base64 for img2img
+    images?: string[]; // base64 data URLs for img2img（支持多张）
   },
   callbacks: StreamCallbacks,
   options?: { signal?: AbortSignal }
 ): Promise<void> {
   const { baseUrl, apiKey, ...body } = data;
   const endpoint = resolveBaseUrl(baseUrl);
-  const isImg2Img = !!body.image;
+  const isImg2Img = !!(body.images && body.images.length > 0);
 
   // 图生图用 /images/edits 端点，文生图用 /images/generations
   const path = isImg2Img ? "/images/edits" : "/images/generations";
@@ -473,14 +473,18 @@ export async function generateImageStream(
       formData.append("response_format", "b64_json");
       formData.append("stream", "true");
       if (body.quality) formData.append("quality", body.quality);
-      // image 是 data URL (data:image/<mime>;base64,...)，按实际 MIME 转为 Blob
-      const dataUrl = body.image!;
-      const mimeMatch = dataUrl.match(/^data:(image\/[a-z+]+);/i);
-      const mime = mimeMatch?.[1] || "image/png";
-      const base64Data = dataUrl.split(",")[1] || dataUrl;
-      const imageBlob = await (await fetch(`data:${mime};base64,${base64Data}`)).blob();
-      const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
-      formData.append("image", imageBlob, `reference.${ext}`);
+      // 多图：循环 append "image" 字段
+      // API 文档：image 类型为 file | file[] | URL，OpenAI 兼容约定下多图通过重复 image 字段传递
+      const images = body.images!;
+      for (let i = 0; i < images.length; i++) {
+        const dataUrl = images[i];
+        const mimeMatch = dataUrl.match(/^data:(image\/[a-z+]+);/i);
+        const mime = mimeMatch?.[1] || "image/png";
+        const base64Data = dataUrl.split(",")[1] || dataUrl;
+        const imageBlob = await (await fetch(`data:${mime};base64,${base64Data}`)).blob();
+        const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+        formData.append("image", imageBlob, `reference-${i}.${ext}`);
+      }
 
       response = await fetch(`${endpoint}${path}`, {
         method: "POST",
@@ -644,7 +648,7 @@ export interface BatchTaskParams {
   style?: string;
   baseUrl: string;
   apiKey: string;
-  image?: string;
+  images?: string[];
 }
 
 export interface MultiCallbacks {

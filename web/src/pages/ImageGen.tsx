@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { cloneElement, useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import type { CSSProperties } from "react";
 import {
   Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag, Drawer, Empty, Popconfirm,
 } from "antd";
-import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, UploadOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined } from "@ant-design/icons";
+import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
-import { useImageGenStore, type TaskStatus, type GenTask, type GenMode } from "@/stores/imageGen";
+import { useImageGenStore, type TaskStatus, type GenTask, type GenMode, MAX_REF_IMAGES } from "@/stores/imageGen";
 import { usePromptFavoriteStore, createPromptFavoriteTitle, type PromptFavorite } from "@/stores/promptFavorites";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
@@ -52,14 +52,6 @@ const SIZE_OPTIONS: SizeOption[] = [
   { ratio: "9:16", value: "1024x1792", w: 1024, h: 1792, tier: "1k" },
   { ratio: "16:9", value: "1792x1024", w: 1792, h: 1024, tier: "1k" },
 ];
-
-/** 字节数格式化为人类可读字符串 */
-function formatSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
-}
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -929,7 +921,7 @@ export default function ImageGen() {
   const quality = useImageGenStore((s) => s.quality);
   const styleId = useImageGenStore((s) => s.styleId);
   const img2imgReferenceGuideId = useImageGenStore((s) => s.img2imgReferenceGuideId);
-  const refImage = useImageGenStore((s) => s.refImage);
+  const refImages = useImageGenStore((s) => s.refImages);
   const tasks = useImageGenStore((s) => s.tasks);
   const extraResults = useImageGenStore((s) => s.extraResults);
   const loading = useImageGenStore((s) => s.loading);
@@ -944,7 +936,10 @@ export default function ImageGen() {
   const setQuality = useImageGenStore((s) => s.setQuality);
   const setStyleId = useImageGenStore((s) => s.setStyleId);
   const setImg2imgReferenceGuideId = useImageGenStore((s) => s.setImg2imgReferenceGuideId);
-  const setRefImage = useImageGenStore((s) => s.setRefImage);
+  const setRefImages = useImageGenStore((s) => s.setRefImages);
+  const addRefImages = useImageGenStore((s) => s.addRefImages);
+  const removeRefImage = useImageGenStore((s) => s.removeRefImage);
+  const clearRefImages = useImageGenStore((s) => s.clearRefImages);
   const updateTask = useImageGenStore((s) => s.updateTask);
   const addExtraResult = useImageGenStore((s) => s.addExtraResult);
   const resetTasks = useImageGenStore((s) => s.resetTasks);
@@ -1004,7 +999,7 @@ export default function ImageGen() {
   // 暂存最近一次批量生成的参数，供整体重试复用
   const lastBatchRef = useRef<{
     finalPrompt: string;
-    imageBase64?: string;
+    imagesBase64?: string[];
     baseUrl: string;
     apiKey: string;
     size: string;
@@ -1119,38 +1114,54 @@ export default function ImageGen() {
   useEffect(() => { promptRef.current = prompt; }, [prompt]);
 
   async function handleRefImageFiles(files: FileList) {
-    const file = files[0];
-    if (!file) return;
-    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
-      message.error("仅支持 PNG/JPEG/WebP 格式");
+    const fileArr = Array.from(files);
+    if (!fileArr.length) return;
+    const remaining = MAX_REF_IMAGES - refImages.length;
+    if (remaining <= 0) {
+      message.warning(`最多 ${MAX_REF_IMAGES} 张参考图`);
       return;
     }
-    message.loading({ key: "ref-compress", content: "正在优化参考图..." });
+    const accepted = fileArr.filter((f) => /^image\/(png|jpeg|webp)$/i.test(f.type));
+    const rejected = fileArr.length - accepted.length;
+    const toProcess = accepted.slice(0, remaining);
+    const overflow = accepted.length - toProcess.length;
+    if (rejected) message.error(`${rejected} 张格式不支持，仅支持 PNG/JPEG/WebP`);
+    if (overflow) message.warning(`已达上限，仅取前 ${toProcess.length} 张`);
+    if (toProcess.length === 0) {
+      message.warning("没有可载入的参考图");
+      return;
+    }
+
+    message.loading({ key: "ref-compress", content: `正在优化 ${toProcess.length} 张参考图...` });
+    const newUrls: string[] = [];
     try {
-      const result = await compressImage(file);
-      let refBlob = result.blob;
-      let refUrl = result.url;
-      let flattenedForGreenscreen = false;
-
-      if (genMode === "greenscreen") {
-        refBlob = await flattenImageOnGreen(refBlob);
-        refUrl = URL.createObjectURL(refBlob);
-        flattenedForGreenscreen = true;
-        URL.revokeObjectURL(result.url);
+      for (const file of toProcess) {
+        const result = await compressImage(file);
+        let refBlob = result.blob;
+        let refUrl = result.url;
+        if (genMode === "greenscreen") {
+          refBlob = await flattenImageOnGreen(refBlob);
+          URL.revokeObjectURL(result.url);
+          refUrl = URL.createObjectURL(refBlob);
+        }
+        newUrls.push(refUrl);
       }
-
-      // 释放旧的 blob URL，避免内存泄漏
-      const prev = refImage;
-      if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
-      setRefImage(refUrl);
-      const ratio = result.skipped && !flattenedForGreenscreen
-        ? ""
-        : `，压缩 ${((1 - refBlob.size / result.originalSize) * 100).toFixed(0)}%`;
+      const acceptedCount = addRefImages(newUrls);
+      const after = useImageGenStore.getState().refImages.length;
+      if (acceptedCount === 0) {
+        message.warning({
+          key: "ref-compress",
+          content: `参考图已满，未载入新图片（${after}/${MAX_REF_IMAGES}）`,
+        });
+        return;
+      }
       message.success({
         key: "ref-compress",
-        content: `参考图已就绪 ${result.width}×${result.height}，${formatSize(refBlob.size)}${ratio}${flattenedForGreenscreen ? "，已合成绿幕 JPG" : ""}`,
+        content: `已载入 ${acceptedCount} 张参考图（共 ${after}/${MAX_REF_IMAGES}）`,
       });
     } catch (e) {
+      // 失败时 revoke 已生成的 blob URL，避免内存泄漏
+      newUrls.forEach((u) => u.startsWith("blob:") && URL.revokeObjectURL(u));
       message.error({ key: "ref-compress", content: "参考图处理失败，请重试" });
     }
   }
@@ -1185,20 +1196,23 @@ export default function ImageGen() {
     }
     const finalPrompt = [...promptParts, prompt].join("\n\n");
 
-    // 图生图需要先转 base64
-    let imageBase64: string | undefined;
+    // 图生图需要先把所有参考图转 base64
+    let imagesBase64: string[] | undefined;
     if (mode === "img2img") {
-      if (!refImage) {
+      if (!refImages.length) {
         message.warning("请先上传参考图");
         return;
       }
       try {
-        const response = await fetch(refImage);
-        let blob = await response.blob();
-        if (genMode === "greenscreen") {
-          blob = await flattenImageOnGreen(blob);
+        imagesBase64 = [];
+        for (const refUrl of refImages) {
+          const response = await fetch(refUrl);
+          let blob = await response.blob();
+          if (genMode === "greenscreen") {
+            blob = await flattenImageOnGreen(blob);
+          }
+          imagesBase64.push(await blobToDataUrl(blob));
         }
-        imageBase64 = await blobToDataUrl(blob);
       } catch {
         message.error("参考图加载失败");
         return;
@@ -1207,7 +1221,7 @@ export default function ImageGen() {
 
     await runBatch({
       finalPrompt,
-      imageBase64,
+      imagesBase64,
       baseUrl,
       apiKey,
       size,
@@ -1246,7 +1260,7 @@ export default function ImageGen() {
   // 发起一次 n=N 单请求批次，后端线程池内部并行；供 handleGenerate 与整体重试复用
   const runBatch = useCallback(async (params: {
     finalPrompt: string;
-    imageBase64?: string;
+    imagesBase64?: string[];
     baseUrl: string;
     apiKey: string;
     size: string;
@@ -1290,7 +1304,7 @@ export default function ImageGen() {
           quality: params.quality,
           baseUrl: params.baseUrl,
           apiKey: params.apiKey,
-          image: params.imageBase64,
+          images: params.imagesBase64,
         },
         {
           onTaskProgress: (text) => {
@@ -1441,12 +1455,12 @@ export default function ImageGen() {
     try {
       const cachedSrc = await cacheImageLocally(src);
       setMode("img2img");
-      setRefImage(cachedSrc);
+      setRefImages([cachedSrc]);
       message.info("已切换到图生图，参考图已载入");
     } catch {
       message.error("图片加载失败");
     }
-  }, [setMode, setRefImage, message]);
+  }, [setMode, setRefImages, message]);
 
   // 拆分为 PSD：将结果图转为 data URL，预填到 PSD 任务表单并切换 tab
   const splitToPsd = useCallback(async (src: string) => {
@@ -1748,52 +1762,56 @@ export default function ImageGen() {
             )}
             <Form layout="vertical">
               {mode === "img2img" && (
-                <Form.Item label="参考图" className="reference-image-field">
-                  {refImage ? (
-                    <div className="reference-image-compact">
-                      <img
-                        src={refImage}
-                        alt="参考图"
-                        className="reference-image-thumb"
-                      />
-                      <div className="reference-image-meta">
-                        <Text className="reference-image-title">参考图已载入</Text>
-                        <Text className="reference-image-hint">
-                          用于图生图生成，可替换或 <span className="reference-image-kbd">Ctrl+V</span> 粘贴新图
-                        </Text>
-                      </div>
-                      <Space size={6} className="reference-image-actions">
-                        <FileUploadTrigger
-                          accept="image/png,image/jpeg,image/webp"
-                          variant="button"
-                          label="替换"
-                          icon={<UploadOutlined />}
-                          onFiles={handleRefImageFiles}
-                        />
-                        <Button
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                          onClick={() => setRefImage(null)}
-                        >
-                          移除
-                        </Button>
-                      </Space>
-                    </div>
-                  ) : (
+                <Form.Item label={`参考图 (${refImages.length}/${MAX_REF_IMAGES})`} className="reference-image-field">
+                  {refImages.length === 0 ? (
                     <div className="reference-image-empty">
                       <FileUploadTrigger
                         accept="image/png,image/jpeg,image/webp"
                         variant="dropzone"
+                        multiple
                         label="上传参考图"
                         hint={(
                           <>
-                            点击、拖拽或 <span className="reference-image-kbd">Ctrl+V</span> 粘贴，PNG / JPEG / WebP
+                            点击、拖拽或 <span className="reference-image-kbd">Ctrl+V</span> 粘贴，支持多选，PNG / JPEG / WebP
                           </>
                         )}
                         icon={<InboxOutlined />}
                         onFiles={handleRefImageFiles}
                       />
+                    </div>
+                  ) : (
+                    <div className="reference-images-grid">
+                      {refImages.map((url, i) => (
+                        <div className="reference-image-cell" key={`${i}-${url.slice(-32)}`}>
+                          <img src={url} alt={`参考图 ${i + 1}`} className="reference-image-thumb" />
+                          <button
+                            type="button"
+                            className="reference-image-remove"
+                            title="移除"
+                            onClick={() => removeRefImage(i)}
+                          >
+                            <DeleteOutlined />
+                          </button>
+                          <span className="reference-image-index">{i + 1}</span>
+                        </div>
+                      ))}
+                      {refImages.length < MAX_REF_IMAGES && (
+                        <div className="reference-image-add-cell">
+                          <FileUploadTrigger
+                            accept="image/png,image/jpeg,image/webp"
+                            variant="dropzone"
+                            multiple
+                            label="添加"
+                            icon={<PlusOutlined />}
+                            onFiles={handleRefImageFiles}
+                          />
+                        </div>
+                      )}
+                      <div className="reference-images-actions">
+                        <Button size="small" danger icon={<DeleteOutlined />} onClick={clearRefImages}>
+                          全部清空
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </Form.Item>
@@ -2296,6 +2314,8 @@ export default function ImageGen() {
               current: Math.min(previewIndex, doneImages.length - 1),
               onVisibleChange: (v: boolean) => !v && setPreviewIndex(null),
               onChange: (idx: number) => setPreviewIndex(idx),
+              toolbarRender: (originalNode, info) =>
+                cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon),
             }}
           >
             {doneImages.map((item, i) => (

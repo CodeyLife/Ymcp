@@ -23,6 +23,8 @@ interface HistoryState {
   add: (item: HistoryItem) => void;
   remove: (id: string) => void;
   removeMany: (ids: string[]) => void;
+  /** 从指定历史项中移除单张图片；若该历史项变空则整体删除 */
+  removeImage: (historyId: string, imageId: string) => void;
   clear: () => void;
 }
 
@@ -55,6 +57,20 @@ export const useHistoryStore = create<HistoryState>()(
             if (idSet.has(i.id)) i.imageIds.forEach((iid) => deleteImage(iid).catch(() => {}));
           });
           return { items: s.items.filter((i) => !idSet.has(i.id)) };
+        }),
+      removeImage: (historyId, imageId) =>
+        set((s) => {
+          const target = s.items.find((i) => i.id === historyId);
+          if (!target) return s;
+          deleteImage(imageId).catch(() => {});
+          const newImageIds = target.imageIds.filter((id) => id !== imageId);
+          if (newImageIds.length === 0) {
+            // 该历史项无图，整体删除
+            return { items: s.items.filter((i) => i.id !== historyId) };
+          }
+          return {
+            items: s.items.map((i) => (i.id === historyId ? { ...i, imageIds: newImageIds } : i)),
+          };
         }),
       clear: () =>
         set((s) => {

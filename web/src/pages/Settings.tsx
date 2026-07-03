@@ -1,7 +1,6 @@
 import { Card, Typography, Form, Input, InputNumber, Button, Divider, App, Alert } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
-import { DEFAULT_BASE_URL } from "@/config/defaults";
 import { PageHeader } from "@/components/showtime";
 
 const { Text } = Typography;
@@ -73,7 +72,7 @@ export default function Settings() {
           onFinish={onSave}
         >
           <Form.Item label="API Base URL" name="api_base_url" help="留空使用默认接口地址">
-            <Input placeholder={DEFAULT_BASE_URL} />
+            <Input placeholder="https://api.openai.com/v1" />
           </Form.Item>
           <Form.Item label="API Key" name="api_key" help={apiKey ? "使用自有 Key" : "留空使用默认 Key（不显示）"}>
             <Input.Password placeholder="sk-..." />
@@ -83,7 +82,7 @@ export default function Settings() {
             <InputNumber min={64} max={512} style={{ width: "100%" }} />
           </Form.Item>
           <Divider style={{ borderColor: "#27272a" }} />
-          <Form.Item
+          <Form.Item  
             label="绿幕模式提示词"
             name="greenscreen_prompt"
             help="生成时自动插入到用户提示词前，要求纯绿背景无光影"

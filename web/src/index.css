@@ -941,20 +941,53 @@ body {
 /* 大图预览：尽量大且完整显示在视口内，纵向图不溢出 */
 .ant-image-preview-img {
   max-width: 92vw !important;
-  max-height: 88vh !important;
+  max-height: 82vh !important;
   object-fit: contain !important;
+}
+
+/* antd 原生工具栏容器：允许换行、居中，避免手机端按钮被裁切 */
+.ant-image-preview-operations {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 8px;
+  max-width: calc(100vw - 16px);
 }
 
 .image-preview-toolbar-with-action {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 8px;
+  max-width: 100vw;
+  padding: 0 8px;
 }
 
 .image-preview-action-separator {
   width: 1px;
   height: 24px;
   background: rgba(255, 255, 255, 0.16);
+}
+
+/* 窄屏：缩小按钮尺寸、减小间距，隐藏「图生图」文字仅保留图标 */
+@media (max-width: 767px) {
+  .image-preview-toolbar-with-action {
+    gap: 4px;
+    padding: 0 4px;
+  }
+
+  .image-preview-action-separator {
+    height: 18px;
+  }
+
+  .image-preview-img2img-button {
+    height: 32px;
+    min-width: 32px;
+  }
+
+  .image-preview-img2img-button .anticon {
+    font-size: 16px;
+  }
 }
 
 .image-preview-img2img-button {
@@ -975,13 +1008,6 @@ body {
 
 a.image-preview-img2img-button {
   text-decoration: none;
-}
-
-.image-preview-img2img-button-primary {
-  width: auto;
-  padding: 0 12px;
-  font-size: 13px;
-  font-weight: 600;
 }
 
 .image-preview-img2img-button:hover {
@@ -1016,6 +1042,63 @@ a.image-preview-img2img-button {
 
 .image-preview-img2img-button .anticon {
   font-size: 18px;
+}
+
+/* 大图预览：左右侧切换悬浮按钮 */
+.image-preview-side-nav {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1001;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.image-preview-side-nav:hover {
+  background: rgba(0, 0, 0, 0.56);
+  color: #fff;
+}
+
+.image-preview-side-nav .anticon {
+  font-size: 22px;
+}
+
+.image-preview-side-nav-left {
+  left: 24px;
+}
+
+.image-preview-side-nav-right {
+  right: 24px;
+}
+
+@media (max-width: 767px) {
+  .image-preview-side-nav {
+    width: 36px;
+    height: 36px;
+  }
+
+  .image-preview-side-nav .anticon {
+    font-size: 18px;
+  }
+
+  .image-preview-side-nav-left {
+    left: 8px;
+  }
+
+  .image-preview-side-nav-right {
+    right: 8px;
+  }
 }
 
 /* 滚动条 hover 加深 */
@@ -1562,47 +1645,100 @@ a.image-preview-img2img-button {
   align-items: flex-start;
   gap: 2px;
 }
-.reference-image-compact {
+.reference-images-grid {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 76px;
-  padding: 8px 10px 8px 8px;
-  border: 1px solid rgba(63, 63, 70, 0.72);
-  border-radius: var(--radius-input);
-  background:
-    linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(24, 24, 27, 0.9) 42%),
-    #131316;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 1px 2px rgba(0, 0, 0, 0.24);
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+  position: relative;
 }
-.reference-image-thumb {
-  width: 64px;
-  height: 60px;
+.reference-image-cell {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(63, 63, 70, 0.72);
+  background: #09090b;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.reference-image-cell .reference-image-thumb {
+  width: 100%;
+  height: 100%;
   display: block;
   object-fit: cover;
-  border-radius: 7px;
+  border-radius: 0;
+  border: none;
   background: #09090b;
-  border: 1px solid rgba(255, 255, 255, 0.08);
 }
-.reference-image-meta {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.reference-image-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.62);
+  color: #f4f4f5;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
 }
-.reference-image-title {
-  color: #f4f4f5 !important;
-  font-size: 13px;
+.reference-image-cell:hover .reference-image-remove {
+  opacity: 1;
+}
+.reference-image-remove:hover {
+  background: rgba(239, 68, 68, 0.85);
+}
+.reference-image-index {
+  position: absolute;
+  bottom: 3px;
+  left: 5px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 1.25;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  font-variant-numeric: tabular-nums;
 }
-.reference-image-hint {
-  color: #71717a !important;
-  font-size: 11.5px;
-  line-height: 1.3;
+.reference-image-add-cell {
+  aspect-ratio: 1 / 1;
+  border: 1px dashed rgba(82, 82, 91, 0.7);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(24, 24, 27, 0.4);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.reference-image-add-cell:hover {
+  border-color: rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.06);
+}
+.reference-image-add-cell .file-upload-trigger {
+  width: 100%;
+  height: 100%;
+}
+.reference-image-add-cell .file-upload-trigger-dropzone {
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.reference-image-add-cell .file-upload-trigger-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 14px;
+}
+.reference-image-add-cell .file-upload-trigger-label {
+  font-size: 11px;
+  color: #a1a1aa;
 }
 .reference-image-kbd {
   display: inline-flex;
@@ -1627,12 +1763,11 @@ a.image-preview-img2img-button {
   gap: 2px;
   white-space: normal;
 }
-.reference-image-actions {
+.reference-images-actions {
+  grid-column: 1 / -1;
+  display: flex;
   justify-content: flex-end;
-}
-.reference-image-actions .file-upload-trigger-button {
-  min-height: 30px;
-  padding: 0 10px;
+  margin-top: 2px;
 }
 .prompt-editor-field {
   margin-bottom: 14px;
@@ -1751,23 +1886,9 @@ a.image-preview-img2img-button {
   .imagegen-preset-section {
     margin-bottom: 14px;
   }
-  .reference-image-compact {
-    grid-template-columns: 56px minmax(0, 1fr);
-  }
-  .reference-image-thumb {
-    width: 56px;
-    height: 56px;
-  }
-  .reference-image-actions {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-  .reference-image-actions .ant-space-item:first-child {
-    flex: 1;
-  }
-  .reference-image-actions .file-upload-trigger,
-  .reference-image-actions .ant-btn {
-    width: 100%;
+  .reference-images-grid {
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: 6px;
   }
 }
 
