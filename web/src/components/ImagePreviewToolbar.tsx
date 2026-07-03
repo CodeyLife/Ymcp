@@ -13,6 +13,7 @@ import {
   StarOutlined,
 } from "@ant-design/icons";
 import type { MediaItem } from "@/components/MediaGallery";
+import { ImagePreviewActionToolbar, type ImagePreviewAction } from "@/components/ImagePreviewActionToolbar";
 
 export function getNextPreviewImageIdAfterDelete(imageIds: string[], currentImageId: string | null): string | null {
   if (!currentImageId) return imageIds[0] ?? null;
@@ -61,94 +62,67 @@ function ImagePreviewToolbar({
   onDeleteCurrent,
 }: ImagePreviewToolbarProps) {
   const canUseItemActions = Boolean(currentItem);
+  const actions: ImagePreviewAction[] = [
+    {
+      key: "img2img",
+      title: "用作图生图参考图",
+      icon: <FileImageOutlined />,
+      disabled: !onImg2Img,
+      onClick: () => onImg2Img?.(currentImageId, currentItem),
+    },
+  ];
+
+  if (onDownload) {
+    actions.push({
+      key: "download",
+      title: "下载",
+      icon: <DownloadOutlined />,
+      href: src,
+      download: downloadFilename ?? `image-${Date.now()}.png`,
+    });
+  }
+
+  if (onMatte) {
+    actions.push({
+      key: "matte",
+      title: "送入抠图",
+      icon: <ScissorOutlined />,
+      onClick: () => onMatte(currentImageId, currentItem),
+    });
+  }
+
+  if (onReuse && currentItem) {
+    actions.push({
+      key: "reuse",
+      title: "复用参数",
+      icon: <ReloadOutlined />,
+      onClick: () => onReuse(currentItem),
+    });
+  }
+
+  if (onFavorite && currentItem) {
+    actions.push({
+      key: "favorite",
+      title: currentItem.favorited ? "取消收藏" : "收藏到素材库",
+      icon: currentItem.favorited ? <StarFilled /> : <StarOutlined />,
+      active: currentItem.favorited,
+      onClick: () => onFavorite(currentItem),
+    });
+  }
+
+  if (onDeleteCurrent && currentItem) {
+    actions.push({
+      key: "delete",
+      title: "删除当前项",
+      icon: <DeleteOutlined />,
+      danger: true,
+      disabled: !canUseItemActions,
+      onClick: () => onDeleteCurrent(currentItem),
+    });
+  }
 
   return (
-    <div className="image-preview-toolbar-with-action">
-      {originalNode}
-      <span className="image-preview-action-separator" aria-hidden />
-      <button
-        type="button"
-        className="image-preview-img2img-button"
-        title="用作图生图参考图"
-        aria-label="用作图生图参考图"
-        disabled={!onImg2Img}
-        onClick={(e) => {
-          e.stopPropagation();
-          onImg2Img?.(currentImageId, currentItem);
-        }}
-      >
-        <FileImageOutlined />
-      </button>
-      {onDownload && (
-        <a
-          className="image-preview-img2img-button"
-          title="下载"
-          aria-label="下载"
-          href={src}
-          download={downloadFilename ?? `image-${Date.now()}.png`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <DownloadOutlined />
-        </a>
-      )}
-      {onMatte && (
-        <button
-          type="button"
-          className="image-preview-img2img-button"
-          title="送入抠图"
-          aria-label="送入抠图"
-          onClick={(e) => {
-            e.stopPropagation();
-            onMatte(currentImageId, currentItem);
-          }}
-        >
-          <ScissorOutlined />
-        </button>
-      )}
-      {onReuse && currentItem && (
-        <button
-          type="button"
-          className="image-preview-img2img-button"
-          title="复用参数"
-          aria-label="复用参数"
-          onClick={(e) => {
-            e.stopPropagation();
-            onReuse(currentItem);
-          }}
-        >
-          <ReloadOutlined />
-        </button>
-      )}
-      {onFavorite && currentItem && (
-        <button
-          type="button"
-          className={`image-preview-img2img-button${currentItem.favorited ? " image-preview-favorite-active" : ""}`}
-          title={currentItem.favorited ? "取消收藏" : "收藏到素材库"}
-          aria-label={currentItem.favorited ? "取消收藏" : "收藏到素材库"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onFavorite(currentItem);
-          }}
-        >
-          {currentItem.favorited ? <StarFilled /> : <StarOutlined />}
-        </button>
-      )}
-      {onDeleteCurrent && currentItem && (
-        <button
-          type="button"
-          className="image-preview-img2img-button image-preview-danger-button"
-          title="删除当前项"
-          aria-label="删除当前项"
-          disabled={!canUseItemActions}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDeleteCurrent(currentItem);
-          }}
-        >
-          <DeleteOutlined />
-        </button>
-      )}
-    </div>
+    <ImagePreviewActionToolbar originalNode={originalNode} actions={actions} />
   );
 }
 

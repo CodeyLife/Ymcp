@@ -214,7 +214,7 @@ export const workflowsApi = {
     api.post<Generation[]>(`/workflows/${id}/execute`).then((r) => r.data),
 };
 
-export interface StreamCallbacks {
+export interface ImageRequestCallbacks {
   /** 后端进度文本（image.generation.chunk.progress_text） */
   onProgress?: (text: string) => void;
   /** 单张图完成（image.generation.result），index 为 1-based */
@@ -223,6 +223,8 @@ export interface StreamCallbacks {
   onComplete?: (images: string[]) => void;
   onError?: (error: string) => void;
 }
+
+const IMAGE_GENERATION_STREAMING_ENABLED = false;
 
 function resolveBaseUrl(baseUrl: string): string {
   const isDefault = baseUrl === DEFAULT_BASE_URL;
@@ -438,8 +440,8 @@ async function extractImageSources(
   return images;
 }
 
-/** 流式生图 - 通过 SSE 接收中间帧和最终结果 */
-export async function generateImageStream(
+/** 生图请求：当前默认非流式返回；保留 SSE/NDJSON 解析路径供后续重新启用流式。 */
+export async function generateImageRequest(
   data: {
     prompt: string;
     model: string;
@@ -451,7 +453,7 @@ export async function generateImageStream(
     apiKey: string;
     images?: string[]; // base64 data URLs for img2img（支持多张）
   },
-  callbacks: StreamCallbacks,
+  callbacks: ImageRequestCallbacks,
   options?: { signal?: AbortSignal }
 ): Promise<void> {
   const { baseUrl, apiKey, ...body } = data;
@@ -471,7 +473,7 @@ export async function generateImageStream(
       formData.append("n", String(body.n));
       formData.append("size", body.size);
       formData.append("response_format", "b64_json");
-      formData.append("stream", "true");
+      formData.append("stream", String(IMAGE_GENERATION_STREAMING_ENABLED));
       if (body.quality) formData.append("quality", body.quality);
       // 多图：循环 append "image" 字段
       // API 文档：image 类型为 file | file[] | URL，OpenAI 兼容约定下多图通过重复 image 字段传递
@@ -501,7 +503,7 @@ export async function generateImageStream(
         size: body.size,
         quality: body.quality,
         response_format: "b64_json",
-        stream: true,
+        stream: IMAGE_GENERATION_STREAMING_ENABLED,
       };
       if (body.style) requestBody.style = body.style;
 
@@ -520,10 +522,10 @@ export async function generateImageStream(
       throw new Error(await readApiError(response));
     }
 
-    // 检查是否是流式响应
     const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("text/event-stream") && !contentType.includes("application/x-ndjson")) {
-      // 非流式响应，直接解析 JSON
+    const isStreamResponse =
+      contentType.includes("text/event-stream") || contentType.includes("application/x-ndjson");
+    if (!isStreamResponse) {
       const json = await response.json();
       const images = await extractImageSources(json);
       if (images.length === 0) {
@@ -535,7 +537,7 @@ export async function generateImageStream(
       return;
     }
 
-    // 解析 SSE / NDJSON 流
+    // 解析 SSE / NDJSON 流。当前开关关闭，但保留实现以便未来恢复渐进式进度。
     const isNdjson = contentType.includes("application/x-ndjson");
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -635,7 +637,6 @@ export async function generateImageStream(
     if (!options?.signal?.aborted) callbacks.onComplete?.(finalImages);
   } catch (e) {
     if (options?.signal?.aborted) return;
-    // 流式失败时回退到非流式
     callbacks.onError?.(String((e as Error).message));
   }
 }
@@ -708,7 +709,7 @@ export async function generateImageMulti(
       }
     };
 
-    await generateImageStream(
+    await generateImageRequest(
       { ...task, n: count },
       {
         onProgress: (text) => callbacks.onTaskProgress?.(text),

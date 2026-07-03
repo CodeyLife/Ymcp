@@ -20,17 +20,42 @@ import { DiffusionLoader } from "@/components/DiffusionLoader";
 import { MagneticButton } from "@/components/motion";
 import { PageHeader, TiltCard } from "@/components/showtime";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
+import { ImagePreviewActionToolbar, type ImagePreviewAction } from "@/components/ImagePreviewActionToolbar";
 import { PsdTaskPanel } from "@/components/PsdTaskPanel";
 import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
 
 const { Text } = Typography;
 const { TextArea } = Input;
-const IMAGE_GEN_SOFT_TIMEOUT_MS = 180_000;
+const IMAGE_GEN_SOFT_TIMEOUT_MS = 120_000;
 const GREENSCREEN_BG = "#00ff00";
 const GREENSCREEN_REFERENCE_MIME = "image/jpeg";
 const GREENSCREEN_REFERENCE_QUALITY = 0.95;
 
+// === 模块级任务运行时（脱离组件生命周期，切换 Tab 时保持任务运行） ===
+interface ActiveBatch {
+  id: number;
+  controller: AbortController;
+  softTimeoutId: number | null;
+}
+let activeBatch: ActiveBatch | null = null;
+let batchSeq = 0;
+
+function isActiveBatch(batchId: number) {
+  return activeBatch?.id === batchId;
+}
+function clearActiveBatchTimer() {
+  if (activeBatch?.softTimeoutId != null) {
+    window.clearTimeout(activeBatch.softTimeoutId);
+    activeBatch.softTimeoutId = null;
+  }
+}
+function abortActiveBatch() {
+  if (!activeBatch) return;
+  if (activeBatch.softTimeoutId != null) window.clearTimeout(activeBatch.softTimeoutId);
+  activeBatch.controller.abort();
+  activeBatch = null;
+}
 type ImageHistorySnapshot = Pick<HistoryItem, "mode" | "prompt" | "size" | "quality">;
 
 /* gpt-image-2 支持的尺寸 */
@@ -984,18 +1009,6 @@ export default function ImageGen() {
     img2img: null,
   });
   const reduceMotion = useMotionMode();
-  const activeBatchRef = useRef<{
-    id: number;
-    controller: AbortController;
-    softTimeoutId: number | null;
-  } | null>(null);
-  const retryRequestsRef = useRef<Map<number, {
-    id: number;
-    controller: AbortController;
-    softTimeoutId: number | null;
-  }>>(new Map());
-  const batchSeqRef = useRef(0);
-
   // 暂存最近一次批量生成的参数，供整体重试复用
   const lastBatchRef = useRef<{
     finalPrompt: string;
@@ -1016,37 +1029,6 @@ export default function ImageGen() {
   const [gridDims, setGridDims] = useState({ w: 0, h: 0 });
 
   const { hasOwnKey } = getEffectiveApiConfig();
-
-  const clearActiveBatchTimer = useCallback(() => {
-    const active = activeBatchRef.current;
-    if (active?.softTimeoutId !== null && active?.softTimeoutId !== undefined) {
-      window.clearTimeout(active.softTimeoutId);
-      active.softTimeoutId = null;
-    }
-  }, []);
-
-  const isActiveBatch = useCallback((batchId: number) => activeBatchRef.current?.id === batchId, []);
-
-  const abortActiveBatch = useCallback(() => {
-    const active = activeBatchRef.current;
-    if (!active) return;
-    if (active.softTimeoutId !== null) window.clearTimeout(active.softTimeoutId);
-    active.controller.abort();
-    activeBatchRef.current = null;
-  }, []);
-
-  const abortAllRetryRequests = useCallback(() => {
-    retryRequestsRef.current.forEach((retry) => {
-      if (retry.softTimeoutId !== null) window.clearTimeout(retry.softTimeoutId);
-      retry.controller.abort();
-    });
-    retryRequestsRef.current.clear();
-  }, []);
-
-  useEffect(() => () => {
-    abortActiveBatch();
-    abortAllRetryRequests();
-  }, [abortActiveBatch, abortAllRetryRequests]);
 
   useEffect(() => {
     if (!hasOwnKey && n > 1) setN(1);
@@ -1269,17 +1251,16 @@ export default function ImageGen() {
     historySnapshot: ImageHistorySnapshot;
   }) => {
     abortActiveBatch();
-    abortAllRetryRequests();
     setError(null);
     setFavorited(new Set());
     lockedSizeRef.current = params.size;
     lastBatchRef.current = params;
 
-    const batchId = ++batchSeqRef.current;
+    const batchId = ++batchSeq;
     const controller = new AbortController();
     resetTasks(params.n);
     setLoading(true);
-    activeBatchRef.current = {
+    activeBatch = {
       id: batchId,
       controller,
       softTimeoutId: window.setTimeout(() => {
@@ -1332,7 +1313,7 @@ export default function ImageGen() {
           onAllDone: ({ ok, fail, extra }) => {
             if (!isActiveBatch(batchId)) return;
             clearActiveBatchTimer();
-            activeBatchRef.current = null;
+            activeBatch = null;
             setLoading(false);
             const totalOk = ok + extra;
             if (totalOk > 0) {
@@ -1349,7 +1330,7 @@ export default function ImageGen() {
       if (!isActiveBatch(batchId)) return;
       const err = String((e as Error).message || e || "生成失败");
       clearActiveBatchTimer();
-      activeBatchRef.current = null;
+      activeBatch = null;
       setLoading(false);
       useImageGenStore.getState().tasks.forEach((task) => {
         if (task.status === "pending" || task.status === "loading" || task.status === "waiting") {
@@ -1359,7 +1340,7 @@ export default function ImageGen() {
       setError(err);
       message.error(err);
     }
-  }, [abortActiveBatch, abortAllRetryRequests, isActiveBatch, clearActiveBatchTimer, persistTaskHistory, message, updateTask, addExtraResult, resetTasks, setLoading, setError, setFavorited]);
+  }, [persistTaskHistory, message, updateTask, addExtraResult, resetTasks, setLoading, setError, setFavorited]);
 
   // 整体重试：后端 n=N 为整体请求，无法单独重试某张，此处重新发起整批
   const retryTask = useCallback(async (_index: number) => {
@@ -1660,6 +1641,17 @@ export default function ImageGen() {
     });
     return result;
   }, [tasks, extraResults]);
+
+  // 大图预览工具栏所需信息：按 doneIdx（= doneImages 索引）对齐卡片
+  const previewCardInfo = useMemo(() => {
+    const arr: { favoriteId: string; displayIndex: number; src: string }[] = [];
+    cards.forEach((card, i) => {
+      if (card.doneIdx !== undefined && card.src) {
+        arr[card.doneIdx] = { favoriteId: card.favoriteId, displayIndex: i, src: card.src };
+      }
+    });
+    return arr;
+  }, [cards]);
 
   const gridLayout = useMemo(() => {
     if (cards.length === 0) {
@@ -2314,8 +2306,59 @@ export default function ImageGen() {
               current: Math.min(previewIndex, doneImages.length - 1),
               onVisibleChange: (v: boolean) => !v && setPreviewIndex(null),
               onChange: (idx: number) => setPreviewIndex(idx),
-              toolbarRender: (originalNode, info) =>
-                cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon),
+              toolbarRender: (originalNode, info) => {
+                // info.current 为 antd 内部追踪的当前索引，比 previewIndex 状态更即时
+                const idx = info.current ?? previewIndex ?? 0;
+                const cardInfo = previewCardInfo[idx];
+                if (!cardInfo) {
+                  return cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon);
+                }
+                const actions: ImagePreviewAction[] = [
+                  {
+                    key: "favorite",
+                    title: favorited.has(cardInfo.favoriteId) ? "取消收藏" : "收藏",
+                    icon: favorited.has(cardInfo.favoriteId) ? <StarFilled /> : <StarOutlined />,
+                    active: favorited.has(cardInfo.favoriteId),
+                    onClick: () => toggleFavorite(cardInfo.favoriteId, cardInfo.src, cardInfo.displayIndex),
+                  },
+                  {
+                    key: "edit",
+                    title: "编辑（送入图生图）",
+                    icon: <EditOutlined />,
+                    onClick: () => editImage(cardInfo.src),
+                  },
+                  {
+                    key: "matte",
+                    title: "送入抠图",
+                    icon: <ScissorOutlined />,
+                    onClick: () => sendToMatte(cardInfo.src),
+                  },
+                  {
+                    key: "psd",
+                    title: "拆分为 PSD",
+                    icon: <BlockOutlined />,
+                    onClick: () => splitToPsd(cardInfo.src),
+                  },
+                  {
+                    key: "superres",
+                    title: "超分 4K（本地）",
+                    icon: <ThunderboltOutlined />,
+                    onClick: () => sendToSuperRes(cardInfo.src),
+                  },
+                  {
+                    key: "download",
+                    title: "下载",
+                    icon: <DownloadOutlined />,
+                    onClick: () => downloadImage(cardInfo.src),
+                  },
+                ];
+                return (
+                  <ImagePreviewActionToolbar
+                    originalNode={cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon)}
+                    actions={actions}
+                  />
+                );
+              },
             }}
           >
             {doneImages.map((item, i) => (
