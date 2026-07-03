@@ -92,6 +92,7 @@ export default function AppLayout() {
 
   // 主区鼠标 spotlight：仅写 CSS var，不触发 React re-render（符合 skill 3.B）
   const handleMainMouseMove = (e: React.MouseEvent) => {
+    if (reduce) return; // 窄屏降级模式跳过 spotlight 写入（触屏无鼠标，避免无意义 CSS var 写入）
     const el = spotlightRef.current;
     if (!el) return;
     const sidebarWidth = collapsed ? 72 : 240;

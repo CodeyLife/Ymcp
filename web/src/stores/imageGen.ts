@@ -73,7 +73,7 @@ const DEFAULTS = {
   size: "auto",
   n: 1,
   spritesheetN: 4,
-  quality: "auto",
+  quality: "high",
   styleId: "none",
   img2imgReferenceGuideId: null,
   refImages: [] as string[],

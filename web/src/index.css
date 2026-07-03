@@ -2274,3 +2274,50 @@ a.image-preview-img2img-button {
     min-height: 260px;
   }
 }
+
+/* ===== 移动窄屏动效降级（max-width: 767px）=====
+   目标：关闭装饰性连续动画与高成本 blur 视觉，降低耗电与发热。
+   宽屏（≥768px）完全不受影响，完整保留所有炫技动效。
+   功能性动效（路由懒加载占位 route-fallback-pulse）保留。 */
+@media (max-width: 767px) {
+  /* —— 关闭装饰性连续 @keyframes infinite 动画 —— */
+  .ambient-blob,
+  .ambient-aurora,
+  .sidebar-edge-beam::after,
+  .sidebar-logo-ring,
+  .sidebar-logo-aura,
+  .sidebar-item-active .sidebar-item-icon,
+  .sidebar-item-sheen::before,
+  .sidebar-status-scan,
+  .sidebar-active-indicator::before,
+  .sidebar-active-indicator::after,
+  .file-upload-trigger-paste-active {
+    animation: none !important;
+  }
+
+  /* —— 关闭高成本大半径 filter: blur()（保留静态色块，去掉 GPU 合成） —— */
+  .ambient-blob,
+  .ambient-aurora,
+  .ambient-floor-glow,
+  .image-tools-hero::after {
+    filter: none !important;
+  }
+
+  /* —— 关闭 backdrop-filter（改为实色/半透明背景，保留层次感与可读性） —— */
+  .sidebar-shell,
+  .sidebar-status-card,
+  .qq-group-chip,
+  .result-actions,
+  .image-gen-action-bar,
+  .glass-blur,
+  .ant-image-preview-mask,
+  .image-preview-side-nav {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* —— Logo 光晕降级为静态弱光 —— */
+  .sidebar-logo-aura {
+    opacity: 0.4 !important;
+  }
+}
