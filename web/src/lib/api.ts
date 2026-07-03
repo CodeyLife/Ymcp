@@ -673,16 +673,231 @@ export interface MultiCallbacks {
   onAllDone?: (summary: { ok: number; fail: number; extra: number }) => void;
   /** 任务提交后触发，暴露 clientTaskId 供外部用于断线恢复查询（globalIndex 1-based） */
   onTaskSubmit?: (globalIndex: number, clientTaskId: string) => void;
+  /** 实际使用的后端能力：task 支持断线恢复，direct 为标准 OpenAI-compatible 直连降级 */
+  onAdapterResolved?: (adapter: ImageGenerationAdapterKind) => void;
+}
+
+export type ImageGenerationAdapterKind = "task" | "direct";
+
+export interface SubmittedImageTaskRef {
+  taskId: string;
+  globalIndex: number;
+}
+
+export interface ImageTaskRefreshCallbacks {
+  onTaskProgress?: (taskIndex: number, text: string) => void;
+  onTaskResult?: (taskIndex: number, images: string[]) => void;
+  onTaskError?: (taskIndex: number, error: string) => void;
+}
+
+export interface ImageTaskRefreshResult {
+  remaining: SubmittedImageTaskRef[];
+  ok: number;
+  fail: number;
+}
+
+export interface ImageGenerationClient {
+  submitBatch: (
+    task: BatchTaskParams & { n: number },
+    callbacks: MultiCallbacks,
+    options?: { signal?: AbortSignal }
+  ) => Promise<void>;
+  refreshTasks: (
+    taskRefs: SubmittedImageTaskRef[],
+    config: { baseUrl: string; apiKey: string },
+    callbacks?: ImageTaskRefreshCallbacks
+  ) => Promise<ImageTaskRefreshResult>;
+  resumeTasks: (
+    taskRefs: SubmittedImageTaskRef[],
+    config: { baseUrl: string; apiKey: string },
+    callbacks?: ImageTaskRefreshCallbacks & {
+      onAllDone?: (summary: { ok: number; fail: number }) => void;
+    },
+    options?: { signal?: AbortSignal }
+  ) => Promise<void>;
 }
 
 const IMAGE_TASK_POLL_INTERVAL_MS = 3000;
 const IMAGE_TASK_QUERY_FAILURE_LIMIT = 3;
+const imageTaskCapabilityCache = new Map<string, Promise<boolean>>();
+
+function trimTrailingSlash(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function resolveImageTaskApiBaseUrl(baseUrl: string): string {
+  const normalized = trimTrailingSlash(baseUrl);
+  const defaultBaseUrl = trimTrailingSlash(DEFAULT_BASE_URL);
+  if (normalized === defaultBaseUrl && import.meta.env.DEV) return "/api/image-tasks";
+
+  try {
+    const url = new URL(normalized);
+    const pathname = url.pathname.replace(/\/+$/, "");
+    if (/\/v\d+$/i.test(pathname)) {
+      url.pathname = pathname.replace(/\/v\d+$/i, "/api/image-tasks");
+    } else {
+      url.pathname = `${pathname}/api/image-tasks`.replace(/\/{2,}/g, "/");
+    }
+    url.search = "";
+    url.hash = "";
+    return trimTrailingSlash(url.toString());
+  } catch {
+    if (/\/v\d+$/i.test(normalized)) return normalized.replace(/\/v\d+$/i, "/api/image-tasks");
+    return `${normalized}/api/image-tasks`;
+  }
+}
+
+async function supportsImageTaskApi(config: { baseUrl: string; apiKey: string }): Promise<boolean> {
+  const taskBaseUrl = resolveImageTaskApiBaseUrl(config.baseUrl);
+  const cacheKey = `${taskBaseUrl}|${config.apiKey.trim()}`;
+  const cached = imageTaskCapabilityCache.get(cacheKey);
+  if (cached) return cached;
+
+  const probe = fetch(`${taskBaseUrl}?ids=__ymcp_probe__`, {
+    headers: { authorization: `Bearer ${config.apiKey}` },
+    cache: "no-store",
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        imageTaskCapabilityCache.delete(cacheKey);
+        return false;
+      }
+      const json = await response.json().catch(() => null);
+      const supported = !!json && typeof json === "object" && Array.isArray((json as ImageTaskQueryResponse).items);
+      if (!supported) imageTaskCapabilityCache.delete(cacheKey);
+      return supported;
+    })
+    .catch(() => {
+      imageTaskCapabilityCache.delete(cacheKey);
+      return false;
+    });
+
+  imageTaskCapabilityCache.set(cacheKey, probe);
+  return probe;
+}
+
+function waitForImageTaskPoll(signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, IMAGE_TASK_POLL_INTERVAL_MS);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+}
+
+export async function refreshSubmittedImageTasks(
+  taskRefs: SubmittedImageTaskRef[],
+  config: { baseUrl: string; apiKey: string },
+  callbacks: ImageTaskRefreshCallbacks = {}
+): Promise<ImageTaskRefreshResult> {
+  if (taskRefs.length === 0) return { remaining: [], ok: 0, fail: 0 };
+
+  const pendingTaskIds = new Map(taskRefs.map((item) => [item.taskId, item.globalIndex] as const));
+  const resp = await queryImageTasks([...pendingTaskIds.keys()], config);
+  const remaining = new Map(pendingTaskIds);
+  let ok = 0;
+  let fail = 0;
+
+  for (const item of resp.items) {
+    const globalIndex = pendingTaskIds.get(item.id);
+    if (globalIndex === undefined) continue;
+    const taskIndex = globalIndex - 1;
+
+    if (item.status === "queued" || item.status === "running") {
+      callbacks.onTaskProgress?.(
+        taskIndex,
+        item.progress || (item.status === "queued" ? "排队中" : "生成中")
+      );
+      continue;
+    }
+
+    remaining.delete(item.id);
+    if (item.status === "success" && item.data) {
+      const images = await extractImageSources({ data: item.data });
+      if (images.length > 0) {
+        ok += images.length;
+        callbacks.onTaskResult?.(taskIndex, images);
+      } else {
+        fail++;
+        callbacks.onTaskError?.(taskIndex, "生成成功但未返回图片");
+      }
+    } else {
+      fail++;
+      callbacks.onTaskError?.(taskIndex, item.error || "生成失败");
+    }
+  }
+
+  for (const missingId of resp.missing_ids || []) {
+    const globalIndex = pendingTaskIds.get(missingId);
+    if (globalIndex === undefined) continue;
+    remaining.delete(missingId);
+    fail++;
+    callbacks.onTaskError?.(globalIndex - 1, "任务不存在或已被清理");
+  }
+
+  return {
+    remaining: [...remaining].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
+    ok,
+    fail,
+  };
+}
+
+export async function resumeSubmittedImageTasks(
+  taskRefs: SubmittedImageTaskRef[],
+  config: { baseUrl: string; apiKey: string },
+  callbacks: ImageTaskRefreshCallbacks & {
+    onAllDone?: (summary: { ok: number; fail: number }) => void;
+  } = {},
+  options?: { signal?: AbortSignal }
+): Promise<void> {
+  let pending = [...taskRefs];
+  const queryFailureCounts = new Map<string, number>();
+  let ok = 0;
+  let fail = 0;
+
+  while (pending.length > 0) {
+    if (options?.signal?.aborted) return;
+
+    try {
+      const result = await refreshSubmittedImageTasks(pending, config, callbacks);
+      ok += result.ok;
+      fail += result.fail;
+      pending = result.remaining;
+      for (const item of pending) queryFailureCounts.delete(item.taskId);
+    } catch (e) {
+      const queryError = String((e as Error).message || e || "查询任务状态失败");
+      const stillPending: SubmittedImageTaskRef[] = [];
+      for (const item of pending) {
+        const failures = (queryFailureCounts.get(item.taskId) || 0) + 1;
+        queryFailureCounts.set(item.taskId, failures);
+        if (failures < IMAGE_TASK_QUERY_FAILURE_LIMIT) {
+          stillPending.push(item);
+          continue;
+        }
+        fail++;
+        callbacks.onTaskError?.(item.globalIndex - 1, `恢复查询失败：${queryError}`);
+      }
+      pending = stillPending;
+    }
+
+    if (pending.length > 0) {
+      await waitForImageTaskPoll(options?.signal);
+    }
+  }
+
+  callbacks.onAllDone?.({ ok, fail });
+}
 
 /**
  * 多图生图：基于后端异步任务接口（/api/image-tasks/*），为每张图生成 clientTaskId 并发提交，
  * 然后轮询任务状态直到全部终态。clientTaskId 作为幂等键，支持断线后用相同 ID 查询恢复。
  */
-export async function generateImageMulti(
+async function generateImageMultiWithTaskApi(
   task: BatchTaskParams & { n: number },
   callbacks: MultiCallbacks,
   options?: { signal?: AbortSignal }
@@ -694,6 +909,7 @@ export async function generateImageMulti(
   const imageTaskConfig = { baseUrl: task.baseUrl, apiKey: task.apiKey };
 
   callbacks.onTaskStart?.();
+  callbacks.onAdapterResolved?.("task");
 
   const emitTaskImages = async (globalIndex: number, data: unknown) => {
     const images = await extractImageSources({ data });
@@ -810,17 +1026,7 @@ export async function generateImageMulti(
   while (pendingTaskIds.size > 0) {
     if (options?.signal?.aborted) return;
 
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, IMAGE_TASK_POLL_INTERVAL_MS);
-      options?.signal?.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true }
-      );
-    });
+    await waitForImageTaskPoll(options?.signal);
     if (options?.signal?.aborted) return;
 
     let resp: ImageTaskQueryResponse;
@@ -894,6 +1100,99 @@ export async function generateImageMulti(
   const fail = n - ok;
   callbacks.onAllDone?.({ ok, fail, extra });
 }
+
+async function generateImageMultiDirect(
+  task: BatchTaskParams & { n: number },
+  callbacks: MultiCallbacks,
+  options?: { signal?: AbortSignal }
+): Promise<void> {
+  callbacks.onTaskStart?.();
+  callbacks.onAdapterResolved?.("direct");
+
+  const received = new Set<number>();
+  let extra = 0;
+  let completed = false;
+
+  const finishWithImages = (images: string[]) => {
+    if (completed) return;
+    completed = true;
+    if (images.length === 0) {
+      for (let i = 0; i < task.n; i++) callbacks.onTaskError?.(i, "生成成功但未返回图片");
+      callbacks.onAllDone?.({ ok: 0, fail: task.n, extra: 0 });
+      return;
+    }
+
+    images.forEach((src, index) => {
+      if (index < task.n) {
+        if (received.has(index + 1)) return;
+        received.add(index + 1);
+        callbacks.onTaskResult?.(index, [src]);
+      } else {
+        extra++;
+        callbacks.onExtraResult?.(src);
+      }
+    });
+
+    for (let i = 0; i < task.n; i++) {
+      if (!received.has(i + 1)) callbacks.onTaskError?.(i, "未收到结果");
+    }
+    callbacks.onAllDone?.({ ok: received.size, fail: task.n - received.size, extra });
+  };
+
+  await generateImageRequest(
+    task,
+    {
+      onProgress: (text) => callbacks.onTaskProgress?.(text),
+      onResult: (index, images) => {
+        if (completed) return;
+        images.forEach((src, offset) => {
+          const globalIndex = index + offset;
+          if (globalIndex <= task.n) {
+            received.add(globalIndex);
+            callbacks.onTaskResult?.(globalIndex - 1, [src]);
+          } else {
+            extra++;
+            callbacks.onExtraResult?.(src);
+          }
+        });
+      },
+      onComplete: finishWithImages,
+      onError: (error) => {
+        if (completed) return;
+        completed = true;
+        for (let i = 0; i < task.n; i++) {
+          if (!received.has(i + 1)) callbacks.onTaskError?.(i, error);
+        }
+        callbacks.onAllDone?.({ ok: received.size, fail: task.n - received.size, extra });
+      },
+    },
+    options
+  );
+}
+
+/**
+ * 统一生图入口：
+ * - 优先探测并使用 chatgpt2api 增强任务接口，支持 client_task_id 恢复；
+ * - 探测失败时降级到标准 OpenAI-compatible /images/generations 或 /images/edits。
+ */
+export async function submitBatchImageGeneration(
+  task: BatchTaskParams & { n: number },
+  callbacks: MultiCallbacks,
+  options?: { signal?: AbortSignal }
+): Promise<void> {
+  const canUseTaskApi = await supportsImageTaskApi({ baseUrl: task.baseUrl, apiKey: task.apiKey });
+  if (canUseTaskApi) return generateImageMultiWithTaskApi(task, callbacks, options);
+  return generateImageMultiDirect(task, callbacks, options);
+}
+
+/** 兼容旧调用名，后续页面代码应优先使用 submitBatchImageGeneration。 */
+export const generateImageMulti = submitBatchImageGeneration;
+
+export const imageGenerationClient: ImageGenerationClient = {
+  submitBatch: submitBatchImageGeneration,
+  refreshTasks: refreshSubmittedImageTasks,
+  resumeTasks: resumeSubmittedImageTasks,
+};
 
 /**
  * AI 润色提示词：调用 POST /v1/chat/completions，
@@ -1100,8 +1399,8 @@ export async function submitImageGenerationTask(
   },
   config: { baseUrl: string; apiKey: string }
 ): Promise<ImageTask> {
-  const endpoint = resolveBaseUrl(config.baseUrl);
-  const response = await fetch(`${endpoint}/image-tasks/generations`, {
+  const endpoint = resolveImageTaskApiBaseUrl(config.baseUrl);
+  const response = await fetch(`${endpoint}/generations`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -1133,7 +1432,7 @@ export async function submitImageEditTask(
   },
   config: { baseUrl: string; apiKey: string }
 ): Promise<ImageTask> {
-  const endpoint = resolveBaseUrl(config.baseUrl);
+  const endpoint = resolveImageTaskApiBaseUrl(config.baseUrl);
   const formData = new FormData();
   formData.append("client_task_id", params.clientTaskId);
   formData.append("prompt", params.prompt);
@@ -1143,7 +1442,7 @@ export async function submitImageEditTask(
   for (const img of params.images) {
     formData.append("image", img.blob, img.filename);
   }
-  const response = await fetch(`${endpoint}/image-tasks/edits`, {
+  const response = await fetch(`${endpoint}/edits`, {
     method: "POST",
     headers: { authorization: `Bearer ${config.apiKey}` },
     body: formData,
@@ -1159,9 +1458,9 @@ export async function queryImageTasks(
   ids: string[],
   config: { baseUrl: string; apiKey: string }
 ): Promise<ImageTaskQueryResponse> {
-  const endpoint = resolveBaseUrl(config.baseUrl);
+  const endpoint = resolveImageTaskApiBaseUrl(config.baseUrl);
   const search = ids.length ? `?ids=${ids.map(encodeURIComponent).join(",")}` : "";
-  const response = await fetch(`${endpoint}/image-tasks${search}`, {
+  const response = await fetch(`${endpoint}${search}`, {
     headers: { authorization: `Bearer ${config.apiKey}` },
   });
   if (!response.ok) {

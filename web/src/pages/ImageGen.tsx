@@ -11,7 +11,14 @@ import { usePromptFavoriteStore, createPromptFavoriteTitle, type PromptFavorite 
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
 import { usePsdTaskStore } from "@/stores/psdTask";
-import { generateImageMulti, cacheImageLocally, polishPrompt, toDataUrl, queryImageTasks, extractImageSources } from "@/lib/api";
+import {
+  imageGenerationClient,
+  cacheImageLocally,
+  polishPrompt,
+  toDataUrl,
+  type ImageGenerationAdapterKind,
+  type SubmittedImageTaskRef,
+} from "@/lib/api";
 import { setImage } from "@/lib/imageStore";
 import { IMG2IMG_REFERENCE_GUIDES, STYLE_PRESETS } from "@/lib/imagegenPresets";
 import { downloadBlob } from "@/lib/canvas";
@@ -41,9 +48,14 @@ interface ActiveBatch {
   clientTaskIds: Map<string, number>; // clientTaskId -> globalIndex（1-based），用于断线恢复查询
   handleTaskResult: (taskIndex: number, images: string[]) => void;
   handleTaskError: (taskIndex: number, error: string) => void;
+  adapter: ImageGenerationAdapterKind | null;
+  apiConfig: { baseUrl: string; apiKey: string };
 }
 let activeBatch: ActiveBatch | null = null;
 let batchSeq = 0;
+const PENDING_IMAGE_BATCH_STORAGE_KEY = "ymcp-imagegen-pending-batch";
+const PENDING_IMAGE_BATCH_VERSION = 1;
+const PENDING_IMAGE_BATCH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function isActiveBatch(batchId: number) {
   return activeBatch?.id === batchId;
@@ -61,6 +73,135 @@ function abortActiveBatch() {
   activeBatch = null;
 }
 type ImageHistorySnapshot = Pick<HistoryItem, "mode" | "prompt" | "size" | "quality">;
+
+interface PersistedImageBatch {
+  version: typeof PENDING_IMAGE_BATCH_VERSION;
+  id: number;
+  createdAt: number;
+  updatedAt: number;
+  baseUrl: string;
+  apiKey: string;
+  n: number;
+  size: string;
+  quality?: string;
+  historySnapshot: ImageHistorySnapshot;
+  clientTaskIds: SubmittedImageTaskRef[];
+  taskSnapshots: Array<{
+    globalIndex: number;
+    status: Exclude<TaskStatus, "done">;
+    progress?: string;
+    error?: string;
+  }>;
+}
+
+function readPendingImageBatch(): PersistedImageBatch | null {
+  try {
+    const raw = window.localStorage.getItem(PENDING_IMAGE_BATCH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedImageBatch>;
+    if (!isPersistedImageBatch(parsed)) {
+      window.localStorage.removeItem(PENDING_IMAGE_BATCH_STORAGE_KEY);
+      return null;
+    }
+    const age = Date.now() - parsed.createdAt;
+    const idleAge = Date.now() - parsed.updatedAt;
+    if (age > PENDING_IMAGE_BATCH_MAX_AGE_MS || idleAge > PENDING_IMAGE_BATCH_MAX_AGE_MS) {
+      window.localStorage.removeItem(PENDING_IMAGE_BATCH_STORAGE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    window.localStorage.removeItem(PENDING_IMAGE_BATCH_STORAGE_KEY);
+    return null;
+  }
+}
+
+function isPersistedImageBatch(value: Partial<PersistedImageBatch> | null): value is PersistedImageBatch {
+  if (!value || value.version !== PENDING_IMAGE_BATCH_VERSION) return false;
+  if (
+    typeof value.id !== "number" ||
+    typeof value.createdAt !== "number" ||
+    typeof value.updatedAt !== "number" ||
+    !Number.isFinite(value.createdAt) ||
+    !Number.isFinite(value.updatedAt) ||
+    value.updatedAt < value.createdAt ||
+    typeof value.baseUrl !== "string" ||
+    typeof value.apiKey !== "string" ||
+    typeof value.n !== "number" ||
+    !Number.isFinite(value.n) ||
+    value.n <= 0 ||
+    typeof value.size !== "string" ||
+    !value.historySnapshot ||
+    typeof value.historySnapshot.mode !== "string" ||
+    typeof value.historySnapshot.prompt !== "string" ||
+    typeof value.historySnapshot.size !== "string" ||
+    typeof value.historySnapshot.quality !== "string" ||
+    !Array.isArray(value.clientTaskIds) ||
+    value.clientTaskIds.length === 0 ||
+    !Array.isArray(value.taskSnapshots)
+  ) {
+    return false;
+  }
+
+  const taskCount = value.n;
+  return (
+    value.clientTaskIds.every(
+      (item) =>
+        item &&
+        typeof item.taskId === "string" &&
+        !!item.taskId.trim() &&
+        typeof item.globalIndex === "number" &&
+        Number.isInteger(item.globalIndex) &&
+        item.globalIndex >= 1 &&
+        item.globalIndex <= taskCount
+    ) &&
+    value.taskSnapshots.every(
+      (item) =>
+        item &&
+        typeof item.globalIndex === "number" &&
+        Number.isInteger(item.globalIndex) &&
+        item.globalIndex >= 1 &&
+        item.globalIndex <= taskCount &&
+        ["pending", "loading", "waiting", "error"].includes(item.status) &&
+        (item.progress === undefined || typeof item.progress === "string") &&
+        (item.error === undefined || typeof item.error === "string")
+    )
+  );
+}
+
+function writePendingImageBatch(batch: PersistedImageBatch): void {
+  try {
+    if (batch.clientTaskIds.length === 0) {
+      window.localStorage.removeItem(PENDING_IMAGE_BATCH_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(PENDING_IMAGE_BATCH_STORAGE_KEY, JSON.stringify({ ...batch, updatedAt: Date.now() }));
+  } catch {
+    // localStorage 可能被禁用；不影响当前页面内任务轮询
+  }
+}
+
+function clearPendingImageBatch(batchId?: number): void {
+  try {
+    if (batchId != null) {
+      const current = readPendingImageBatch();
+      if (current && current.id !== batchId) return;
+    }
+    window.localStorage.removeItem(PENDING_IMAGE_BATCH_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function removePendingImageTask(batchId: number, globalIndex: number): void {
+  const current = readPendingImageBatch();
+  if (!current || current.id !== batchId) return;
+  const next = {
+    ...current,
+    clientTaskIds: current.clientTaskIds.filter((item) => item.globalIndex !== globalIndex),
+  };
+  writePendingImageBatch(next);
+}
 
 /* gpt-image-2 支持的尺寸 */
 interface SizeOption {
@@ -1007,6 +1148,7 @@ export default function ImageGen() {
   const [resultRatios, setResultRatios] = useState<Record<string, number>>({});
   const [polishing, setPolishing] = useState(false);
   const [undoPrompt, setUndoPrompt] = useState<string | null>(null);
+  const [generationAdapter, setGenerationAdapter] = useState<ImageGenerationAdapterKind | null>(null);
   const [promptFavoriteDrawerOpen, setPromptFavoriteDrawerOpen] = useState(false);
   const [promptFavoriteSearch, setPromptFavoriteSearch] = useState("");
   const [activePromptFavoriteIds, setActivePromptFavoriteIds] = useState<Record<"text2img" | "img2img", string | null>>({
@@ -1270,26 +1412,66 @@ export default function ImageGen() {
     historySnapshot: ImageHistorySnapshot;
   }) => {
     abortActiveBatch();
+    clearPendingImageBatch();
     setError(null);
     setFavorited(new Set());
+    setGenerationAdapter(null);
     lockedSizeRef.current = params.size;
     lastBatchRef.current = params;
 
     const batchId = ++batchSeq;
+    const batchCreatedAt = Date.now();
     const controller = new AbortController();
     resetTasks(params.n);
     setLoading(true);
     const clientTaskIds = new Map<string, number>();
     const completedTaskIndexes = new Set<number>();
+    const persistCurrentTaskBatch = () => {
+      if (activeBatch?.id !== batchId || activeBatch.adapter !== "task") return;
+      const taskSnapshots = useImageGenStore
+        .getState()
+        .tasks
+        .filter((task) => task.status !== "done")
+        .map((task) => ({
+          globalIndex: task.index + 1,
+          status: task.status as Exclude<TaskStatus, "done">,
+          progress: task.progress,
+          error: task.error,
+        }));
+      writePendingImageBatch({
+        version: PENDING_IMAGE_BATCH_VERSION,
+        id: batchId,
+        createdAt: batchCreatedAt,
+        updatedAt: Date.now(),
+        baseUrl: params.baseUrl,
+        apiKey: params.apiKey,
+        n: params.n,
+        size: params.size,
+        quality: params.quality,
+        historySnapshot: params.historySnapshot,
+        clientTaskIds: [...clientTaskIds].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
+        taskSnapshots,
+      });
+    };
+    const forgetClientTask = (globalIndex: number) => {
+      for (const [taskId, index] of [...clientTaskIds]) {
+        if (index === globalIndex) clientTaskIds.delete(taskId);
+      }
+    };
     const handleTaskResult = (taskIndex: number, images: string[]) => {
       if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
       updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
       images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
+      forgetClientTask(taskIndex + 1);
+      persistCurrentTaskBatch();
     };
     const handleTaskError = (taskIndex: number, err: string) => {
       if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      completedTaskIndexes.add(taskIndex);
       updateTask(taskIndex, { status: "error", error: err, progress: undefined });
+      forgetClientTask(taskIndex + 1);
+      persistCurrentTaskBatch();
     };
     activeBatch = {
       id: batchId,
@@ -1307,10 +1489,12 @@ export default function ImageGen() {
       clientTaskIds,
       handleTaskResult,
       handleTaskError,
+      adapter: null,
+      apiConfig: { baseUrl: params.baseUrl, apiKey: params.apiKey },
     };
 
     try {
-      await generateImageMulti(
+      await imageGenerationClient.submitBatch(
         {
           prompt: params.finalPrompt,
           model: "gpt-image-2",
@@ -1322,9 +1506,21 @@ export default function ImageGen() {
           images: params.imagesBase64,
         },
         {
+          onAdapterResolved: (adapter) => {
+            if (!isActiveBatch(batchId)) return;
+            activeBatch!.adapter = adapter;
+            setGenerationAdapter(adapter);
+            if (adapter === "direct") {
+              clearPendingImageBatch(batchId);
+              message.info("当前后端未提供可恢复任务接口，已降级为 OpenAI 兼容直连模式");
+            } else {
+              persistCurrentTaskBatch();
+            }
+          },
           onTaskSubmit: (globalIndex, taskId) => {
             if (!isActiveBatch(batchId)) return;
             clientTaskIds.set(taskId, globalIndex);
+            persistCurrentTaskBatch();
           },
           onTaskProgress: (text) => {
             if (!isActiveBatch(batchId)) return;
@@ -1333,6 +1529,7 @@ export default function ImageGen() {
                 updateTask(task.index, { status: "loading", progress: text });
               }
             });
+            persistCurrentTaskBatch();
           },
           onTaskResult: (taskIndex, images) => {
             handleTaskResult(taskIndex, images);
@@ -1348,6 +1545,7 @@ export default function ImageGen() {
           onAllDone: ({ ok, fail, extra }) => {
             if (!isActiveBatch(batchId)) return;
             clearActiveBatchTimer();
+            clearPendingImageBatch(batchId);
             activeBatch = null;
             setLoading(false);
             const totalOk = ok + extra;
@@ -1365,6 +1563,7 @@ export default function ImageGen() {
       if (!isActiveBatch(batchId)) return;
       const err = String((e as Error).message || e || "生成失败");
       clearActiveBatchTimer();
+      clearPendingImageBatch(batchId);
       activeBatch = null;
       setLoading(false);
       useImageGenStore.getState().tasks.forEach((task) => {
@@ -1387,6 +1586,99 @@ export default function ImageGen() {
     await runBatch(last);
   }, [runBatch, message]);
 
+  const resumePersistedTaskBatch = useCallback(async () => {
+    const saved = readPendingImageBatch();
+    if (!saved || activeBatch) return;
+
+    const batchId = ++batchSeq;
+    const controller = new AbortController();
+    const clientTaskIds = new Map(saved.clientTaskIds.map((item) => [item.taskId, item.globalIndex] as const));
+    if (clientTaskIds.size === 0) {
+      clearPendingImageBatch(saved.id);
+      return;
+    }
+
+    const completedTaskIndexes = new Set<number>();
+    const handleTaskResult = (taskIndex: number, images: string[]) => {
+      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      completedTaskIndexes.add(taskIndex);
+      updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
+      images.forEach((src) => persistTaskHistory(src, saved.historySnapshot).catch(() => message.warning("历史记录保存失败")));
+      removePendingImageTask(saved.id, taskIndex + 1);
+    };
+    const handleTaskError = (taskIndex: number, err: string) => {
+      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      completedTaskIndexes.add(taskIndex);
+      updateTask(taskIndex, { status: "error", error: err, progress: undefined });
+      removePendingImageTask(saved.id, taskIndex + 1);
+    };
+
+    resetTasks(saved.n);
+    saved.taskSnapshots.forEach((snapshot) => {
+      updateTask(snapshot.globalIndex - 1, {
+        status: snapshot.status,
+        progress: snapshot.progress,
+        error: snapshot.error,
+      });
+    });
+    setError(null);
+    setGenerationAdapter("task");
+    lockedSizeRef.current = saved.size;
+    setLoading(true);
+    activeBatch = {
+      id: batchId,
+      controller,
+      softTimeoutId: null,
+      clientTaskIds,
+      handleTaskResult,
+      handleTaskError,
+      adapter: "task",
+      apiConfig: { baseUrl: saved.baseUrl, apiKey: saved.apiKey },
+    };
+    message.info("正在恢复上次未完成的生图任务");
+
+    await imageGenerationClient.resumeTasks(
+      saved.clientTaskIds,
+      { baseUrl: saved.baseUrl, apiKey: saved.apiKey },
+      {
+        onTaskProgress: (taskIndex, text) => {
+          if (!isActiveBatch(batchId)) return;
+          updateTask(taskIndex, { status: "loading", progress: text });
+        },
+        onTaskResult: (taskIndex, images) => {
+          const globalIndex = taskIndex + 1;
+          for (const [taskId, index] of [...clientTaskIds]) {
+            if (index === globalIndex) clientTaskIds.delete(taskId);
+          }
+          handleTaskResult(taskIndex, images);
+        },
+        onTaskError: (taskIndex, err) => {
+          const globalIndex = taskIndex + 1;
+          for (const [taskId, index] of [...clientTaskIds]) {
+            if (index === globalIndex) clientTaskIds.delete(taskId);
+          }
+          handleTaskError(taskIndex, err);
+        },
+        onAllDone: ({ ok, fail }) => {
+          if (!isActiveBatch(batchId)) return;
+          clearPendingImageBatch(saved.id);
+          activeBatch = null;
+          setLoading(false);
+          if (ok > 0) {
+            message.success(`已恢复完成 ${ok} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
+          } else if (fail > 0) {
+            setError(`恢复任务失败 ${fail} 张`);
+          }
+        },
+      },
+      { signal: controller.signal }
+    );
+  }, [message, persistTaskHistory, resetTasks, setError, setLoading, updateTask]);
+
+  useEffect(() => {
+    void resumePersistedTaskBatch();
+  }, [resumePersistedTaskBatch]);
+
   // 页面回前台时立即查询任务状态，弥补后台 fetch 被中断导致的状态丢失
   useEffect(() => {
     const handleVisibilityChange = async () => {
@@ -1394,29 +1686,25 @@ export default function ImageGen() {
       const batch = activeBatch;
       if (!batch || batch.clientTaskIds.size === 0) return;
 
-      const { baseUrl, apiKey } = getEffectiveApiConfig();
       try {
-        const resp = await queryImageTasks([...batch.clientTaskIds.keys()], { baseUrl, apiKey });
-        for (const item of resp.items) {
-          const globalIndex = batch.clientTaskIds.get(item.id);
-          if (globalIndex === undefined) continue;
-          if (!isActiveBatch(batch.id)) return;
-          if (item.status === "success") {
-            const images = item.data ? await extractImageSources({ data: item.data }) : [];
-            if (!isActiveBatch(batch.id)) return;
-            if (images.length > 0) {
-              batch.handleTaskResult(globalIndex - 1, images);
-            } else {
-              batch.handleTaskError(globalIndex - 1, "生成成功但未返回图片");
-            }
-          } else if (item.status === "error") {
-            if (isActiveBatch(batch.id)) {
-              batch.handleTaskError(globalIndex - 1, item.error || "生成失败");
-            }
+        await imageGenerationClient.refreshTasks(
+          [...batch.clientTaskIds].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
+          batch.apiConfig,
+          {
+            onTaskProgress: (taskIndex, text) => {
+              if (!isActiveBatch(batch.id)) return;
+              updateTask(taskIndex, { status: "loading", progress: text });
+            },
+            onTaskResult: (taskIndex, images) => {
+              if (isActiveBatch(batch.id)) batch.handleTaskResult(taskIndex, images);
+            },
+            onTaskError: (taskIndex, err) => {
+              if (isActiveBatch(batch.id)) batch.handleTaskError(taskIndex, err);
+            },
           }
-        }
+        );
       } catch {
-        // 静默，generateImageMulti 内部轮询会处理
+        // 静默，imageGenerationClient 内部轮询会处理
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -2119,6 +2407,13 @@ export default function ImageGen() {
                   </Text>
                   <Text style={{ color: "#71717a", fontSize: 11 }}>
                     {hasOwnKey ? `${n} 张` : "默认接口限制 1 张"} · {quality === "auto" ? "自动质量" : `${quality} 质量`}
+                  </Text>
+                  <Text style={{ color: generationAdapter === "task" ? "#34d399" : "#fbbf24", fontSize: 11, display: "block" }}>
+                    {generationAdapter === "task"
+                      ? "任务模式 · 支持后台恢复"
+                      : generationAdapter === "direct"
+                        ? "直连模式 · 不支持后台恢复"
+                        : "自动检测 · 直连后端不支持后台恢复"}
                   </Text>
                 </div>
                 <MagneticButton strength={0.35}>
