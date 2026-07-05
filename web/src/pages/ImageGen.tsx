@@ -1,9 +1,9 @@
-import { cloneElement, useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import type { CSSProperties } from "react";
 import {
   Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag, Drawer, Empty, Popconfirm,
 } from "antd";
-import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined, EyeOutlined } from "@ant-design/icons";
+import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined, EyeOutlined, FileImageOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
 import { DEFAULT_GREENSCREEN_PROMPT, DEFAULT_SPRITESHEET_PROMPT } from "@/config/defaults";
 import { useImageGenStore, type TaskStatus, type GenTask, type GenMode, MAX_REF_IMAGES } from "@/stores/imageGen";
@@ -29,6 +29,7 @@ import { MagneticButton } from "@/components/motion";
 import { PageHeader, TiltCard } from "@/components/showtime";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
 import { ImagePreviewActionToolbar, type ImagePreviewAction } from "@/components/ImagePreviewActionToolbar";
+import { ImagePreviewGroupTabs } from "@/components/ImagePreviewGroupTabs";
 import { PsdTaskPanel } from "@/components/PsdTaskPanel";
 import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
@@ -745,6 +746,7 @@ interface ResultActionButtonsProps {
   favoriteId: string;
   displayIndex: number;
   isFavorited: boolean;
+  genMode: GenMode;
   onDownload: (src: string) => void;
   onToggleFavorite: (favoriteId: string, src: string, displayIndex: number) => void;
   onEditImage: (src: string) => void;
@@ -758,6 +760,7 @@ function ResultActionButtons({
   favoriteId,
   displayIndex,
   isFavorited,
+  genMode,
   onDownload,
   onToggleFavorite,
   onEditImage,
@@ -786,14 +789,16 @@ function ResultActionButtons({
       >
         <EditOutlined />
       </button>
-      <button
-        type="button"
-        aria-label="送入抠图"
-        title="送入抠图"
-        onClick={() => onSendToMatte(src)}
-      >
-        <ScissorOutlined />
-      </button>
+      {genMode === "greenscreen" && (
+        <button
+          type="button"
+          aria-label="送入抠图"
+          title="送入抠图"
+          onClick={() => onSendToMatte(src)}
+        >
+          <ScissorOutlined />
+        </button>
+      )}
       <button
         type="button"
         aria-label="拆分为 PSD"
@@ -1039,6 +1044,7 @@ const TaskCard = memo(function TaskCard({
                       favoriteId={favoriteId}
                       displayIndex={displayIndex}
                       isFavorited={isFavorited}
+                      genMode={genMode}
                       onDownload={onDownload}
                       onToggleFavorite={onToggleFavorite}
                       onEditImage={onEditImage}
@@ -1058,6 +1064,7 @@ const TaskCard = memo(function TaskCard({
                   favoriteId={favoriteId}
                   displayIndex={displayIndex}
                   isFavorited={isFavorited}
+                  genMode={genMode}
                   onDownload={onDownload}
                   onToggleFavorite={onToggleFavorite}
                   onEditImage={onEditImage}
@@ -1106,7 +1113,6 @@ export default function ImageGen() {
   const setQuality = useImageGenStore((s) => s.setQuality);
   const setStyleId = useImageGenStore((s) => s.setStyleId);
   const setImg2imgReferenceGuideId = useImageGenStore((s) => s.setImg2imgReferenceGuideId);
-  const setRefImages = useImageGenStore((s) => s.setRefImages);
   const addRefImages = useImageGenStore((s) => s.addRefImages);
   const removeRefImage = useImageGenStore((s) => s.removeRefImage);
   const clearRefImages = useImageGenStore((s) => s.clearRefImages);
@@ -1118,9 +1124,13 @@ export default function ImageGen() {
 
   const greenscreenPrompt = useUIStore((s) => s.greenscreenPrompt);
   const spritesheetPrompt = useUIStore((s) => s.spritesheetPrompt);
+  const imageGenAdapter = useUIStore((s) => s.imageGenAdapter);
 
   const addHistory = useHistoryStore((s) => s.add);
   const addAsset = useAssetStore((s) => s.add);
+  const assetItems = useAssetStore((s) => s.items);
+  const assetGroups = useAssetStore((s) => s.groups);
+  const moveAssetToGroup = useAssetStore((s) => s.moveItemToGroup);
   const promptFavorites = usePromptFavoriteStore((s) => s.items);
   const addPromptFavorite = usePromptFavoriteStore((s) => s.add);
   const updatePromptFavorite = usePromptFavoriteStore((s) => s.update);
@@ -1241,6 +1251,19 @@ export default function ImageGen() {
     }
   }, [firstCompareReferenceImage, previewIndex]);
 
+  // 按住"查看参考图"时，直接替换 antd 预览中 img 的 src 为参考图，松开后恢复原图
+  // 相比叠加浮层，此方案保留 antd 预览的框架 UI（工具栏、关闭按钮、左右切换等）
+  useEffect(() => {
+    if (!previewCompareActive || !firstCompareReferenceImage) return;
+    const imgEl = document.querySelector<HTMLImageElement>(".ant-image-preview-img");
+    if (!imgEl) return;
+    const originalSrc = imgEl.getAttribute("src") ?? "";
+    imgEl.setAttribute("src", firstCompareReferenceImage);
+    return () => {
+      imgEl.setAttribute("src", originalSrc);
+    };
+  }, [previewCompareActive, firstCompareReferenceImage]);
+
   function setCurrentActivePromptFavoriteId(id: string | null) {
     setActivePromptFavoriteIds((prev) => ({ ...prev, [currentPromptSourceMode]: id }));
   }
@@ -1306,7 +1329,9 @@ export default function ImageGen() {
     const trimmedPrompt = prompt.trim();
     const stylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
     const styleFragment = stylePreset?.fragment.trim();
-    if (!trimmedPrompt && !styleFragment) {
+    // 图生图模式下，参考约束自带生成指引，即使提示词为空也允许生成
+    const hasReferenceGuide = mode === "img2img" && !!currentImg2imgReferenceGuide?.fragment?.trim();
+    if (!trimmedPrompt && !styleFragment && !hasReferenceGuide) {
       message.warning("请输入提示词或选择画风");
       return;
     }
@@ -1504,6 +1529,7 @@ export default function ImageGen() {
           baseUrl: params.baseUrl,
           apiKey: params.apiKey,
           images: params.imagesBase64,
+          adapter: imageGenAdapter,
         },
         {
           onAdapterResolved: (adapter) => {
@@ -1511,8 +1537,8 @@ export default function ImageGen() {
             activeBatch!.adapter = adapter;
             setGenerationAdapter(adapter);
             if (adapter === "direct") {
+              // 直连模式不持久化批次，无法断线恢复
               clearPendingImageBatch(batchId);
-              message.info("当前后端未提供可恢复任务接口，已降级为 OpenAI 兼容直连模式");
             } else {
               persistCurrentTaskBatch();
             }
@@ -1574,7 +1600,7 @@ export default function ImageGen() {
       setError(err);
       message.error(err);
     }
-  }, [persistTaskHistory, message, updateTask, addExtraResult, resetTasks, setLoading, setError, setFavorited]);
+  }, [persistTaskHistory, message, updateTask, addExtraResult, resetTasks, setLoading, setError, setFavorited, imageGenAdapter]);
 
   // 整体重试：后端 n=N 为整体请求，无法单独重试某张，此处重新发起整批
   const retryTask = useCallback(async (_index: number) => {
@@ -1589,6 +1615,12 @@ export default function ImageGen() {
   const resumePersistedTaskBatch = useCallback(async () => {
     const saved = readPendingImageBatch();
     if (!saved || activeBatch) return;
+
+    // 持久化的批次必然来自任务模式；若用户已切换到直连模式则不再尝试恢复
+    if (imageGenAdapter !== "task") {
+      clearPendingImageBatch(saved.id);
+      return;
+    }
 
     const batchId = ++batchSeq;
     const controller = new AbortController();
@@ -1625,17 +1657,41 @@ export default function ImageGen() {
     setGenerationAdapter("task");
     lockedSizeRef.current = saved.size;
     setLoading(true);
+
+    // 任务模式：软超时以批次创建时刻为起点计算剩余时间，
+    // 避免长时间挂起浏览器后恢复仍要等满整段软超时
+    const elapsed = Date.now() - saved.createdAt;
+    const remainingSoftMs = IMAGE_GEN_SOFT_TIMEOUT_MS - elapsed;
+    const triggerSoftTimeout = () => {
+      if (!isActiveBatch(batchId)) return;
+      setLoading(false);
+      useImageGenStore.getState().tasks.forEach((task) => {
+        if (task.status === "pending" || task.status === "loading") {
+          updateTask(task.index, { status: "waiting" });
+        }
+      });
+      message.warning("恢复的任务仍在等待，你可以继续等结果，或直接开始下一次生成");
+    };
+    const softTimeoutId =
+      remainingSoftMs <= 0
+        ? window.setTimeout(triggerSoftTimeout, 0)
+        : window.setTimeout(triggerSoftTimeout, remainingSoftMs);
+
     activeBatch = {
       id: batchId,
       controller,
-      softTimeoutId: null,
+      softTimeoutId,
       clientTaskIds,
       handleTaskResult,
       handleTaskError,
       adapter: "task",
       apiConfig: { baseUrl: saved.baseUrl, apiKey: saved.apiKey },
     };
-    message.info("正在恢复上次未完成的生图任务");
+    if (remainingSoftMs <= 0) {
+      message.warning("上次任务已超过软超时，可直接开始下一次生成");
+    } else {
+      message.info("正在恢复上次未完成的生图任务");
+    }
 
     await imageGenerationClient.resumeTasks(
       saved.clientTaskIds,
@@ -1673,7 +1729,7 @@ export default function ImageGen() {
       },
       { signal: controller.signal }
     );
-  }, [message, persistTaskHistory, resetTasks, setError, setLoading, updateTask]);
+  }, [message, persistTaskHistory, resetTasks, setError, setLoading, updateTask, imageGenAdapter]);
 
   useEffect(() => {
     void resumePersistedTaskBatch();
@@ -1766,7 +1822,6 @@ export default function ImageGen() {
       const next = new Set(current);
       next.delete(taskId);
       setFavorited(next);
-      message.info("已取消收藏");
     } else {
       const next = new Set(current);
       next.add(taskId);
@@ -1780,11 +1835,12 @@ export default function ImageGen() {
           type: "image",
           imageId,
           tags: ["AI生成", mode],
-          source: "generated",
-          metadata: { size: size === "auto" ? undefined : Number(size) },
+          metadata: {
+            taskId,
+            size: size === "auto" ? undefined : Number(size),
+          },
           createdAt: Date.now(),
         });
-        message.success("已收藏到素材库");
       } catch {
         message.error("收藏失败");
       }
@@ -1795,12 +1851,26 @@ export default function ImageGen() {
     try {
       const cachedSrc = await cacheImageLocally(src);
       setMode("img2img");
-      setRefImages([cachedSrc]);
-      message.info("已切换到图生图，参考图已载入");
+      // 追加到已有参考图末尾，避免覆盖用户已上传的参考图；满额时提示
+      if (refImages.length >= MAX_REF_IMAGES) {
+        // 满额时 revoke 刚创建的 blob URL，避免泄漏
+        if (cachedSrc.startsWith("blob:")) URL.revokeObjectURL(cachedSrc);
+        message.warning(`参考图已满（${refImages.length}/${MAX_REF_IMAGES}），无法继续添加`);
+        return;
+      }
+      const accepted = addRefImages([cachedSrc]);
+      const total = useImageGenStore.getState().refImages.length;
+      if (accepted > 0) {
+        message.info(`已追加为图生图参考图（共 ${total}/${MAX_REF_IMAGES}）`);
+      } else {
+        // 兜底：addRefImages 未接受时 revoke，避免泄漏
+        if (cachedSrc.startsWith("blob:")) URL.revokeObjectURL(cachedSrc);
+        message.warning(`参考图已满（${total}/${MAX_REF_IMAGES}），无法继续添加`);
+      }
     } catch {
       message.error("图片加载失败");
     }
-  }, [setMode, setRefImages, message]);
+  }, [setMode, addRefImages, refImages.length, message]);
 
   // 拆分为 PSD：将结果图转为 data URL，预填到 PSD 任务表单并切换 tab
   const splitToPsd = useCallback(async (src: string) => {
@@ -2011,6 +2081,15 @@ export default function ImageGen() {
     });
     return arr;
   }, [cards]);
+
+  // 当前预览图对应的已收藏素材（仅当 previewIndex 对应的图已收藏且 asset 存在时有效）
+  // 与 toolbarRender 一致，统一以 previewIndex 为索引源（PreviewGroup 的 current 受控于 previewIndex）
+  const currentPreviewAsset = useMemo(() => {
+    if (previewIndex === null) return undefined;
+    const info = previewCardInfo[previewIndex];
+    if (!info) return undefined;
+    return assetItems.find((a) => a.metadata.taskId === info.favoriteId);
+  }, [previewIndex, previewCardInfo, assetItems]);
 
   const gridLayout = useMemo(() => {
     if (cards.length === 0) {
@@ -2413,29 +2492,31 @@ export default function ImageGen() {
                       ? "任务模式 · 支持后台恢复"
                       : generationAdapter === "direct"
                         ? "直连模式 · 不支持后台恢复"
-                        : "自动检测 · 直连后端不支持后台恢复"}
+                        : `${imageGenAdapter === "task" ? "任务模式" : "直连模式"} · 等待生成开始`}
                   </Text>
                 </div>
-                <MagneticButton strength={0.35}>
-                  <Button
-                    type="primary"
-                    loading={loading}
-                    onClick={handleGenerate}
-                    size="large"
-                    style={{
-                      background: "linear-gradient(135deg, #10b981 0%, #047857 100%)",
-                      border: "none",
-                      fontWeight: 600,
-                      minWidth: 112,
-                      boxShadow: loading
-                        ? "0 0 0 1px rgba(16, 185, 129, 0.4), 0 6px 18px rgba(16, 185, 129, 0.28)"
-                        : "0 8px 22px rgba(16, 185, 129, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.18)",
-                      borderRadius: 8,
-                    }}
-                  >
-                    {loading ? "生成中" : "生成"}
-                  </Button>
-                </MagneticButton>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <MagneticButton strength={0.35}>
+                    <Button
+                      type="primary"
+                      loading={loading}
+                      onClick={handleGenerate}
+                      size="large"
+                      style={{
+                        background: "linear-gradient(135deg, #10b981 0%, #047857 100%)",
+                        border: "none",
+                        fontWeight: 600,
+                        minWidth: 112,
+                        boxShadow: loading
+                          ? "0 0 0 1px rgba(16, 185, 129, 0.4), 0 6px 18px rgba(16, 185, 129, 0.28)"
+                          : "0 8px 22px rgba(16, 185, 129, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.18)",
+                        borderRadius: 8,
+                      }}
+                    >
+                      {loading ? "生成中" : "生成"}
+                    </Button>
+                  </MagneticButton>
+                </div>
               </div>
             </Form>
           </Card>
@@ -2680,12 +2761,12 @@ export default function ImageGen() {
                 setPreviewCompareActive(false);
                 setPreviewIndex(idx);
               },
-              toolbarRender: (originalNode, info) => {
+              toolbarRender: (_originalNode, info) => {
                 // info.current 为 antd 内部追踪的当前索引，比 previewIndex 状态更即时
                 const idx = info.current ?? previewIndex ?? 0;
                 const cardInfo = previewCardInfo[idx];
                 if (!cardInfo) {
-                  return cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon);
+                  return null;
                 }
                 const actions: ImagePreviewAction[] = [
                   {
@@ -2696,17 +2777,21 @@ export default function ImageGen() {
                     onClick: () => toggleFavorite(cardInfo.favoriteId, cardInfo.src, cardInfo.displayIndex),
                   },
                   {
-                    key: "edit",
-                    title: "编辑（送入图生图）",
-                    icon: <EditOutlined />,
+                    key: "img2img",
+                    title: "用作图生图参考图",
+                    icon: <FileImageOutlined />,
                     onClick: () => editImage(cardInfo.src),
                   },
-                  {
+                ];
+                if (genMode === "greenscreen") {
+                  actions.push({
                     key: "matte",
                     title: "送入抠图",
                     icon: <ScissorOutlined />,
                     onClick: () => sendToMatte(cardInfo.src),
-                  },
+                  });
+                }
+                actions.push(
                   {
                     key: "psd",
                     title: "拆分为 PSD",
@@ -2725,7 +2810,7 @@ export default function ImageGen() {
                     icon: <DownloadOutlined />,
                     onClick: () => downloadImage(cardInfo.src),
                   },
-                ];
+                );
                 if (firstCompareReferenceImage) {
                   actions.unshift({
                     key: "compare-reference",
@@ -2740,7 +2825,7 @@ export default function ImageGen() {
                 }
                 return (
                   <ImagePreviewActionToolbar
-                    originalNode={cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon)}
+                    originalNode={null}
                     actions={actions}
                   />
                 );
@@ -2753,10 +2838,14 @@ export default function ImageGen() {
           </Image.PreviewGroup>
         </div>
       )}
-      {previewCompareActive && firstCompareReferenceImage && (
-        <div className="image-preview-reference-compare" aria-hidden>
-          <img src={firstCompareReferenceImage} alt="" />
-        </div>
+      {previewIndex !== null && previewCardInfo[previewIndex] &&
+        favorited.has(previewCardInfo[previewIndex].favoriteId) && (
+        <ImagePreviewGroupTabs
+          currentAssetId={currentPreviewAsset?.id}
+          currentGroupId={currentPreviewAsset?.groupId}
+          groups={assetGroups}
+          onMoveToGroup={moveAssetToGroup}
+        />
       )}
 
       <PromptFavoriteDrawer

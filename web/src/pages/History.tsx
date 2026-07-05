@@ -7,7 +7,6 @@ import {
 } from "@ant-design/icons";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
-import { useUIStore } from "@/stores/ui";
 import { downloadBlob } from "@/lib/canvas";
 import { getImage, setImage } from "@/lib/imageStore";
 import { useImageUrl } from "@/hooks/useImageUrl";
@@ -35,13 +34,14 @@ function formatTime(ts: number) {
 export default function History() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const setIncomingImage = useUIStore((s) => s.setIncomingImage);
   const items = useHistoryStore((s) => s.items);
   const removeMany = useHistoryStore((s) => s.removeMany);
   const removeImage = useHistoryStore((s) => s.removeImage);
   const assets = useAssetStore((s) => s.items);
+  const assetGroups = useAssetStore((s) => s.groups);
   const addAsset = useAssetStore((s) => s.add);
   const removeByHistoryId = useAssetStore((s) => s.removeByHistoryId);
+  const moveItemToGroup = useAssetStore((s) => s.moveItemToGroup);
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
   const previewSrc = useImageUrl(previewImageId);
 
@@ -76,6 +76,12 @@ export default function History() {
     () => mediaItems.find((item) => previewImageId ? item.imageIds.includes(previewImageId) : false),
     [mediaItems, previewImageId]
   );
+  // 当前预览图对应的已收藏素材（仅已收藏时存在）
+  const previewAsset = useMemo(() => {
+    const h = previewItem?.raw as HistoryItem | undefined;
+    if (!h) return undefined;
+    return assets.find((a) => a.metadata.historyId === h.id);
+  }, [assets, previewItem]);
 
   async function downloadImage(imageId: string) {
     try {
@@ -90,21 +96,6 @@ export default function History() {
     }
   }
 
-  async function sendToMatte(imageId: string) {
-    try {
-      const blob = await getImage(imageId);
-      if (!blob) {
-        message.error("图片加载失败");
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      setIncomingImage({ src: url, from: "history" });
-      navigate("/matte");
-    } catch {
-      message.error("图片加载失败");
-    }
-  }
-
   async function sendToImageGen(imageId: string) {
     await sendImageToImageGenReference(imageId, {
       navigate,
@@ -112,6 +103,36 @@ export default function History() {
       showSuccess: (content) => message.success(content),
       showError: (content) => message.error(content),
     });
+  }
+
+  /**
+   * 裁剪结果入库：
+   * - 把 PNG blob 写入 imageStore，得到新 imageId
+   * - 作为新 AssetItem 加入素材库（未分组），不影响历史记录
+   */
+  async function handleCropped(
+    _imageId: string,
+    item: MediaItem | undefined,
+    blob: Blob,
+    info: { width: number; height: number }
+  ) {
+    const raw = item?.raw as HistoryItem | undefined;
+    const newImageId = await setImage(blob);
+    const baseName = raw?.prompt?.trim().slice(0, 20) || "历史裁剪";
+    addAsset({
+      id: `asset-crop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name: `${baseName}（裁剪 ${info.width}×${info.height}）`.slice(0, 60),
+      type: "image",
+      imageId: newImageId,
+      tags: ["裁剪"],
+      metadata: {
+        width: info.width,
+        height: info.height,
+        size: blob.size,
+      },
+      createdAt: Date.now(),
+    });
+    message.success("已保存裁剪结果到素材库");
   }
 
   function reuseParams(item: MediaItem) {
@@ -156,7 +177,6 @@ export default function History() {
     if (favoritedIds.has(h.id)) {
       // 取消收藏：移除由该历史项收藏而来的素材
       removeByHistoryId(h.id);
-      message.info("已取消收藏");
     } else {
       // 收藏：复制图片到独立 imageId（避免 history 删除时清理影响 asset）
       try {
@@ -172,11 +192,9 @@ export default function History() {
           type: "image",
           imageId: newImageId,
           tags: ["收藏", h.mode],
-          source: "generated",
           metadata: { historyId: h.id },
           createdAt: Date.now(),
         });
-        message.success("已收藏到素材库");
       } catch {
         message.error("收藏失败");
       }
@@ -199,7 +217,6 @@ export default function History() {
         onPreview={(imageId) => setPreviewImageId(imageId)}
         onDownload={(imageId) => downloadImage(imageId)}
         getDownloadFilename={(_, item) => buildPreviewDownloadName(item)}
-        onMatte={(imageId) => sendToMatte(imageId)}
         onImg2Img={(imageId) => void sendToImageGen(imageId)}
         onReuse={reuseParams}
         onFavorite={handleFavorite}
@@ -217,11 +234,16 @@ export default function History() {
           onClose={() => setPreviewImageId(null)}
           onImageChange={setPreviewImageId}
           onDownload={downloadImage}
-          onMatte={sendToMatte}
           onImg2Img={(imageId) => void sendToImageGen(imageId)}
           onReuse={reuseParams}
           onFavorite={(item) => void handleFavorite(item)}
           onDeleteCurrent={handleDeleteCurrent}
+          onCrop={handleCropped}
+          cropTitle="裁剪并保存到素材库"
+          currentAssetId={previewAsset?.id}
+          currentGroupId={previewAsset?.groupId}
+          groups={assetGroups}
+          onMoveToGroup={moveItemToGroup}
         />
       )}
     </div>

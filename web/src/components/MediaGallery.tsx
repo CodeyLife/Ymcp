@@ -20,7 +20,7 @@
 import { useState, useMemo, useCallback, useEffect, type ReactNode } from "react";
 import { Checkbox, Button, Popconfirm, Tooltip, Pagination } from "antd";
 import {
-  DeleteOutlined, DownloadOutlined, ScissorOutlined, ReloadOutlined,
+  DeleteOutlined, DownloadOutlined, ReloadOutlined,
   LeftOutlined, RightOutlined, PictureOutlined,
   StarOutlined, StarFilled, FileImageOutlined,
 } from "@ant-design/icons";
@@ -64,7 +64,6 @@ export interface MediaGalleryProps {
   onPreview?: (imageId: string, item: MediaItem) => void;
   onDownload?: (imageId: string, item: MediaItem) => void;
   getDownloadFilename?: (imageId: string, item: MediaItem) => string;
-  onMatte?: (imageId: string, item: MediaItem) => void;
   onImg2Img?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   /** 收藏/取消收藏回调，传入时卡片渲染星标按钮 */
@@ -95,14 +94,13 @@ interface MediaCardProps {
   onPreview?: (imageId: string, item: MediaItem) => void;
   onDownload?: (imageId: string, item: MediaItem) => void;
   getDownloadFilename?: (imageId: string, item: MediaItem) => string;
-  onMatte?: (imageId: string, item: MediaItem) => void;
   onImg2Img?: (imageId: string, item: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   onFavorite?: (item: MediaItem) => void;
 }
 
 function MediaCard({
-  item, selected, onToggleSelect, onPreview, onDownload, getDownloadFilename, onMatte, onImg2Img, onReuse, onFavorite,
+  item, selected, onToggleSelect, onPreview, onDownload, getDownloadFilename, onImg2Img, onReuse, onFavorite,
 }: MediaCardProps) {
   const reduce = useMotionMode();
   const [imgIdx, setImgIdx] = useState(0);
@@ -373,13 +371,6 @@ function MediaCard({
               onClick={stop}
             />
           )}
-          {onMatte && currentId && (
-            <CardActionButton
-              icon={<ScissorOutlined />}
-              tip="送入抠图"
-              onClick={(e) => { stop(e); onMatte(currentId, item); }}
-            />
-          )}
           {onImg2Img && currentId && (
             <CardActionButton
               icon={<FileImageOutlined />}
@@ -510,7 +501,6 @@ export function MediaGallery({
   onPreview,
   onDownload,
   getDownloadFilename,
-  onMatte,
   onImg2Img,
   onReuse,
   onFavorite,
@@ -693,7 +683,6 @@ export function MediaGallery({
             onPreview={onPreview}
             onDownload={onDownload}
             getDownloadFilename={getDownloadFilename}
-            onMatte={onMatte}
             onImg2Img={onImg2Img}
             onReuse={onReuse}
             onFavorite={onFavorite}

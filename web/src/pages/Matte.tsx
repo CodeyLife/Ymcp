@@ -3,8 +3,6 @@ import { Card, Typography, Row, Col, Form, InputNumber, Select, Button, Input, S
 import { ScissorOutlined, DownloadOutlined, AimOutlined, UploadOutlined } from "@ant-design/icons";
 import { useUIStore } from "@/stores/ui";
 import { cacheImageLocally } from "@/lib/api";
-import { setImage } from "@/lib/imageStore";
-import { useAssetStore } from "@/stores/asset";
 import { hexToRgb, rgbToHex, downloadBlob } from "@/lib/canvas";
 import { applyChromaKey, contractAlpha, sampleBorderKey, type RGB } from "@/lib/chromaKey";
 import { PageHeader, EmptyState } from "@/components/showtime";
@@ -42,7 +40,6 @@ export default function Matte() {
   const { message } = App.useApp();
   const incomingImage = useUIStore((s) => s.incomingImage);
   const setIncomingImage = useUIStore((s) => s.setIncomingImage);
-  const addAsset = useAssetStore((s) => s.add);
   const [src, setSrc] = useState<string | null>(null);
   const [uploadName, setUploadName] = useState("");
   const [outputName, setOutputName] = useState("");
@@ -177,23 +174,11 @@ export default function Matte() {
   function download() {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.toBlob(async (blob) => {
+    canvas.toBlob((blob) => {
       if (!blob) return;
       const outputNames = buildOutputNames(outputName);
-      // 图片 Blob 直接存入 IndexedDB，store 只保存 imageId 引用
-      const imageId = await setImage(blob);
-      addAsset({
-        id: `asset-matte-${Date.now()}`,
-        name: outputNames.assetName,
-        type: "image",
-        imageId,
-        tags: ["抠图"],
-        source: "matte",
-        metadata: { width: canvas.width, height: canvas.height },
-        createdAt: Date.now(),
-      });
       downloadBlob(blob, outputNames.downloadName);
-      message.success("已下载并保存到素材库");
+      message.success("已下载");
     }, "image/png");
   }
 

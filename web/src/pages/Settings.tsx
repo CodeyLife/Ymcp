@@ -1,6 +1,6 @@
-import { Card, Typography, Form, Input, InputNumber, Button, Divider, App, Alert } from "antd";
+import { Card, Typography, Form, Input, InputNumber, Button, Divider, App, Alert, Segmented } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
-import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
+import { useUIStore, getEffectiveApiConfig, type ImageGenAdapter } from "@/stores/ui";
 import { DEFAULT_GREENSCREEN_PROMPT, DEFAULT_SPRITESHEET_PROMPT } from "@/config/defaults";
 import { PageHeader } from "@/components/showtime";
 
@@ -14,11 +14,13 @@ export default function Settings() {
   const thumbSize = useUIStore((s) => s.thumbSize);
   const greenscreenPrompt = useUIStore((s) => s.greenscreenPrompt);
   const spritesheetPrompt = useUIStore((s) => s.spritesheetPrompt);
+  const imageGenAdapter = useUIStore((s) => s.imageGenAdapter);
   const setApiBaseUrl = useUIStore((s) => s.setApiBaseUrl);
   const setApiKey = useUIStore((s) => s.setApiKey);
   const setThumbSize = useUIStore((s) => s.setThumbSize);
   const setGreenscreenPrompt = useUIStore((s) => s.setGreenscreenPrompt);
   const setSpritesheetPrompt = useUIStore((s) => s.setSpritesheetPrompt);
+  const setImageGenAdapter = useUIStore((s) => s.setImageGenAdapter);
   const { hasOwnKey, usesDefaultBaseUrl } = getEffectiveApiConfig();
 
   function onSave(values: {
@@ -77,6 +79,21 @@ export default function Settings() {
           </Form.Item>
           <Form.Item label="API Key" name="api_key" help={apiKey ? "使用自有 Key" : "留空使用默认 Key（不显示）"}>
             <Input.Password placeholder="sk-..." />
+          </Form.Item>
+          <Divider style={{ borderColor: "#27272a" }} />
+          <Form.Item
+            label="生图调用模式"
+            help="任务模式：走后端异步任务接口，支持断线恢复；直连模式：标准 OpenAI 兼容 /images/generations 接口，不支持后台恢复"
+          >
+            <Segmented
+              block
+              value={imageGenAdapter}
+              onChange={(v) => setImageGenAdapter(v as ImageGenAdapter)}
+              options={[
+                { label: "任务模式", value: "task" },
+                { label: "直连模式", value: "direct" },
+              ]}
+            />
           </Form.Item>
           <Divider style={{ borderColor: "#27272a" }} />
           <Form.Item label="缩略图尺寸" name="thumb_size" help="素材库和历史记录的缩略图尺寸">

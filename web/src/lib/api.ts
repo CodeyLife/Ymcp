@@ -698,7 +698,7 @@ export interface ImageTaskRefreshResult {
 
 export interface ImageGenerationClient {
   submitBatch: (
-    task: BatchTaskParams & { n: number },
+    task: BatchTaskParams & { n: number; adapter: ImageGenerationAdapterKind },
     callbacks: MultiCallbacks,
     options?: { signal?: AbortSignal }
   ) => Promise<void>;
@@ -719,7 +719,6 @@ export interface ImageGenerationClient {
 
 const IMAGE_TASK_POLL_INTERVAL_MS = 3000;
 const IMAGE_TASK_QUERY_FAILURE_LIMIT = 3;
-const imageTaskCapabilityCache = new Map<string, Promise<boolean>>();
 
 function trimTrailingSlash(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -745,35 +744,6 @@ function resolveImageTaskApiBaseUrl(baseUrl: string): string {
     if (/\/v\d+$/i.test(normalized)) return normalized.replace(/\/v\d+$/i, "/api/image-tasks");
     return `${normalized}/api/image-tasks`;
   }
-}
-
-async function supportsImageTaskApi(config: { baseUrl: string; apiKey: string }): Promise<boolean> {
-  const taskBaseUrl = resolveImageTaskApiBaseUrl(config.baseUrl);
-  const cacheKey = `${taskBaseUrl}|${config.apiKey.trim()}`;
-  const cached = imageTaskCapabilityCache.get(cacheKey);
-  if (cached) return cached;
-
-  const probe = fetch(`${taskBaseUrl}?ids=__ymcp_probe__`, {
-    headers: { authorization: `Bearer ${config.apiKey}` },
-    cache: "no-store",
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        imageTaskCapabilityCache.delete(cacheKey);
-        return false;
-      }
-      const json = await response.json().catch(() => null);
-      const supported = !!json && typeof json === "object" && Array.isArray((json as ImageTaskQueryResponse).items);
-      if (!supported) imageTaskCapabilityCache.delete(cacheKey);
-      return supported;
-    })
-    .catch(() => {
-      imageTaskCapabilityCache.delete(cacheKey);
-      return false;
-    });
-
-  imageTaskCapabilityCache.set(cacheKey, probe);
-  return probe;
 }
 
 function waitForImageTaskPoll(signal?: AbortSignal): Promise<void> {
@@ -1171,18 +1141,17 @@ async function generateImageMultiDirect(
 }
 
 /**
- * 统一生图入口：
- * - 优先探测并使用 chatgpt2api 增强任务接口，支持 client_task_id 恢复；
- * - 探测失败时降级到标准 OpenAI-compatible /images/generations 或 /images/edits。
+ * 统一生图入口：由调用方通过 task.adapter 显式指定模式，不再运行时探测。
+ * - adapter === "task"    → chatgpt2api 增强任务接口，支持 client_task_id 断线恢复
+ * - adapter === "direct"  → 标准 OpenAI-compatible /images/generations 或 /images/edits
  */
 export async function submitBatchImageGeneration(
-  task: BatchTaskParams & { n: number },
+  task: BatchTaskParams & { n: number; adapter: ImageGenerationAdapterKind },
   callbacks: MultiCallbacks,
   options?: { signal?: AbortSignal }
 ): Promise<void> {
-  const canUseTaskApi = await supportsImageTaskApi({ baseUrl: task.baseUrl, apiKey: task.apiKey });
-  if (canUseTaskApi) return generateImageMultiWithTaskApi(task, callbacks, options);
-  return generateImageMultiDirect(task, callbacks, options);
+  if (task.adapter === "direct") return generateImageMultiDirect(task, callbacks, options);
+  return generateImageMultiWithTaskApi(task, callbacks, options);
 }
 
 /** 兼容旧调用名，后续页面代码应优先使用 submitBatchImageGeneration。 */

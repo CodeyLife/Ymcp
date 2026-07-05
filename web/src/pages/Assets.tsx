@@ -1,29 +1,26 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
-  App, Segmented, Input,
+  App, Input, Dropdown,
 } from "antd";
+import type { MenuProps } from "antd";
 import {
-  AppstoreOutlined, UploadOutlined, SearchOutlined,
+  AppstoreOutlined, SearchOutlined,
+  PlusOutlined, MoreOutlined, EditOutlined, DeleteOutlined, UploadOutlined,
 } from "@ant-design/icons";
 import { useAssetStore, type AssetItem } from "@/stores/asset";
-import { useUIStore } from "@/stores/ui";
 import { downloadBlob } from "@/lib/canvas";
 import { getImage, setImage } from "@/lib/imageStore";
 import { useImageUrl } from "@/hooks/useImageUrl";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/showtime";
-import { MediaGallery, type MediaItem, type MediaBadge } from "@/components/MediaGallery";
-import { FileUploadTrigger } from "@/components/FileUploadTrigger";
+import { MediaGallery, type MediaItem } from "@/components/MediaGallery";
 import { getNextPreviewImageIdAfterDelete, ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
 import { sendImageToImageGenReference } from "@/lib/imageGenReference";
 
-type FilterType = "all" | "generated" | "uploaded" | "matte";
-
-const SOURCE_BADGE: Record<AssetItem["source"], MediaBadge> = {
-  generated: { label: "AI", color: "emerald" },
-  uploaded:  { label: "上传", color: "blue" },
-  matte:     { label: "抠图", color: "orange" },
-};
+type GroupFilter =
+  | { type: "all" }
+  | { type: "ungrouped" }
+  | { type: "group"; groupId: string };
 
 function formatTime(ts: number) {
   const d = new Date(ts);
@@ -43,19 +40,33 @@ function formatSize(bytes?: number) {
 }
 
 export default function Assets() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
-  const setIncomingImage = useUIStore((s) => s.setIncomingImage);
   const items = useAssetStore((s) => s.items);
-  const add = useAssetStore((s) => s.add);
+  const groups = useAssetStore((s) => s.groups);
+  const addAsset = useAssetStore((s) => s.add);
   const removeMany = useAssetStore((s) => s.removeMany);
-  const [filter, setFilter] = useState<FilterType>("all");
+  const createGroup = useAssetStore((s) => s.createGroup);
+  const renameGroup = useAssetStore((s) => s.renameGroup);
+  const deleteGroup = useAssetStore((s) => s.deleteGroup);
+  const moveItemToGroup = useAssetStore((s) => s.moveItemToGroup);
+  // 默认选中第二个分组「未分组」
+  const [filter, setFilter] = useState<GroupFilter>({ type: "ungrouped" });
   const [search, setSearch] = useState("");
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+  // 进入大图预览时锁定的上下文：imageIds 列表与 imageId → MediaItem 映射。
+  // 切换收藏分组不影响上下切换与功能按钮，上下切换以进入预览时的列表为准。
+  const [previewContext, setPreviewContext] = useState<{
+    imageIds: string[];
+    itemMap: Map<string, MediaItem>;
+  } | null>(null);
   const previewSrc = useImageUrl(previewImageId);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
 
   const filtered = items.filter((item) => {
-    if (filter !== "all" && item.source !== filter) return false;
+    if (filter.type === "ungrouped" && item.groupId !== undefined) return false;
+    if (filter.type === "group" && item.groupId !== filter.groupId) return false;
     if (search && !item.name.toLowerCase().includes(search.toLowerCase()) &&
         !item.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()))) return false;
     return true;
@@ -71,18 +82,31 @@ export default function Assets() {
       imageIds: [a.imageId],
       title: a.name,
       metas,
-      badge: SOURCE_BADGE[a.source],
       raw: a,
     };
   });
-  const previewImageIds = useMemo(
-    () => mediaItems.flatMap((item) => item.imageIds),
-    [mediaItems]
+  // 锁定的 imageIds（上下切换以此为准，切换分组不影响）
+  const lockedImageIds = previewContext?.imageIds ?? [];
+  // 锁定的 currentItem（功能按钮以此为准，切换分组不影响）
+  const lockedCurrentItem = previewImageId ? previewContext?.itemMap.get(previewImageId) : undefined;
+  // 实时的 previewAsset（分组 Tab 高亮实时反映分组变化）
+  const previewAsset = useMemo(
+    () => items.find((a) => a.imageId === previewImageId),
+    [items, previewImageId]
   );
-  const previewItem = useMemo(
-    () => mediaItems.find((item) => previewImageId ? item.imageIds.includes(previewImageId) : false),
-    [mediaItems, previewImageId]
-  );
+
+  const openPreview = (imageId: string) => {
+    setPreviewContext({
+      imageIds: mediaItems.flatMap((item) => item.imageIds),
+      itemMap: new Map(mediaItems.flatMap((item) => item.imageIds.map((id) => [id, item]))),
+    });
+    setPreviewImageId(imageId);
+  };
+
+  const closePreview = () => {
+    setPreviewImageId(null);
+    setPreviewContext(null);
+  };
 
   async function downloadImage(imageId: string) {
     try {
@@ -97,48 +121,45 @@ export default function Assets() {
     }
   }
 
-  async function sendToMatte(imageId: string) {
-    try {
-      const blob = await getImage(imageId);
-      if (!blob) {
-        message.error("图片加载失败");
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      setIncomingImage({ src: url, from: "assets" });
-      navigate("/matte");
-    } catch {
-      message.error("图片加载失败");
-    }
-  }
-
   async function sendToImageGen(imageId: string) {
     await sendImageToImageGenReference(imageId, {
       navigate,
-      onSuccess: () => setPreviewImageId(null),
+      onSuccess: () => closePreview(),
       showSuccess: (content) => message.success(content),
       showError: (content) => message.error(content),
     });
   }
 
-  async function handleUpload(files: FileList) {
-    let count = 0;
-    for (const file of Array.from(files)) {
-      // 直接将 File（Blob 子类）存入 IndexedDB，返回 imageId 持久化引用
-      const imageId = await setImage(file);
-      add({
-        id: `asset-upload-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        name: file.name,
-        type: "image",
-        imageId,
-        tags: ["上传"],
-        source: "uploaded",
-        metadata: { size: file.size },
-        createdAt: Date.now(),
-      });
-      count++;
-    }
-    message.success(`已上传 ${count} 张图片`);
+  /**
+   * 裁剪结果入库：
+   * - 把 PNG blob 写入 imageStore，得到新 imageId
+   * - 作为新 AssetItem 加入素材库，归入当前预览素材所在分组（若有）
+   * - 不影响原图，原图仍在素材库中
+   */
+  async function handleCropped(
+    _imageId: string,
+    item: MediaItem | undefined,
+    blob: Blob,
+    info: { width: number; height: number }
+  ) {
+    const raw = item?.raw as AssetItem | undefined;
+    const newImageId = await setImage(blob);
+    const baseName = raw?.name?.replace(/\.[^.]+$/, "") || "素材";
+    addAsset({
+      id: `asset-crop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name: `${baseName}（裁剪 ${info.width}×${info.height}）`.slice(0, 60),
+      type: "image",
+      imageId: newImageId,
+      tags: ["裁剪"],
+      groupId: raw?.groupId,
+      metadata: {
+        width: info.width,
+        height: info.height,
+        size: blob.size,
+      },
+      createdAt: Date.now(),
+    });
+    message.success("已保存裁剪结果到当前分组");
   }
 
   function handleDelete(ids: string[]) {
@@ -147,9 +168,24 @@ export default function Assets() {
   }
 
   function handleDeleteCurrent(item: MediaItem) {
-    const nextId = getNextPreviewImageIdAfterDelete(previewImageIds, previewImageId);
+    const nextId = getNextPreviewImageIdAfterDelete(lockedImageIds, previewImageId);
     handleDelete([item.id]);
-    setPreviewImageId(nextId ?? null);
+    if (nextId) {
+      setPreviewImageId(nextId);
+      // 从锁定的上下文中移除已删除项，避免上下切换到已删除的图片
+      const removedImageIds = new Set(item.imageIds);
+      setPreviewContext((prev) => {
+        if (!prev) return prev;
+        const newItemMap = new Map(prev.itemMap);
+        removedImageIds.forEach((id) => newItemMap.delete(id));
+        return {
+          imageIds: prev.imageIds.filter((id) => !removedImageIds.has(id)),
+          itemMap: newItemMap,
+        };
+      });
+    } else {
+      closePreview();
+    }
   }
 
   function buildPreviewDownloadName(item?: MediaItem) {
@@ -159,36 +195,214 @@ export default function Assets() {
     return /\.[a-z0-9]{2,5}$/i.test(name) ? name : `${name}.png`;
   }
 
+  async function handleUploadFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) {
+      message.warning("请选择图片文件");
+      return;
+    }
+    setUploading(true);
+    // 上传归属规则：当前在某个分组内则归入该分组，否则归入「未分组」
+    const targetGroupId = filter.type === "group" ? filter.groupId : undefined;
+    let success = 0;
+    try {
+      for (const file of files) {
+        try {
+          const imageId = await setImage(file);
+          const baseName = file.name.replace(/\.[^.]+$/, "");
+          addAsset({
+            id: `asset-upload-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+            name: baseName.slice(0, 40) || "上传素材",
+            type: "image",
+            imageId,
+            tags: ["上传"],
+            groupId: targetGroupId,
+            metadata: {
+              size: file.size,
+            },
+            createdAt: Date.now(),
+          });
+          success += 1;
+        } catch {
+          // 单张失败跳过，继续处理后续
+        }
+      }
+      if (success > 0) {
+        message.success(`已上传 ${success} 张图片`);
+      } else {
+        message.error("上传失败");
+      }
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function handleCreateGroup() {
+    let name = "";
+    modal.confirm({
+      title: "新建分组",
+      content: (
+        <Input
+          placeholder="分组名称"
+          maxLength={20}
+          autoFocus
+          onChange={(e) => { name = e.target.value; }}
+        />
+      ),
+      onOk: () => {
+        const trimmed = name.trim();
+        if (!trimmed) {
+          message.warning("分组名称不能为空");
+          return Promise.reject();
+        }
+        const id = createGroup(trimmed);
+        setFilter({ type: "group", groupId: id });
+        message.success("已创建分组");
+      },
+    });
+  }
+
+  function handleRenameGroup(id: string, oldName: string) {
+    let name = oldName;
+    modal.confirm({
+      title: "重命名分组",
+      content: (
+        <Input
+          placeholder="分组名称"
+          maxLength={20}
+          defaultValue={oldName}
+          autoFocus
+          onChange={(e) => { name = e.target.value; }}
+        />
+      ),
+      onOk: () => {
+        const trimmed = name.trim();
+        if (!trimmed) {
+          message.warning("分组名称不能为空");
+          return Promise.reject();
+        }
+        renameGroup(id, trimmed);
+        message.success("已重命名");
+      },
+    });
+  }
+
+  function handleDeleteGroup(id: string, name: string) {
+    deleteGroup(id);
+    setFilter({ type: "all" });
+    message.success(`已删除分组「${name}」`);
+  }
+
+  function buildGroupMenu(group: { id: string; name: string }): MenuProps["items"] {
+    return [
+      {
+        key: "rename",
+        label: "重命名",
+        icon: <EditOutlined />,
+        onClick: () => handleRenameGroup(group.id, group.name),
+      },
+      {
+        key: "delete",
+        label: "删除分组",
+        icon: <DeleteOutlined />,
+        danger: true,
+        onClick: () => {
+          modal.confirm({
+            title: `删除分组「${group.name}」？`,
+            content: "分组内的素材将移至「未分组」，不会被删除。",
+            okText: "删除",
+            okButtonProps: { danger: true },
+            cancelText: "取消",
+            onOk: () => handleDeleteGroup(group.id, group.name),
+          });
+        },
+      },
+    ];
+  }
+
+  const isActive = (f: GroupFilter) => {
+    if (filter.type === "all" && f.type === "all") return true;
+    if (filter.type === "ungrouped" && f.type === "ungrouped") return true;
+    if (filter.type === "group" && f.type === "group") return filter.groupId === f.groupId;
+    return false;
+  };
+
   return (
     <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 28px 48px" }}>
       <PageHeader
         title="素材库"
-        description="生成和上传的图片统一管理，支持搜索、筛选、批量删除和快速抠图。"
+        description="收藏的图片统一管理，支持自定义分组、搜索和批量删除。"
         icon={<AppstoreOutlined />}
-        extra={
-          <FileUploadTrigger
-            accept="image/*"
-            multiple
-            label="上传"
-            hint="PNG / JPEG / WebP"
-            icon={<UploadOutlined />}
-            onFiles={handleUpload}
-          />
-        }
       />
 
-      {/* 筛选栏 */}
-      <div style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <Segmented
-          value={filter}
-          onChange={(v) => setFilter(v as FilterType)}
-          options={[
-            { label: "全部", value: "all" },
-            { label: "AI 生成", value: "generated" },
-            { label: "上传", value: "uploaded" },
-            { label: "抠图", value: "matte" },
-          ]}
+      {/* 分组 Tab 栏 */}
+      <div className="asset-group-tabs" style={{ marginBottom: 16 }}>
+        <button
+          type="button"
+          className={`asset-group-tab${isActive({ type: "all" }) ? " asset-group-tab-active" : ""}`}
+          onClick={() => setFilter({ type: "all" })}
+        >
+          全部
+        </button>
+        <button
+          type="button"
+          className={`asset-group-tab${isActive({ type: "ungrouped" }) ? " asset-group-tab-active" : ""}`}
+          onClick={() => setFilter({ type: "ungrouped" })}
+        >
+          未分组
+        </button>
+        {groups.map((g) => (
+          <div
+            key={g.id}
+            className={`asset-group-tab-wrapper${isActive({ type: "group", groupId: g.id }) ? " asset-group-tab-active" : ""}`}
+            style={{ display: "inline-flex", alignItems: "center" }}
+          >
+            <button
+              type="button"
+              className="asset-group-tab"
+              onClick={() => setFilter({ type: "group", groupId: g.id })}
+            >
+              {g.name}
+            </button>
+            <Dropdown menu={{ items: buildGroupMenu(g) }} trigger={["click"]}>
+              <button
+                type="button"
+                className="asset-group-tab-more"
+                title="管理分组"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreOutlined />
+              </button>
+            </Dropdown>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="asset-group-tab asset-group-tab-add"
+          onClick={handleCreateGroup}
+          title="新建分组"
+        >
+          <PlusOutlined /> 新建
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={(e) => void handleUploadFiles(e.target.files)}
+          style={{ display: "none" }}
         />
+        <button
+          type="button"
+          className="asset-group-tab asset-group-tab-upload"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          title="上传图片到素材库"
+        >
+          <UploadOutlined /> {uploading ? "上传中..." : "上传"}
+        </button>
         <Input
           prefix={<SearchOutlined style={{ color: "#52525b" }} />}
           placeholder="搜索名称或标签"
@@ -203,11 +417,10 @@ export default function Assets() {
         items={mediaItems}
         emptyIcon={<AppstoreOutlined />}
         emptyTitle="暂无素材"
-        emptyDescription="点击右上角上传，或在生图页保存生成结果到素材库。"
-        onPreview={(imageId) => setPreviewImageId(imageId)}
+        emptyDescription="在生图页或历史记录中收藏图片，即可在此管理。"
+        onPreview={openPreview}
         onDownload={(imageId) => downloadImage(imageId)}
         getDownloadFilename={(_, item) => buildPreviewDownloadName(item)}
-        onMatte={(imageId) => sendToMatte(imageId)}
         onImg2Img={(imageId) => void sendToImageGen(imageId)}
         onDelete={handleDelete}
       />
@@ -217,15 +430,20 @@ export default function Assets() {
         <ImagePreviewWithToolbar
           imageId={previewImageId}
           src={previewSrc}
-          imageIds={previewImageIds}
-          currentItem={previewItem}
-          downloadFilename={buildPreviewDownloadName(previewItem)}
-          onClose={() => setPreviewImageId(null)}
+          imageIds={lockedImageIds}
+          currentItem={lockedCurrentItem}
+          downloadFilename={buildPreviewDownloadName(lockedCurrentItem)}
+          onClose={closePreview}
           onImageChange={setPreviewImageId}
           onDownload={downloadImage}
-          onMatte={sendToMatte}
           onImg2Img={(imageId) => void sendToImageGen(imageId)}
           onDeleteCurrent={handleDeleteCurrent}
+          onCrop={handleCropped}
+          cropTitle="裁剪并保存到素材库"
+          currentAssetId={previewAsset?.id}
+          currentGroupId={previewAsset?.groupId}
+          groups={groups}
+          onMoveToGroup={moveItemToGroup}
         />
       )}
     </div>

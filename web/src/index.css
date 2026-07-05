@@ -1055,24 +1055,6 @@ a.image-preview-img2img-button {
   font-size: 18px;
 }
 
-.image-preview-reference-compare {
-  position: fixed;
-  inset: 64px 0 88px;
-  z-index: 1085;
-  pointer-events: none;
-  display: grid;
-  place-items: center;
-  padding: 0 4vw;
-}
-
-.image-preview-reference-compare img {
-  display: block;
-  max-width: 92vw;
-  max-height: calc(100vh - 152px);
-  object-fit: contain;
-  filter: drop-shadow(0 18px 42px rgba(0, 0, 0, 0.6));
-}
-
 /* 大图预览：左右侧切换悬浮按钮 */
 .image-preview-side-nav {
   position: fixed;
@@ -1128,6 +1110,154 @@ a.image-preview-img2img-button {
   .image-preview-side-nav-right {
     right: 8px;
   }
+}
+
+/* ============================================================
+ * 大图预览：顶部分组快捷切换 Tab
+ * ============================================================ */
+.image-preview-group-tabs {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1085;
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.62);
+  border-radius: 999px;
+  backdrop-filter: blur(12px);
+  max-width: calc(100vw - 80px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.image-preview-group-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.image-preview-group-tab {
+  padding: 4px 14px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.7);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.image-preview-group-tab:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.image-preview-group-tab-active {
+  color: #fff;
+  background: rgba(139, 92, 246, 0.42);
+}
+
+.image-preview-group-tab-active:hover {
+  color: #fff;
+  background: rgba(139, 92, 246, 0.55);
+}
+
+/* ============================================================
+ * 素材库页面：分组 Tab 栏
+ * ============================================================ */
+.asset-group-tabs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.asset-group-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  color: #d4d4d8;
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.asset-group-tab:hover {
+  color: #fafafa;
+  background: #3f3f46;
+}
+
+.asset-group-tab-active {
+  color: #fff;
+  background: rgba(139, 92, 246, 0.28);
+  border-color: rgba(139, 92, 246, 0.5);
+}
+
+.asset-group-tab-active:hover {
+  color: #fff;
+  background: rgba(139, 92, 246, 0.36);
+}
+
+.asset-group-tab-wrapper {
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.asset-group-tab-wrapper.asset-group-tab-active .asset-group-tab {
+  color: #fff;
+  background: rgba(139, 92, 246, 0.28);
+  border-color: rgba(139, 92, 246, 0.5);
+}
+
+.asset-group-tab-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: #71717a;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.asset-group-tab-more:hover {
+  color: #fafafa;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.asset-group-tab-add {
+  color: #a1a1aa;
+  background: transparent;
+  border-style: dashed;
+}
+
+/* 上传按钮：主操作入口，紫色实心 */
+.asset-group-tab-upload {
+  color: #fff;
+  background: rgba(139, 92, 246, 0.32);
+  border-color: rgba(139, 92, 246, 0.6);
+}
+
+.asset-group-tab-upload:hover {
+  color: #fff;
+  background: rgba(139, 92, 246, 0.5);
+  border-color: rgba(139, 92, 246, 0.8);
+}
+
+.asset-group-tab-upload:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* 滚动条 hover 加深 */
@@ -2319,5 +2449,203 @@ a.image-preview-img2img-button {
   /* —— Logo 光晕降级为静态弱光 —— */
   .sidebar-logo-aura {
     opacity: 0.4 !important;
+  }
+}
+
+/* ============================================================
+ * 图片裁剪模态 (ImageCropModal)
+ * ============================================================ */
+
+.crop-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #0c0c0f;
+  color: #f4f4f5;
+}
+
+.crop-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #27272a;
+  background: rgba(24, 24, 27, 0.7);
+}
+
+.crop-toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crop-size-info {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: #a1a1aa;
+  padding: 0 8px;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  background: #18181b;
+}
+
+.crop-toolbar-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #3f3f46;
+  background: #18181b;
+  color: #d4d4d8;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all 0.18s ease;
+}
+
+.crop-toolbar-btn:hover:not(:disabled) {
+  border-color: #52525b;
+  color: #f4f4f5;
+  background: #27272a;
+}
+
+.crop-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.crop-toolbar-btn-primary {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #34d399;
+}
+
+.crop-toolbar-btn-primary:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.28);
+  border-color: rgba(52, 211, 153, 0.7);
+  color: #6ee7b7;
+}
+
+.crop-toolbar-btn-danger:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #f87171;
+  background: rgba(127, 29, 29, 0.2);
+}
+
+.crop-canvas-wrap {
+  position: relative;
+  width: 100%;
+  /* 限定画布最大高度，保证纵横比不为正方形的图也能完整展示 */
+  max-height: min(70vh, 640px);
+  min-height: 320px;
+  background: #050507;
+  background-image:
+    linear-gradient(45deg, #18181b 25%, transparent 25%),
+    linear-gradient(-45deg, #18181b 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #18181b 75%),
+    linear-gradient(-45deg, transparent 75%, #18181b 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.crop-image {
+  max-width: 100%;
+  max-height: min(70vh, 640px);
+  object-fit: contain;
+  display: block;
+  /* 让图片可被 pointer 事件穿透到 wrap，由 wrap 处理画布拖拽 */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.crop-image-empty {
+  color: #52525b;
+  font-size: 14px;
+  padding: 80px 0;
+}
+
+.crop-overlay-layer {
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+}
+
+.crop-mask {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.crop-region {
+  position: absolute;
+  z-index: 2;
+  border: 1.5px solid #34d399;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  cursor: move;
+  touch-action: none;
+}
+
+.crop-grid-line {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+}
+
+.crop-grid-line-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.crop-grid-line-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.crop-handle {
+  z-index: 4;
+}
+
+.crop-tip {
+  padding: 10px 16px;
+  font-size: 12px;
+  color: #71717a;
+  border-top: 1px solid #27272a;
+  background: rgba(24, 24, 27, 0.7);
+}
+
+@media (max-width: 767px) {
+  .crop-toolbar {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .crop-toolbar-btn {
+    width: 30px;
+    height: 30px;
+  }
+
+  .crop-canvas-wrap {
+    min-height: 240px;
+  }
+
+  .crop-image {
+    max-height: 56vh;
   }
 }

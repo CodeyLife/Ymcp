@@ -18,7 +18,7 @@ export interface ImagePreviewAction {
 }
 
 interface ImagePreviewActionToolbarProps {
-  originalNode: ReactNode;
+  originalNode?: ReactNode;
   actions: ImagePreviewAction[];
 }
 
@@ -26,7 +26,7 @@ export function ImagePreviewActionToolbar({ originalNode, actions }: ImagePrevie
   return (
     <div className="image-preview-toolbar-with-action">
       {originalNode}
-      {actions.length > 0 && <span className="image-preview-action-separator" aria-hidden />}
+      {originalNode && actions.length > 0 && <span className="image-preview-action-separator" aria-hidden />}
       {actions.map((action) => {
         const className = [
           "image-preview-img2img-button",

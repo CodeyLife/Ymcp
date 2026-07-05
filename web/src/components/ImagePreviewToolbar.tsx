@@ -1,4 +1,4 @@
-import { cloneElement, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Image } from "antd";
 import {
@@ -14,6 +14,9 @@ import {
 } from "@ant-design/icons";
 import type { MediaItem } from "@/components/MediaGallery";
 import { ImagePreviewActionToolbar, type ImagePreviewAction } from "@/components/ImagePreviewActionToolbar";
+import { ImagePreviewGroupTabs } from "@/components/ImagePreviewGroupTabs";
+import { ImageCropModal } from "@/components/ImageCropModal";
+import type { AssetGroup } from "@/stores/asset";
 
 export function getNextPreviewImageIdAfterDelete(imageIds: string[], currentImageId: string | null): string | null {
   if (!currentImageId) return imageIds[0] ?? null;
@@ -41,11 +44,11 @@ interface ImagePreviewToolbarProps {
   src: string;
   downloadFilename?: string;
   onDownload?: (imageId: string, item?: MediaItem) => void;
-  onMatte?: (imageId: string, item?: MediaItem) => void;
   onImg2Img?: (imageId: string, item?: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   onFavorite?: (item: MediaItem) => void;
   onDeleteCurrent?: (item: MediaItem) => void;
+  onCrop?: (imageId: string, item?: MediaItem) => void;
 }
 
 function ImagePreviewToolbar({
@@ -55,11 +58,11 @@ function ImagePreviewToolbar({
   src,
   downloadFilename,
   onDownload,
-  onMatte,
   onImg2Img,
   onReuse,
   onFavorite,
   onDeleteCurrent,
+  onCrop,
 }: ImagePreviewToolbarProps) {
   const canUseItemActions = Boolean(currentItem);
   const actions: ImagePreviewAction[] = [
@@ -72,6 +75,15 @@ function ImagePreviewToolbar({
     },
   ];
 
+  if (onCrop) {
+    actions.push({
+      key: "crop",
+      title: "裁剪图片",
+      icon: <ScissorOutlined />,
+      onClick: () => onCrop(currentImageId, currentItem),
+    });
+  }
+
   if (onDownload) {
     actions.push({
       key: "download",
@@ -79,15 +91,6 @@ function ImagePreviewToolbar({
       icon: <DownloadOutlined />,
       href: src,
       download: downloadFilename ?? `image-${Date.now()}.png`,
-    });
-  }
-
-  if (onMatte) {
-    actions.push({
-      key: "matte",
-      title: "送入抠图",
-      icon: <ScissorOutlined />,
-      onClick: () => onMatte(currentImageId, currentItem),
     });
   }
 
@@ -135,11 +138,25 @@ interface ImagePreviewWithToolbarProps {
   onClose: () => void;
   onImageChange: (imageId: string) => void;
   onDownload?: (imageId: string, item?: MediaItem) => void;
-  onMatte?: (imageId: string, item?: MediaItem) => void;
   onImg2Img?: (imageId: string, item?: MediaItem) => void;
   onReuse?: (item: MediaItem) => void;
   onFavorite?: (item: MediaItem) => void;
   onDeleteCurrent?: (item: MediaItem) => void;
+  /**
+   * 裁剪结果回调：用户在裁剪模态里确认后触发，blob 为 PNG。
+   * 传入此回调会在工具栏出现「裁剪图片」按钮。
+   */
+  onCrop?: (imageId: string, item: MediaItem | undefined, blob: Blob, info: { width: number; height: number }) => void | Promise<void>;
+  /** 裁剪模态标题，默认「裁剪图片」 */
+  cropTitle?: string;
+  /** 当前图片对应的素材 id（用于分组 Tab，存在则显示 Tab） */
+  currentAssetId?: string;
+  /** 当前素材所属分组 id */
+  currentGroupId?: string;
+  /** 自定义分组列表 */
+  groups?: AssetGroup[];
+  /** 移动素材到指定分组 */
+  onMoveToGroup?: (assetId: string, groupId: string | undefined) => void;
 }
 
 export function ImagePreviewWithToolbar({
@@ -151,17 +168,41 @@ export function ImagePreviewWithToolbar({
   onClose,
   onImageChange,
   onDownload,
-  onMatte,
   onImg2Img,
   onReuse,
   onFavorite,
   onDeleteCurrent,
+  onCrop,
+  cropTitle,
+  currentAssetId,
+  currentGroupId,
+  groups,
+  onMoveToGroup,
 }: ImagePreviewWithToolbarProps) {
   const previewIndex = imageIds.indexOf(imageId);
   const canSwitchPreview = imageIds.length > 1 && previewIndex >= 0;
 
   const touchStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const scaleRef = useRef(1);
+  const [cropOpen, setCropOpen] = useState(false);
+  const cropContextRef = useRef<{ imageId: string; item: MediaItem | undefined } | null>(null);
+
+  const openCrop = useCallback(
+    (id: string, item: MediaItem | undefined) => {
+      cropContextRef.current = { imageId: id, item };
+      setCropOpen(true);
+    },
+    []
+  );
+
+  const handleCrop = useCallback(
+    async (blob: Blob, info: { width: number; height: number }) => {
+      const ctx = cropContextRef.current;
+      if (!ctx || !onCrop) return;
+      await onCrop(ctx.imageId, ctx.item, blob, info);
+    },
+    [onCrop]
+  );
 
   const switchPreviewImage = useCallback((offset: -1 | 1) => {
     if (!canSwitchPreview) return;
@@ -230,19 +271,19 @@ export function ImagePreviewWithToolbar({
             scaleRef.current = info.transform.scale;
           },
           src,
-          toolbarRender: (originalNode, info) => (
+          toolbarRender: (_originalNode, _info) => (
             <ImagePreviewToolbar
-              originalNode={cloneElement(originalNode, {}, info.icons.zoomOutIcon, info.icons.zoomInIcon)}
+              originalNode={null}
               currentImageId={imageId}
               currentItem={currentItem}
               src={src}
               downloadFilename={downloadFilename}
               onDownload={onDownload}
-              onMatte={onMatte}
               onImg2Img={onImg2Img}
               onReuse={onReuse}
               onFavorite={onFavorite}
               onDeleteCurrent={onDeleteCurrent}
+              onCrop={onCrop ? openCrop : undefined}
             />
           ),
         }}
@@ -276,6 +317,23 @@ export function ImagePreviewWithToolbar({
           </button>
         </>,
         document.body
+      )}
+      {currentAssetId && onMoveToGroup && groups && (
+        <ImagePreviewGroupTabs
+          currentAssetId={currentAssetId}
+          currentGroupId={currentGroupId}
+          groups={groups}
+          onMoveToGroup={onMoveToGroup}
+        />
+      )}
+      {onCrop && (
+        <ImageCropModal
+          open={cropOpen}
+          src={src}
+          title={cropTitle}
+          onClose={() => setCropOpen(false)}
+          onCrop={handleCrop}
+        />
       )}
     </>
   );

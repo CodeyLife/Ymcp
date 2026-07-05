@@ -19,6 +19,9 @@ function normalizeApiBaseUrl(baseUrl: string) {
   return baseUrl.trim().replace(/\/+$/, "");
 }
 
+/** 生图调用模式：task = 后端异步任务接口（支持断线恢复），direct = OpenAI 兼容直连 */
+export type ImageGenAdapter = "task" | "direct";
+
 interface UIState {
   collapsed: boolean;
   toggleCollapsed: () => void;
@@ -30,11 +33,14 @@ interface UIState {
   thumbSize: number;
   greenscreenPrompt: string;
   spritesheetPrompt: string;
+  /** 生图调用模式，由 Settings 显式指定，默认 task */
+  imageGenAdapter: ImageGenAdapter;
   setApiBaseUrl: (baseUrl: string) => void;
   setApiKey: (apiKey: string) => void;
   setThumbSize: (size: number) => void;
   setGreenscreenPrompt: (prompt: string) => void;
   setSpritesheetPrompt: (prompt: string) => void;
+  setImageGenAdapter: (adapter: ImageGenAdapter) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -50,24 +56,32 @@ export const useUIStore = create<UIState>()(
       thumbSize: 256,
       greenscreenPrompt: "",
       spritesheetPrompt: "",
+      imageGenAdapter: "task",
       setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) }),
       setApiKey: (apiKey) => set({ apiKey }),
       setThumbSize: (size) => set({ thumbSize: size }),
       setGreenscreenPrompt: (prompt) => set({ greenscreenPrompt: prompt }),
       setSpritesheetPrompt: (prompt) => set({ spritesheetPrompt: prompt }),
+      setImageGenAdapter: (imageGenAdapter) => set({ imageGenAdapter }),
     }),
     {
       name: "ymcp-ui",
-      version: 1,
-      // 老版本将默认提示词写入了 localStorage；迁移时把等于旧默认值的字段清空，
+      version: 2,
+      // v0 -> v1：老版本将默认提示词写入了 localStorage；迁移时把等于旧默认值的字段清空，
       // 让这些字段回到"未配置"状态，从而走默认配置读取逻辑。
+      // v1 -> v2：新增 imageGenAdapter 字段，老数据缺失时回退到默认 "task"。
       migrate: (persistedState: any, version: number) => {
-        if (version === 0 && persistedState) {
+        if (persistedState && version < 1) {
           if (persistedState.greenscreenPrompt === DEFAULT_GREENSCREEN_PROMPT) {
             persistedState.greenscreenPrompt = "";
           }
           if (persistedState.spritesheetPrompt === DEFAULT_SPRITESHEET_PROMPT) {
             persistedState.spritesheetPrompt = "";
+          }
+        }
+        if (persistedState && version < 2) {
+          if (persistedState.imageGenAdapter !== "task" && persistedState.imageGenAdapter !== "direct") {
+            persistedState.imageGenAdapter = "task";
           }
         }
         return persistedState;
@@ -78,6 +92,7 @@ export const useUIStore = create<UIState>()(
         thumbSize: state.thumbSize,
         greenscreenPrompt: state.greenscreenPrompt,
         spritesheetPrompt: state.spritesheetPrompt,
+        imageGenAdapter: state.imageGenAdapter,
       }),
     }
   )
