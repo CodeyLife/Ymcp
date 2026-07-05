@@ -64,27 +64,34 @@ export default function Assets() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
-  const filtered = items.filter((item) => {
-    if (filter.type === "ungrouped" && item.groupId !== undefined) return false;
-    if (filter.type === "group" && item.groupId !== filter.groupId) return false;
-    if (search && !item.name.toLowerCase().includes(search.toLowerCase()) &&
-        !item.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()))) return false;
-    return true;
-  });
+  // memoize：避免 previewImageId 变化时重算过滤与映射，导致下游 MediaGallery 的 useMemo 失效
+  const filtered = useMemo(
+    () => items.filter((item) => {
+      if (filter.type === "ungrouped" && item.groupId !== undefined) return false;
+      if (filter.type === "group" && item.groupId !== filter.groupId) return false;
+      if (search && !item.name.toLowerCase().includes(search.toLowerCase()) &&
+          !item.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()))) return false;
+      return true;
+    }),
+    [items, filter, search]
+  );
 
   // 归一化为 MediaItem
-  const mediaItems: MediaItem[] = filtered.map((a) => {
-    const metas = [{ label: "time", value: formatTime(a.createdAt) }];
-    const sizeStr = formatSize(a.metadata.size);
-    if (sizeStr) metas.push({ label: "size", value: sizeStr });
-    return {
-      id: a.id,
-      imageIds: [a.imageId],
-      title: a.name,
-      metas,
-      raw: a,
-    };
-  });
+  const mediaItems: MediaItem[] = useMemo(
+    () => filtered.map((a) => {
+      const metas = [{ label: "time", value: formatTime(a.createdAt) }];
+      const sizeStr = formatSize(a.metadata.size);
+      if (sizeStr) metas.push({ label: "size", value: sizeStr });
+      return {
+        id: a.id,
+        imageIds: [a.imageId],
+        title: a.name,
+        metas,
+        raw: a,
+      };
+    }),
+    [filtered]
+  );
   // 锁定的 imageIds（上下切换以此为准，切换分组不影响）
   const lockedImageIds = previewContext?.imageIds ?? [];
   // 锁定的 currentItem（功能按钮以此为准，切换分组不影响）

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Image } from "antd";
 import {
@@ -16,7 +16,10 @@ import type { MediaItem } from "@/components/MediaGallery";
 import { ImagePreviewActionToolbar, type ImagePreviewAction } from "@/components/ImagePreviewActionToolbar";
 import { ImagePreviewGroupTabs } from "@/components/ImagePreviewGroupTabs";
 import { ImageCropModal } from "@/components/ImageCropModal";
+import { ImageCachePinner } from "@/components/ImageCachePinner";
 import type { AssetGroup } from "@/stores/asset";
+
+const PREVIEW_CACHE_PIN_RADIUS = 2;
 
 export function getNextPreviewImageIdAfterDelete(imageIds: string[], currentImageId: string | null): string | null {
   if (!currentImageId) return imageIds[0] ?? null;
@@ -49,6 +52,11 @@ interface ImagePreviewToolbarProps {
   onFavorite?: (item: MediaItem) => void;
   onDeleteCurrent?: (item: MediaItem) => void;
   onCrop?: (imageId: string, item?: MediaItem) => void;
+  /**
+   * 自定义工具栏 actions。传入时跳过内部默认 actions 组装（img2img/裁剪/下载/复用/收藏/删除），
+   * 直接用调用方提供的列表渲染。适用于 actions 与默认集合差异较大的场景（如 ImageGen）。
+   */
+  actions?: ImagePreviewAction[];
 }
 
 function ImagePreviewToolbar({
@@ -63,69 +71,90 @@ function ImagePreviewToolbar({
   onFavorite,
   onDeleteCurrent,
   onCrop,
+  actions: customActions,
 }: ImagePreviewToolbarProps) {
   const canUseItemActions = Boolean(currentItem);
-  const actions: ImagePreviewAction[] = [
-    {
-      key: "img2img",
-      title: "用作图生图参考图",
-      icon: <FileImageOutlined />,
-      disabled: !onImg2Img,
-      onClick: () => onImg2Img?.(currentImageId, currentItem),
-    },
-  ];
 
-  if (onCrop) {
-    actions.push({
-      key: "crop",
-      title: "裁剪图片",
-      icon: <ScissorOutlined />,
-      onClick: () => onCrop(currentImageId, currentItem),
-    });
-  }
+  const defaultActions = useMemo<ImagePreviewAction[]>(() => {
+    const list: ImagePreviewAction[] = [
+      {
+        key: "img2img",
+        title: "用作图生图参考图",
+        icon: <FileImageOutlined />,
+        disabled: !onImg2Img,
+        onClick: () => onImg2Img?.(currentImageId, currentItem),
+      },
+    ];
 
-  if (onDownload) {
-    actions.push({
-      key: "download",
-      title: "下载",
-      icon: <DownloadOutlined />,
-      href: src,
-      download: downloadFilename ?? `image-${Date.now()}.png`,
-    });
-  }
+    if (onCrop) {
+      list.push({
+        key: "crop",
+        title: "裁剪图片",
+        icon: <ScissorOutlined />,
+        onClick: () => onCrop(currentImageId, currentItem),
+      });
+    }
 
-  if (onReuse && currentItem) {
-    actions.push({
-      key: "reuse",
-      title: "复用参数",
-      icon: <ReloadOutlined />,
-      onClick: () => onReuse(currentItem),
-    });
-  }
+    if (onDownload) {
+      list.push({
+        key: "download",
+        title: "下载",
+        icon: <DownloadOutlined />,
+        href: src,
+        download: downloadFilename ?? `image-${Date.now()}.png`,
+      });
+    }
 
-  if (onFavorite && currentItem) {
-    actions.push({
-      key: "favorite",
-      title: currentItem.favorited ? "取消收藏" : "收藏到素材库",
-      icon: currentItem.favorited ? <StarFilled /> : <StarOutlined />,
-      active: currentItem.favorited,
-      onClick: () => onFavorite(currentItem),
-    });
-  }
+    if (onReuse && currentItem) {
+      list.push({
+        key: "reuse",
+        title: "复用参数",
+        icon: <ReloadOutlined />,
+        onClick: () => onReuse(currentItem),
+      });
+    }
 
-  if (onDeleteCurrent && currentItem) {
-    actions.push({
-      key: "delete",
-      title: "删除当前项",
-      icon: <DeleteOutlined />,
-      danger: true,
-      disabled: !canUseItemActions,
-      onClick: () => onDeleteCurrent(currentItem),
-    });
-  }
+    if (onFavorite && currentItem) {
+      list.push({
+        key: "favorite",
+        title: currentItem.favorited ? "取消收藏" : "收藏到素材库",
+        icon: currentItem.favorited ? <StarFilled /> : <StarOutlined />,
+        active: currentItem.favorited,
+        onClick: () => onFavorite(currentItem),
+      });
+    }
+
+    if (onDeleteCurrent && currentItem) {
+      list.push({
+        key: "delete",
+        title: "删除当前项",
+        icon: <DeleteOutlined />,
+        danger: true,
+        disabled: !canUseItemActions,
+        onClick: () => onDeleteCurrent(currentItem),
+      });
+    }
+
+    return list;
+  }, [
+    canUseItemActions,
+    currentImageId,
+    currentItem,
+    downloadFilename,
+    onCrop,
+    onDeleteCurrent,
+    onDownload,
+    onFavorite,
+    onImg2Img,
+    onReuse,
+    src,
+  ]);
 
   return (
-    <ImagePreviewActionToolbar originalNode={originalNode} actions={actions} />
+    <ImagePreviewActionToolbar
+      originalNode={originalNode}
+      actions={customActions ?? defaultActions}
+    />
   );
 }
 
@@ -157,6 +186,11 @@ interface ImagePreviewWithToolbarProps {
   groups?: AssetGroup[];
   /** 移动素材到指定分组 */
   onMoveToGroup?: (assetId: string, groupId: string | undefined) => void;
+  /**
+   * 自定义工具栏 actions。传入时跳过内部默认 actions 组装（img2img/裁剪/下载/复用/收藏/删除），
+   * 直接用调用方提供的列表渲染。适用于 actions 与默认集合差异较大的场景（如 ImageGen）。
+   */
+  actions?: ImagePreviewAction[];
 }
 
 export function ImagePreviewWithToolbar({
@@ -178,9 +212,16 @@ export function ImagePreviewWithToolbar({
   currentGroupId,
   groups,
   onMoveToGroup,
+  actions,
 }: ImagePreviewWithToolbarProps) {
   const previewIndex = imageIds.indexOf(imageId);
   const canSwitchPreview = imageIds.length > 1 && previewIndex >= 0;
+  const pinnedImageIds = useMemo(() => {
+    if (previewIndex < 0) return [];
+    const start = Math.max(0, previewIndex - PREVIEW_CACHE_PIN_RADIUS);
+    const end = Math.min(imageIds.length, previewIndex + PREVIEW_CACHE_PIN_RADIUS + 1);
+    return imageIds.slice(start, end);
+  }, [imageIds, previewIndex]);
 
   const touchStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const scaleRef = useRef(1);
@@ -284,6 +325,7 @@ export function ImagePreviewWithToolbar({
               onFavorite={onFavorite}
               onDeleteCurrent={onDeleteCurrent}
               onCrop={onCrop ? openCrop : undefined}
+              actions={actions}
             />
           ),
         }}
@@ -334,6 +376,9 @@ export function ImagePreviewWithToolbar({
           onClose={() => setCropOpen(false)}
           onCrop={handleCrop}
         />
+      )}
+      {pinnedImageIds.length > 0 && (
+        <ImageCachePinner ids={pinnedImageIds} />
       )}
     </>
   );

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import type { CSSProperties } from "react";
 import {
-  Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Image, Switch, Tag, Drawer, Empty, Popconfirm,
+  Card, Typography, Segmented, Form, Input, Slider, Button, Row, Col, Space, App, Alert, Switch, Tag, Drawer, Empty, Popconfirm,
 } from "antd";
 import { PictureOutlined, ScissorOutlined, DownloadOutlined, StarOutlined, StarFilled, EditOutlined, CloseCircleOutlined, ReloadOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, InboxOutlined, DeleteOutlined, BlockOutlined, BookOutlined, SaveOutlined, PlusOutlined, EyeOutlined, FileImageOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig } from "@/stores/ui";
@@ -28,8 +28,8 @@ import { DiffusionLoader } from "@/components/DiffusionLoader";
 import { MagneticButton } from "@/components/motion";
 import { PageHeader, TiltCard } from "@/components/showtime";
 import { FileUploadTrigger } from "@/components/FileUploadTrigger";
-import { ImagePreviewActionToolbar, type ImagePreviewAction } from "@/components/ImagePreviewActionToolbar";
-import { ImagePreviewGroupTabs } from "@/components/ImagePreviewGroupTabs";
+import { type ImagePreviewAction } from "@/components/ImagePreviewActionToolbar";
+import { ImagePreviewWithToolbar } from "@/components/ImagePreviewToolbar";
 import { PsdTaskPanel } from "@/components/PsdTaskPanel";
 import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
@@ -42,8 +42,10 @@ const GREENSCREEN_REFERENCE_MIME = "image/jpeg";
 const GREENSCREEN_REFERENCE_QUALITY = 0.95;
 
 // === 模块级任务运行时（脱离组件生命周期，切换 Tab 时保持任务运行） ===
+// 多轮队列支持：同一时刻可能存在多个并行批次（软超时触发的下一轮与本轮并行）
 interface ActiveBatch {
   id: number;
+  round: number;                       // 所属轮次，1-based
   controller: AbortController;
   softTimeoutId: number | null;
   clientTaskIds: Map<string, number>; // clientTaskId -> globalIndex（1-based），用于断线恢复查询
@@ -52,26 +54,36 @@ interface ActiveBatch {
   adapter: ImageGenerationAdapterKind | null;
   apiConfig: { baseUrl: string; apiKey: string };
 }
-let activeBatch: ActiveBatch | null = null;
+// key = round，多轮并行时容纳多个活跃批次
+const activeBatches = new Map<number, ActiveBatch>();
 let batchSeq = 0;
+// 已启动的最大轮次（调度锁：仅最新启动的轮次可触发下一轮，避免软超时 + onAllDone 双触发）
+let lastStartedRound = 0;
+// 本次多轮队列配置的总轮次（0 表示空闲）
+let multiRoundTotal = 0;
 const PENDING_IMAGE_BATCH_STORAGE_KEY = "ymcp-imagegen-pending-batch";
 const PENDING_IMAGE_BATCH_VERSION = 1;
 const PENDING_IMAGE_BATCH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-function isActiveBatch(batchId: number) {
-  return activeBatch?.id === batchId;
+function isActiveBatchForRound(round: number, batchId: number) {
+  const b = activeBatches.get(round);
+  return b?.id === batchId;
 }
-function clearActiveBatchTimer() {
-  if (activeBatch?.softTimeoutId != null) {
-    window.clearTimeout(activeBatch.softTimeoutId);
-    activeBatch.softTimeoutId = null;
+function clearRoundTimer(round: number) {
+  const b = activeBatches.get(round);
+  if (b?.softTimeoutId != null) {
+    window.clearTimeout(b.softTimeoutId);
+    b.softTimeoutId = null;
   }
 }
-function abortActiveBatch() {
-  if (!activeBatch) return;
-  if (activeBatch.softTimeoutId != null) window.clearTimeout(activeBatch.softTimeoutId);
-  activeBatch.controller.abort();
-  activeBatch = null;
+function abortAllActiveBatches() {
+  activeBatches.forEach((b) => {
+    if (b.softTimeoutId != null) window.clearTimeout(b.softTimeoutId);
+    b.controller.abort();
+  });
+  activeBatches.clear();
+  lastStartedRound = 0;
+  multiRoundTotal = 0;
 }
 type ImageHistorySnapshot = Pick<HistoryItem, "mode" | "prompt" | "size" | "quality">;
 
@@ -93,6 +105,9 @@ interface PersistedImageBatch {
     progress?: string;
     error?: string;
   }>;
+  // 多轮队列标记：所属轮次与总轮次。向后兼容：缺省视为单轮（round=1, rounds=1）。
+  round?: number;
+  rounds?: number;
 }
 
 function readPendingImageBatch(): PersistedImageBatch | null {
@@ -145,6 +160,17 @@ function isPersistedImageBatch(value: Partial<PersistedImageBatch> | null): valu
   }
 
   const taskCount = value.n;
+  const persistedRound = value.round ?? 1;
+  const persistedRounds = value.rounds ?? persistedRound;
+  if (
+    !Number.isInteger(persistedRound) ||
+    !Number.isInteger(persistedRounds) ||
+    persistedRound < 1 ||
+    persistedRounds < persistedRound
+  ) {
+    return false;
+  }
+
   return (
     value.clientTaskIds.every(
       (item) =>
@@ -731,7 +757,7 @@ interface TaskCardProps {
   spritesheetN: number;
   reduceMotion: boolean;
   onRetry: (taskIndex: number) => void;
-  onOpenPreview: (doneIdx: number) => void;
+  onOpenPreview: (favoriteId: string) => void;
   onDownload: (src: string) => void;
   onToggleFavorite: (favoriteId: string, src: string, displayIndex: number) => void;
   onEditImage: (src: string) => void;
@@ -828,7 +854,7 @@ function ResultActionButtons({
 }
 
 const TaskCard = memo(function TaskCard({
-  task, status, src, favoriteId, displayIndex, doneIdx,
+  task, status, src, favoriteId, displayIndex,
   isFavorited, previewRatio, aspectRatio, cellMaxH,
   genMode, spritesheetN, reduceMotion,
   onRetry, onOpenPreview, onDownload, onToggleFavorite,
@@ -994,7 +1020,7 @@ const TaskCard = memo(function TaskCard({
               <TiltCard
                 max={6}
                 className="result-tilt"
-                onClick={() => doneIdx !== undefined && onOpenPreview(doneIdx)}
+                onClick={() => onOpenPreview(favoriteId)}
                 style={{ cursor: "pointer" }}
               >
                 <div
@@ -1116,11 +1142,20 @@ export default function ImageGen() {
   const addRefImages = useImageGenStore((s) => s.addRefImages);
   const removeRefImage = useImageGenStore((s) => s.removeRefImage);
   const clearRefImages = useImageGenStore((s) => s.clearRefImages);
+  const setTasks = useImageGenStore((s) => s.setTasks);
   const updateTask = useImageGenStore((s) => s.updateTask);
   const addExtraResult = useImageGenStore((s) => s.addExtraResult);
   const resetTasks = useImageGenStore((s) => s.resetTasks);
+  const appendTasks = useImageGenStore((s) => s.appendTasks);
   const setLoading = useImageGenStore((s) => s.setLoading);
   const setError = useImageGenStore((s) => s.setError);
+  const rounds = useImageGenStore((s) => s.rounds);
+  const currentRound = useImageGenStore((s) => s.currentRound);
+  const queueTotalRounds = useImageGenStore((s) => s.queueTotalRounds);
+  const setRounds = useImageGenStore((s) => s.setRounds);
+  const setCurrentRound = useImageGenStore((s) => s.setCurrentRound);
+  const setQueueTotalRounds = useImageGenStore((s) => s.setQueueTotalRounds);
+  const resetMultiRound = useImageGenStore((s) => s.resetMultiRound);
 
   const greenscreenPrompt = useUIStore((s) => s.greenscreenPrompt);
   const spritesheetPrompt = useUIStore((s) => s.spritesheetPrompt);
@@ -1152,7 +1187,14 @@ export default function ImageGen() {
     [tasks, extraResults]
   );
 
-  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  // 大图预览：用 favoriteId 作为虚拟 imageId（ImageGen 的 src 是直接 URL，非 imageStore id）
+  // 进入预览时锁定 imageIds 列表 + cardInfoMap（仿 Assets previewContext 模式），
+  // 避免批次流式生成期间 doneImages 变化导致翻页索引错位
+  const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+  const [previewContext, setPreviewContext] = useState<{
+    imageIds: string[];
+    cardInfoMap: Map<string, { favoriteId: string; displayIndex: number; src: string }>;
+  } | null>(null);
   const [previewCompareActive, setPreviewCompareActive] = useState(false);
   const [favorited, setFavorited] = useState<Set<string>>(new Set());
   const [resultRatios, setResultRatios] = useState<Record<string, number>>({});
@@ -1188,11 +1230,16 @@ export default function ImageGen() {
   const { hasOwnKey } = getEffectiveApiConfig();
 
   useEffect(() => {
-    if (!hasOwnKey && n > 1) setN(1);
-  }, [hasOwnKey, n, setN]);
+    if (!hasOwnKey) {
+      if (n > 1) setN(1);
+      if (rounds > 1) setRounds(1);
+    }
+  }, [hasOwnKey, n, rounds, setN, setRounds]);
 
   // 监听结果区容器尺寸，用于动态算最优网格列数
   // 依赖 tasks.length：task-grid 渲染后 ref 才可用，effect 重新执行
+  // 移动端（reduceMotion）只计算一次，不订阅 resize/ResizeObserver，
+  // 避免地址栏伸缩导致卡片大小在上下拖动时持续抖动
   useEffect(() => {
     const el = gridContainerRef.current;
     if (!el) return;
@@ -1202,6 +1249,10 @@ export default function ImageGen() {
       setGridDims((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
     };
     update();
+    if (reduceMotion) {
+      // 移动端：仅一次性计算，不挂载监听
+      return;
+    }
     const ro = new ResizeObserver(update);
     ro.observe(el);
     window.addEventListener("resize", update);
@@ -1209,7 +1260,7 @@ export default function ImageGen() {
       ro.disconnect();
       window.removeEventListener("resize", update);
     };
-  }, [tasks.length]);
+  }, [tasks.length, reduceMotion]);
 
   const currentSize = SIZE_OPTIONS.find((s) => s.value === size);
   const currentStylePreset = STYLE_PRESETS.find((s) => s.id === styleId);
@@ -1246,10 +1297,10 @@ export default function ImageGen() {
   }, [promptFavorites]);
 
   useEffect(() => {
-    if (previewIndex === null || !firstCompareReferenceImage) {
+    if (previewImageId === null || !firstCompareReferenceImage) {
       setPreviewCompareActive(false);
     }
-  }, [firstCompareReferenceImage, previewIndex]);
+  }, [firstCompareReferenceImage, previewImageId]);
 
   // 按住"查看参考图"时，直接替换 antd 预览中 img 的 src 为参考图，松开后恢复原图
   // 相比叠加浮层，此方案保留 antd 预览的框架 UI（工具栏、关闭按钮、左右切换等）
@@ -1337,6 +1388,7 @@ export default function ImageGen() {
     }
     const { baseUrl, apiKey } = getEffectiveApiConfig();
     const effectiveN = hasOwnKey ? n : 1;
+    const effectiveRounds = hasOwnKey ? rounds : 1;
 
     // 调用时注入额外片段，输入框保持干净。
     // 画风片段放到用户提示词之后，避免前置画风削弱用户主语权重。
@@ -1387,21 +1439,24 @@ export default function ImageGen() {
       }
     }
 
-    await runBatch({
-      finalPrompt,
-      imagesBase64,
-      baseUrl,
-      apiKey,
-      size,
-      n: effectiveN,
-      quality,
-      historySnapshot: {
-        mode: mode === "psd" ? "text2img" : mode,
-        prompt,
+    await runMultiRoundBatch(
+      {
+        finalPrompt,
+        imagesBase64,
+        baseUrl,
+        apiKey,
         size,
+        n: effectiveN,
         quality,
+        historySnapshot: {
+          mode: mode === "psd" ? "text2img" : mode,
+          prompt,
+          size,
+          quality,
+        },
       },
-    });
+      effectiveRounds
+    );
   }
 
   // 持久化单张图到历史记录（每张独立一条，n=1）
@@ -1425,7 +1480,25 @@ export default function ImageGen() {
     addHistory(historyItem);
   }, [addHistory]);
 
-  // 发起一次 n=N 单请求批次，后端线程池内部并行；供 handleGenerate 与整体重试复用
+  // 多轮调度所需的 ref（打破 runBatch <-> tryStartNextRound 循环依赖）
+  const tryStartNextRoundRef = useRef<(finishedRound: number) => void>(() => {});
+  const maybeFinishMultiRoundRef = useRef<() => void>(() => {});
+  // 暂存最近一次批量生成的参数，供整体重试与下一轮启动复用
+  const lastBatchParamsRef = useRef<{
+    finalPrompt: string;
+    imagesBase64?: string[];
+    baseUrl: string;
+    apiKey: string;
+    size: string;
+    n: number;
+    quality?: string;
+    historySnapshot: ImageHistorySnapshot;
+  } | null>(null);
+
+  // 发起一次 n=N 单请求批次（=一轮），后端线程池内部并行。
+  // 调用方负责：abortAllActiveBatches、setLoading(true)、setFavorited、setGenerationAdapter、
+  //             lockedSizeRef、lastBatchParamsRef、multiRoundTotal/lastStartedRound 初始化、setCurrentRound。
+  // 本函数仅负责单轮的提交、轮询、回调与软超时；轮次推进由 tryStartNextRound 处理。
   const runBatch = useCallback(async (params: {
     finalPrompt: string;
     imagesBase64?: string[];
@@ -1435,30 +1508,32 @@ export default function ImageGen() {
     n: number;
     quality?: string;
     historySnapshot: ImageHistorySnapshot;
+    round: number;
   }) => {
-    abortActiveBatch();
-    clearPendingImageBatch();
-    setError(null);
-    setFavorited(new Set());
-    setGenerationAdapter(null);
-    lockedSizeRef.current = params.size;
-    lastBatchRef.current = params;
-
+    const { round } = params;
     const batchId = ++batchSeq;
     const batchCreatedAt = Date.now();
     const controller = new AbortController();
-    resetTasks(params.n);
-    setLoading(true);
+    // round===1 清空旧 tasks；round>=2 追加（不清空预览，实现多轮累加展示）
+    if (round === 1) {
+      resetTasks(params.n);
+    } else {
+      appendTasks(params.n, round);
+    }
+    // 当前轮次在 tasks 数组中的起始 globalIndex（用于把 API 的 0..n-1 taskIndex 映射到全局 index）
+    const roundStartIndex = (round - 1) * params.n;
     const clientTaskIds = new Map<string, number>();
     const completedTaskIndexes = new Set<number>();
     const persistCurrentTaskBatch = () => {
-      if (activeBatch?.id !== batchId || activeBatch.adapter !== "task") return;
+      const b = activeBatches.get(round);
+      if (!b || b.id !== batchId || b.adapter !== "task") return;
+      // 仅持久化本轮次未完成的 task；globalIndex 转回 1..n（per-round）以兼容现有 resume 逻辑
       const taskSnapshots = useImageGenStore
         .getState()
         .tasks
-        .filter((task) => task.status !== "done")
+        .filter((task) => task.round === round && task.status !== "done")
         .map((task) => ({
-          globalIndex: task.index + 1,
+          globalIndex: (task.index - roundStartIndex) + 1,
           status: task.status as Exclude<TaskStatus, "done">,
           progress: task.progress,
           error: task.error,
@@ -1476,6 +1551,8 @@ export default function ImageGen() {
         historySnapshot: params.historySnapshot,
         clientTaskIds: [...clientTaskIds].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
         taskSnapshots,
+        round,
+        rounds: multiRoundTotal,
       });
     };
     const forgetClientTask = (globalIndex: number) => {
@@ -1484,39 +1561,48 @@ export default function ImageGen() {
       }
     };
     const handleTaskResult = (taskIndex: number, images: string[]) => {
-      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      if (!isActiveBatchForRound(round, batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
-      updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
+      updateTask(taskIndex + roundStartIndex, { status: "done", results: images, progress: undefined, error: undefined });
       images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
       forgetClientTask(taskIndex + 1);
       persistCurrentTaskBatch();
     };
     const handleTaskError = (taskIndex: number, err: string) => {
-      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      if (!isActiveBatchForRound(round, batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
-      updateTask(taskIndex, { status: "error", error: err, progress: undefined });
+      updateTask(taskIndex + roundStartIndex, { status: "error", error: err, progress: undefined });
       forgetClientTask(taskIndex + 1);
       persistCurrentTaskBatch();
     };
-    activeBatch = {
+    activeBatches.set(round, {
       id: batchId,
+      round,
       controller,
       softTimeoutId: window.setTimeout(() => {
-        if (!isActiveBatch(batchId)) return;
-        setLoading(false);
+        if (!isActiveBatchForRound(round, batchId)) return;
+        // 仅把本轮 pending/loading 改为 waiting（不影响其他并行轮次）
         useImageGenStore.getState().tasks.forEach((task) => {
-          if (task.status === "pending" || task.status === "loading") {
+          if (task.round === round && (task.status === "pending" || task.status === "loading")) {
             updateTask(task.index, { status: "waiting" });
           }
         });
-        message.warning("生成仍在等待，你可以继续等结果，或直接开始下一次生成");
+        if (multiRoundTotal <= 1) {
+          // 单轮模式：保留原行为，解除 loading 让用户能开新批
+          setLoading(false);
+          message.warning("生成仍在等待，你可以继续等结果，或直接开始下一次生成");
+        } else {
+          // 多轮模式：不解除 loading（整个队列仍在跑），并行启动下一轮
+          message.warning(`第 ${round} 轮仍在等待，已并行启动下一轮`);
+        }
+        tryStartNextRoundRef.current(round);
       }, IMAGE_GEN_SOFT_TIMEOUT_MS),
       clientTaskIds,
       handleTaskResult,
       handleTaskError,
       adapter: null,
       apiConfig: { baseUrl: params.baseUrl, apiKey: params.apiKey },
-    };
+    });
 
     try {
       await imageGenerationClient.submitBatch(
@@ -1533,9 +1619,11 @@ export default function ImageGen() {
         },
         {
           onAdapterResolved: (adapter) => {
-            if (!isActiveBatch(batchId)) return;
-            activeBatch!.adapter = adapter;
-            setGenerationAdapter(adapter);
+            const b = activeBatches.get(round);
+            if (!b || b.id !== batchId) return;
+            b.adapter = adapter;
+            // 仅 round===1 时更新 UI 显示的 adapter（避免多轮并行时反复切换）
+            if (round === 1) setGenerationAdapter(adapter);
             if (adapter === "direct") {
               // 直连模式不持久化批次，无法断线恢复
               clearPendingImageBatch(batchId);
@@ -1544,14 +1632,15 @@ export default function ImageGen() {
             }
           },
           onTaskSubmit: (globalIndex, taskId) => {
-            if (!isActiveBatch(batchId)) return;
+            if (!isActiveBatchForRound(round, batchId)) return;
             clientTaskIds.set(taskId, globalIndex);
             persistCurrentTaskBatch();
           },
           onTaskProgress: (text) => {
-            if (!isActiveBatch(batchId)) return;
+            if (!isActiveBatchForRound(round, batchId)) return;
+            // 仅更新本轮 pending/loading 任务（不影响其他并行轮次）
             useImageGenStore.getState().tasks.forEach((task) => {
-              if (task.status === "pending" || task.status === "loading") {
+              if (task.round === round && (task.status === "pending" || task.status === "loading")) {
                 updateTask(task.index, { status: "loading", progress: text });
               }
             });
@@ -1561,7 +1650,7 @@ export default function ImageGen() {
             handleTaskResult(taskIndex, images);
           },
           onExtraResult: (src) => {
-            if (!isActiveBatch(batchId)) return;
+            if (!isActiveBatchForRound(round, batchId)) return;
             addExtraResult(src);
             persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败"));
           },
@@ -1569,52 +1658,155 @@ export default function ImageGen() {
             handleTaskError(taskIndex, err);
           },
           onAllDone: ({ ok, fail, extra }) => {
-            if (!isActiveBatch(batchId)) return;
-            clearActiveBatchTimer();
+            if (!isActiveBatchForRound(round, batchId)) return;
+            clearRoundTimer(round);
+            activeBatches.delete(round);
             clearPendingImageBatch(batchId);
-            activeBatch = null;
-            setLoading(false);
             const totalOk = ok + extra;
-            if (totalOk > 0) {
-              message.success(`生成完成 ${totalOk} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
-            } else if (fail > 0) {
-              setError(`全部失败 ${fail} 张`);
-              message.error(`全部失败 ${fail} 张`);
+            const isMulti = multiRoundTotal > 1;
+            if (isMulti) {
+              if (totalOk > 0) {
+                message.success(`第 ${round} 轮完成 ${totalOk} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
+              } else if (fail > 0) {
+                message.warning(`第 ${round} 轮全部失败 ${fail} 张`);
+              }
+            } else {
+              if (totalOk > 0) {
+                message.success(`生成完成 ${totalOk} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
+              } else if (fail > 0) {
+                setError(`全部失败 ${fail} 张`);
+                message.error(`全部失败 ${fail} 张`);
+              }
             }
+            // 触发下一轮（仅当本轮是 lastStartedRound 时）
+            tryStartNextRoundRef.current(round);
+            // 整个队列结束判断
+            maybeFinishMultiRoundRef.current();
           },
         },
         { signal: controller.signal }
       );
     } catch (e) {
-      if (!isActiveBatch(batchId)) return;
+      if (!isActiveBatchForRound(round, batchId)) return;
       const err = String((e as Error).message || e || "生成失败");
-      clearActiveBatchTimer();
+      clearRoundTimer(round);
       clearPendingImageBatch(batchId);
-      activeBatch = null;
-      setLoading(false);
+      activeBatches.delete(round);
+      // 仅把本轮 pending/loading/waiting 任务标记为 error（不影响其他并行轮次）
       useImageGenStore.getState().tasks.forEach((task) => {
-        if (task.status === "pending" || task.status === "loading" || task.status === "waiting") {
+        if (task.round === round && (task.status === "pending" || task.status === "loading" || task.status === "waiting")) {
           updateTask(task.index, { status: "error", error: err, progress: undefined });
         }
       });
       setError(err);
       message.error(err);
+      // 多轮模式下尝试推进下一轮与收尾判断
+      tryStartNextRoundRef.current(round);
+      maybeFinishMultiRoundRef.current();
     }
-  }, [persistTaskHistory, message, updateTask, addExtraResult, resetTasks, setLoading, setError, setFavorited, imageGenAdapter]);
+  }, [persistTaskHistory, message, updateTask, addExtraResult, resetTasks, appendTasks, setLoading, setError, imageGenAdapter]);
+
+  // 多轮调度：当本轮（必须是 lastStartedRound）完成或软超时后，启动下一轮
+  const tryStartNextRound = useCallback((finishedRound: number) => {
+    // 仅"最新启动的轮"才有资格启动下一轮，避免软超时 + onAllDone 双触发
+    if (finishedRound !== lastStartedRound) return;
+    const next = lastStartedRound + 1;
+    if (next > multiRoundTotal) return; // 队列已全部启动
+    const params = lastBatchParamsRef.current;
+    if (!params) return;
+    lastStartedRound = next;
+    setCurrentRound(next);
+    void runBatch({ ...params, round: next });
+  }, [runBatch, setCurrentRound]);
+
+  // 多轮收尾：所有轮次结束（activeBatches 清空 + lastStartedRound 已达 multiRoundTotal）时清 loading 与状态
+  const maybeFinishMultiRound = useCallback(() => {
+    if (activeBatches.size > 0) return;             // 还有轮次在跑
+    if (lastStartedRound < multiRoundTotal) return; // 还有轮次没启动（防御）
+    const wasMultiRound = multiRoundTotal > 1;
+    setLoading(false);
+    setCurrentRound(0);
+    resetMultiRound();
+    multiRoundTotal = 0;
+    lastStartedRound = 0;
+    clearPendingImageBatch();
+    if (wasMultiRound) {
+      const totalDone = useImageGenStore.getState().tasks.filter((t) => t.status === "done").length;
+      message.success(`多轮队列完成，共生成 ${totalDone} 张`);
+    }
+  }, [setLoading, setCurrentRound, resetMultiRound, message]);
+
+  // 同步 ref（打破循环依赖）
+  useEffect(() => {
+    tryStartNextRoundRef.current = tryStartNextRound;
+    maybeFinishMultiRoundRef.current = maybeFinishMultiRound;
+  }, [tryStartNextRound, maybeFinishMultiRound]);
+
+  // 多轮队列入口：清空旧批次、初始化队列状态、启动第 1 轮；后续轮次由调度器触发
+  const runMultiRoundBatch = useCallback(async (params: {
+    finalPrompt: string;
+    imagesBase64?: string[];
+    baseUrl: string;
+    apiKey: string;
+    size: string;
+    n: number;
+    quality?: string;
+    historySnapshot: ImageHistorySnapshot;
+  }, totalRounds: number) => {
+    abortAllActiveBatches();
+    clearPendingImageBatch();
+    setError(null);
+    setFavorited(new Set());
+    setGenerationAdapter(null);
+    lockedSizeRef.current = params.size;
+    lastBatchParamsRef.current = params;
+    // 兼容 lastBatchRef（旧整体重试路径引用）
+    lastBatchRef.current = params;
+    multiRoundTotal = Math.max(1, totalRounds);
+    setQueueTotalRounds(multiRoundTotal);
+    lastStartedRound = 1;
+    setCurrentRound(1);
+    setLoading(true);
+    await runBatch({ ...params, round: 1 });
+  }, [runBatch, setError, setFavorited, setGenerationAdapter, setLoading, setCurrentRound, setQueueTotalRounds]);
 
   // 整体重试：后端 n=N 为整体请求，无法单独重试某张，此处重新发起整批
+  // TODO P3: retryTask 支持多轮整体重试（当前仅单轮重试，避免误触发整个多轮队列）
   const retryTask = useCallback(async (_index: number) => {
     const last = lastBatchRef.current;
     if (!last) {
       message.warning("参数已失效，请重新生成");
       return;
     }
-    await runBatch(last);
-  }, [runBatch, message]);
+    await runMultiRoundBatch(last, 1);
+  }, [runMultiRoundBatch, message]);
+
+  // 停止整个多轮队列：abort 所有并行批次、清空运行时标记、把未完成任务标 error
+  const handleStopMultiRound = useCallback(() => {
+    abortAllActiveBatches();
+    clearPendingImageBatch();
+    setLoading(false);
+    setCurrentRound(0);
+    setQueueTotalRounds(0);
+    // 把所有仍在 pending/loading/waiting 的 task 标记为已放弃（done/error 保留）
+    useImageGenStore.getState().tasks.forEach((task) => {
+      if (task.status === "pending" || task.status === "loading" || task.status === "waiting") {
+        updateTask(task.index, { status: "error", error: "用户停止队列", progress: undefined });
+      }
+    });
+    message.info("已停止多轮队列");
+  }, [updateTask, message, setLoading, setCurrentRound, setQueueTotalRounds]);
 
   const resumePersistedTaskBatch = useCallback(async () => {
+    if (activeBatches.size > 0) {
+      setLoading(true);
+      if (multiRoundTotal > 0) setQueueTotalRounds(multiRoundTotal);
+      if (lastStartedRound > 0) setCurrentRound(lastStartedRound);
+      return;
+    }
+
     const saved = readPendingImageBatch();
-    if (!saved || activeBatch) return;
+    if (!saved) return;
 
     // 持久化的批次必然来自任务模式；若用户已切换到直连模式则不再尝试恢复
     if (imageGenAdapter !== "task") {
@@ -1630,24 +1822,54 @@ export default function ImageGen() {
       return;
     }
 
+    const round = Math.max(1, saved.round ?? 1);
+    const totalRounds = Math.max(round, saved.rounds ?? round);
+    const roundStartIndex = (round - 1) * saved.n;
     const completedTaskIndexes = new Set<number>();
     const handleTaskResult = (taskIndex: number, images: string[]) => {
-      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      if (!isActiveBatchForRound(round, batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
-      updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
+      updateTask(taskIndex + roundStartIndex, { status: "done", results: images, progress: undefined, error: undefined });
       images.forEach((src) => persistTaskHistory(src, saved.historySnapshot).catch(() => message.warning("历史记录保存失败")));
       removePendingImageTask(saved.id, taskIndex + 1);
     };
     const handleTaskError = (taskIndex: number, err: string) => {
-      if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
+      if (!isActiveBatchForRound(round, batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
-      updateTask(taskIndex, { status: "error", error: err, progress: undefined });
+      updateTask(taskIndex + roundStartIndex, { status: "error", error: err, progress: undefined });
       removePendingImageTask(saved.id, taskIndex + 1);
     };
 
-    resetTasks(saved.n);
+    const ensureTaskPlaceholders = () => {
+      const existingTasks = useImageGenStore.getState().tasks;
+      const requiredCount = Math.max(totalRounds * saved.n, roundStartIndex + saved.n, existingTasks.length);
+      const byIndex = new Map(existingTasks.map((task) => [task.index, task] as const));
+      let changed = existingTasks.length === 0;
+      const baseTs = Date.now();
+
+      for (let index = 0; index < requiredCount; index += 1) {
+        if (byIndex.has(index)) continue;
+        const taskRound = Math.floor(index / saved.n) + 1;
+        const slot = index - (taskRound - 1) * saved.n;
+        byIndex.set(index, {
+          id: `resume-${saved.id}-r${taskRound}-${slot}`,
+          index,
+          round: taskRound,
+          status: (taskRound < round ? "waiting" : "pending") as TaskStatus,
+          startedAt: baseTs,
+        });
+        changed = true;
+      }
+
+      if (changed) {
+        setTasks([...byIndex.values()].sort((a, b) => a.index - b.index));
+      }
+    };
+
+    ensureTaskPlaceholders();
     saved.taskSnapshots.forEach((snapshot) => {
-      updateTask(snapshot.globalIndex - 1, {
+      updateTask(roundStartIndex + snapshot.globalIndex - 1, {
+        round,
         status: snapshot.status,
         progress: snapshot.progress,
         error: snapshot.error,
@@ -1656,6 +1878,10 @@ export default function ImageGen() {
     setError(null);
     setGenerationAdapter("task");
     lockedSizeRef.current = saved.size;
+    multiRoundTotal = totalRounds;
+    lastStartedRound = round;
+    setCurrentRound(round);
+    setQueueTotalRounds(totalRounds);
     setLoading(true);
 
     // 任务模式：软超时以批次创建时刻为起点计算剩余时间，
@@ -1663,13 +1889,13 @@ export default function ImageGen() {
     const elapsed = Date.now() - saved.createdAt;
     const remainingSoftMs = IMAGE_GEN_SOFT_TIMEOUT_MS - elapsed;
     const triggerSoftTimeout = () => {
-      if (!isActiveBatch(batchId)) return;
-      setLoading(false);
+      if (!isActiveBatchForRound(round, batchId)) return;
       useImageGenStore.getState().tasks.forEach((task) => {
-        if (task.status === "pending" || task.status === "loading") {
+        if (task.round === round && (task.status === "pending" || task.status === "loading")) {
           updateTask(task.index, { status: "waiting" });
         }
       });
+      setLoading(false);
       message.warning("恢复的任务仍在等待，你可以继续等结果，或直接开始下一次生成");
     };
     const softTimeoutId =
@@ -1677,8 +1903,9 @@ export default function ImageGen() {
         ? window.setTimeout(triggerSoftTimeout, 0)
         : window.setTimeout(triggerSoftTimeout, remainingSoftMs);
 
-    activeBatch = {
+    activeBatches.set(round, {
       id: batchId,
+      round,
       controller,
       softTimeoutId,
       clientTaskIds,
@@ -1686,50 +1913,47 @@ export default function ImageGen() {
       handleTaskError,
       adapter: "task",
       apiConfig: { baseUrl: saved.baseUrl, apiKey: saved.apiKey },
-    };
+    });
     if (remainingSoftMs <= 0) {
       message.warning("上次任务已超过软超时，可直接开始下一次生成");
     } else {
       message.info("正在恢复上次未完成的生图任务");
     }
 
-    await imageGenerationClient.resumeTasks(
-      saved.clientTaskIds,
-      { baseUrl: saved.baseUrl, apiKey: saved.apiKey },
-      {
-        onTaskProgress: (taskIndex, text) => {
-          if (!isActiveBatch(batchId)) return;
-          updateTask(taskIndex, { status: "loading", progress: text });
+    try {
+      await imageGenerationClient.resumeTasks(
+        saved.clientTaskIds,
+        { baseUrl: saved.baseUrl, apiKey: saved.apiKey },
+        {
+          onTaskProgress: (taskIndex, text) => {
+            if (!isActiveBatchForRound(round, batchId)) return;
+            updateTask(taskIndex + roundStartIndex, { status: "loading", progress: text });
+          },
+          onTaskResult: (taskIndex, images) => handleTaskResult(taskIndex, images),
+          onTaskError: (taskIndex, err) => handleTaskError(taskIndex, err),
+          onAllDone: ({ ok, fail }) => {
+            if (!isActiveBatchForRound(round, batchId)) return;
+            clearRoundTimer(round);
+            activeBatches.delete(round);
+            clearPendingImageBatch(saved.id);
+            setLoading(false);
+            setCurrentRound(0);
+            setQueueTotalRounds(0);
+            multiRoundTotal = 0;
+            lastStartedRound = 0;
+            if (ok > 0) {
+              message.success(`已恢复完成 ${ok} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
+            } else if (fail > 0) {
+              setError(`恢复任务失败 ${fail} 张`);
+            }
+          },
         },
-        onTaskResult: (taskIndex, images) => {
-          const globalIndex = taskIndex + 1;
-          for (const [taskId, index] of [...clientTaskIds]) {
-            if (index === globalIndex) clientTaskIds.delete(taskId);
-          }
-          handleTaskResult(taskIndex, images);
-        },
-        onTaskError: (taskIndex, err) => {
-          const globalIndex = taskIndex + 1;
-          for (const [taskId, index] of [...clientTaskIds]) {
-            if (index === globalIndex) clientTaskIds.delete(taskId);
-          }
-          handleTaskError(taskIndex, err);
-        },
-        onAllDone: ({ ok, fail }) => {
-          if (!isActiveBatch(batchId)) return;
-          clearPendingImageBatch(saved.id);
-          activeBatch = null;
-          setLoading(false);
-          if (ok > 0) {
-            message.success(`已恢复完成 ${ok} 张${fail > 0 ? `，失败 ${fail} 张` : ""}`);
-          } else if (fail > 0) {
-            setError(`恢复任务失败 ${fail} 张`);
-          }
-        },
-      },
-      { signal: controller.signal }
-    );
-  }, [message, persistTaskHistory, resetTasks, setError, setLoading, updateTask, imageGenAdapter]);
+        { signal: controller.signal }
+      );
+    } catch {
+      // 静默：resumeTasks 内部已处理取消与 abort
+    }
+  }, [message, persistTaskHistory, setError, setLoading, setTasks, updateTask, imageGenAdapter, setCurrentRound, setQueueTotalRounds]);
 
   useEffect(() => {
     void resumePersistedTaskBatch();
@@ -1739,43 +1963,39 @@ export default function ImageGen() {
   useEffect(() => {
     const handleVisibilityChange = async () => {
       if (document.visibilityState !== "visible") return;
-      const batch = activeBatch;
-      if (!batch || batch.clientTaskIds.size === 0) return;
-
-      try {
-        await imageGenerationClient.refreshTasks(
-          [...batch.clientTaskIds].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
-          batch.apiConfig,
-          {
-            onTaskProgress: (taskIndex, text) => {
-              if (!isActiveBatch(batch.id)) return;
-              updateTask(taskIndex, { status: "loading", progress: text });
-            },
-            onTaskResult: (taskIndex, images) => {
-              if (isActiveBatch(batch.id)) batch.handleTaskResult(taskIndex, images);
-            },
-            onTaskError: (taskIndex, err) => {
-              if (isActiveBatch(batch.id)) batch.handleTaskError(taskIndex, err);
-            },
-          }
-        );
-      } catch {
-        // 静默，imageGenerationClient 内部轮询会处理
-      }
+      if (activeBatches.size === 0) return;
+      // 多轮并行时每个批次独立刷新；handleTaskResult/Error 已封装 roundStartIndex 映射
+      const refreshes = [...activeBatches.values()].map(async (batch) => {
+        if (batch.clientTaskIds.size === 0) return;
+        // 由当前 store 中归属本 round 的 task 数推算 n，进而算 roundStartIndex
+        const batchN = useImageGenStore.getState().tasks.filter((t) => t.round === batch.round).length;
+        const roundStartIndex = batchN > 0 ? (batch.round - 1) * batchN : 0;
+        try {
+          await imageGenerationClient.refreshTasks(
+            [...batch.clientTaskIds].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
+            batch.apiConfig,
+            {
+              onTaskProgress: (taskIndex, text) => {
+                if (!isActiveBatchForRound(batch.round, batch.id)) return;
+                updateTask(taskIndex + roundStartIndex, { status: "loading", progress: text });
+              },
+              onTaskResult: (taskIndex, images) => {
+                if (isActiveBatchForRound(batch.round, batch.id)) batch.handleTaskResult(taskIndex, images);
+              },
+              onTaskError: (taskIndex, err) => {
+                if (isActiveBatchForRound(batch.round, batch.id)) batch.handleTaskError(taskIndex, err);
+              },
+            }
+          );
+        } catch {
+          // 静默，imageGenerationClient 内部轮询会处理
+        }
+      });
+      await Promise.all(refreshes);
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [updateTask]);
-
-  // 打开大图预览：定位到 doneImages 中的位置
-  const openPreview = useCallback((doneIdx: number) => {
-    setPreviewIndex((prev) => {
-      // 用函数式更新避免依赖 doneImages.length，保持回调稳定
-      // doneImages 长度检查在点击时通过最新 doneImages 完成（doneIdx 由 cards 派生，已校验）
-      if (doneIdx >= 0) return doneIdx;
-      return prev;
-    });
-  }, []);
 
   // 下面所有传给 TaskCard 的回调均 useCallback 稳定化，保证 TaskCard memo 生效
   const sendToMatte = useCallback(async (src: string) => {
@@ -2054,6 +2274,7 @@ export default function ImageGen() {
       const extraTask: GenTask = {
         id: `extra-result-${index}`,
         index: taskIndex,
+        round: 1,
         status: "done",
         results: [src],
         startedAt: 0,
@@ -2071,25 +2292,124 @@ export default function ImageGen() {
     return result;
   }, [tasks, extraResults]);
 
-  // 大图预览工具栏所需信息：按 doneIdx（= doneImages 索引）对齐卡片
-  const previewCardInfo = useMemo(() => {
-    const arr: { favoriteId: string; displayIndex: number; src: string }[] = [];
-    cards.forEach((card, i) => {
-      if (card.doneIdx !== undefined && card.src) {
-        arr[card.doneIdx] = { favoriteId: card.favoriteId, displayIndex: i, src: card.src };
+  // 打开大图预览：以 favoriteId 为虚拟 imageId，进入时快照 imageIds 列表 + cardInfoMap
+  // 锁定列表避免批次流式生成期间 doneImages 变化导致翻页索引错位
+  const openPreview = useCallback((favoriteId: string) => {
+    const imageIds: string[] = [];
+    const cardInfoMap = new Map<string, { favoriteId: string; displayIndex: number; src: string }>();
+    let displayCounter = 0;
+    cards.forEach((c) => {
+      if (c.doneIdx !== undefined && c.src) {
+        const id = c.favoriteId;
+        imageIds.push(id);
+        cardInfoMap.set(id, { favoriteId: id, displayIndex: displayCounter++, src: c.src });
       }
     });
-    return arr;
+    setPreviewContext({ imageIds, cardInfoMap });
+    setPreviewImageId(favoriteId);
   }, [cards]);
 
-  // 当前预览图对应的已收藏素材（仅当 previewIndex 对应的图已收藏且 asset 存在时有效）
-  // 与 toolbarRender 一致，统一以 previewIndex 为索引源（PreviewGroup 的 current 受控于 previewIndex）
+  // 当前预览图对应的已收藏素材：基于 previewImageId（即 favoriteId）匹配 asset
+  // 仅当该图已收藏且 asset 存在时有效，用于驱动分组 Tab 显示与移动
   const currentPreviewAsset = useMemo(() => {
-    if (previewIndex === null) return undefined;
-    const info = previewCardInfo[previewIndex];
-    if (!info) return undefined;
-    return assetItems.find((a) => a.metadata.taskId === info.favoriteId);
-  }, [previewIndex, previewCardInfo, assetItems]);
+    if (previewImageId === null) return undefined;
+    return assetItems.find((a) => a.metadata.taskId === previewImageId);
+  }, [previewImageId, assetItems]);
+
+  // 切换预览图回调：重置"按住查看参考图"状态，避免跨图状态串扰
+  const handleImageChange = useCallback((nextId: string) => {
+    setPreviewCompareActive(false);
+    setPreviewImageId(nextId);
+  }, []);
+
+  // 关闭预览回调：清理所有预览状态
+  const handleClosePreview = useCallback(() => {
+    setPreviewCompareActive(false);
+    setPreviewImageId(null);
+    setPreviewContext(null);
+  }, []);
+
+  // 大图预览工具栏 actions：按当前 previewImageId 派生 cardInfo 后组装
+  // 通过 actions prop 注入通用组件 ImagePreviewWithToolbar，跳过其内部默认 actions 组装
+  const previewActions = useMemo<ImagePreviewAction[] | undefined>(() => {
+    if (previewImageId === null || !previewContext) return undefined;
+    const cardInfo = previewContext.cardInfoMap.get(previewImageId);
+    if (!cardInfo) return undefined;
+
+    const actions: ImagePreviewAction[] = [
+      {
+        key: "favorite",
+        title: favorited.has(cardInfo.favoriteId) ? "取消收藏" : "收藏",
+        icon: favorited.has(cardInfo.favoriteId) ? <StarFilled /> : <StarOutlined />,
+        active: favorited.has(cardInfo.favoriteId),
+        onClick: () => toggleFavorite(cardInfo.favoriteId, cardInfo.src, cardInfo.displayIndex),
+      },
+      {
+        key: "img2img",
+        title: "用作图生图参考图",
+        icon: <FileImageOutlined />,
+        onClick: () => editImage(cardInfo.src),
+      },
+    ];
+
+    if (genMode === "greenscreen") {
+      actions.push({
+        key: "matte",
+        title: "送入抠图",
+        icon: <ScissorOutlined />,
+        onClick: () => sendToMatte(cardInfo.src),
+      });
+    }
+
+    actions.push(
+      {
+        key: "psd",
+        title: "拆分为 PSD",
+        icon: <BlockOutlined />,
+        onClick: () => splitToPsd(cardInfo.src),
+      },
+      {
+        key: "superres",
+        title: "超分 4K（本地）",
+        icon: <ThunderboltOutlined />,
+        onClick: () => sendToSuperRes(cardInfo.src),
+      },
+      {
+        key: "download",
+        title: "下载",
+        icon: <DownloadOutlined />,
+        onClick: () => downloadImage(cardInfo.src),
+      },
+    );
+
+    if (firstCompareReferenceImage) {
+      actions.unshift({
+        key: "compare-reference",
+        title: "按住查看第一张参考图",
+        icon: <EyeOutlined />,
+        pressed: previewCompareActive,
+        onPointerDown: () => setPreviewCompareActive(true),
+        onPointerUp: () => setPreviewCompareActive(false),
+        onPointerLeave: () => setPreviewCompareActive(false),
+        onPointerCancel: () => setPreviewCompareActive(false),
+      });
+    }
+
+    return actions;
+  }, [
+    previewImageId,
+    previewContext,
+    favorited,
+    genMode,
+    firstCompareReferenceImage,
+    previewCompareActive,
+    toggleFavorite,
+    editImage,
+    sendToMatte,
+    splitToPsd,
+    sendToSuperRes,
+    downloadImage,
+  ]);
 
   const gridLayout = useMemo(() => {
     if (cards.length === 0) {
@@ -2129,7 +2449,7 @@ export default function ImageGen() {
   void gridLayout;
 
   return (
-    <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 28px 48px" }}>
+    <div className="image-gen-page" style={{ maxWidth: 1440, margin: "0 auto" }}>
       <PageHeader
         title="AI 生图"
         description="基于 OpenAI gpt-image-2 的文生图与图生图。生成结果可一键送入抠图或拆分为 PSD。"
@@ -2455,7 +2775,7 @@ export default function ImageGen() {
                   max={8}
                   value={n}
                   onChange={setN}
-                  disabled={!hasOwnKey}
+                  disabled={!hasOwnKey || loading}
                   marks={{ 1: "1", 4: "4", 8: "8" }}
                 />
                 {!hasOwnKey && (
@@ -2463,6 +2783,26 @@ export default function ImageGen() {
                     配置自有 API Key 后可调整数量
                   </Text>
                 )}
+              </Form.Item>
+
+              <Form.Item label={`轮次: ${rounds}`}>
+                <Slider
+                  min={1}
+                  max={10}
+                  value={rounds}
+                  onChange={setRounds}
+                  disabled={!hasOwnKey || loading}
+                  marks={{ 1: "1", 5: "5", 10: "10" }}
+                />
+                {!hasOwnKey ? (
+                  <Text style={{ color: "#71717a", fontSize: 11 }}>
+                    配置自有 API Key 后可调整轮次
+                  </Text>
+                ) : rounds > 1 ? (
+                  <Text style={{ color: "#71717a", fontSize: 11 }}>
+                    每轮 {n} 张，共 {rounds} 轮，预计最多 {n * rounds} 张。软超时后自动并行下一轮。
+                  </Text>
+                ) : null}
               </Form.Item>
 
               <Form.Item label="质量">
@@ -2480,7 +2820,7 @@ export default function ImageGen() {
               </Form.Item>
 
               <div className="image-gen-action-bar">
-                <div style={{ minWidth: 0 }}>
+                <div className="image-gen-action-summary" style={{ minWidth: 0 }}>
                   <Text style={{ color: "#d4d4d8", fontSize: 12, fontWeight: 600, display: "block" }}>
                     {mode === "img2img" ? "图生图" : "文生图"} · {currentSize?.ratio ?? "auto"}
                   </Text>
@@ -2494,9 +2834,14 @@ export default function ImageGen() {
                         ? "直连模式 · 不支持后台恢复"
                         : `${imageGenAdapter === "task" ? "任务模式" : "直连模式"} · 等待生成开始`}
                   </Text>
+                  {queueTotalRounds > 1 && currentRound > 0 && (
+                    <Text style={{ color: "#fbbf24", fontSize: 11, display: "block" }}>
+                      多轮队列：第 {currentRound} / {queueTotalRounds} 轮（已启动，软超时轮次并行后台）
+                    </Text>
+                  )}
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <MagneticButton strength={0.35}>
+                <div className="image-gen-action-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <MagneticButton strength={0.35} className="image-gen-generate-wrap">
                     <Button
                       type="primary"
                       loading={loading}
@@ -2516,6 +2861,16 @@ export default function ImageGen() {
                       {loading ? "生成中" : "生成"}
                     </Button>
                   </MagneticButton>
+                  {loading && (
+                    <Button
+                      danger
+                      size="large"
+                      onClick={handleStopMultiRound}
+                      style={{ minWidth: 96, borderRadius: 8, fontWeight: 600 }}
+                    >
+                      停止队列
+                    </Button>
+                  )}
                 </div>
               </div>
             </Form>
@@ -2744,103 +3099,17 @@ export default function ImageGen() {
         </Col>
       </Row>
 
-      {/* 大图预览：支持同批多图左右切换（doneImages 扁平化） */}
-      {previewIndex !== null && doneImages.length > 0 && (
-        <div style={{ display: "none" }}>
-          <Image.PreviewGroup
-            preview={{
-              visible: previewIndex !== null,
-              current: Math.min(previewIndex, doneImages.length - 1),
-              onVisibleChange: (v: boolean) => {
-                if (!v) {
-                  setPreviewCompareActive(false);
-                  setPreviewIndex(null);
-                }
-              },
-              onChange: (idx: number) => {
-                setPreviewCompareActive(false);
-                setPreviewIndex(idx);
-              },
-              toolbarRender: (_originalNode, info) => {
-                // info.current 为 antd 内部追踪的当前索引，比 previewIndex 状态更即时
-                const idx = info.current ?? previewIndex ?? 0;
-                const cardInfo = previewCardInfo[idx];
-                if (!cardInfo) {
-                  return null;
-                }
-                const actions: ImagePreviewAction[] = [
-                  {
-                    key: "favorite",
-                    title: favorited.has(cardInfo.favoriteId) ? "取消收藏" : "收藏",
-                    icon: favorited.has(cardInfo.favoriteId) ? <StarFilled /> : <StarOutlined />,
-                    active: favorited.has(cardInfo.favoriteId),
-                    onClick: () => toggleFavorite(cardInfo.favoriteId, cardInfo.src, cardInfo.displayIndex),
-                  },
-                  {
-                    key: "img2img",
-                    title: "用作图生图参考图",
-                    icon: <FileImageOutlined />,
-                    onClick: () => editImage(cardInfo.src),
-                  },
-                ];
-                if (genMode === "greenscreen") {
-                  actions.push({
-                    key: "matte",
-                    title: "送入抠图",
-                    icon: <ScissorOutlined />,
-                    onClick: () => sendToMatte(cardInfo.src),
-                  });
-                }
-                actions.push(
-                  {
-                    key: "psd",
-                    title: "拆分为 PSD",
-                    icon: <BlockOutlined />,
-                    onClick: () => splitToPsd(cardInfo.src),
-                  },
-                  {
-                    key: "superres",
-                    title: "超分 4K（本地）",
-                    icon: <ThunderboltOutlined />,
-                    onClick: () => sendToSuperRes(cardInfo.src),
-                  },
-                  {
-                    key: "download",
-                    title: "下载",
-                    icon: <DownloadOutlined />,
-                    onClick: () => downloadImage(cardInfo.src),
-                  },
-                );
-                if (firstCompareReferenceImage) {
-                  actions.unshift({
-                    key: "compare-reference",
-                    title: "按住查看第一张参考图",
-                    icon: <EyeOutlined />,
-                    pressed: previewCompareActive,
-                    onPointerDown: () => setPreviewCompareActive(true),
-                    onPointerUp: () => setPreviewCompareActive(false),
-                    onPointerLeave: () => setPreviewCompareActive(false),
-                    onPointerCancel: () => setPreviewCompareActive(false),
-                  });
-                }
-                return (
-                  <ImagePreviewActionToolbar
-                    originalNode={null}
-                    actions={actions}
-                  />
-                );
-              },
-            }}
-          >
-            {doneImages.map((item, i) => (
-              <Image key={`${item.key}-${i}`} src={item.src} />
-            ))}
-          </Image.PreviewGroup>
-        </div>
-      )}
-      {previewIndex !== null && previewCardInfo[previewIndex] &&
-        favorited.has(previewCardInfo[previewIndex].favoriteId) && (
-        <ImagePreviewGroupTabs
+      {/* 大图预览：复用通用组件 ImagePreviewWithToolbar，与 History/Assets 体验一致
+          —— 左右侧大圆按钮 + 触屏 swipe + 键盘 ←/→ 翻页三件套
+          —— 进入预览时锁定 imageIds 列表（previewContext），避免批次流式生成期间索引错位 */}
+      {previewImageId !== null && previewContext && (
+        <ImagePreviewWithToolbar
+          imageId={previewImageId}
+          src={previewContext.cardInfoMap.get(previewImageId)?.src ?? ""}
+          imageIds={previewContext.imageIds}
+          onClose={handleClosePreview}
+          onImageChange={handleImageChange}
+          actions={previewActions}
           currentAssetId={currentPreviewAsset?.id}
           currentGroupId={currentPreviewAsset?.groupId}
           groups={assetGroups}

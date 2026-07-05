@@ -1557,6 +1557,10 @@ a.image-preview-img2img-button {
 }
 
 /* AI 生图主操作条：让生成按钮始终留在参数卡底部可见区域 */
+.image-gen-page {
+  padding: 24px 28px 48px;
+}
+
 .image-gen-action-bar {
   position: sticky;
   bottom: 0;
@@ -1576,7 +1580,18 @@ a.image-preview-img2img-button {
   box-shadow: 0 -12px 24px rgba(0, 0, 0, 0.18);
 }
 
+.image-gen-action-summary {
+  overflow-wrap: anywhere;
+}
+
+.image-gen-action-controls {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 767px) {
+  .image-gen-page {
+    padding: 16px 12px 32px;
+  }
   .prompt-favorite-status,
   .prompt-favorite-card-head,
   .prompt-favorite-meta {
@@ -1592,12 +1607,37 @@ a.image-preview-img2img-button {
   }
   .image-gen-action-bar {
     position: static;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 10px;
     margin-top: 14px;
+    margin-right: 0;
+    margin-bottom: 0;
+    margin-left: 0;
+    padding: 12px;
     border-radius: 10px;
     border: 1px solid rgba(39, 39, 42, 0.78);
   }
+  .image-gen-action-summary {
+    width: 100%;
+    min-width: 0;
+  }
+  .image-gen-action-controls {
+    display: flex !important;
+    width: 100%;
+    align-items: stretch !important;
+  }
+  .image-gen-action-controls > * {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .image-gen-generate-wrap {
+    display: block !important;
+  }
   .image-gen-action-bar .ant-btn {
     width: 100%;
+    min-width: 0 !important;
   }
 }
 
