@@ -2131,6 +2131,33 @@ export default function ImageGen() {
     setPreviewImageId(favoriteId);
   }, [cards]);
 
+  // 进入预览后，批次生成期间新到达的 done 图按到达顺序追加到 previewContext 末尾。
+  // 已锁定图的位置数字（displayIndex）不变，新图 displayIndex 从现有列表长度起算。
+  // 与 Assets.tsx 删除时增量剔除 previewContext 的模式对称。
+  useEffect(() => {
+    if (!previewContext) return;
+    const existing = new Set(previewContext.imageIds);
+    const additions: Array<{ id: string; src: string; displayIndex: number }> = [];
+    let nextDisplayIndex = previewContext.imageIds.length;
+    for (const c of cards) {
+      if (c.doneIdx !== undefined && c.src && !existing.has(c.favoriteId)) {
+        additions.push({ id: c.favoriteId, src: c.src, displayIndex: nextDisplayIndex++ });
+      }
+    }
+    if (additions.length === 0) return;
+    setPreviewContext((prev) => {
+      if (!prev) return prev;
+      const nextMap = new Map(prev.cardInfoMap);
+      additions.forEach((a) => {
+        nextMap.set(a.id, { favoriteId: a.id, displayIndex: a.displayIndex, src: a.src });
+      });
+      return {
+        imageIds: [...prev.imageIds, ...additions.map((a) => a.id)],
+        cardInfoMap: nextMap,
+      };
+    });
+  }, [cards, previewContext]);
+
   // 当前预览图对应的已收藏素材：基于 previewImageId（即 favoriteId）匹配 asset
   // 仅当该图已收藏且 asset 存在时有效，用于驱动分组 Tab 显示与移动
   const currentPreviewAsset = useMemo(() => {

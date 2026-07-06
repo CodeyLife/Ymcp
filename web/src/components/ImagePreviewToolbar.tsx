@@ -357,6 +357,10 @@ export function ImagePreviewWithToolbar({
           >
             <RightOutlined />
           </button>
+          {/* 索引徽章：当前位置 / 总数。previewIndex 与 imageIds.length 已就绪，零新 props */}
+          <div className="image-preview-index-badge" aria-live="polite">
+            {previewIndex + 1} / {imageIds.length}
+          </div>
         </>,
         document.body
       )}

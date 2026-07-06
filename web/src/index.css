@@ -1093,6 +1093,25 @@ a.image-preview-img2img-button {
   right: 24px;
 }
 
+/* 大图预览：顶部右上角索引徽章（当前位置 / 总数） */
+.image-preview-index-badge {
+  position: fixed;
+  top: 16px;
+  right: 56px;          /* 避让 antd 关闭按钮（右上角约 0-40px） */
+  z-index: 1085;        /* 与 group-tabs 同层 */
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.56);
+  color: #e4e4e7;
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;  /* 数字等宽，避免翻页时抖动 */
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;  /* 不拦截预览操作 */
+  user-select: none;
+}
+
 @media (max-width: 767px) {
   .image-preview-side-nav {
     width: 36px;
@@ -1109,6 +1128,13 @@ a.image-preview-img2img-button {
 
   .image-preview-side-nav-right {
     right: 8px;
+  }
+
+  .image-preview-index-badge {
+    top: 8px;
+    right: 48px;        /* 移动端关闭按钮更靠右，徽章左移 */
+    font-size: 12px;
+    padding: 3px 10px;
   }
 }
 
