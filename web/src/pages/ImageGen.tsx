@@ -298,65 +298,77 @@ async function pngToJpegUrl(src: string): Promise<string> {
   });
 }
 
+const PREVIEW_CELL_MIN_H = 180;
+const PREVIEW_CELL_MAX_H = 520;
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getPreviewSoftMaxH(count: number): number {
+  if (count <= 1) return PREVIEW_CELL_MAX_H;
+  if (count <= 4) return 420;
+  return 340;
+}
+
+function getReadableColumnWidth(imgRatio: number, count: number): number {
+  const widthFromMinHeight = PREVIEW_CELL_MIN_H * imgRatio;
+  const baseWidth = count <= 4 ? 280 : 220;
+  const maxWidth = count <= 4 ? 360 : 300;
+  return clampNumber(Math.max(baseWidth, widthFromMinHeight), 180, maxWidth);
+}
+
 /**
- * 根据结果数量、容器宽高比、图片宽高比，算出能装下全部卡片且总高不超过可用高度的最优列数。
- * 目标：每格尽量大、行数最少、不溢出视口。
- *
- * 算法：遍历所有可能的 cols (1..count)，对每个 cols 算 rows=ceil(count/cols)，
- *       算每格宽度 = (containerW - (cols-1)*gap) / cols，
- *       每格高度 = cellW / imgRatio（按图片宽高比），
- *       每行可用高度上限 = (availH - (rows-1)*gap) / rows - cardOverhead，
- *       约束：cellH ≤ 每行可用上限（保证不溢出）且 cellH ≥ 80px（避免过小），
- *       在所有候选里选 cellH 最大的 cols（即格子最大）。
- *       兜底：无满足约束方案时，选行数最少且 cellH 不超上限的；仍无则强制限制 cellH。
+ * 根据容器宽度和图片比例决定列数。高度只作为图框上限的软约束，
+ * 多图时允许结果区滚动，避免为了塞进一屏把图片压成缩略图。
  */
 function computeOptimalCols(
   count: number,
   containerW: number,
+  imgRatio: number,
+  gap: number
+): number {
+  if (count <= 1) return 1;
+
+  const maxCols =
+    count <= 4 ? Math.min(2, count) :
+    count <= 6 ? Math.min(3, count) :
+    Math.min(4, count);
+  const minColumnW = getReadableColumnWidth(imgRatio, count);
+
+  for (let cols = maxCols; cols >= 1; cols--) {
+    const cellW = (containerW - (cols - 1) * gap) / cols;
+    if (cellW >= minColumnW) return cols;
+  }
+
+  return 1;
+}
+
+/**
+ * 算每格图片容器最大高度。少量图片参考视口高度但不低于舒适值；
+ * 5 张以上保持可读高度，交给结果区自然滚动。
+ */
+function computeCellMaxH(
+  count: number,
+  containerW: number,
+  cols: number,
   availH: number,
+  rows: number,
   imgRatio: number,
   gap: number,
   cardOverhead: number
 ): number {
-  if (count <= 1) return 1;
-  let best = 1;
-  let bestCellH = 0;
-  for (let cols = 1; cols <= count; cols++) {
-    const rows = Math.ceil(count / cols);
-    const cellW = (containerW - (cols - 1) * gap) / cols;
-    if (cellW <= 0) continue;
-    const cellH = cellW / imgRatio;
-    // 每行可用高度上限：均分扣除 gap 与 cardOverhead
-    const rowMaxH = (availH - (rows - 1) * gap) / rows - cardOverhead;
-    // 约束：单格高度不超过行上限（保证总高不溢出），且不小于 80px
-    if (cellH <= rowMaxH && cellH >= 80) {
-      if (cellH > bestCellH) {
-        bestCellH = cellH;
-        best = cols;
-      }
-    }
-  }
-  // 兜底 1：无满足约束方案，选行数最少（cols 最大）且 cellW 合理的
-  if (best === 1 && bestCellH === 0) {
-    for (let cols = count; cols >= 1; cols--) {
-      const cellW = (containerW - (cols - 1) * gap) / cols;
-      if (cellW > 0) return cols;
-    }
-  }
-  return best;
-}
+  const safeCols = Math.max(1, cols);
+  const cellW = (containerW - (safeCols - 1) * gap) / safeCols;
+  const naturalH = cellW > 0 ? cellW / imgRatio : getPreviewSoftMaxH(count);
+  const softMaxH = getPreviewSoftMaxH(count);
 
-/**
- * 根据可用高度、行数、gap、cardOverhead，算每格图片容器的最大高度（px，硬上限）。
- * 保证 rows 行总高（含 gap 与 cardOverhead）不超过 availH。
- */
-function computeCellMaxH(
-  availH: number,
-  rows: number,
-  gap: number,
-  cardOverhead: number
-): number {
-  return Math.max(80, (availH - (rows - 1) * gap) / rows - cardOverhead);
+  const viewportRowH = (availH - (rows - 1) * gap) / rows - cardOverhead;
+  const heightLimit = count <= 4
+    ? Math.min(softMaxH, Math.max(softMaxH * 0.85, viewportRowH))
+    : softMaxH;
+
+  return Math.round(clampNumber(Math.min(naturalH, heightLimit), PREVIEW_CELL_MIN_H, PREVIEW_CELL_MAX_H));
 }
 
 function SizeIcon({ ratio }: { ratio: string }) {
@@ -732,7 +744,6 @@ interface TaskCardProps {
   genMode: GenMode;
   spritesheetN: number;
   reduceMotion: boolean;
-  onRetry: (taskIndex: number) => void;
   onOpenPreview: (favoriteId: string) => void;
   onDownload: (src: string) => void;
   onToggleFavorite: (favoriteId: string, src: string, displayIndex: number) => void;
@@ -833,7 +844,7 @@ const TaskCard = memo(function TaskCard({
   task, status, src, favoriteId, displayIndex,
   isFavorited, previewRatio, aspectRatio, cellMaxH,
   genMode, spritesheetN, reduceMotion,
-  onRetry, onOpenPreview, onDownload, onToggleFavorite,
+  onOpenPreview, onDownload, onToggleFavorite,
   onEditImage, onSendToMatte, onSendToSuperRes, onSplitToPsd,
   onResultRatio,
 }: TaskCardProps) {
@@ -869,17 +880,6 @@ const TaskCard = memo(function TaskCard({
         <div className="task-header">
           <span className="task-index">#{String(displayIndex + 1).padStart(2, "0")}</span>
           <TaskStatusTag status={status} />
-          {status === "error" && (
-            <Button
-              size="small"
-              type="text"
-              icon={<ReloadOutlined />}
-              onClick={() => onRetry(task.index)}
-              style={{ color: "#f87171", marginLeft: "auto" }}
-            >
-              重试
-            </Button>
-          )}
         </div>
 
         <div className="task-body">
@@ -894,7 +894,7 @@ const TaskCard = memo(function TaskCard({
                 position: "relative",
                 border: "1px solid rgba(16, 185, 129, 0.18)",
                 margin: "0 auto",
-                width: "100%",
+                width: `min(100%, calc(${cellMaxH} * ${previewRatio}))`,
               }}
             >
               <DiffusionLoader
@@ -917,9 +917,10 @@ const TaskCard = memo(function TaskCard({
                 border: "1px solid rgba(16, 185, 129, 0.25)",
                 boxShadow: "0 0 24px rgba(16, 185, 129, 0.18)",
                 display: "flex",
+                alignItems: "center",
                 justifyContent: "center",
                 margin: "0 auto",
-                width: "100%",
+                width: `min(100%, calc(${cellMaxH} * ${previewRatio}))`,
               }}
             >
               <img
@@ -927,7 +928,9 @@ const TaskCard = memo(function TaskCard({
                 alt="生成中"
                 style={{
                   maxWidth: "100%",
-                  maxHeight: "60vh",
+                  maxHeight: cellMaxH,
+                  width: "100%",
+                  height: "100%",
                   objectFit: "contain",
                   display: "block",
                 }}
@@ -954,6 +957,9 @@ const TaskCard = memo(function TaskCard({
             <div
               style={{
                 maxHeight: cellMaxH,
+                maxWidth: "100%",
+                width: `min(100%, calc(${cellMaxH} * ${previewRatio}))`,
+                aspectRatio,
                 display: "grid",
                 placeItems: "center",
                 borderRadius: 10,
@@ -962,7 +968,6 @@ const TaskCard = memo(function TaskCard({
                   "repeating-conic-gradient(#1a1a1e 0% 25%, #131316 0% 50%) 50% / 24px 24px",
                 padding: 16,
                 margin: "0 auto",
-                width: "100%",
               }}
             >
               <div style={{ textAlign: "center", maxWidth: 420 }}>
@@ -1176,18 +1181,6 @@ export default function ImageGen() {
     img2img: null,
   });
   const reduceMotion = useMotionMode();
-  // 暂存最近一次批量生成的参数，供整体重试复用
-  const lastBatchRef = useRef<{
-    finalPrompt: string;
-    imagesBase64?: string[];
-    baseUrl: string;
-    apiKey: string;
-    size: string;
-    n: number;
-    quality?: string;
-    historySnapshot: ImageHistorySnapshot;
-  } | null>(null);
-
   // 锁定生成时的 size value，任务进行/完成后切换 size 不影响已渲染格子的尺寸
   const lockedSizeRef = useRef<string | null>(null);
 
@@ -1461,7 +1454,6 @@ export default function ImageGen() {
     setFavorited(new Set());
     setGenerationAdapter(null);
     lockedSizeRef.current = params.size;
-    lastBatchRef.current = params;
 
     const batchId = ++batchSeq;
     const batchCreatedAt = Date.now();
@@ -1621,16 +1613,6 @@ export default function ImageGen() {
       message.error(err);
     }
   }, [persistTaskHistory, message, updateTask, addExtraResult, resetTasks, setLoading, setError, imageGenAdapter, setFavorited, setGenerationAdapter]);
-
-  // 整体重试：后端 n=N 为整体请求，无法单独重试某张，此处重新发起整批
-  const retryTask = useCallback(async (_index: number) => {
-    const last = lastBatchRef.current;
-    if (!last) {
-      message.warning("参数已失效，请重新生成");
-      return;
-    }
-    await runBatch(last);
-  }, [runBatch, message]);
 
   // 停止当前批次：abort、清空运行时标记、把未完成任务标 error
   const handleStop = useCallback(() => {
@@ -2277,10 +2259,10 @@ export default function ImageGen() {
     const RESERVED_H = 220;  // 顶栏 + Card title + body padding 估值
     const availH = Math.max(200, gridDims.h - RESERVED_H);
     const cols = gridDims.w > 0
-      ? computeOptimalCols(cards.length, gridDims.w, availH, imgRatio, GAP, CARD_OVERHEAD)
+      ? computeOptimalCols(cards.length, gridDims.w, imgRatio, GAP)
       : 1;
     const rows = Math.ceil(cards.length / cols);
-    const cellMaxHpx = computeCellMaxH(availH, rows, GAP, CARD_OVERHEAD);
+    const cellMaxHpx = computeCellMaxH(cards.length, gridDims.w, cols, availH, rows, imgRatio, GAP, CARD_OVERHEAD);
     const aspectRatio =
       lockedSize && lockedSize.tier !== "auto"
         ? `${lockedSize.w} / ${lockedSize.h}`
@@ -2294,8 +2276,6 @@ export default function ImageGen() {
       imgRatio,
     };
   }, [cards, gridDims, currentSize]);
-  // 历史遗留：gridLayout 待后续接入，此处引用以通过 noUnusedLocals
-  void gridLayout;
 
   return (
     <div className="image-gen-page" style={{ maxWidth: 1440, margin: "0 auto" }}>
@@ -2906,7 +2886,6 @@ export default function ImageGen() {
                     genMode={genMode}
                     spritesheetN={spritesheetN}
                     reduceMotion={reduceMotion}
-                    onRetry={retryTask}
                     onOpenPreview={openPreview}
                     onDownload={downloadImage}
                     onToggleFavorite={toggleFavorite}
