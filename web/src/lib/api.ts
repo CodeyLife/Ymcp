@@ -873,9 +873,11 @@ async function generateImageMultiWithTaskApi(
   options?: { signal?: AbortSignal }
 ): Promise<void> {
   const n = task.n;
-  const received = new Set<number>(); // 已通过 onResult 收到的全局 1-based index
-  const failed = new Set<number>(); // 已上报真实错误的全局 1-based index
-  let extra = 0;
+  // received/failed 跟踪任务级 globalIndex（1-based），不再按图片拆分
+  const received = new Set<number>(); // 已通过 onResult 收到结果的任务 globalIndex
+  const failed = new Set<number>(); // 已上报真实错误的任务 globalIndex
+  let totalImageCount = 0; // 累计收到的图片总数（一个任务可能返回多张）
+  let extra = 0; // 兼容回调签名，新语义下始终为 0
   const imageTaskConfig = { baseUrl: task.baseUrl, apiKey: task.apiKey };
 
   callbacks.onTaskStart?.();
@@ -888,16 +890,15 @@ async function generateImageMultiWithTaskApi(
       callbacks.onTaskError?.(globalIndex - 1, "生成成功但未返回图片");
       return;
     }
-    images.forEach((src, j) => {
-      const idx = globalIndex + j;
-      if (idx <= n) {
-        received.add(idx);
-        callbacks.onTaskResult?.(idx - 1, [src]);
-      } else {
-        extra++;
-        callbacks.onExtraResult?.(src);
-      }
-    });
+    // 单次任务返回的所有图片归属同一 taskIndex（globalIndex - 1）。
+    // 旧逻辑用 globalIndex + j 把多图拆到不同 taskIndex，会让后续任务真正完成时
+    // 被 ImageGen.tsx 中 completedTaskIndexes 去重逻辑忽略，最终图片丢失
+    // （例如 task#1 返回 3 张图会占据 task#1/#2/#3 三个槽位，
+    //   随后真正的 task#2 完成时被 handleTaskResult 提前 return 而丢弃）。
+    // UI 层（ImageGen.cards useMemo）已支持把 task.results 多图展开为多张卡片。
+    received.add(globalIndex);
+    totalImageCount += images.length;
+    callbacks.onTaskResult?.(globalIndex - 1, images);
   };
 
   // 1. 为每个 task 生成 clientTaskId，并发提交
@@ -1066,8 +1067,9 @@ async function generateImageMultiWithTaskApi(
     }
   }
 
-  const ok = received.size;
-  const fail = n - ok;
+  // ok=总图片数（含单任务多图），fail=失败的任务数；extra 始终为 0（多图已并入对应任务）
+  const ok = totalImageCount;
+  const fail = n - received.size;
   callbacks.onAllDone?.({ ok, fail, extra });
 }
 
