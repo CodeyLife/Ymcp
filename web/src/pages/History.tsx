@@ -7,7 +7,7 @@ import {
 } from "@ant-design/icons";
 import { useHistoryStore, type HistoryItem } from "@/stores/history";
 import { useAssetStore } from "@/stores/asset";
-import { downloadBlob } from "@/lib/canvas";
+import { downloadBlob, detectExtFromBlob } from "@/lib/canvas";
 import { getImage, setImage } from "@/lib/imageStore";
 import { useImageUrl } from "@/hooks/useImageUrl";
 import { useNavigate } from "react-router-dom";
@@ -90,7 +90,8 @@ export default function History() {
         message.error("图片加载失败");
         return;
       }
-      downloadBlob(blob, `history-${Date.now()}.png`);
+      const ext = await detectExtFromBlob(blob);
+      downloadBlob(blob, `history-${Date.now()}.${ext}`);
     } catch {
       message.error("下载失败");
     }
@@ -165,7 +166,7 @@ export default function History() {
 
   function buildPreviewDownloadName(item?: MediaItem) {
     const raw = item?.raw as HistoryItem | undefined;
-    return `history-${raw?.id ?? Date.now()}.png`;
+    return `history-${raw?.id ?? Date.now()}`;
   }
 
   async function handleFavorite(item: MediaItem) {

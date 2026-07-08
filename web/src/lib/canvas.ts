@@ -1,6 +1,7 @@
 /** 图像/画布共享工具函数，迁移自 src/ymcp/web/v2f_static.py 的纯前端逻辑 */
 
 import { applyChromaKey } from "@/lib/chromaKey";
+import { detectMimeFromBytes } from "@/lib/api";
 
 export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) =>
@@ -18,6 +19,33 @@ export function downloadBlob(blob: Blob, filename: string) {
   link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+/** mime → 扩展名映射 */
+export function getExtFromMime(mime: string): string {
+  const m = (mime || "").toLowerCase();
+  if (m === "image/jpeg" || m === "image/jpg") return "jpg";
+  if (m === "image/webp") return "webp";
+  if (m === "image/gif") return "gif";
+  return "png";
+}
+
+/** 读取 blob 字节流魔数，返回可靠扩展名（不受 blob.type 影响，兼容旧数据） */
+export async function detectExtFromBlob(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+  return getExtFromMime(detectMimeFromBytes(bytes));
+}
+
+/**
+ * 从 src（blob:/data:/http(s): URL）下载图片，自动根据字节流魔数决定扩展名。
+ * baseName 若已含扩展名则直接使用；否则补 detectExtFromBlob 的结果。
+ */
+export async function downloadSrc(src: string, baseName: string): Promise<void> {
+  const response = await fetch(src);
+  const blob = await response.blob();
+  const hasExt = /\.[a-z0-9]{2,5}$/i.test(baseName);
+  const filename = hasExt ? baseName : `${baseName}.${await detectExtFromBlob(blob)}`;
+  downloadBlob(blob, filename);
 }
 
 export async function downloadCanvas(canvasId: string, filename: string) {

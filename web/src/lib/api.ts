@@ -160,15 +160,37 @@ async function hasRasterImageSignature(blob: Blob): Promise<boolean> {
   return isPng || isJpeg || isGif || isWebp;
 }
 
+/** 通过字节流魔数检测图片真实 mime，未知返回 image/png */
+export function detectMimeFromBytes(bytes: Uint8Array): string {
+  if (bytes.length < 4) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  )
+    return "image/webp";
+  return "image/png";
+}
+
 /** 从 base64 创建 blob URL */
-export function base64ToBlobUrl(b64: string, mime = "image/png"): string {
+export function base64ToBlobUrl(b64: string, mime?: string): string {
   const byteChars = atob(b64);
   const byteNumbers = new Array(byteChars.length);
   for (let i = 0; i < byteChars.length; i++) {
     byteNumbers[i] = byteChars.charCodeAt(i);
   }
   const byteArray = new Uint8Array(byteNumbers);
-  const blob = new Blob([byteArray], { type: mime });
+  // 调用方显式指定 mime 时优先用指定值；否则用魔数检测结果（覆盖旧的默认 image/png）
+  const finalMime = mime || detectMimeFromBytes(byteArray);
+  const blob = new Blob([byteArray], { type: finalMime });
   return URL.createObjectURL(blob);
 }
 

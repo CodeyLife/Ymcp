@@ -18,6 +18,7 @@ import { ImagePreviewGroupTabs } from "@/components/ImagePreviewGroupTabs";
 import { ImageCropModal } from "@/components/ImageCropModal";
 import { ImageCachePinner } from "@/components/ImageCachePinner";
 import type { AssetGroup } from "@/stores/asset";
+import { downloadSrc } from "@/lib/canvas";
 
 const PREVIEW_CACHE_PIN_RADIUS = 2;
 
@@ -100,8 +101,10 @@ function ImagePreviewToolbar({
         key: "download",
         title: "下载",
         icon: <DownloadOutlined />,
-        href: src,
-        download: downloadFilename ?? `image-${Date.now()}.png`,
+        onClick: () => {
+          const base = downloadFilename ?? `image-${Date.now()}`;
+          downloadSrc(src, base);
+        },
       });
     }
 

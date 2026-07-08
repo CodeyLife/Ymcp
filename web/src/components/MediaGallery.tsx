@@ -28,6 +28,7 @@ import { motion } from "motion/react";
 import { useMotionMode } from "@/hooks/useMotionMode";
 import { useImageUrl } from "@/hooks/useImageUrl";
 import { EmptyState } from "./showtime";
+import { downloadSrc } from "@/lib/canvas";
 
 /* ============================================================
  * 类型定义
@@ -366,9 +367,7 @@ function MediaCard({
             <CardActionButton
               icon={<DownloadOutlined />}
               tip="下载"
-              href={current}
-              download={downloadFilename}
-              onClick={stop}
+              onClick={(e) => { stop(e); downloadSrc(current, downloadFilename ?? `image-${Date.now()}`); }}
             />
           )}
           {onImg2Img && currentId && (

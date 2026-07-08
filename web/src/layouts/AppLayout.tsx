@@ -187,7 +187,9 @@ export default function AppLayout() {
           <div className="sidebar-logo-wrap">
             <span className="sidebar-logo-aura" aria-hidden />
             <span className="sidebar-logo-ring" aria-hidden />
-            <div className="sidebar-logo">Y</div>
+            <div className="sidebar-logo">
+              <img src="/logo.png" alt="Ymcp" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            </div>
           </div>
           {!collapsed && (
             <div className="sidebar-brand-text" style={{ lineHeight: 1.15 }}>

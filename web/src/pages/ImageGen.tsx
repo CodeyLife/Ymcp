@@ -21,7 +21,7 @@ import {
 } from "@/lib/api";
 import { setImage } from "@/lib/imageStore";
 import { IMG2IMG_REFERENCE_GUIDES, STYLE_PRESETS } from "@/lib/imagegenPresets";
-import { downloadBlob } from "@/lib/canvas";
+import { downloadBlob, detectExtFromBlob } from "@/lib/canvas";
 import { compressImage } from "@/lib/imageCompress";
 import { useNavigate } from "react-router-dom";
 import { DiffusionLoader } from "@/components/DiffusionLoader";
@@ -1830,7 +1830,8 @@ export default function ImageGen() {
       const cachedSrc = await cacheImageLocally(src);
       const response = await fetch(cachedSrc);
       const blob = await response.blob();
-      downloadBlob(blob, `gpt-image-${Date.now()}.png`);
+      const ext = await detectExtFromBlob(blob);
+      downloadBlob(blob, `gpt-image-${Date.now()}.${ext}`);
     } catch {
       message.error("下载失败");
     }

@@ -8,7 +8,7 @@ import {
   PlusOutlined, MoreOutlined, EditOutlined, DeleteOutlined, UploadOutlined,
 } from "@ant-design/icons";
 import { useAssetStore, type AssetItem } from "@/stores/asset";
-import { downloadBlob } from "@/lib/canvas";
+import { downloadBlob, detectExtFromBlob } from "@/lib/canvas";
 import { getImage, setImage } from "@/lib/imageStore";
 import { useImageUrl } from "@/hooks/useImageUrl";
 import { useNavigate } from "react-router-dom";
@@ -122,7 +122,8 @@ export default function Assets() {
         message.error("图片加载失败");
         return;
       }
-      downloadBlob(blob, `asset-${Date.now()}.png`);
+      const ext = await detectExtFromBlob(blob);
+      downloadBlob(blob, `asset-${Date.now()}.${ext}`);
     } catch {
       message.error("下载失败");
     }
@@ -198,8 +199,8 @@ export default function Assets() {
   function buildPreviewDownloadName(item?: MediaItem) {
     const raw = item?.raw as AssetItem | undefined;
     const name = raw?.name?.trim();
-    if (!name) return `asset-${Date.now()}.png`;
-    return /\.[a-z0-9]{2,5}$/i.test(name) ? name : `${name}.png`;
+    if (!name) return `asset-${Date.now()}`;
+    return name;
   }
 
   async function handleUploadFiles(fileList: FileList | null) {
