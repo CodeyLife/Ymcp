@@ -764,10 +764,22 @@ function imageTaskFailedIndices(item: ImageTask): Set<number> {
   );
 }
 
+function imageTaskFailureError(item: ImageTask, relativeIndex: number): string | null {
+  const failure = item.failures?.find((entry) => {
+    const index =
+      typeof entry.index === "number" ? entry.index : typeof entry.index === "string" ? Number.parseInt(entry.index, 10) : NaN;
+    return index === relativeIndex;
+  });
+  const error = typeof failure?.error === "string" ? failure.error.trim() : "";
+  return error || null;
+}
+
 function imageTaskSlotFailureMessage(item: ImageTask, relativeIndex: number, fallback: string): string {
-  const error = typeof item.error === "string" ? item.error.trim() : "";
-  if (error) return error;
+  const failureError = imageTaskFailureError(item, relativeIndex);
+  if (failureError) return failureError;
   if (imageTaskFailedIndices(item).has(relativeIndex)) return `第 ${relativeIndex} 张生成失败`;
+  const error = typeof item.error === "string" ? item.error.trim() : "";
+  if (error && item.status === "error") return error;
   return fallback;
 }
 
@@ -895,12 +907,12 @@ export async function refreshSubmittedImageTasks(
         }
       }
     } else {
-      const err = item.error || "生成失败";
       for (let slot = startSlot; slot < endSlot; slot++) {
         if (!itemDeliveredSlots.has(slot) && !settledSlots.has(slot)) {
           settledSlots.add(slot);
           fail++;
-          callbacks.onTaskError?.(slot, err);
+          const relativeIndex = slot - startSlot + 1;
+          callbacks.onTaskError?.(slot, imageTaskSlotFailureMessage(item, relativeIndex, item.error || "生成失败"));
         }
       }
     }
@@ -1140,7 +1152,7 @@ async function generateImageMultiWithTaskApi(
             value.status === "success"
               ? (relativeIndex) =>
                   imageTaskSlotFailureMessage(value, relativeIndex, value.data?.length ? "未收到该位置结果" : "生成成功但未返回图片")
-              : value.error || "生成失败"
+              : (relativeIndex) => imageTaskSlotFailureMessage(value, relativeIndex, value.error || "生成失败")
           );
         } else {
           pendingTaskIds.set(meta.clientTaskId, meta.globalIndex);
@@ -1211,7 +1223,7 @@ async function generateImageMultiWithTaskApi(
           imageTaskSlotFailureMessage(item, relativeIndex, item.data?.length ? "未收到该位置结果" : "生成成功但未返回图片")
         );
       } else {
-        emitTaskError(globalIndex, item.error || "生成失败");
+        emitMissingSlots(globalIndex, (relativeIndex) => imageTaskSlotFailureMessage(item, relativeIndex, item.error || "生成失败"));
       }
     }
 
@@ -1511,6 +1523,11 @@ export interface ImageTask {
   updated_at: string;
   data?: ImageTaskData[];
   error?: string;
+  failures?: Array<{
+    index: number | string;
+    error?: string;
+    account_email?: string;
+  }>;
   progress?: string;
   expected_count?: number;
   completed_count?: number;
