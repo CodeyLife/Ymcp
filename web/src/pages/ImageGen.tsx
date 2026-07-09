@@ -47,7 +47,7 @@ interface ActiveBatch {
   id: number;
   controller: AbortController;
   softTimeoutId: number | null;
-  // clientTaskId -> task globalIndex（1-based 任务索引，≤ ceil(n/4)），用于断线恢复查询
+  // clientTaskId -> task globalIndex（1-based 任务索引），用于断线恢复查询
   clientTaskIds: Map<string, number>;
   n: number; // 图片总数（image slot 数），用于 refresh/resume 的 slot 映射
   handleTaskResult: (taskIndex: number, images: string[]) => void;
@@ -59,7 +59,7 @@ interface ActiveBatch {
 let activeBatch: ActiveBatch | null = null;
 let batchSeq = 0;
 const PENDING_IMAGE_BATCH_STORAGE_KEY = "ymcp-imagegen-pending-batch";
-const PENDING_IMAGE_BATCH_VERSION = 2;
+const PENDING_IMAGE_BATCH_VERSION = 3;
 const PENDING_IMAGE_BATCH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function isActiveBatch(batchId: number) {
@@ -77,6 +77,41 @@ function abortActiveBatch() {
   activeBatch.controller.abort();
   activeBatch = null;
 }
+function imageTaskGlobalIndexOfSlot(slotIndex: number): number {
+  return Math.floor(slotIndex / IMAGE_TASK_MAX_N_PER_TASK) + 1;
+}
+function imageTaskSlotRange(globalIndex: number, totalN: number): { startSlot: number; endSlot: number } {
+  return {
+    startSlot: (globalIndex - 1) * IMAGE_TASK_MAX_N_PER_TASK,
+    endSlot: Math.min(globalIndex * IMAGE_TASK_MAX_N_PER_TASK, totalN),
+  };
+}
+function imageTaskSlotsSettled(globalIndex: number, totalN: number, completedSlots: Set<number>): boolean {
+  const { startSlot, endSlot } = imageTaskSlotRange(globalIndex, totalN);
+  if (startSlot >= endSlot) return false;
+  for (let slot = startSlot; slot < endSlot; slot++) {
+    if (!completedSlots.has(slot)) return false;
+  }
+  return true;
+}
+function pruneSettledClientTask(
+  clientTaskIds: Map<string, number>,
+  completedSlots: Set<number>,
+  resultSlots: Set<number>,
+  historySavedSlots: Set<number>,
+  settledSlotIndex: number,
+  totalN: number
+): void {
+  const globalIndex = imageTaskGlobalIndexOfSlot(settledSlotIndex);
+  if (!imageTaskSlotsSettled(globalIndex, totalN, completedSlots)) return;
+  const { startSlot, endSlot } = imageTaskSlotRange(globalIndex, totalN);
+  for (let slot = startSlot; slot < endSlot; slot++) {
+    if (resultSlots.has(slot) && !historySavedSlots.has(slot)) return;
+  }
+  for (const [taskId, taskGlobalIndex] of [...clientTaskIds]) {
+    if (taskGlobalIndex === globalIndex) clientTaskIds.delete(taskId);
+  }
+}
 type ImageHistorySnapshot = Pick<HistoryItem, "mode" | "prompt" | "size" | "quality">;
 
 interface PersistedImageBatch {
@@ -90,8 +125,10 @@ interface PersistedImageBatch {
   size: string;
   quality?: string;
   historySnapshot: ImageHistorySnapshot;
-  // globalIndex = task globalIndex（1-based 任务索引，≤ ceil(n/IMAGE_TASK_MAX_N_PER_TASK)）
+  // globalIndex = task globalIndex（1-based 任务索引）
   clientTaskIds: SubmittedImageTaskRef[];
+  // globalIndex = image slot + 1（1-based，已写入历史记录的结果位）
+  historySavedSlots: number[];
   // globalIndex = image slot + 1（1-based，≤ n）
   taskSnapshots: Array<{
     globalIndex: number;
@@ -145,6 +182,7 @@ function isPersistedImageBatch(value: Partial<PersistedImageBatch> | null): valu
     typeof value.historySnapshot.quality !== "string" ||
     !Array.isArray(value.clientTaskIds) ||
     value.clientTaskIds.length === 0 ||
+    !Array.isArray(value.historySavedSlots) ||
     !Array.isArray(value.taskSnapshots)
   ) {
     return false;
@@ -163,6 +201,9 @@ function isPersistedImageBatch(value: Partial<PersistedImageBatch> | null): valu
         Number.isInteger(item.globalIndex) &&
         item.globalIndex >= 1 &&
         item.globalIndex <= maxTaskIndex
+    ) &&
+    value.historySavedSlots.every(
+      (slot) => typeof slot === "number" && Number.isInteger(slot) && slot >= 1 && slot <= n
     ) &&
     value.taskSnapshots.every(
       (item) =>
@@ -200,16 +241,6 @@ function clearPendingImageBatch(batchId?: number): void {
   } catch {
     // ignore
   }
-}
-
-function removePendingImageTask(batchId: number, globalIndex: number): void {
-  const current = readPendingImageBatch();
-  if (!current || current.id !== batchId) return;
-  const next = {
-    ...current,
-    clientTaskIds: current.clientTaskIds.filter((item) => item.globalIndex !== globalIndex),
-  };
-  writePendingImageBatch(next);
 }
 
 /* gpt-image-2 支持的尺寸 */
@@ -1467,6 +1498,8 @@ export default function ImageGen() {
     resetTasks(params.n);
     const clientTaskIds = new Map<string, number>();
     const completedTaskIndexes = new Set<number>();
+    const resultTaskIndexes = new Set<number>();
+    const historySavedTaskIndexes = new Set<number>();
     const persistCurrentTaskBatch = () => {
       const b = activeBatch;
       if (!b || b.id !== batchId || b.adapter !== "task") return;
@@ -1492,27 +1525,29 @@ export default function ImageGen() {
         quality: params.quality,
         historySnapshot: params.historySnapshot,
         clientTaskIds: [...clientTaskIds].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
+        historySavedSlots: [...historySavedTaskIndexes].map((slot) => slot + 1),
         taskSnapshots,
       });
-    };
-    const forgetClientTask = (globalIndex: number) => {
-      for (const [taskId, index] of [...clientTaskIds]) {
-        if (index === globalIndex) clientTaskIds.delete(taskId);
-      }
     };
     const handleTaskResult = (taskIndex: number, images: string[]) => {
       if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
+      resultTaskIndexes.add(taskIndex);
       updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
-      images.forEach((src) => persistTaskHistory(src, params.historySnapshot).catch(() => message.warning("历史记录保存失败")));
-      forgetClientTask(Math.floor(taskIndex / IMAGE_TASK_MAX_N_PER_TASK) + 1);
+      Promise.all(images.map((src) => persistTaskHistory(src, params.historySnapshot)))
+        .then(() => {
+          historySavedTaskIndexes.add(taskIndex);
+          pruneSettledClientTask(clientTaskIds, completedTaskIndexes, resultTaskIndexes, historySavedTaskIndexes, taskIndex, params.n);
+          persistCurrentTaskBatch();
+        })
+        .catch(() => message.warning("历史记录保存失败"));
       persistCurrentTaskBatch();
     };
     const handleTaskError = (taskIndex: number, err: string) => {
       if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
       updateTask(taskIndex, { status: "error", error: err, progress: undefined });
-      forgetClientTask(Math.floor(taskIndex / IMAGE_TASK_MAX_N_PER_TASK) + 1);
+      pruneSettledClientTask(clientTaskIds, completedTaskIndexes, resultTaskIndexes, historySavedTaskIndexes, taskIndex, params.n);
       persistCurrentTaskBatch();
     };
     activeBatch = {
@@ -1568,8 +1603,16 @@ export default function ImageGen() {
             clientTaskIds.set(taskId, globalIndex);
             persistCurrentTaskBatch();
           },
-          onTaskProgress: (text) => {
+          onTaskProgress: (text, taskIndex) => {
             if (!isActiveBatch(batchId)) return;
+            if (typeof taskIndex === "number") {
+              const task = useImageGenStore.getState().tasks.find((item) => item.index === taskIndex);
+              if (task && (task.status === "pending" || task.status === "loading")) {
+                updateTask(taskIndex, { status: "loading", progress: text });
+                persistCurrentTaskBatch();
+              }
+              return;
+            }
             useImageGenStore.getState().tasks.forEach((task) => {
               if (task.status === "pending" || task.status === "loading") {
                 updateTask(task.index, { status: "loading", progress: text });
@@ -1658,18 +1701,52 @@ export default function ImageGen() {
     }
 
     const completedTaskIndexes = new Set<number>();
+    const resultTaskIndexes = new Set<number>();
+    const historySavedTaskIndexes = new Set(saved.historySavedSlots.map((slot) => slot - 1));
+    const persistResumedTaskBatch = () => {
+      const b = activeBatch;
+      if (!b || b.id !== batchId || b.adapter !== "task") return;
+      const taskSnapshots = useImageGenStore
+        .getState()
+        .tasks
+        .filter((task) => task.status !== "done")
+        .map((task) => ({
+          globalIndex: task.index + 1,
+          status: task.status as Exclude<TaskStatus, "done">,
+          progress: task.progress,
+          error: task.error,
+        }));
+      writePendingImageBatch({
+        ...saved,
+        clientTaskIds: [...clientTaskIds].map(([taskId, globalIndex]) => ({ taskId, globalIndex })),
+        historySavedSlots: [...historySavedTaskIndexes].map((slot) => slot + 1),
+        taskSnapshots,
+      });
+    };
     const handleTaskResult = (taskIndex: number, images: string[]) => {
       if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
+      resultTaskIndexes.add(taskIndex);
       updateTask(taskIndex, { status: "done", results: images, progress: undefined, error: undefined });
-      images.forEach((src) => persistTaskHistory(src, saved.historySnapshot).catch(() => message.warning("历史记录保存失败")));
-      removePendingImageTask(saved.id, Math.floor(taskIndex / IMAGE_TASK_MAX_N_PER_TASK) + 1);
+      if (!historySavedTaskIndexes.has(taskIndex)) {
+        Promise.all(images.map((src) => persistTaskHistory(src, saved.historySnapshot)))
+          .then(() => {
+            historySavedTaskIndexes.add(taskIndex);
+            pruneSettledClientTask(clientTaskIds, completedTaskIndexes, resultTaskIndexes, historySavedTaskIndexes, taskIndex, saved.n);
+            persistResumedTaskBatch();
+          })
+          .catch(() => message.warning("历史记录保存失败"));
+      } else {
+        pruneSettledClientTask(clientTaskIds, completedTaskIndexes, resultTaskIndexes, historySavedTaskIndexes, taskIndex, saved.n);
+      }
+      persistResumedTaskBatch();
     };
     const handleTaskError = (taskIndex: number, err: string) => {
       if (!isActiveBatch(batchId) || completedTaskIndexes.has(taskIndex)) return;
       completedTaskIndexes.add(taskIndex);
       updateTask(taskIndex, { status: "error", error: err, progress: undefined });
-      removePendingImageTask(saved.id, Math.floor(taskIndex / IMAGE_TASK_MAX_N_PER_TASK) + 1);
+      pruneSettledClientTask(clientTaskIds, completedTaskIndexes, resultTaskIndexes, historySavedTaskIndexes, taskIndex, saved.n);
+      persistResumedTaskBatch();
     };
 
     const ensureTaskPlaceholders = () => {
