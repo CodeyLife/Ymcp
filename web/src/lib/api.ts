@@ -727,7 +727,8 @@ export interface ImageGenerationClient {
   refreshTasks: (
     taskRefs: SubmittedImageTaskRef[],
     config: { baseUrl: string; apiKey: string },
-    callbacks?: ImageTaskRefreshCallbacks
+    callbacks?: ImageTaskRefreshCallbacks,
+    options?: { totalN: number }
   ) => Promise<ImageTaskRefreshResult>;
   resumeTasks: (
     taskRefs: SubmittedImageTaskRef[],
@@ -735,12 +736,15 @@ export interface ImageGenerationClient {
     callbacks?: ImageTaskRefreshCallbacks & {
       onAllDone?: (summary: { ok: number; fail: number }) => void;
     },
-    options?: { signal?: AbortSignal }
+    options?: { totalN: number },
+    signalOptions?: { signal?: AbortSignal }
   ) => Promise<void>;
 }
 
 const IMAGE_TASK_POLL_INTERVAL_MS = 3000;
 const IMAGE_TASK_QUERY_FAILURE_LIMIT = 3;
+// TODO P3: 后端 _parse_count 限制单任务 1-4 张，对齐上游单次生成能力边界；后续上游放宽可同步上调
+export const IMAGE_TASK_MAX_N_PER_TASK = 4;
 
 function trimTrailingSlash(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -785,26 +789,34 @@ function waitForImageTaskPoll(signal?: AbortSignal): Promise<void> {
 export async function refreshSubmittedImageTasks(
   taskRefs: SubmittedImageTaskRef[],
   config: { baseUrl: string; apiKey: string },
-  callbacks: ImageTaskRefreshCallbacks = {}
+  callbacks: ImageTaskRefreshCallbacks = {},
+  options?: { totalN: number }
 ): Promise<ImageTaskRefreshResult> {
   if (taskRefs.length === 0) return { remaining: [], ok: 0, fail: 0 };
 
+  const totalN = options?.totalN ?? taskRefs.length;
   const pendingTaskIds = new Map(taskRefs.map((item) => [item.taskId, item.globalIndex] as const));
   const resp = await queryImageTasks([...pendingTaskIds.keys()], config);
   const remaining = new Map(pendingTaskIds);
   let ok = 0;
   let fail = 0;
 
+  // task globalIndex（1-based）→ image slot 区间 [startSlot, endSlot)（0-based）
+  const slotRangeOf = (taskG: number): { startSlot: number; endSlot: number } => ({
+    startSlot: (taskG - 1) * IMAGE_TASK_MAX_N_PER_TASK,
+    endSlot: Math.min(taskG * IMAGE_TASK_MAX_N_PER_TASK, totalN),
+  });
+
   for (const item of resp.items) {
-    const globalIndex = pendingTaskIds.get(item.id);
-    if (globalIndex === undefined) continue;
-    const taskIndex = globalIndex - 1;
+    const taskG = pendingTaskIds.get(item.id);
+    if (taskG === undefined) continue;
+    const { startSlot, endSlot } = slotRangeOf(taskG);
 
     if (item.status === "queued" || item.status === "running") {
-      callbacks.onTaskProgress?.(
-        taskIndex,
-        item.progress || (item.status === "queued" ? "排队中" : "生成中")
-      );
+      const text = item.progress || (item.status === "queued" ? "排队中" : "生成中");
+      for (let slot = startSlot; slot < endSlot; slot++) {
+        callbacks.onTaskProgress?.(slot, text);
+      }
       continue;
     }
 
@@ -812,24 +824,46 @@ export async function refreshSubmittedImageTasks(
     if (item.status === "success" && item.data) {
       const images = await extractImageSources({ data: item.data });
       if (images.length > 0) {
-        ok += images.length;
-        callbacks.onTaskResult?.(taskIndex, images);
+        const filled = new Set<number>();
+        images.forEach((src, offset) => {
+          const slot = startSlot + offset;
+          if (slot < endSlot) {
+            ok++;
+            filled.add(slot);
+            callbacks.onTaskResult?.(slot, [src]);
+          }
+        });
+        // 任务成功但返回图片数 < n_per_task：未填充 slot 上报错误
+        for (let slot = startSlot; slot < endSlot; slot++) {
+          if (!filled.has(slot)) {
+            fail++;
+            callbacks.onTaskError?.(slot, "未收到该位置结果");
+          }
+        }
       } else {
-        fail++;
-        callbacks.onTaskError?.(taskIndex, "生成成功但未返回图片");
+        for (let slot = startSlot; slot < endSlot; slot++) {
+          fail++;
+          callbacks.onTaskError?.(slot, "生成成功但未返回图片");
+        }
       }
     } else {
-      fail++;
-      callbacks.onTaskError?.(taskIndex, item.error || "生成失败");
+      const err = item.error || "生成失败";
+      for (let slot = startSlot; slot < endSlot; slot++) {
+        fail++;
+        callbacks.onTaskError?.(slot, err);
+      }
     }
   }
 
   for (const missingId of resp.missing_ids || []) {
-    const globalIndex = pendingTaskIds.get(missingId);
-    if (globalIndex === undefined) continue;
+    const taskG = pendingTaskIds.get(missingId);
+    if (taskG === undefined) continue;
     remaining.delete(missingId);
-    fail++;
-    callbacks.onTaskError?.(globalIndex - 1, "任务不存在或已被清理");
+    const { startSlot, endSlot } = slotRangeOf(taskG);
+    for (let slot = startSlot; slot < endSlot; slot++) {
+      fail++;
+      callbacks.onTaskError?.(slot, "任务不存在或已被清理");
+    }
   }
 
   return {
@@ -845,18 +879,20 @@ export async function resumeSubmittedImageTasks(
   callbacks: ImageTaskRefreshCallbacks & {
     onAllDone?: (summary: { ok: number; fail: number }) => void;
   } = {},
-  options?: { signal?: AbortSignal }
+  options?: { totalN: number },
+  signalOptions?: { signal?: AbortSignal }
 ): Promise<void> {
+  const totalN = options?.totalN ?? taskRefs.length;
   let pending = [...taskRefs];
   const queryFailureCounts = new Map<string, number>();
   let ok = 0;
   let fail = 0;
 
   while (pending.length > 0) {
-    if (options?.signal?.aborted) return;
+    if (signalOptions?.signal?.aborted) return;
 
     try {
-      const result = await refreshSubmittedImageTasks(pending, config, callbacks);
+      const result = await refreshSubmittedImageTasks(pending, config, callbacks, { totalN });
       ok += result.ok;
       fail += result.fail;
       pending = result.remaining;
@@ -871,14 +907,19 @@ export async function resumeSubmittedImageTasks(
           stillPending.push(item);
           continue;
         }
-        fail++;
-        callbacks.onTaskError?.(item.globalIndex - 1, `恢复查询失败：${queryError}`);
+        const taskG = item.globalIndex;
+        const startSlot = (taskG - 1) * IMAGE_TASK_MAX_N_PER_TASK;
+        const endSlot = Math.min(taskG * IMAGE_TASK_MAX_N_PER_TASK, totalN);
+        for (let slot = startSlot; slot < endSlot; slot++) {
+          fail++;
+          callbacks.onTaskError?.(slot, `恢复查询失败：${queryError}`);
+        }
       }
       pending = stillPending;
     }
 
     if (pending.length > 0) {
-      await waitForImageTaskPoll(options?.signal);
+      await waitForImageTaskPoll(signalOptions?.signal);
     }
   }
 
@@ -886,8 +927,10 @@ export async function resumeSubmittedImageTasks(
 }
 
 /**
- * 多图生图：基于后端异步任务接口（/api/image-tasks/*），为每张图生成 clientTaskId 并发提交，
- * 然后轮询任务状态直到全部终态。clientTaskId 作为幂等键，支持断线后用相同 ID 查询恢复。
+ * 多图生图（任务模式）：把 n 张目标图拆为 ceil(n/MAX_N) 个后端任务并发提交，
+ * 每个任务携带 n_per_task（≤4），参考图每任务只上传一次。任务返回的多图结果
+ * 通过 slot 映射分发到 n 个 UI 占位（imageSlot 0-based）。clientTaskId 作为幂等键，
+ * 支持断线后用相同 ID 查询恢复。
  */
 async function generateImageMultiWithTaskApi(
   task: BatchTaskParams & { n: number },
@@ -895,45 +938,78 @@ async function generateImageMultiWithTaskApi(
   options?: { signal?: AbortSignal }
 ): Promise<void> {
   const n = task.n;
-  // received/failed 跟踪任务级 globalIndex（1-based），不再按图片拆分
-  const received = new Set<number>(); // 已通过 onResult 收到结果的任务 globalIndex
-  const failed = new Set<number>(); // 已上报真实错误的任务 globalIndex
-  let totalImageCount = 0; // 累计收到的图片总数（一个任务可能返回多张）
-  let extra = 0; // 兼容回调签名，新语义下始终为 0
+  const taskCount = Math.max(1, Math.ceil(n / IMAGE_TASK_MAX_N_PER_TASK));
+  // processed 跟踪已到终态并完成 slot 分发的任务 globalIndex（1-based）
+  const processed = new Set<number>();
+  let totalImageCount = 0; // 累计收到的有效图片数（落在 [0,n) 区间内）
+  let extra = 0; // 超出 n 的额外图片数
   const imageTaskConfig = { baseUrl: task.baseUrl, apiKey: task.apiKey };
 
   callbacks.onTaskStart?.();
   callbacks.onAdapterResolved?.("task");
 
-  const emitTaskImages = async (globalIndex: number, data: unknown) => {
-    const images = await extractImageSources({ data });
-    if (images.length === 0) {
-      failed.add(globalIndex);
-      callbacks.onTaskError?.(globalIndex - 1, "生成成功但未返回图片");
-      return;
+  // task globalIndex（1-based）→ image slot 区间 [startSlot, endSlot)（0-based）
+  const slotRangeOf = (taskG: number): { startSlot: number; endSlot: number } => ({
+    startSlot: (taskG - 1) * IMAGE_TASK_MAX_N_PER_TASK,
+    endSlot: Math.min(taskG * IMAGE_TASK_MAX_N_PER_TASK, n),
+  });
+
+  // 任务到终态且失败：对该任务所有 slot 上报错误
+  const emitTaskError = (globalIndex: number, err: string) => {
+    if (processed.has(globalIndex)) return;
+    processed.add(globalIndex);
+    const { startSlot, endSlot } = slotRangeOf(globalIndex);
+    for (let slot = startSlot; slot < endSlot; slot++) {
+      callbacks.onTaskError?.(slot, err);
     }
-    // 单次任务返回的所有图片归属同一 taskIndex（globalIndex - 1）。
-    // 旧逻辑用 globalIndex + j 把多图拆到不同 taskIndex，会让后续任务真正完成时
-    // 被 ImageGen.tsx 中 completedTaskIndexes 去重逻辑忽略，最终图片丢失
-    // （例如 task#1 返回 3 张图会占据 task#1/#2/#3 三个槽位，
-    //   随后真正的 task#2 完成时被 handleTaskResult 提前 return 而丢弃）。
-    // UI 层（ImageGen.cards useMemo）已支持把 task.results 多图展开为多张卡片。
-    received.add(globalIndex);
-    totalImageCount += images.length;
-    callbacks.onTaskResult?.(globalIndex - 1, images);
   };
 
-  // 1. 为每个 task 生成 clientTaskId，并发提交
+  // 任务到终态且成功：把返回图片分发到对应 slot，未填满的 slot 上报错误
+  const emitTaskImages = async (globalIndex: number, data: unknown) => {
+    if (processed.has(globalIndex)) return;
+    processed.add(globalIndex);
+    const images = await extractImageSources({ data });
+    const { startSlot, endSlot } = slotRangeOf(globalIndex);
+    if (images.length === 0) {
+      for (let slot = startSlot; slot < endSlot; slot++) {
+        callbacks.onTaskError?.(slot, "生成成功但未返回图片");
+      }
+      return;
+    }
+    const filled = new Set<number>();
+    images.forEach((src, offset) => {
+      const slot = startSlot + offset;
+      if (slot < endSlot) {
+        totalImageCount++;
+        filled.add(slot);
+        callbacks.onTaskResult?.(slot, [src]);
+      } else {
+        extra++;
+        callbacks.onExtraResult?.(src);
+      }
+    });
+    // 任务成功但返回图片数 < n_per_task：未填充 slot 上报错误
+    for (let slot = startSlot; slot < endSlot; slot++) {
+      if (!filled.has(slot)) {
+        callbacks.onTaskError?.(slot, "未收到该位置结果");
+      }
+    }
+  };
+
+  // 1. 拆分任务：每个任务承载 ≤ MAX_N 张图，参考图只随任务上传一次
   const batchTs = Date.now();
-  const taskMeta: Array<{ globalIndex: number; clientTaskId: string }> = [];
-  for (let i = 0; i < n; i++) {
+  const taskMeta: Array<{ globalIndex: number; n: number; clientTaskId: string }> = [];
+  for (let i = 0; i < taskCount; i++) {
+    const start = i * IMAGE_TASK_MAX_N_PER_TASK;
+    const end = Math.min(start + IMAGE_TASK_MAX_N_PER_TASK, n);
     taskMeta.push({
       globalIndex: i + 1, // 1-based
+      n: end - start,
       clientTaskId: `img-${batchTs}-${i + 1}`,
     });
   }
 
-  // 图生图需要先把 base64 data URL 转 Blob
+  // 图生图需要先把 base64 data URL 转 Blob（一次转换，多任务复用）
   let imageBlobs: { blob: Blob; filename: string }[] | undefined;
   if (task.images && task.images.length > 0) {
     imageBlobs = [];
@@ -966,6 +1042,7 @@ async function generateImageMultiWithTaskApi(
               size: task.size,
               quality: task.quality,
               images: imageBlobs,
+              n: meta.n,
             },
             imageTaskConfig
           );
@@ -977,6 +1054,7 @@ async function generateImageMultiWithTaskApi(
             model: task.model,
             size: task.size,
             quality: task.quality,
+            n: meta.n,
           },
           imageTaskConfig
         );
@@ -1036,12 +1114,11 @@ async function generateImageMultiWithTaskApi(
         if (failures < IMAGE_TASK_QUERY_FAILURE_LIMIT) continue;
 
         pendingTaskIds.delete(taskId);
-        failed.add(globalIndex);
         const submitError = submitErrors.get(taskId);
         const message = submitError
           ? `提交失败，且无法查询任务状态：${queryError}`
           : `查询任务状态失败：${queryError}`;
-        callbacks.onTaskError?.(globalIndex - 1, message);
+        emitTaskError(globalIndex, message);
       }
       continue;
     }
@@ -1063,9 +1140,7 @@ async function generateImageMultiWithTaskApi(
       if (item.status === "success" && item.data) {
         await emitTaskImages(globalIndex, item.data);
       } else {
-        // error
-        failed.add(globalIndex);
-        callbacks.onTaskError?.(globalIndex - 1, item.error || "生成失败");
+        emitTaskError(globalIndex, item.error || "生成失败");
       }
     }
 
@@ -1074,24 +1149,21 @@ async function generateImageMultiWithTaskApi(
       const globalIndex = pendingTaskIds.get(missingId);
       if (globalIndex !== undefined) {
         pendingTaskIds.delete(missingId);
-        failed.add(globalIndex);
-        callbacks.onTaskError?.(globalIndex - 1, "任务不存在或已被清理");
+        emitTaskError(globalIndex, "任务不存在或已被清理");
       }
     }
   }
 
-  // 3. 兜底：标记未收到 result 的 task
-  for (let i = 0; i < n; i++) {
-    const resultIndex = i + 1;
-    if (!received.has(resultIndex) && !failed.has(resultIndex)) {
-      failed.add(resultIndex);
-      callbacks.onTaskError?.(i, "未收到结果");
+  // 3. 兜底：标记未到终态的任务（每个 slot 上报错误）
+  for (let g = 1; g <= taskCount; g++) {
+    if (!processed.has(g)) {
+      emitTaskError(g, "未收到结果");
     }
   }
 
-  // ok=总图片数（含单任务多图），fail=失败的任务数；extra 始终为 0（多图已并入对应任务）
+  // ok=有效图片数，fail=未收到图片的 slot 数；extra 为超出 n 的额外图片
   const ok = totalImageCount;
-  const fail = n - received.size;
+  const fail = n - totalImageCount;
   callbacks.onAllDone?.({ ok, fail, extra });
 }
 
@@ -1389,6 +1461,7 @@ export async function submitImageGenerationTask(
     model: string;
     size?: string;
     quality?: string;
+    n?: number;
   },
   config: { baseUrl: string; apiKey: string }
 ): Promise<ImageTask> {
@@ -1405,6 +1478,7 @@ export async function submitImageGenerationTask(
       model: params.model,
       size: params.size ?? null,
       quality: params.quality ?? "auto",
+      n: params.n ?? 1,
     }),
   });
   if (!response.ok) {
@@ -1421,6 +1495,7 @@ export async function submitImageEditTask(
     model: string;
     size?: string;
     quality?: string;
+    n?: number;
     images: { blob: Blob; filename: string }[];
   },
   config: { baseUrl: string; apiKey: string }
@@ -1432,6 +1507,7 @@ export async function submitImageEditTask(
   formData.append("model", params.model);
   formData.append("size", params.size ?? "");
   formData.append("quality", params.quality ?? "auto");
+  formData.append("n", String(params.n ?? 1));
   for (const img of params.images) {
     formData.append("image", img.blob, img.filename);
   }
