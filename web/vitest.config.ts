@@ -7,6 +7,6 @@ export default defineConfig({
     environment: "node",
     fileParallelism: false,
     setupFiles: ["./src/features/novel/__tests__/setup.ts"],
-    include: ["src/features/novel/__tests__/*.test.ts"],
+    include: ["src/features/novel/__tests__/*.test.{ts,tsx}"],
   },
 });

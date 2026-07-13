@@ -6,8 +6,8 @@ import { novelDb } from "./db";
 async function bundleProject(projectId: string) {
   const project = await novelDb.projects.get(projectId);
   if (!project) throw new Error("项目不存在");
-  const tableNames = ["entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles"] as const;
-  const data: Record<string, unknown> = { manifest: { format: "ymcp-novel", schemaVersion: 2, exportedAt: Date.now() }, project };
+  const tableNames = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "projectGenerationRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
+  const data: Record<string, unknown> = { manifest: { format: "ymcp-novel", schemaVersion: 4, exportedAt: Date.now() }, project };
   for (const tableName of tableNames) data[tableName] = await novelDb[tableName].where("projectId").equals(projectId).toArray();
   return data;
 }
@@ -28,14 +28,12 @@ function stripHtml(html: string) {
 }
 
 async function manuscript(projectId: string) {
-  const [project, outline, documents] = await Promise.all([
+  const [project, documents] = await Promise.all([
     novelDb.projects.get(projectId),
-    novelDb.outlineNodes.where("projectId").equals(projectId).sortBy("order"),
-    novelDb.documents.where("projectId").equals(projectId).toArray(),
+    novelDb.documents.where("projectId").equals(projectId).sortBy("order"),
   ]);
   if (!project) throw new Error("项目不存在");
-  const chapters = outline.filter((node) => node.kind === "chapter").map((node) => ({ node, document: documents.find((doc) => doc.id === node.documentId) }));
-  return { project, chapters };
+  return { project, chapters: documents };
 }
 
 export async function exportNovel(projectId: string, format: "json" | "markdown" | "txt" | "docx" | "epub") {
@@ -44,17 +42,17 @@ export async function exportNovel(projectId: string, format: "json" | "markdown"
     download(new Blob([JSON.stringify(await bundleProject(projectId), null, 2)], { type: "application/json" }), `${project.title}.ymcp-novel.json`);
     return;
   }
-  const markdown = `# ${project.title}\n\n${chapters.map(({ node, document }) => `## ${node.title}\n\n${document?.plainText ?? ""}`).join("\n\n")}`;
+  const markdown = `# ${project.title}\n\n${chapters.map((chapter) => `## ${chapter.title}\n\n${chapter.plainText}`).join("\n\n")}`;
   if (format === "markdown" || format === "txt") {
     download(new Blob([markdown], { type: "text/plain;charset=utf-8" }), `${project.title}.${format === "markdown" ? "md" : "txt"}`);
     return;
   }
   if (format === "docx") {
-    const doc = new Document({ sections: [{ children: [new Paragraph({ text: project.title, heading: HeadingLevel.TITLE }), ...chapters.flatMap(({ node, document }) => [new Paragraph({ text: node.title, heading: HeadingLevel.HEADING_1 }), ...stripHtml(document?.contentHtml ?? "").split("\n").filter(Boolean).map((line) => new Paragraph(line))])] }] });
+    const doc = new Document({ sections: [{ children: [new Paragraph({ text: project.title, heading: HeadingLevel.TITLE }), ...chapters.flatMap((chapter) => [new Paragraph({ text: chapter.title, heading: HeadingLevel.HEADING_1 }), ...stripHtml(chapter.contentHtml).split("\n").filter(Boolean).map((line) => new Paragraph(line))])] }] });
     download(await Packer.toBlob(doc), `${project.title}.docx`);
     return;
   }
-  const chapterXhtml = chapters.map(({ node, document }, index) => ({ name: `chapter-${index + 1}.xhtml`, title: node.title, body: `<h1>${node.title}</h1>${document?.contentHtml ?? ""}` }));
+  const chapterXhtml = chapters.map((chapter, index) => ({ name: `chapter-${index + 1}.xhtml`, title: chapter.title, body: `<h1>${chapter.title}</h1>${chapter.contentHtml}` }));
   const files: Record<string, Uint8Array> = {
     mimetype: strToU8("application/epub+zip"),
     "META-INF/container.xml": strToU8(`<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`),
@@ -66,9 +64,9 @@ export async function exportNovel(projectId: string, format: "json" | "markdown"
 
 export async function importNovel(file: File) {
   const payload = JSON.parse(await file.text()) as Record<string, unknown> & { manifest?: { format?: string; schemaVersion?: number }; project?: { id?: string } };
-  if (payload.manifest?.format !== "ymcp-novel" || payload.manifest.schemaVersion !== 2 || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v2 文件");
+  if (payload.manifest?.format !== "ymcp-novel" || payload.manifest.schemaVersion !== 4 || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4 文件");
   const projectId = payload.project.id;
-  const tables = ["projects", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles"] as const;
+  const tables = ["projects", "architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "projectGenerationRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
   await novelDb.transaction("rw", novelDb.tables, async () => {
     for (const table of tables) {
       const value = table === "projects" ? [payload.project] : payload[table];

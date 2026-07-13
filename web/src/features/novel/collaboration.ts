@@ -33,3 +33,10 @@ export function openCollaborativeDocument(projectId: string, documentId: string)
     },
   };
 }
+
+export async function deleteCollaborativeDocument(projectId: string, documentId: string) {
+  const collaboration = openCollaborativeDocument(projectId, documentId);
+  await collaboration.ready;
+  await collaboration.persistence.clearData();
+  collaboration.doc.destroy();
+}

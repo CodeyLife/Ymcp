@@ -82,7 +82,7 @@ export const BUILTIN_NOVEL_SKILLS: NovelSkillManifest[] = [
   builtin({ skillId: "character-desire-engine", name: "人物欲望引擎", description: "用欲望、恐惧、错误信念、真实需求和代价构造人物。", category: "character-world", stages: ["foundation", "planning", "review"], prompt: "为主要人物明确外在欲望、内在恐惧、错误信念、未承认的需求、道德边界和愿意支付的代价。人物选择必须由这些力量推动，而不是服务作者方便。" }),
   builtin({ skillId: "character-voice-matrix", name: "角色声音矩阵", description: "区分角色词汇、句长、回避方式、潜台词与情绪泄露。", category: "character-world", stages: ["drafting", "review", "revision"], prompt: "让角色仅凭对白也可辨认。依据教育、关系权力、当前目标和回避习惯控制词汇、句长、直接程度、语气词、潜台词与沉默；禁止所有角色共享同一书面腔。" }),
   builtin({ skillId: "world-rule-contract", name: "世界规则契约", description: "把能力、社会和物理规则写成带代价的可验证约束。", category: "character-world", stages: ["foundation", "planning", "review"], prompt: "世界规则必须写清适用条件、能力上限、代价、例外和社会后果。解决冲突不得临时创造无铺垫规则；新增例外必须形成待审事实。" }),
-  builtin({ skillId: "hierarchical-outline", name: "分层剧情控制", description: "从卷目标、剧情线、章节到场景逐级分解。", category: "long-plan", stages: ["planning"], prompt: "先确定上层叙事承诺和阶段不可逆变化，再分解到章节目标、场景行动与结果。每个下层节点必须服务至少一个上层目标，并说明因果衔接。" }),
+  builtin({ skillId: "hierarchical-outline", name: "分层剧情控制", description: "从全书阶段到幕、序列和故事事件逐级分解。", category: "long-plan", stages: ["planning"], prompt: "先确定上层叙事承诺和阶段不可逆变化，再分解到幕、序列与具体故事事件。大纲只表达故事因果，不绑定章节；每个下层节点必须服务至少一个上层目标。" }),
   builtin({ skillId: "causal-thread-weaving", name: "因果与剧情线编织", description: "避免事件清单和支线失踪。", category: "long-plan", stages: ["planning", "review"], prompt: "每个重要事件标注原因、触发条件、阻碍、直接结果和延迟后果。主线与支线通过共同人物、资源、秘密或选择相互改变，不能仅轮流出现。" }),
   builtin({ skillId: "foreshadowing-ledger", name: "伏笔账本", description: "规划埋设、提醒、误导、揭示和回收。", category: "long-plan", stages: ["planning", "review", "fact-extraction"], prompt: "伏笔必须记录读者可见线索、角色可知范围、预期误读、提醒频率、揭示条件和回收影响。揭示前不得让角色无来源地知道真相。" }),
   builtin({ skillId: "chapter-blueprint", name: "章节蓝图", description: "先产出可审批、可执行的章节节拍。", category: "chapter", stages: ["planning"], requires: ["story-facts-invariant"], outputSchema: chapterBlueprintSchema, priority: 200, prompt: "章节蓝图必须包含具体目标、精确起点、4至10个行动节拍、每个节拍的情绪反应与结果、信息释放、转折、章尾钩子、必须发生与禁止事项。节拍要足够具体但不代写正文。" }),
@@ -96,9 +96,9 @@ export const BUILTIN_NOVEL_SKILLS: NovelSkillManifest[] = [
 ];
 
 const PROFILE_SKILLS: Record<string, string[]> = {
-  "general-serial": ["story-facts-invariant", "character-desire-engine", "character-voice-matrix", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
-  progression: ["story-facts-invariant", "character-desire-engine", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "plot-pacing-audit", "fact-delta-extraction"],
-  emotional: ["story-facts-invariant", "character-desire-engine", "character-voice-matrix", "hierarchical-outline", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "fact-delta-extraction"],
+  "general-serial": ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "character-voice-matrix", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
+  progression: ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "plot-pacing-audit", "fact-delta-extraction"],
+  emotional: ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "character-voice-matrix", "hierarchical-outline", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "fact-delta-extraction"],
 };
 
 export interface ResolvedSkillSet {

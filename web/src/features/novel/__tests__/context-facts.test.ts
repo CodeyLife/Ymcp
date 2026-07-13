@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { compileNovelContext } from "../context";
-import { createNovelProject, novelDb, recordBase, updateProject } from "../db";
+import { createChapter, createNovelProject, novelDb, recordBase, saveStoryArchitecture, updateProject } from "../db";
 import { commitAcceptedFacts, setFactCandidateStatus, storeFactCandidates } from "../facts";
 import type { StoryEntity } from "../types";
 
@@ -21,6 +21,34 @@ describe("context invariants and fact commits", () => {
     expect(source).toMatchObject({ pinned: true, priorityClass: "invariant", truncated: true });
     expect(source?.contentHash).toMatch(/^[a-f0-9]{8}$/);
     expect(packet.omittedSourceIds.length).toBeGreaterThan(0);
+  });
+
+  it("pins approved architecture and the target chapter scene plan", async () => {
+    const project = await createNovelProject({ title: "架构测试", genre: ["科幻"], premise: "城市每天失去一小时。" });
+    const architecture = await novelDb.architectures.where("projectId").equals(project.id).first();
+    await saveStoryArchitecture({
+      ...architecture!,
+      status: "approved",
+      endingPromise: "主角决定保留所有人遗忘的代价。",
+      phases: [{ id: "phase-1", title: "中段升级", purpose: "主角发现丢失的时间被人保存。", turningPoint: "主角决定夺回时间。", order: 0, locked: true }],
+    });
+    const document = await createChapter(project.id, "第一章");
+    await novelDb.scenes.add({
+      ...recordBase(project.id),
+      chapterId: document.id,
+      title: "钟楼对峙",
+      order: 0,
+      status: "planned",
+      characterIds: [],
+      purpose: "揭示时间存储装置",
+      conflict: "主角必须决定是否关闭装置",
+      outcome: "装置继续运行，但代价转移给主角",
+      wordTarget: 1200,
+      beats: [{ id: "scene-beat-1", text: "主角启动逆向计时", order: 0 }],
+    });
+    const packet = await compileNovelContext({ projectId: project.id, task: "rewrite", instruction: "检查本章是否兑现架构", targetDocumentId: document!.id, stage: "revision" });
+    expect(packet.sources.find((source) => source.kind === "architecture")).toMatchObject({ pinned: true, priorityClass: "invariant" });
+    expect(packet.sources.find((source) => source.kind === "scene" && source.title.includes("钟楼对峙"))).toMatchObject({ pinned: true, priorityClass: "working" });
   });
 
   it("commits only accepted non-conflicting facts and writes an operation", async () => {

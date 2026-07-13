@@ -1,32 +1,32 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { App, Button, Divider, Drawer, Dropdown, Empty, Form, Input, InputNumber, Progress, Select, Slider, Spin, Switch, Tag, Tooltip } from "antd";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { App, Button, Divider, Drawer, Dropdown, Empty, Form, Input, InputNumber, Progress, Segmented, Select, Slider, Spin, Switch, Tag, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import {
-  AimOutlined,
   ApartmentOutlined,
+  ArrowDownOutlined,
   ArrowLeftOutlined,
+  ArrowUpOutlined,
   BookOutlined,
-  BranchesOutlined,
   BulbOutlined,
-  CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloudSyncOutlined,
   DashboardOutlined,
   DeploymentUnitOutlined,
+  DeleteOutlined,
   EditOutlined,
   ExportOutlined,
-  FileTextOutlined,
   HistoryOutlined,
   MenuOutlined,
   MoreOutlined,
   NodeIndexOutlined,
   PlusOutlined,
   RadarChartOutlined,
+  ReloadOutlined,
   RobotOutlined,
   SaveOutlined,
-  TeamOutlined,
   ToolOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -38,9 +38,10 @@ import Collaboration from "@tiptap/extension-collaboration";
 import { motion } from "motion/react";
 import {
   addEntity,
-  addOutlineNode,
   appendOperation,
   createCheckpoint,
+  createChapter,
+  deleteChapter,
   novelDb,
   recordBase,
   saveDocument,
@@ -51,12 +52,16 @@ import { exportNovel } from "@/features/novel/export";
 import { openCollaborativeDocument } from "@/features/novel/collaboration";
 import type {
   Foreshadowing,
+  EntityRelation,
   ManuscriptDocument,
   NovelWorkspaceView,
   PlotThread,
   StoryEntity,
+  StoryScene,
   TimelineEvent,
 } from "@/features/novel/types";
+import GenerationComposer from "@/features/novel/GenerationComposer";
+import { cancelProjectGeneration, PROJECT_GENERATION_STAGES, retryProjectGeneration, skipProjectGenerationStage, startProjectGeneration } from "@/features/novel/generation";
 import "@/features/novel/novel.css";
 
 const SkillCenter = lazy(() => import("@/features/novel/SkillCenter"));
@@ -64,21 +69,14 @@ const WorkflowCenter = lazy(() => import("@/features/novel/WorkflowCenter"));
 const AIWorkbench = lazy(() => import("@/features/novel/AIWorkbench"));
 import { ChatModelSelect } from "@/components/ChatModelSelect";
 
+const PlanningWorkspace = lazy(() => import("@/features/novel/PlanningWorkspace"));
+
 const VIEW_ITEMS: Array<{ key: NovelWorkspaceView; label: string; icon: React.ReactNode; group: string }> = [
-  { key: "dashboard", label: "近期剧情", icon: <DashboardOutlined />, group: "创作中枢" },
-  { key: "workflow", label: "创作流程", icon: <DeploymentUnitOutlined />, group: "创作中枢" },
-  { key: "manuscript", label: "正文写作", icon: <EditOutlined />, group: "创作中枢" },
-  { key: "bible", label: "故事圣经", icon: <BookOutlined />, group: "故事资料" },
-  { key: "characters", label: "角色档案", icon: <TeamOutlined />, group: "故事资料" },
-  { key: "relations", label: "人物关系", icon: <ApartmentOutlined />, group: "故事资料" },
-  { key: "skills", label: "Skill 中心", icon: <ToolOutlined />, group: "故事资料" },
-  { key: "outline", label: "层级大纲", icon: <NodeIndexOutlined />, group: "剧情规划" },
-  { key: "board", label: "剧情卡片", icon: <BranchesOutlined />, group: "剧情规划" },
-  { key: "timeline", label: "故事时间线", icon: <CalendarOutlined />, group: "剧情规划" },
-  { key: "threads", label: "剧情线", icon: <AimOutlined />, group: "连续性" },
-  { key: "foreshadowing", label: "伏笔管理", icon: <BulbOutlined />, group: "连续性" },
-  { key: "analysis", label: "故事分析", icon: <RadarChartOutlined />, group: "审校与历史" },
-  { key: "versions", label: "版本历史", icon: <HistoryOutlined />, group: "审校与历史" },
+  { key: "dashboard", label: "总览", icon: <DashboardOutlined />, group: "创作工作区" },
+  { key: "planning", label: "规划", icon: <NodeIndexOutlined />, group: "创作工作区" },
+  { key: "writing", label: "写作", icon: <EditOutlined />, group: "创作工作区" },
+  { key: "library", label: "资料库", icon: <BookOutlined />, group: "创作工作区" },
+  { key: "review", label: "审校", icon: <RadarChartOutlined />, group: "创作工作区" },
 ];
 
 const ENTITY_KIND_LABEL: Record<StoryEntity["kind"], string> = {
@@ -107,12 +105,34 @@ function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; o
   const { message } = App.useApp();
   const [saving, setSaving] = useState(false);
   const collaboration = useMemo(() => document ? openCollaborativeDocument(document.projectId, document.yjsDocumentId) : undefined, [document?.projectId, document?.yjsDocumentId]);
-  const editor = useEditor({
-    extensions: [StarterKit.configure({ undoRedo: false }), Placeholder.configure({ placeholder: "落笔。让人物先做出一个选择……" }), CharacterCount, ...(collaboration ? [Collaboration.configure({ document: collaboration.doc })] : [])],
-    content: document?.contentHtml ?? "",
-  }, [document?.id]);
+  const [collaborationReady, setCollaborationReady] = useState(false);
+  const synchronizedDocument = useRef<{ id?: string; revision?: number }>({});
   useEffect(() => {
-    if (!collaboration || !editor || !document) return;
+    let cancelled = false;
+    setCollaborationReady(!collaboration);
+    if (collaboration) void collaboration.ready.then(() => {
+      if (!cancelled) setCollaborationReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [collaboration]);
+  const editor = useEditor({
+    extensions: [StarterKit.configure({ undoRedo: false }), Placeholder.configure({ placeholder: "落笔。让人物先做出一个选择……" }), CharacterCount, ...(collaboration && collaborationReady ? [Collaboration.configure({ document: collaboration.doc })] : [])],
+    content: document?.contentHtml ?? "",
+    editable: !collaboration || collaborationReady,
+  }, [document?.id, collaborationReady]);
+  useEffect(() => {
+    if (!editor || !document || editor.isDestroyed || !collaborationReady) return;
+    if (synchronizedDocument.current.id !== document.id) {
+      synchronizedDocument.current = { id: document.id, revision: document.revision };
+      return;
+    }
+    if (synchronizedDocument.current.revision === document.revision) return;
+    synchronizedDocument.current.revision = document.revision;
+    if (editor.getHTML() === document.contentHtml) return;
+    editor.commands.setContent(document.contentHtml || "");
+  }, [collaborationReady, document?.contentHtml, document?.id, document?.revision, editor]);
+  useEffect(() => {
+    if (!collaboration) return;
     const pendingCleanup = COLLAB_CLEANUP_TIMERS.get(collaboration);
     if (pendingCleanup) {
       clearTimeout(pendingCleanup);
@@ -125,7 +145,7 @@ function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; o
       }, 0);
       COLLAB_CLEANUP_TIMERS.set(collaboration, cleanupTimer);
     };
-  }, [collaboration, editor]);
+  }, [collaboration]);
 
   async function save(checkpoint = false) {
     if (!editor || !document) return;
@@ -140,7 +160,8 @@ function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; o
     }
   }
 
-  if (!document) return <EmptyPanel title="选择一个章节" description="从左侧章节目录选择，或在大纲中创建新章节。" />;
+  if (!document) return <EmptyPanel title="选择一个章节" description="从左侧章节管理器选择或新建章节。" />;
+  if (collaboration && !collaborationReady) return <div className="novel-studio-loading"><Spin /><span>正在恢复章节内容</span></div>;
   return (
     <div className="novel-editor-shell">
       <div className="novel-editor-toolbar">
@@ -171,7 +192,7 @@ function BibleView({ projectId }: { projectId: string }) {
   if (!project) return <Spin />;
   return <div className="novel-view-content"><SectionTitle eyebrow="STORY BIBLE" title="故事圣经" description="这里的内容是所有规划、写作和审校任务共同遵守的事实基础。" />
     <Form form={form} layout="vertical" className="novel-bible-form" onFinish={async (values) => { await updateProject(projectId, { ...values, genre: values.genre.split(/[、,，]/).filter(Boolean), themes: values.themes.split(/[、,，]/).filter(Boolean), sellingPoints: values.sellingPoints.split(/[、,，]/).filter(Boolean) }); message.success("故事圣经已保存"); }}>
-      <section><h3>作品定位</h3><div className="novel-form-grid"><Form.Item name="title" label="书名"><Input /></Form.Item><Form.Item name="subtitle" label="副标题"><Input /></Form.Item><Form.Item name="genre" label="题材"><Input /></Form.Item><Form.Item name="audience" label="目标读者"><Input /></Form.Item><Form.Item name="pov" label="叙事视角"><Input /></Form.Item><Form.Item name="tense" label="叙事时态"><Input /></Form.Item></div><Form.Item name="logline" label="一句话梗概"><Input /></Form.Item><Form.Item name="premise" label="核心创意"><Input.TextArea rows={3} /></Form.Item></section>
+      <section><h3>作品定位</h3><div className="novel-form-grid"><Form.Item name="title" label="书名"><Input /></Form.Item><Form.Item name="subtitle" label="副标题"><Input /></Form.Item><Form.Item name="genre" label="题材"><Input /></Form.Item><Form.Item name="audience" label="目标读者"><Input /></Form.Item><Form.Item name="pov" label="叙事视角"><Input /></Form.Item><Form.Item name="tense" label="叙事时态"><Input /></Form.Item></div><Form.Item name="premise" label="核心创意"><Input.TextArea rows={3} /></Form.Item></section>
       <section><h3>主题与风格</h3><div className="novel-form-grid"><Form.Item name="themes" label="主题"><Input placeholder="成长、代价、记忆" /></Form.Item><Form.Item name="sellingPoints" label="核心卖点"><Input /></Form.Item><Form.Item name="tone" label="整体基调"><Input /></Form.Item><Form.Item name="languageStyle" label="语言风格"><Input /></Form.Item></div></section>
       <section><h3>AI 与创作上下文</h3><div className="novel-form-grid"><Form.Item name={["settings", "textModel"]} label="文本模型"><ChatModelSelect style={{ width: "100%" }} /></Form.Item><Form.Item name={["settings", "temperature"]} label="创作温度"><InputNumber min={0} max={2} step={0.05} style={{ width: "100%" }} /></Form.Item><Form.Item name={["settings", "contextBudget"]} label="上下文 Token 预算"><InputNumber min={4000} max={200000} step={1000} style={{ width: "100%" }} /></Form.Item><Form.Item name={["settings", "recentChapterCount"]} label="近期章节数量"><InputNumber min={1} max={30} style={{ width: "100%" }} /></Form.Item><Form.Item name={["settings", "autoCommitFacts"]} label="授权 AI 自动提交事实变更" valuePropName="checked"><Switch /></Form.Item><Form.Item name={["settings", "encrypted"]} label="敏感项目加密" valuePropName="checked"><Switch disabled /><span className="novel-inline-help">需先设置项目密钥</span></Form.Item></div></section>
       <section><h3>世界规则</h3><div className="novel-world-grid">{entities.filter((item) => item.kind !== "character").map((entity) => <article key={entity.id}><Tag>{ENTITY_KIND_LABEL[entity.kind]}</Tag><strong>{entity.name}</strong><p>{entity.summary || "等待补充定义"}</p></article>)}<button type="button" onClick={() => void addEntity(projectId, "rule", "新世界规则")}><PlusOutlined /><span>添加世界规则</span></button></div></section>
@@ -194,26 +215,25 @@ function CharactersView({ projectId }: { projectId: string }) {
 function RelationsView({ projectId }: { projectId: string }) {
   const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).and((item) => item.kind === "character").toArray(), [projectId]) ?? [];
   const relations = useLiveQuery(() => novelDb.relations.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
-  return <div className="novel-view-content"><SectionTitle eyebrow="RELATIONSHIP GRAPH" title="人物关系" description="同一段关系可以同时拥有公开表象、私人真相与动态数值。" />
-    {entities.length < 2 ? <EmptyPanel title="至少需要两名角色" description="创建角色后即可建立关系。" /> : <><div className="novel-relation-stage">{entities.slice(0, 8).map((entity, index) => <motion.div key={entity.id} className="novel-relation-node" initial={{ opacity: 0, scale: .9 }} animate={{ opacity: 1, scale: 1 }} style={{ "--node-index": index } as React.CSSProperties}><span>{entity.name.slice(0, 1)}</span><strong>{entity.name}</strong><small>{entity.character?.state.emotional || "状态未知"}</small></motion.div>)}<div className="novel-relation-center"><ApartmentOutlined /><span>{relations.length} 条关系</span></div></div><div className="novel-relation-list">{relations.length === 0 ? <p>尚未建立显式关系。角色仍可通过剧情线和章节共同出场形成关联。</p> : relations.map((relation) => <article key={relation.id}><strong>{entities.find((item) => item.id === relation.fromEntityId)?.name} → {entities.find((item) => item.id === relation.toEntityId)?.name}</strong><Tag>{relation.relationType}</Tag><span>信任 {relation.trust}</span><span>冲突 {relation.conflict}</span></article>)}</div></>}
-  </div>;
-}
-
-function OutlineView({ projectId, mode }: { projectId: string; mode: "tree" | "board" }) {
-  const nodes = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).sortBy("order"), [projectId]) ?? [];
   const [selectedId, setSelectedId] = useState<string>();
-  const selected = nodes.find((item) => item.id === selectedId);
-  async function addChapter() {
-    const volume = nodes.find((item) => item.kind === "volume");
-    const chapters = nodes.filter((item) => item.kind === "chapter");
-    const node = await addOutlineNode(projectId, volume?.id, "chapter", `第${chapters.length + 1}章`, chapters.length);
-    const document: ManuscriptDocument = { ...recordBase(projectId), outlineNodeId: node.id, title: node.title, contentHtml: "", plainText: "", summary: "", status: "outline", wordCount: 0, branch: "main", yjsDocumentId: crypto.randomUUID() };
-    await novelDb.documents.add(document);
-    await novelDb.outlineNodes.update(node.id, { documentId: document.id });
-    setSelectedId(node.id);
+  const selected = relations.find((item) => item.id === selectedId) ?? relations[0];
+  const [draft, setDraft] = useState<EntityRelation>();
+  useEffect(() => setDraft(selected ? structuredClone(selected) : undefined), [selected]);
+  async function addRelation() {
+    if (entities.length < 2) return;
+    const relation: EntityRelation = { ...recordBase(projectId), fromEntityId: entities[0].id, toEntityId: entities[1].id, relationType: "同伴", publicLabel: "", privateTruth: "", affinity: 50, trust: 50, conflict: 20, history: [] };
+    await novelDb.relations.add(relation);
+    await appendOperation(projectId, "relations", relation.id, "create", { relationType: { before: null, after: relation.relationType } });
+    setSelectedId(relation.id);
   }
-  return <div className="novel-view-content"><SectionTitle eyebrow={mode === "tree" ? "STRUCTURE" : "STORY BOARD"} title={mode === "tree" ? "层级大纲" : "剧情卡片"} description="从作品结构一路拆解到可以执行的场景节拍。" action={<Button type="primary" icon={<PlusOutlined />} onClick={() => void addChapter()}>新增章节</Button>} />
-    {mode === "board" ? <div className="novel-board">{nodes.filter((node) => node.kind === "chapter").map((node, index) => <article key={node.id}><span>{String(index + 1).padStart(2, "0")}</span><Tag>{node.status}</Tag><h3>{node.title}</h3><p>{node.summary || "等待规划本章目标"}</p><div><small>张力</small><Progress percent={node.tension} showInfo={false} strokeColor="#b5483a" /></div><div><small>情绪</small><Progress percent={node.emotion} showInfo={false} strokeColor="#ad8b51" /></div><strong>{node.blueprint?.hook || "尚未设置章节钩子"}</strong></article>)}</div> : <div className="novel-outline-layout"><div className="novel-outline-tree">{nodes.filter((node) => !node.parentId).map((root) => <div key={root.id}><button onClick={() => setSelectedId(root.id)} className={selectedId === root.id ? "active" : ""}><BookOutlined /><strong>{root.title}</strong><Tag>{root.status}</Tag></button>{nodes.filter((node) => node.parentId === root.id).map((child) => <button key={child.id} onClick={() => setSelectedId(child.id)} className={selectedId === child.id ? "active child" : "child"}><FileTextOutlined /><span>{child.title}</span><small>{child.summary}</small></button>)}</div>)}</div><div className="novel-outline-detail">{selected ? <><Tag>{selected.kind}</Tag><Input value={selected.title} onChange={(event) => void novelDb.outlineNodes.update(selected.id, { title: event.target.value, updatedAt: Date.now() })} /><Input.TextArea value={selected.summary} rows={4} onChange={(event) => void novelDb.outlineNodes.update(selected.id, { summary: event.target.value, updatedAt: Date.now() })} /><label>冲突张力 <Slider value={selected.tension} onChange={(value) => void novelDb.outlineNodes.update(selected.id, { tension: value })} /></label><label>情绪强度 <Slider value={selected.emotion} onChange={(value) => void novelDb.outlineNodes.update(selected.id, { emotion: value })} /></label><label>信息释放 <Slider value={selected.information} onChange={(value) => void novelDb.outlineNodes.update(selected.id, { information: value })} /></label>{selected.blueprint && <div className="novel-blueprint"><h3>章节蓝图</h3><Input addonBefore="目标" value={selected.blueprint.objective} readOnly /><Input addonBefore="冲突" value={selected.blueprint.conflict} readOnly /><Input addonBefore="转折" value={selected.blueprint.turningPoint} readOnly /><Input addonBefore="钩子" value={selected.blueprint.hook} readOnly /></div>}</> : <EmptyPanel title="选择大纲节点" description="在左侧查看并编辑具体内容。" />}</div></div>}
+  async function saveRelation() {
+    if (!draft) return;
+    const before = await novelDb.relations.get(draft.id);
+    await novelDb.relations.put({ ...draft, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() });
+    await appendOperation(projectId, "relations", draft.id, "update", { value: { before, after: draft } });
+  }
+  return <div className="novel-view-content"><SectionTitle eyebrow="RELATIONSHIP GRAPH" title="人物关系" description="同一段关系可以同时拥有公开表象、私人真相与动态数值。" action={<Button type="primary" icon={<PlusOutlined />} disabled={entities.length < 2} onClick={() => void addRelation()}>建立关系</Button>} />
+    {entities.length < 2 ? <EmptyPanel title="至少需要两名角色" description="创建角色后即可建立关系。" /> : <><div className="novel-relation-stage">{entities.slice(0, 8).map((entity, index) => <motion.div key={entity.id} className="novel-relation-node" initial={{ opacity: 0, scale: .9 }} animate={{ opacity: 1, scale: 1 }} style={{ "--node-index": index } as React.CSSProperties}><span>{entity.name.slice(0, 1)}</span><strong>{entity.name}</strong><small>{entity.character?.state.emotional || "状态未知"}</small></motion.div>)}<div className="novel-relation-center"><ApartmentOutlined /><span>{relations.length} 条关系</span></div></div><div className="novel-relation-workbench"><aside className="novel-relation-list">{relations.length === 0 ? <p>尚未建立显式关系。</p> : relations.map((relation) => <button key={relation.id} className={selected?.id === relation.id ? "active" : ""} onClick={() => setSelectedId(relation.id)}><strong>{entities.find((item) => item.id === relation.fromEntityId)?.name} → {entities.find((item) => item.id === relation.toEntityId)?.name}</strong><Tag>{relation.relationType}</Tag><span>信任 {relation.trust}</span><span>冲突 {relation.conflict}</span></button>)}</aside>{draft && <section className="novel-relation-editor"><div className="novel-form-grid"><Select value={draft.fromEntityId} options={entities.map((item) => ({ value: item.id, label: item.name }))} onChange={(fromEntityId) => setDraft({ ...draft, fromEntityId })} /><Select value={draft.toEntityId} options={entities.map((item) => ({ value: item.id, label: item.name }))} onChange={(toEntityId) => setDraft({ ...draft, toEntityId })} /></div><Input addonBefore="关系类型" value={draft.relationType} onChange={(event) => setDraft({ ...draft, relationType: event.target.value })} /><Input.TextArea rows={3} value={draft.publicLabel} placeholder="其他人眼中的关系" onChange={(event) => setDraft({ ...draft, publicLabel: event.target.value })} /><Input.TextArea rows={3} value={draft.privateTruth} placeholder="关系双方未公开的真相" onChange={(event) => setDraft({ ...draft, privateTruth: event.target.value })} /><label>亲密度 <Slider value={draft.affinity} onChange={(affinity) => setDraft({ ...draft, affinity })} /></label><label>信任度 <Slider value={draft.trust} onChange={(trust) => setDraft({ ...draft, trust })} /></label><label>冲突度 <Slider value={draft.conflict} onChange={(conflict) => setDraft({ ...draft, conflict })} /></label><Button type="primary" icon={<SaveOutlined />} onClick={() => void saveRelation()}>保存关系</Button></section>}</div></>}
   </div>;
 }
 
@@ -235,6 +255,27 @@ function ContinuityView({ projectId, type }: { projectId: string; type: "threads
   </div>;
 }
 
+const PROJECT_STAGE_LABELS = { architecture: "全书架构", "story-bible": "资料库", outline: "故事大纲", "story-control": "剧情控制", chapters: "章节编排", review: "一致性检查" } as const;
+const PROJECT_STAGE_TASK = { architecture: "architecture", "story-bible": "story-bible", outline: "outline", "story-control": "story-control", chapters: "chapter-arrangement", review: "review" } as const;
+const PROJECT_STAGE_SCOPE = { architecture: "architecture", "story-bible": "bible", outline: "outline", "story-control": "review", chapters: "chapters", review: "review" } as const;
+
+function ProjectGenerationPanel({ projectId, premise }: { projectId: string; premise: string }) {
+  const { message } = App.useApp();
+  const runs = useLiveQuery(() => novelDb.projectGenerationRuns.where("projectId").equals(projectId).reverse().sortBy("createdAt"), [projectId]) ?? [];
+  const run = runs[0];
+  const pendingCount = useLiveQuery(() => novelDb.proposals.where("projectId").equals(projectId).and((item) => item.status === "pending").count(), [projectId]) ?? 0;
+  const active = run && !["completed", "cancelled"].includes(run.status);
+  const [instruction, setInstruction] = useState(premise);
+  const [busy, setBusy] = useState(false);
+  async function perform(action: () => Promise<unknown>) { setBusy(true); try { await action(); } catch (error) { message.error(error instanceof Error ? error.message : "操作失败"); } finally { setBusy(false); } }
+  return <section className="novel-project-generation"><header><div><span>AI PROJECT PIPELINE</span><h3>从创意生成全案</h3><p>每个阶段先生成候选，审核采纳后自动进入下一阶段。</p></div><div>{pendingCount > 0 && <Tag color="gold">{pendingCount} 项待审核</Tag>}{run && <Tag color={run.status === "failed" ? "red" : run.status === "completed" ? "green" : "gold"}>{run.status}</Tag>}</div></header>
+    <div className="novel-project-stage-rail">{PROJECT_GENERATION_STAGES.map((stage, index) => <div key={stage} className={run && index < run.stageIndex ? "done" : run?.currentStage === stage ? "active" : ""}><i>{index + 1}</i><span>{PROJECT_STAGE_LABELS[stage]}</span></div>)}</div>
+    {!active && <><div className="novel-project-generation-launch"><Input.TextArea rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="输入核心创意、题材方向或整套规划要求" /><Button type="primary" size="large" icon={<ThunderboltOutlined />} loading={busy} onClick={() => void perform(() => startProjectGeneration(projectId, instruction || premise))}>开始生成全案</Button></div><div className="novel-project-positioning"><strong>只完善项目定位</strong><GenerationComposer projectId={projectId} scope="dashboard" taskKeys={["project-positioning"]} compact /></div></>}
+    {active && run.status !== "failed" && <GenerationComposer projectId={projectId} scope={PROJECT_STAGE_SCOPE[run.currentStage]} taskKeys={[PROJECT_STAGE_TASK[run.currentStage]]} projectGenerationRunId={run.id} />}
+    {active && <footer>{run.status === "failed" && <><p>{run.error}</p><Button icon={<ReloadOutlined />} loading={busy} onClick={() => void perform(() => retryProjectGeneration(run.id))}>重试当前阶段</Button></>}<Button onClick={() => void perform(() => skipProjectGenerationStage(run.id))}>跳过当前阶段</Button><Button danger onClick={() => void perform(() => cancelProjectGeneration(run.id))}>取消全案流程</Button></footer>}
+  </section>;
+}
+
 function DashboardView({ projectId, onWrite, onAI, onWorkflow }: { projectId: string; onWrite: () => void; onAI: () => void; onWorkflow: () => void }) {
   const project = useLiveQuery(() => novelDb.projects.get(projectId), [projectId]);
   const documents = useLiveQuery(() => novelDb.documents.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
@@ -243,18 +284,18 @@ function DashboardView({ projectId, onWrite, onAI, onWorkflow }: { projectId: st
   const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const words = documents.reduce((sum, item) => sum + item.wordCount, 0);
   if (!project) return <Spin />;
-  return <div className="novel-view-content novel-dashboard"><SectionTitle eyebrow="STORY NOW" title="近期剧情" description="写下一章之前，先看清故事此刻停在哪里。" action={<div><Button icon={<RobotOutlined />} onClick={onAI}>单步工具</Button><Button icon={<EditOutlined />} onClick={onWrite}>继续写作</Button><Button type="primary" icon={<DeploymentUnitOutlined />} onClick={onWorkflow}>标准创作流程</Button></div>} />
+  return <div className="novel-view-content novel-dashboard"><ProjectGenerationPanel projectId={projectId} premise={project.premise} /><SectionTitle eyebrow="STORY NOW" title="近期剧情" description="写下一章之前，先看清故事此刻停在哪里。" action={<div className="novel-dashboard-actions"><Button className="novel-dashboard-action-primary" icon={<EditOutlined />} onClick={onWrite}>继续写作</Button><Button className="novel-dashboard-action-secondary" icon={<DeploymentUnitOutlined />} onClick={onWorkflow}>章节流程</Button><Tooltip title="打开任务历史"><Button className="novel-dashboard-action-tool" aria-label="打开任务历史" icon={<RobotOutlined />} onClick={onAI} /></Tooltip></div>} />
     <div className="novel-metric-grid"><Metric label="总字数" value={words.toLocaleString()} note={`目标 ${project.targetWords.toLocaleString()}`} /><Metric label="章节" value={documents.length} note={`${documents.filter((item) => item.status === "final").length} 章定稿`} /><Metric label="活跃剧情线" value={threads.filter((item) => item.status === "active").length} note={`${threads.length} 条已登记`} tone="good" /><Metric label="连续性风险" value={clues.filter((item) => item.urgency > 70 && item.status !== "resolved").length} note="需要关注" tone={clues.some((item) => item.urgency > 70) ? "warn" : "neutral"} /></div>
     <div className="novel-dashboard-grid"><section className="novel-current-state"><div className="novel-panel-heading"><span>CURRENT STATE</span><h3>故事现在发生了什么</h3></div>{documents.slice(-5).reverse().map((doc, index) => <article key={doc.id}><span>{index === 0 ? "现在" : `-${index}`}</span><div><strong>{doc.title}</strong><p>{doc.summary || doc.plainText.slice(0, 100) || "本章尚未形成摘要"}</p></div><Tag>{doc.status}</Tag></article>)}{documents.length === 0 && <Empty description="暂无章节" />}</section><section className="novel-active-cast"><div className="novel-panel-heading"><span>ACTIVE CAST</span><h3>活跃人物</h3></div>{entities.filter((item) => item.kind === "character").slice(0, 6).map((entity) => <article key={entity.id}><span>{entity.name.slice(0, 1)}</span><div><strong>{entity.name}</strong><p>{entity.character?.state.objective || "尚未记录当前目标"}</p></div><small>{entity.character?.state.emotional || "未知"}</small></article>)}</section><section className="novel-open-loops"><div className="novel-panel-heading"><span>OPEN LOOPS</span><h3>未闭合线索</h3></div>{clues.filter((item) => item.status !== "resolved").slice(0, 5).map((clue) => <article key={clue.id}><div><strong>{clue.title}</strong><p>{clue.clue || "等待补充线索表现"}</p></div><Progress percent={clue.urgency} showInfo={false} strokeColor={clue.urgency > 70 ? "#c45c4e" : "#ad8b51"} /></article>)}</section><section className="novel-next-moves"><div className="novel-panel-heading"><span>NEXT MOVES</span><h3>接下来要推进</h3></div>{threads.filter((item) => item.status !== "resolved").slice(0, 5).map((thread) => <article key={thread.id}><Tag>{thread.kind}</Tag><div><strong>{thread.title}</strong><p>{thread.nextMove || "等待确定下一步动作"}</p></div></article>)}</section></div>
   </div>;
 }
 
 function AnalysisView({ projectId }: { projectId: string }) {
-  const nodes = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).and((item) => item.kind === "chapter").sortBy("order"), [projectId]) ?? [];
+  const nodes = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).and((item) => item.kind === "event").sortBy("order"), [projectId]) ?? [];
   const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const docs = useLiveQuery(() => novelDb.documents.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const max = Math.max(1, ...nodes.flatMap((node) => [node.tension, node.emotion, node.information]));
-  return <div className="novel-view-content"><SectionTitle eyebrow="EDITORIAL ANALYSIS" title="故事分析" description="用可解释的指标发现节奏、角色与信息分布问题。" /><div className="novel-analysis-grid"><section><h3>章节节奏曲线</h3><div className="novel-bar-chart">{nodes.map((node) => <Tooltip key={node.id} title={`${node.title} · 张力 ${node.tension} / 情绪 ${node.emotion} / 信息 ${node.information}`}><div><i style={{ height: `${node.tension / max * 100}%` }} /><i style={{ height: `${node.emotion / max * 100}%` }} /><i style={{ height: `${node.information / max * 100}%` }} /><span>{node.order + 1}</span></div></Tooltip>)}</div><footer><span className="tension">张力</span><span className="emotion">情绪</span><span className="information">信息</span></footer></section><section><h3>作品健康度</h3><div className="novel-health-ring"><Progress type="circle" percent={Math.min(100, 35 + entities.length * 3 + docs.filter((item) => item.summary).length * 4)} strokeColor="#b5483a" trailColor="#2b2927" size={150} /><p>基于设定完整度、章节摘要和连续性记录</p></div></section><section><h3>编辑建议</h3><ul className="novel-editorial-notes"><li><CheckCircleOutlined /> 已建立 {entities.length} 个故事实体</li><li><CheckCircleOutlined /> {nodes.length} 个章节节点进入节奏分析</li><li className={docs.some((item) => !item.summary) ? "warn" : ""}><BulbOutlined /> {docs.filter((item) => !item.summary).length} 章缺少摘要，会影响长期上下文</li><li className={nodes.some((item) => item.tension === nodeAverage(nodes.map((item) => item.tension))) ? "warn" : ""}><RadarChartOutlined /> 建议让相邻章节的张力形成更明显落差</li></ul></section></div></div>;
+  return <div className="novel-view-content"><SectionTitle eyebrow="EDITORIAL ANALYSIS" title="故事分析" description="用可解释的指标发现节奏、角色与信息分布问题。" /><div className="novel-analysis-grid"><section><h3>故事事件节奏</h3><div className="novel-bar-chart">{nodes.map((node) => <Tooltip key={node.id} title={`${node.title} · 张力 ${node.tension} / 情绪 ${node.emotion} / 信息 ${node.information}`}><div><i style={{ height: `${node.tension / max * 100}%` }} /><i style={{ height: `${node.emotion / max * 100}%` }} /><i style={{ height: `${node.information / max * 100}%` }} /><span>{node.order + 1}</span></div></Tooltip>)}</div><footer><span className="tension">张力</span><span className="emotion">情绪</span><span className="information">信息</span></footer></section><section><h3>作品健康度</h3><div className="novel-health-ring"><Progress type="circle" percent={Math.min(100, 35 + entities.length * 3 + docs.filter((item) => item.summary).length * 4)} strokeColor="#b5483a" trailColor="#2b2927" size={150} /><p>基于设定完整度、章节摘要和连续性记录</p></div></section><section><h3>编辑建议</h3><ul className="novel-editorial-notes"><li><CheckCircleOutlined /> 已建立 {entities.length} 个故事实体</li><li><CheckCircleOutlined /> {nodes.length} 个故事事件进入节奏分析</li><li className={docs.some((item) => !item.summary) ? "warn" : ""}><BulbOutlined /> {docs.filter((item) => !item.summary).length} 章缺少摘要，会影响长期上下文</li><li className={nodes.some((item) => item.tension === nodeAverage(nodes.map((item) => item.tension))) ? "warn" : ""}><RadarChartOutlined /> 建议让相邻事件的张力形成更明显落差</li></ul></section></div></div>;
 }
 
 function nodeAverage(values: number[]) { return values.length ? Math.round(values.reduce((sum, item) => sum + item, 0) / values.length) : 0; }
@@ -272,9 +313,12 @@ export default function NovelStudio() {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = (searchParams.get("view") as NovelWorkspaceView) || "dashboard";
   const project = useLiveQuery(() => novelDb.projects.get(projectId), [projectId]);
-  const outline = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).sortBy("order"), [projectId]) ?? [];
-  const documents = useLiveQuery(() => novelDb.documents.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
+  const documents = useLiveQuery(() => novelDb.documents.where("projectId").equals(projectId).sortBy("order"), [projectId]) ?? [];
   const conflicts = useLiveQuery(() => novelDb.conflicts.where({ projectId, status: "open" }).count(), [projectId]) ?? 0;
+  const urgentForeshadowingCount = useLiveQuery(
+    () => novelDb.foreshadowing.where("projectId").equals(projectId).filter((item) => item.urgency > 70 && item.status !== "resolved").count(),
+    [projectId],
+  ) ?? 0;
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>();
   const [aiCollapsed, setAiCollapsed] = useState(() => window.matchMedia("(max-width: 700px)").matches);
   const [mobileNav, setMobileNav] = useState(false);
@@ -284,19 +328,87 @@ export default function NovelStudio() {
   const groups = useMemo(() => [...new Set(VIEW_ITEMS.map((item) => item.group))], []);
   if (project === undefined) return <div className="novel-studio-loading"><Spin /><span>打开故事工作区</span></div>;
   if (!project) return <div className="novel-studio-loading"><Empty description="项目不存在" /><Button onClick={() => navigate("/novels")}>返回项目中心</Button></div>;
-  function setView(next: NovelWorkspaceView) { setSearchParams({ view: next }); setMobileNav(false); }
+  function setView(next: NovelWorkspaceView, panel?: string) { setSearchParams(panel ? { view: next, panel } : { view: next }); setMobileNav(false); }
   function renderView() {
-    if (view === "dashboard") return <DashboardView projectId={projectId} onWrite={() => setView("manuscript")} onAI={() => setAiCollapsed(false)} onWorkflow={() => setView("workflow")} />;
-    if (view === "workflow") return <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载创作流程</span></div>}><WorkflowCenter projectId={projectId} document={selectedDocument} /></Suspense>;
-    if (view === "bible") return <BibleView projectId={projectId} />;
-    if (view === "characters") return <CharactersView projectId={projectId} />;
-    if (view === "relations") return <RelationsView projectId={projectId} />;
-    if (view === "skills") return <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载 Skill 中心</span></div>}><SkillCenter projectId={projectId} /></Suspense>;
-    if (view === "outline" || view === "board") return <OutlineView projectId={projectId} mode={view === "board" ? "board" : "tree"} />;
-    if (view === "threads" || view === "foreshadowing" || view === "timeline") return <ContinuityView projectId={projectId} type={view} />;
-    if (view === "analysis") return <AnalysisView projectId={projectId} />;
-    if (view === "versions") return <VersionsView projectId={projectId} />;
-    return <div className="novel-manuscript-view"><aside className="novel-chapter-list"><header><span>MANUSCRIPT</span><strong>章节目录</strong></header>{outline.filter((node) => node.kind === "chapter").map((node) => { const doc = documents.find((item) => item.id === node.documentId); return <button key={node.id} className={selectedDocument?.id === doc?.id ? "active" : ""} onClick={() => doc && setSelectedDocumentId(doc.id)}><span>{String(node.order + 1).padStart(2, "0")}</span><div><strong>{node.title}</strong><small>{doc?.wordCount ?? 0} 字 · {doc?.status ?? "未创建"}</small></div></button>; })}</aside><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div>;
+    if (view === "dashboard") return <DashboardView projectId={projectId} onWrite={() => setView("writing")} onAI={() => setAiCollapsed(false)} onWorkflow={() => setView("writing", "workflow")} />;
+    if (view === "planning") return <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载规划工作区</span></div>}><PlanningWorkspace projectId={projectId} /></Suspense>;
+    if (view === "writing") return <WritingWorkspace projectId={projectId} documents={documents} selectedDocument={selectedDocument} onSelectDocument={setSelectedDocumentId} initialMode={searchParams.get("panel") === "workflow" ? "workflow" : "manuscript"} />;
+    if (view === "library") return <LibraryWorkspace projectId={projectId} />;
+    if (view === "review") return <ReviewWorkspace projectId={projectId} />;
+    if (view === "settings") return <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载项目设置</span></div>}><SkillCenter projectId={projectId} /></Suspense>;
+    return <DashboardView projectId={projectId} onWrite={() => setView("writing")} onAI={() => setAiCollapsed(false)} onWorkflow={() => setView("writing", "workflow")} />;
   }
-  return <div className="novel-studio"><header className="novel-studio-topbar"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate("/novels")} /><Button className="novel-mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileNav(true)} /><span className="novel-mini-cover" style={{ background: project.coverColor }}>{project.title.slice(0, 1)}</span><div><strong>{project.title}</strong><small>{VIEW_ITEMS.find((item) => item.key === view)?.label}</small></div></div><div className="novel-topbar-status"><span><CloudSyncOutlined /> 本地已保存</span>{conflicts > 0 && <Tag color="red">{conflicts} 个同步冲突</Tag>}<Dropdown menu={{ items: exportItems }}><Button icon={<ExportOutlined />}>导出 <MoreOutlined /></Button></Dropdown></div></header><div className="novel-studio-body"><nav className="novel-workspace-nav">{groups.map((group) => <section key={group}><span>{group}</span>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}>{item.icon}<span>{item.label}</span>{item.key === "foreshadowing" && <i />}</button>)}</section>)}</nav><main className="novel-workspace-main">{renderView()}</main><Suspense fallback={<button className="novel-ai-collapsed"><RobotOutlined /><span>AI</span></button>}><AIWorkbench projectId={projectId} document={selectedDocument} collapsed={aiCollapsed} onToggle={() => setAiCollapsed((value) => !value)} /></Suspense></div><footer className="novel-taskbar"><span><span className="online-dot" /> 数据库在线</span><span>Schema v{project.schemaVersion}</span><span>修订 {project.revision}</span><span className="spacer" /><span>{documents.reduce((sum, item) => sum + item.wordCount, 0).toLocaleString()} 字</span><span>今日目标 {project.dailyGoal.toLocaleString()}</span></footer><Drawer placement="left" width={280} open={mobileNav} onClose={() => setMobileNav(false)} title={project.title}>{groups.map((group) => <div className="novel-mobile-nav" key={group}><strong>{group}</strong>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <Button key={item.key} type={view === item.key ? "primary" : "text"} icon={item.icon} onClick={() => setView(item.key)} block>{item.label}</Button>)}</div>)}</Drawer></div>;
+  const assistantScope = (["dashboard", "planning", "writing", "library", "review", "settings"].includes(view) ? view : "dashboard") as "dashboard" | "planning" | "writing" | "library" | "review" | "settings";
+  const assistantDocument = assistantScope === "writing" || assistantScope === "review" ? selectedDocument : undefined;
+  const assistantTarget = assistantScope === "planning" ? "当前故事规划" : assistantScope === "library" ? "当前资料库" : assistantScope === "review" ? "当前审校任务" : undefined;
+  return <div className="novel-studio"><header className="novel-studio-topbar"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate("/novels")} /><Button className="novel-mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileNav(true)} /><span className="novel-mini-cover" style={{ background: project.coverColor }}>{project.title.slice(0, 1)}</span><div><strong>{project.title}</strong><small>{view === "settings" ? "项目设置" : VIEW_ITEMS.find((item) => item.key === view)?.label ?? "总览"}</small></div></div><div className="novel-topbar-status"><span><CloudSyncOutlined /> 本地已保存</span>{conflicts > 0 && <Tag color="red">{conflicts} 个同步冲突</Tag>}<Button type={view === "settings" ? "primary" : "default"} icon={<ToolOutlined />} onClick={() => setView("settings")}>项目设置</Button><Dropdown menu={{ items: exportItems }}><Button icon={<ExportOutlined />}>导出 <MoreOutlined /></Button></Dropdown></div></header><div className="novel-studio-body"><nav className="novel-workspace-nav">{groups.map((group) => <section key={group}><span>{group}</span>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}>{item.icon}<span>{item.label}</span>{item.key === "review" && urgentForeshadowingCount > 0 && <i title={`${urgentForeshadowingCount} 条高紧迫度伏笔需要关注`} />}</button>)}</section>)}</nav><main className="novel-workspace-main">{renderView()}</main><Suspense fallback={<button className="novel-ai-collapsed"><RobotOutlined /><span>AI</span></button>}><AIWorkbench projectId={projectId} document={assistantDocument} scope={assistantScope} targetLabel={assistantTarget} collapsed={aiCollapsed} onToggle={() => setAiCollapsed((value) => !value)} /></Suspense></div><footer className="novel-taskbar"><span><span className="online-dot" /> 数据库在线</span><span>Schema v{project.schemaVersion}</span><span>修订 {project.revision}</span><span className="spacer" /><span>{documents.reduce((sum, item) => sum + item.wordCount, 0).toLocaleString()} 字</span><span>今日目标 {project.dailyGoal.toLocaleString()}</span></footer><Drawer placement="left" width={280} open={mobileNav} onClose={() => setMobileNav(false)} title={project.title}>{groups.map((group) => <div className="novel-mobile-nav" key={group}><strong>{group}</strong>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <Button key={item.key} type={view === item.key ? "primary" : "text"} icon={item.icon} onClick={() => setView(item.key)} block>{item.label}</Button>)}</div>)}</Drawer></div>;
+}
+
+
+function ChapterPlanEditor({ document }: { document?: ManuscriptDocument }) {
+  const { message } = App.useApp();
+  if (!document) return <EmptyPanel title="选择一个章节" description="创建或选择章节后规划本章。" />;
+  const save = async (changes: Partial<ManuscriptDocument>) => {
+    const next = { ...document, ...changes, revision: document.revision + 1, updatedAt: Date.now() };
+    await novelDb.documents.put(next);
+    await appendOperation(document.projectId, "documents", document.id, "update", { value: { before: document, after: next } });
+  };
+  const blueprint = document.blueprint;
+  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="chapters" targetId={document.id} taskKeys={["chapter-plan"]} compact /><SectionTitle eyebrow="CHAPTER PLAN" title={document.title} description="章节蓝图只约束本章写作，不与故事大纲建立硬关联。" action={<Tag>{document.status}</Tag>} />
+    <div className="novel-architecture-form"><label>章节标题<Input value={document.title} onChange={(event) => void save({ title: event.target.value })} /></label><label>章节摘要<Input.TextArea rows={3} value={document.summary} onChange={(event) => void save({ summary: event.target.value })} /></label><label>本章目标<Input.TextArea rows={2} value={blueprint.objective} onChange={(event) => void save({ blueprint: { ...blueprint, objective: event.target.value } })} /></label><label>冲突<Input.TextArea rows={2} value={blueprint.conflict} onChange={(event) => void save({ blueprint: { ...blueprint, conflict: event.target.value } })} /></label><label>转折<Input.TextArea rows={2} value={blueprint.turningPoint} onChange={(event) => void save({ blueprint: { ...blueprint, turningPoint: event.target.value } })} /></label><label>章尾钩子<Input.TextArea rows={2} value={blueprint.hook} onChange={(event) => void save({ blueprint: { ...blueprint, hook: event.target.value } })} /></label><label>目标字数<InputNumber min={100} max={50000} value={blueprint.targetWords} onChange={(value) => void save({ blueprint: { ...blueprint, targetWords: value ?? 3000 } })} /></label></div>
+    <Button icon={<SaveOutlined />} onClick={() => message.success("章节规划实时保存")}>确认规划</Button>
+  </div>;
+}
+
+function ScenePlanner({ document }: { document?: ManuscriptDocument }) {
+  const { modal } = App.useApp();
+  const scenes = useLiveQuery<StoryScene[]>(async () => document ? await novelDb.scenes.where("chapterId").equals(document.id).sortBy("order") : [], [document?.id]) ?? [];
+  const [selectedId, setSelectedId] = useState<string>();
+  const selected = scenes.find((item) => item.id === selectedId) ?? scenes[0];
+  if (!document) return <EmptyPanel title="选择一个章节" description="场景属于章节，请先创建或选择章节。" />;
+  async function addScene() {
+    const scene = { ...recordBase(document!.projectId), chapterId: document!.id, title: `场景 ${scenes.length + 1}`, order: scenes.length, status: "idea" as const, characterIds: [], plotThreadIds: [], foreshadowingIds: [], purpose: "", conflict: "", outcome: "", wordTarget: 800, beats: [] };
+    await novelDb.scenes.add(scene); setSelectedId(scene.id);
+  }
+  async function updateScene(changes: Record<string, unknown>) { if (selected) await novelDb.scenes.update(selected.id, { ...changes, revision: selected.revision + 1, updatedAt: Date.now() }); }
+  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="scenes" targetId={document.id} taskKeys={["scene-design"]} compact /><SectionTitle eyebrow="SCENE DESIGN" title={`${document.title} · 场景`} description="按目标、阻碍、结果和行动节拍设计本章内部推进。" action={<Button type="primary" icon={<PlusOutlined />} onClick={() => void addScene()}>添加场景</Button>} />
+    <div className="novel-scene-layout"><aside>{scenes.map((scene) => <button key={scene.id} className={selected?.id === scene.id ? "active" : ""} onClick={() => setSelectedId(scene.id)}><strong>{scene.title}</strong><small>{scene.purpose || "等待定义场景功能"}</small></button>)}</aside>{selected ? <div className="novel-scene-detail"><div className="novel-scene-title-row"><Input value={selected.title} onChange={(event) => void updateScene({ title: event.target.value })} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${selected.title}”？`, okButtonProps: { danger: true }, onOk: async () => { await novelDb.scenes.delete(selected.id); setSelectedId(undefined); } })} /></div><Input.TextArea rows={2} placeholder="场景功能" value={selected.purpose} onChange={(event) => void updateScene({ purpose: event.target.value })} /><Input.TextArea rows={2} placeholder="目标与阻碍" value={selected.conflict} onChange={(event) => void updateScene({ conflict: event.target.value })} /><Input.TextArea rows={2} placeholder="结果、代价或新决定" value={selected.outcome} onChange={(event) => void updateScene({ outcome: event.target.value })} /><div className="novel-scene-beats"><header><strong>行动节拍</strong><Button type="text" icon={<PlusOutlined />} onClick={() => void updateScene({ beats: [...(selected.beats ?? []), { id: crypto.randomUUID(), text: "", order: selected.beats?.length ?? 0 }] })}>添加</Button></header>{(selected.beats ?? []).map((beat, index) => <div key={beat.id}><i>{index + 1}</i><Input value={beat.text} onChange={(event) => void updateScene({ beats: (selected.beats ?? []).map((item) => item.id === beat.id ? { ...item, text: event.target.value } : item) })} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => void updateScene({ beats: (selected.beats ?? []).filter((item) => item.id !== beat.id).map((item, order) => ({ ...item, order })) })} /></div>)}</div></div> : <Empty description="添加一个场景" />}</div>
+  </div>;
+}
+
+function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocument, initialMode }: { projectId: string; documents: ManuscriptDocument[]; selectedDocument?: ManuscriptDocument; onSelectDocument: (id: string) => void; initialMode: "manuscript" | "workflow" }) {
+  const { modal } = App.useApp();
+  const [mode, setMode] = useState<"plan" | "scenes" | "manuscript" | "workflow">(initialMode);
+  const [draggedId, setDraggedId] = useState<string>();
+  useEffect(() => setMode(initialMode), [initialMode]);
+  async function moveChapter(document: ManuscriptDocument, direction: -1 | 1) {
+    const index = documents.findIndex((item) => item.id === document.id);
+    const target = documents[index + direction];
+    if (!target) return;
+    await novelDb.documents.bulkPut([{ ...document, order: target.order, revision: document.revision + 1, updatedAt: Date.now() }, { ...target, order: document.order, revision: target.revision + 1, updatedAt: Date.now() }]);
+  }
+  async function dropChapter(targetId: string) {
+    if (!draggedId || draggedId === targetId) return;
+    const sourceIndex = documents.findIndex((item) => item.id === draggedId);
+    const targetIndex = documents.findIndex((item) => item.id === targetId);
+    const reordered = [...documents];
+    const [source] = reordered.splice(sourceIndex, 1);
+    reordered.splice(targetIndex, 0, source);
+    await novelDb.documents.bulkPut(reordered.map((item, order) => ({ ...item, order, revision: item.revision + 1, updatedAt: Date.now() })));
+    setDraggedId(undefined);
+  }
+  const chapterList = <aside className="novel-chapter-list"><header><div><span>MANUSCRIPT</span><strong>章节管理</strong></div><Button type="text" icon={<PlusOutlined />} title="新增章节" onClick={async () => { const chapter = await createChapter(projectId); onSelectDocument(chapter.id); }} /></header><GenerationComposer projectId={projectId} scope="chapters" taskKeys={["chapter-arrangement"]} compact />{documents.map((doc) => <div className={`novel-chapter-row${selectedDocument?.id === doc.id ? " active" : ""}`} key={doc.id} draggable onDragStart={() => setDraggedId(doc.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void dropChapter(doc.id)}><button onClick={() => onSelectDocument(doc.id)}><span>{String(doc.order + 1).padStart(2, "0")}</span><div><strong>{doc.title}</strong><small>{doc.wordCount} 字 · {doc.status}</small></div></button><div><Button type="text" icon={<ArrowUpOutlined />} onClick={() => void moveChapter(doc, -1)} /><Button type="text" icon={<ArrowDownOutlined />} onClick={() => void moveChapter(doc, 1)} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${doc.title}”？`, content: "本章场景、正文版本和章节流程将一并删除，大纲不会受到影响。", okButtonProps: { danger: true }, onOk: async () => { if (selectedDocument?.id === doc.id) { onSelectDocument(documents.find((item) => item.id !== doc.id)?.id ?? ""); await new Promise((resolve) => setTimeout(resolve, 0)); } await deleteChapter(doc.id); } })} /></div></div>)}{!documents.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无章节，可手动新增或让 AI 编排" />}</aside>;
+  const content = mode === "plan" ? <ChapterPlanEditor document={selectedDocument} /> : mode === "scenes" ? <ScenePlanner document={selectedDocument} /> : mode === "manuscript" ? <div className="novel-manuscript-with-command"><GenerationComposer projectId={projectId} scope="writing" targetId={selectedDocument?.id} taskKeys={["chapter-draft"]} compact /><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div> : <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载章节流程</span></div>}><WorkflowCenter projectId={projectId} document={selectedDocument} /></Suspense>;
+  return <div className="novel-writing-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "plan", label: "章节规划" }, { value: "scenes", label: "场景设计" }, { value: "manuscript", label: "正文编辑" }, { value: "workflow", label: "自动流程" }]} /></div><div className="novel-writing-body">{chapterList}{content}</div></div>;
+}
+
+function LibraryWorkspace({ projectId }: { projectId: string }) {
+  const [mode, setMode] = useState<"bible" | "characters" | "relations" | "timeline" | "foreshadowing">("bible");
+  const generation = mode === "bible" ? { scope: "bible" as const, task: "story-bible" as const } : mode === "characters" ? { scope: "characters" as const, task: "characters" as const } : mode === "relations" ? { scope: "relations" as const, task: "relations" as const } : mode === "timeline" ? { scope: "timeline" as const, task: "timeline" as const } : { scope: "foreshadowing" as const, task: "foreshadowing" as const };
+  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "bible", label: "故事圣经" }, { value: "characters", label: "角色" }, { value: "relations", label: "关系" }, { value: "timeline", label: "时间线" }, { value: "foreshadowing", label: "伏笔" }]} /></div><GenerationComposer projectId={projectId} scope={generation.scope} taskKeys={[generation.task]} compact />{mode === "bible" ? <BibleView projectId={projectId} /> : mode === "characters" ? <CharactersView projectId={projectId} /> : mode === "relations" ? <RelationsView projectId={projectId} /> : <ContinuityView projectId={projectId} type={mode} />}</div>;
+}
+
+function ReviewWorkspace({ projectId }: { projectId: string }) {
+  const [mode, setMode] = useState<"analysis" | "threads" | "versions">("analysis");
+  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "analysis", label: "故事诊断" }, { value: "threads", label: "剧情线" }, { value: "versions", label: "版本历史" }]} /></div>{mode !== "versions" && <GenerationComposer projectId={projectId} scope={mode === "threads" ? "threads" : "review"} taskKeys={[mode === "threads" ? "plot-threads" : "review"]} compact />}{mode === "analysis" ? <AnalysisView projectId={projectId} /> : mode === "threads" ? <ContinuityView projectId={projectId} type="threads" /> : <VersionsView projectId={projectId} />}</div>;
 }

@@ -9,6 +9,11 @@ import "@/features/novel/novel.css";
 
 const GENRES = ["玄幻", "奇幻", "科幻", "悬疑", "都市", "历史", "武侠", "言情", "现实", "轻小说", "其他"];
 
+// 字数简写：达到 1 万字后用「x.x 万字」避免数字过长
+function formatWordCount(words: number): string {
+  return words >= 10000 ? `${(words / 10000).toFixed(1)} 万字` : `${words.toLocaleString()} 字`;
+}
+
 export default function NovelProjects() {
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
@@ -87,14 +92,14 @@ export default function NovelProjects() {
                   <div className="novel-project-title-row">
                     <div>
                       <h2>{project.title}</h2>
-                      <p>{project.logline || "等待写下这个故事的核心命题"}</p>
+                      <p>{project.premise || "等待写下这个故事的核心命题"}</p>
                     </div>
                     <Tag>{project.status === "planning" ? "规划中" : project.status === "drafting" ? "创作中" : project.status === "revising" ? "修订中" : "已完成"}</Tag>
                   </div>
                   <div className="novel-project-tags">{project.genre.map((genre) => <span key={genre}>{genre}</span>)}</div>
                   <Progress percent={progress} size="small" strokeColor={project.coverColor} trailColor="#292725" />
                   <div className="novel-project-meta">
-                    <span>{words.toLocaleString()} / {project.targetWords.toLocaleString()} 字</span>
+                    <span>{formatWordCount(words)}</span>
                     <span>{projectDocs.length} 章</span>
                     <span>{new Date(project.updatedAt).toLocaleDateString("zh-CN")}</span>
                   </div>

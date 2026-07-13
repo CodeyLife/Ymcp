@@ -9,7 +9,8 @@ export type EntityKind =
   | "ability"
   | "term";
 
-export type OutlineKind = "volume" | "arc" | "chapter" | "scene" | "beat";
+export type OutlineKind = "act" | "sequence" | "event";
+export type StoryFramework = "free" | "three-act" | "four-part" | "save-the-cat" | "snowflake";
 export type PlotThreadKind = "main" | "subplot" | "romance" | "growth" | "mystery" | "antagonist";
 export type ProjectRole = "owner" | "editor" | "commenter" | "reader";
 export type ProposalStatus = "pending" | "accepted" | "rejected" | "partially_accepted";
@@ -29,7 +30,6 @@ export interface VersionedRecord {
 export interface StoryProject extends Omit<VersionedRecord, "projectId"> {
   title: string;
   subtitle: string;
-  logline: string;
   premise: string;
   genre: string[];
   audience: string;
@@ -127,16 +127,40 @@ export interface ChapterBlueprint {
   targetWords: number;
 }
 
+export interface ArchitecturePhase {
+  id: string;
+  title: string;
+  purpose: string;
+  turningPoint: string;
+  order: number;
+  locked: boolean;
+}
+
+export interface StoryArchitecture extends VersionedRecord {
+  framework: StoryFramework;
+  status: "draft" | "approved";
+  centralQuestion: string;
+  readerPromise: string;
+  centralConflict: string;
+  stakes: string;
+  endingPromise: string;
+  synopsis: string;
+  phases: ArchitecturePhase[];
+}
+
 export interface OutlineNode extends VersionedRecord {
   parentId?: string;
   kind: OutlineKind;
   title: string;
   summary: string;
   order: number;
-  status: "idea" | "planned" | "drafting" | "done";
+  status: "idea" | "planned" | "resolved";
   storyTime?: string;
-  documentId?: string;
-  blueprint?: ChapterBlueprint;
+  causality: string;
+  outcome: string;
+  characterIds: string[];
+  plotThreadIds: string[];
+  foreshadowingIds: string[];
   tension: number;
   emotion: number;
   information: number;
@@ -147,17 +171,25 @@ export interface StoryScene extends VersionedRecord {
   chapterId: string;
   title: string;
   order: number;
+  status?: "idea" | "planned" | "drafting" | "done";
+  povCharacterId?: string;
+  storyTime?: string;
   locationId?: string;
   characterIds: string[];
+  plotThreadIds?: string[];
+  foreshadowingIds?: string[];
   purpose: string;
   conflict: string;
+  entryState?: string;
   outcome: string;
   wordTarget: number;
+  beats?: Array<{ id: string; text: string; order: number }>;
 }
 
 export interface ManuscriptDocument extends VersionedRecord {
-  outlineNodeId: string;
+  order: number;
   title: string;
+  blueprint: ChapterBlueprint;
   contentHtml: string;
   plainText: string;
   summary: string;
@@ -227,7 +259,7 @@ export interface StorySnapshot extends VersionedRecord {
 
 export interface ContextSource {
   id: string;
-  kind: "instruction" | "document" | "entity" | "relation" | "outline" | "thread" | "foreshadowing" | "snapshot" | "style" | "skill" | "taste";
+  kind: "instruction" | "architecture" | "document" | "entity" | "relation" | "outline" | "scene" | "thread" | "foreshadowing" | "snapshot" | "style" | "skill" | "taste";
   title: string;
   content: string;
   weight: number;
@@ -261,17 +293,82 @@ export interface ProposalPatch {
   rationale: string;
 }
 
+export type ProposalTargetTable =
+  | "projects"
+  | "architectures"
+  | "outlineNodes"
+  | "documents"
+  | "scenes"
+  | "entities"
+  | "relations"
+  | "plotThreads"
+  | "foreshadowing"
+  | "timelineEvents";
+
+export interface ProposalItem {
+  id: string;
+  label: string;
+  operation: "create" | "update";
+  targetTable: ProposalTargetTable;
+  targetId?: string;
+  tempId?: string;
+  expectedRevision?: number;
+  before?: Record<string, unknown>;
+  status: "pending" | "accepted" | "rejected" | "conflict";
+  payload: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  rationale: string;
+  dependencies: string[];
+}
+
+export type NovelGenerationScope = "dashboard" | "architecture" | "outline" | "chapters" | "scenes" | "bible" | "characters" | "relations" | "timeline" | "foreshadowing" | "threads" | "review" | "writing";
+
+export type NovelGenerationTaskKey =
+  | "project-positioning"
+  | "architecture"
+  | "outline"
+  | "story-bible"
+  | "characters"
+  | "relations"
+  | "timeline"
+  | "plot-threads"
+  | "foreshadowing"
+  | "story-control"
+  | "chapter-arrangement"
+  | "chapter-plan"
+  | "scene-design"
+  | "chapter-draft"
+  | "review";
+
 export interface AIProposal extends VersionedRecord {
   title: string;
   operation: string;
+  taskKey?: NovelGenerationTaskKey;
+  scope?: NovelGenerationScope;
   targetId?: string;
   status: ProposalStatus;
   previewMarkdown: string;
   patches: ProposalPatch[];
+  items: ProposalItem[];
   contextPacketId: string;
   agentRunId?: string;
   model: string;
   artifactId?: string;
+  projectGenerationRunId?: string;
+}
+
+export type ProjectGenerationStage = "architecture" | "story-bible" | "outline" | "story-control" | "chapters" | "review";
+
+export interface ProjectGenerationRun extends VersionedRecord {
+  instruction: string;
+  status: "running" | "waiting-approval" | "completed" | "failed" | "cancelled";
+  currentStage: ProjectGenerationStage;
+  stageIndex: number;
+  proposalIds: string[];
+  activeProposalId?: string;
+  error?: string;
+  startedAt: number;
+  finishedAt?: number;
 }
 
 export interface AgentStep {
@@ -467,8 +564,27 @@ export interface SyncConflict extends VersionedRecord {
   status: "open" | "resolved-local" | "resolved-remote" | "resolved-manual";
 }
 
+/**
+ * 内容向量记录：为实体/大纲/文档等生成语义 embedding，供上下文混合检索使用。
+ * 通过 contentHash 判断内容是否变化，决定是否需要重新生成向量。
+ */
+export interface NovelEmbedding extends VersionedRecord {
+  targetTable: "entities" | "outlineNodes" | "documents" | "scenes" | "plotThreads" | "foreshadowing";
+  targetId: string;
+  model: string;
+  dimension: number;
+  vector: number[];
+  contentHash: string;
+  chunkIndex?: number;
+}
+
 export type NovelWorkspaceView =
   | "dashboard"
+  | "planning"
+  | "writing"
+  | "library"
+  | "review"
+  | "settings"
   | "bible"
   | "characters"
   | "relations"

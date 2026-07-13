@@ -1,9 +1,6 @@
 import Ajv, { type AnySchema } from "ajv";
 import { getEffectiveApiConfig } from "@/stores/ui";
-import { novelDb, recordBase } from "./db";
-import { compileNovelContext, formatContextPacket } from "./context";
-import { formatSkillPrompt, resolveNovelSkills } from "./skills";
-import type { AgentRun, AIProposal, NovelAgentRole, NovelContextPacket, NovelSkillStage } from "./types";
+import type { NovelAgentRole } from "./types";
 
 const SYSTEM_INVARIANTS = `你在专业小说创作系统内工作。用户批准的事实库、锁定规则、角色知识边界和审批状态不可被覆盖。区分事实、推断、建议和候选正文。未经批准不得声称已经修改正文或资料。输出必须尊重指定格式，不泄露内部推理。`;
 
@@ -20,12 +17,11 @@ const ROLE_PROMPTS: Record<NovelAgentRole, string> = {
   "quality-editor": "你是总编。汇总相互独立的审校报告，合并重复问题并区分阻断、主要问题和警告。",
 };
 
-function endpoint(baseUrl: string) {
+export function endpoint(baseUrl: string) {
   const normalized = baseUrl.replace(/\/+$/, "");
   if (normalized === "https://gpt.eromaa.com/v1" && import.meta.env.DEV) return "/ai-proxy";
   return normalized;
 }
-
 async function hashPrompt(value: string) {
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(bytes)].map((item) => item.toString(16).padStart(2, "0")).join("");
@@ -128,40 +124,4 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
     if (!parsed || !validate(parsed)) throw new Error(`AI 结构化输出无效：${validate.errors?.map((item) => `${item.instancePath || "root"} ${item.message}`).join("；") ?? "JSON 解析失败"}`);
   }
   return { data: parsed as T, usage: response.usage, promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
-}
-
-export const NOVEL_AI_ACTIONS = [
-  { key: "plan-next", label: "规划近期剧情", role: "architect" as const, stage: "planning" as const, instruction: "结合当前事实库规划后续五章，明确每章目标、冲突、转折、信息释放、伏笔推进和章尾驱动力。" },
-  { key: "draft", label: "生成章节草稿", role: "writer" as const, stage: "drafting" as const, instruction: "依据已批准章节蓝图生成完整章节草稿，保持人物声音和知识边界。" },
-  { key: "character", label: "深化角色", role: "architect" as const, stage: "foundation" as const, instruction: "深化相关角色的欲望、恐惧、错误信念、真实需求、声音和关系张力。" },
-  { key: "continuity", label: "一致性审校", role: "continuity-reviewer" as const, stage: "review" as const, instruction: "检查时间、空间、人物知识、物品、世界规则和因果，引用证据并区分严重度。" },
-  { key: "rewrite", label: "编辑式修订", role: "revision-editor" as const, stage: "revision" as const, instruction: "依据具体问题定向修订当前章节，保留已通过内容与事实。" },
-] as const;
-
-export async function runNovelAI(params: { projectId: string; action: string; instruction: string; targetDocumentId?: string; signal?: AbortSignal; onToken?: (text: string) => void }): Promise<{ proposal: AIProposal; packet: NovelContextPacket; run: AgentRun }> {
-  const project = await novelDb.projects.get(params.projectId);
-  if (!project) throw new Error("项目不存在");
-  const action = NOVEL_AI_ACTIONS.find((item) => item.key === params.action) ?? NOVEL_AI_ACTIONS[0];
-  const resolved = await resolveNovelSkills({ projectId: params.projectId, stage: action.stage as NovelSkillStage });
-  if (resolved.conflicts.length) throw new Error(`Skill 冲突：${resolved.conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")}`);
-  const packet = await compileNovelContext({ projectId: params.projectId, task: params.action, instruction: params.instruction, targetDocumentId: params.targetDocumentId, stage: action.stage, resolvedSkills: resolved.skills });
-  const run: AgentRun = { ...recordBase(params.projectId), goal: params.instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-skill-v2", contextPacketId: packet.id, role: action.role, skillRefs: resolved.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [
-    { id: crypto.randomUUID(), title: "冻结分层上下文", tool: "context.compile", status: "completed", output: `${packet.sources.length} 项来源` },
-    { id: crypto.randomUUID(), title: "执行声明式 Skill", tool: "model.chat", status: "running" },
-    { id: crypto.randomUUID(), title: "等待用户审阅", tool: "proposal.review", status: "pending" },
-  ] };
-  await novelDb.agentRuns.add(run);
-  try {
-    const prompt = `# 任务\n${params.instruction}\n\n# 冻结上下文\n${formatContextPacket(packet)}\n\n# 输出契约\n输出可直接审阅的 Markdown。列明意图、影响与连续性风险，不得声称已经修改项目。`;
-    const output = await streamNovelModel({ model: project.settings.textModel, temperature: project.settings.temperature, role: action.role, skillPrompt: formatSkillPrompt(resolved.skills), prompt, signal: params.signal, onToken: params.onToken });
-    run.status = "completed"; run.finishedAt = Date.now(); run.promptHash = output.promptHash; run.steps[1].status = "completed"; run.steps[1].output = output.content; run.steps[2].status = "completed";
-    await novelDb.agentRuns.put({ ...run, revision: run.revision + 1, updatedAt: Date.now() });
-    const proposal: AIProposal = { ...recordBase(params.projectId), title: action.label, operation: params.action, targetId: params.targetDocumentId, status: "pending", previewMarkdown: output.content, patches: [], contextPacketId: packet.id, agentRunId: run.id, model: project.settings.textModel };
-    await novelDb.proposals.add(proposal);
-    return { proposal, packet, run };
-  } catch (error) {
-    run.status = params.signal?.aborted ? "cancelled" : "failed"; run.finishedAt = Date.now(); run.steps[1].status = "failed"; run.steps[1].error = error instanceof Error ? error.message : "未知错误";
-    await novelDb.agentRuns.put({ ...run, revision: run.revision + 1, updatedAt: Date.now() });
-    throw error;
-  }
 }
