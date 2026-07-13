@@ -182,6 +182,8 @@ export async function runGenerationTask(params: {
   if (skills.conflicts.length) throw new Error(`Skill 冲突：${skills.conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")}`);
   const packet = await compileNovelContext({ projectId: params.projectId, task: params.taskKey, instruction: params.instruction, targetDocumentId: params.targetId, stage: task.skillStage, resolvedSkills: skills.skills });
   const inventory = await existingInventory(params.projectId, task.allowedTables);
+  const acceptedRefs = await acceptedProjectReferences(params.projectId);
+  const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
   const agent: AgentRun = { ...recordBase(params.projectId), goal: params.instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-structured-v4", contextPacketId: packet.id, role: task.role, skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: task.label, tool: "model.structured", status: "running" }] };
   await novelDb.agentRuns.add(agent);
   try {
@@ -192,7 +194,7 @@ export async function runGenerationTask(params: {
       skillPrompt: formatSkillPrompt(skills.skills),
       schema: proposalSchema(task.allowedTables),
       signal: params.signal,
-      prompt: `# 任务\n${params.instruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 输出要求\n只生成待用户审核的候选项，不得声称已修改项目。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
+      prompt: `# 任务\n${params.instruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n只生成待用户审核的候选项，不得声称已修改项目。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有对象时必须使用对象索引中的真实 ID，或使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
     });
     const rawItems = Array.isArray(result.data.items) ? result.data.items as Array<Record<string, unknown>> : [];
     const items: ProposalItem[] = rawItems.map((raw) => ({
@@ -276,6 +278,24 @@ function resolveReferences(value: unknown, refs: Map<string, string>): unknown {
   if (Array.isArray(value)) return value.map((item) => resolveReferences(item, refs));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveReferences(item, refs)]));
   return value;
+}
+
+async function acceptedProjectReferences(projectId: string) {
+  const refs = new Map<string, string>();
+  const proposals = await novelDb.proposals.where("projectId").equals(projectId).toArray();
+  const acceptedItems = proposals.flatMap((proposal) => proposal.items.filter((item) => item.status === "accepted" && item.tempId));
+  for (const item of acceptedItems) {
+    if (item.targetId) {
+      refs.set(item.tempId!, item.targetId);
+      continue;
+    }
+    const payload = (item.after ?? item.payload) as Record<string, unknown>;
+    const identity = String(payload.name ?? payload.title ?? "").trim();
+    if (!identity) continue;
+    const matches = await novelDb.table(item.targetTable).where("projectId").equals(projectId).filter((record: Record<string, unknown>) => record.name === identity || record.title === identity).primaryKeys();
+    if (matches.length === 1) refs.set(item.tempId!, String(matches[0]));
+  }
+  return refs;
 }
 
 function sanitizePayload(payload: Record<string, unknown>) {
@@ -371,6 +391,7 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
   if (!initialProposal || initialProposal.status !== "pending") throw new Error("提案不存在或已经处理");
   const initialSelected = initialProposal.items.filter((item) => selectedItemIds.includes(item.id));
   if (!initialSelected.length) throw new Error("请至少选择一个候选项");
+  const acceptedRefs = await acceptedProjectReferences(initialProposal.projectId);
   const tables = [...new Set(initialSelected.map((item) => novelDb.table(item.targetTable))), novelDb.operations, novelDb.proposals, novelDb.embeddings];
   const embeddings: Array<{ table: ProposalTargetTable; id: string; record: Record<string, unknown> }> = [];
   let appliedCount = 0;
@@ -384,7 +405,7 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     const generatedTempIds = new Set(proposal.items.map((item) => item.tempId).filter((id): id is string => Boolean(id)));
     const missingDependencies = selected.flatMap((item) => item.dependencies.filter((dependency) => generatedTempIds.has(dependency) && !selectedTempIds.has(dependency)));
     if (missingDependencies.length) throw new Error(`请同时选择依赖项：${[...new Set(missingDependencies)].join("、")}`);
-    const refs = new Map<string, string>();
+    const refs = new Map(acceptedRefs);
     for (const item of selected) if (item.tempId) refs.set(item.tempId, item.targetId || crypto.randomUUID());
     const conflicts: string[] = [];
     for (const item of selected) {
@@ -417,7 +438,11 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
         embeddings.push({ table: item.targetTable, id: item.targetId, record });
       }
     }
-    const nextItems = proposal.items.map((item) => conflicts.includes(item.id) ? { ...item, status: "conflict" as const } : selectedItemIds.includes(item.id) ? { ...item, status: "accepted" as const } : item.status === "pending" ? { ...item, status: "rejected" as const } : item);
+    const nextItems = proposal.items.map((item) => conflicts.includes(item.id)
+      ? { ...item, status: "conflict" as const }
+      : selectedItemIds.includes(item.id)
+        ? { ...item, targetId: item.targetId ?? (item.tempId ? refs.get(item.tempId) : undefined), status: "accepted" as const }
+        : item.status === "pending" ? { ...item, status: "rejected" as const } : item);
     const accepted = nextItems.filter((item) => item.status === "accepted").length;
     const status = conflicts.length ? "pending" : accepted === nextItems.length ? "accepted" : accepted > 0 ? "partially_accepted" : "rejected";
     await novelDb.proposals.put({ ...proposal, items: nextItems, status, revision: proposal.revision + 1, updatedAt: Date.now() });
@@ -430,8 +455,18 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     const content = embeddingText(table, record);
     return content ? upsertEmbedding({ projectId: initialProposal.projectId, targetTable: table as "entities", targetId: id, content }) : Promise.resolve();
   }));
-  if (generationRunId) await advanceProjectGeneration(generationRunId, proposalId);
+  if (generationRunId) await completeProjectGenerationTask(generationRunId, proposalId);
   return { applied: appliedCount, conflicts: conflictCount, embeddingFailures: embeddingResults.filter((result) => result.status === "rejected").length };
+}
+
+async function completeProjectGenerationTask(runId: string, proposalId: string) {
+  return novelDb.transaction("rw", novelDb.projectGenerationRuns, async () => {
+    const run = await novelDb.projectGenerationRuns.get(runId);
+    if (!run || run.status !== "waiting-approval" || run.activeProposalId !== proposalId) return run;
+    const completed = { ...run, status: "completed" as const, activeProposalId: undefined, finishedAt: Date.now(), revision: run.revision + 1, updatedAt: Date.now() };
+    await novelDb.projectGenerationRuns.put(completed);
+    return completed;
+  });
 }
 
 export const PROJECT_GENERATION_STAGES: ProjectGenerationStage[] = ["architecture", "story-bible", "outline", "story-control", "chapters", "review"];

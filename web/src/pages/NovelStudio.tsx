@@ -22,11 +22,9 @@ import {
   NodeIndexOutlined,
   PlusOutlined,
   RadarChartOutlined,
-  ReloadOutlined,
   RobotOutlined,
   SaveOutlined,
   ToolOutlined,
-  ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -54,6 +52,8 @@ import type {
   Foreshadowing,
   EntityRelation,
   ManuscriptDocument,
+  NovelGenerationScope,
+  NovelGenerationTaskKey,
   NovelWorkspaceView,
   PlotThread,
   StoryEntity,
@@ -61,7 +61,8 @@ import type {
   TimelineEvent,
 } from "@/features/novel/types";
 import GenerationComposer from "@/features/novel/GenerationComposer";
-import { cancelProjectGeneration, PROJECT_GENERATION_STAGES, retryProjectGeneration, skipProjectGenerationStage, startProjectGeneration } from "@/features/novel/generation";
+import CharacterCard from "@/features/novel/CharacterCard";
+import { getGenerationTask } from "@/features/novel/generation";
 import "@/features/novel/novel.css";
 
 const SkillCenter = lazy(() => import("@/features/novel/SkillCenter"));
@@ -208,7 +209,7 @@ function CharactersView({ projectId }: { projectId: string }) {
   const [draft, setDraft] = useState<StoryEntity>();
   useEffect(() => setDraft(selected ? structuredClone(selected) : undefined), [selected]);
   return <div className="novel-view-content"><SectionTitle eyebrow="CAST" title="角色档案" description="人物的欲望、知识与实时状态共同决定他们在场景中能做什么。" action={<Button type="primary" icon={<PlusOutlined />} onClick={async () => { const entity = await addEntity(projectId, "character", `新角色 ${entities.length + 1}`); setSelectedId(entity.id); }}>添加角色</Button>} />
-    {entities.length === 0 ? <EmptyPanel title="还没有角色" description="创建主角、对手或关键配角。" /> : <div className="novel-character-layout"><aside>{entities.map((entity) => <button key={entity.id} className={selected?.id === entity.id ? "active" : ""} onClick={() => setSelectedId(entity.id)}><span>{entity.name.slice(0, 1)}</span><div><strong>{entity.name}</strong><small>{entity.character?.role || "角色"}</small></div></button>)}</aside>{draft && <main><div className="novel-character-identity"><span>{draft.name.slice(0, 1)}</span><div><Input variant="borderless" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><Input variant="borderless" value={draft.character?.role} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, role: event.target.value } })} /></div><Button type="primary" icon={<SaveOutlined />} onClick={() => void updateEntity(draft)}>保存</Button></div><div className="novel-form-grid"><label>人物摘要<Input.TextArea rows={3} value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} /></label><label>外貌与辨识度<Input.TextArea rows={3} value={draft.character?.appearance} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, appearance: event.target.value } })} /></label><label>性格<Input.TextArea rows={3} value={draft.character?.personality} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, personality: event.target.value } })} /></label><label>欲望<Input.TextArea rows={3} value={draft.character?.desire} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, desire: event.target.value } })} /></label><label>动机<Input.TextArea rows={3} value={draft.character?.motivation} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, motivation: event.target.value } })} /></label><label>弱点<Input.TextArea rows={3} value={draft.character?.weakness} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, weakness: event.target.value } })} /></label><label>秘密<Input.TextArea rows={3} value={draft.character?.secret} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, secret: event.target.value } })} /></label><label>人物弧光<Input.TextArea rows={3} value={draft.character?.arc} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, arc: event.target.value } })} /></label></div><Divider>当前故事状态</Divider><div className="novel-state-row"><Input addonBefore="位置" value={draft.character?.state.location} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, location: event.target.value } } })} /><Input addonBefore="情绪" value={draft.character?.state.emotional} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, emotional: event.target.value } } })} /><Input addonBefore="当前目标" value={draft.character?.state.objective} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, objective: event.target.value } } })} /></div></main>}</div>}
+    {entities.length === 0 ? <EmptyPanel title="还没有角色" description="创建主角、对手或关键配角。" /> : <div className="novel-character-layout"><aside>{entities.map((entity) => <button key={entity.id} className={selected?.id === entity.id ? "active" : ""} onClick={() => setSelectedId(entity.id)}><CharacterCard entity={entity} mode="rail" selected={selected?.id === entity.id} /></button>)}</aside>{draft && <main><div className="novel-character-identity"><span>{draft.name.slice(0, 1)}</span><div><Input variant="borderless" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><Input variant="borderless" value={draft.character?.role} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, role: event.target.value } })} /></div><Button type="primary" icon={<SaveOutlined />} onClick={() => void updateEntity(draft)}>保存</Button></div><div className="novel-form-grid"><label>人物摘要<Input.TextArea rows={3} value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} /></label><label>外貌与辨识度<Input.TextArea rows={3} value={draft.character?.appearance} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, appearance: event.target.value } })} /></label><label>性格<Input.TextArea rows={3} value={draft.character?.personality} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, personality: event.target.value } })} /></label><label>欲望<Input.TextArea rows={3} value={draft.character?.desire} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, desire: event.target.value } })} /></label><label>动机<Input.TextArea rows={3} value={draft.character?.motivation} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, motivation: event.target.value } })} /></label><label>弱点<Input.TextArea rows={3} value={draft.character?.weakness} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, weakness: event.target.value } })} /></label><label>秘密<Input.TextArea rows={3} value={draft.character?.secret} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, secret: event.target.value } })} /></label><label>人物弧光<Input.TextArea rows={3} value={draft.character?.arc} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, arc: event.target.value } })} /></label></div><Divider>当前故事状态</Divider><div className="novel-state-row"><Input addonBefore="位置" value={draft.character?.state.location} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, location: event.target.value } } })} /><Input addonBefore="情绪" value={draft.character?.state.emotional} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, emotional: event.target.value } } })} /><Input addonBefore="当前目标" value={draft.character?.state.objective} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, objective: event.target.value } } })} /></div></main>}</div>}
   </div>;
 }
 
@@ -255,24 +256,30 @@ function ContinuityView({ projectId, type }: { projectId: string; type: "threads
   </div>;
 }
 
-const PROJECT_STAGE_LABELS = { architecture: "全书架构", "story-bible": "资料库", outline: "故事大纲", "story-control": "剧情控制", chapters: "章节编排", review: "一致性检查" } as const;
-const PROJECT_STAGE_TASK = { architecture: "architecture", "story-bible": "story-bible", outline: "outline", "story-control": "story-control", chapters: "chapter-arrangement", review: "review" } as const;
-const PROJECT_STAGE_SCOPE = { architecture: "architecture", "story-bible": "bible", outline: "outline", "story-control": "review", chapters: "chapters", review: "review" } as const;
+const DASHBOARD_GENERATION_TABS: Array<{ key: NovelGenerationTaskKey; label: string; scope: NovelGenerationScope }> = [
+  { key: "project-positioning", label: "项目定位", scope: "dashboard" },
+  { key: "architecture", label: "全书架构", scope: "architecture" },
+  { key: "story-bible", label: "资料库", scope: "bible" },
+  { key: "outline", label: "故事大纲", scope: "outline" },
+  { key: "story-control", label: "剧情控制", scope: "review" },
+  { key: "chapter-arrangement", label: "章节编排", scope: "chapters" },
+  { key: "review", label: "一致性检查", scope: "review" },
+];
 
 function ProjectGenerationPanel({ projectId, premise }: { projectId: string; premise: string }) {
-  const { message } = App.useApp();
-  const runs = useLiveQuery(() => novelDb.projectGenerationRuns.where("projectId").equals(projectId).reverse().sortBy("createdAt"), [projectId]) ?? [];
-  const run = runs[0];
-  const pendingCount = useLiveQuery(() => novelDb.proposals.where("projectId").equals(projectId).and((item) => item.status === "pending").count(), [projectId]) ?? 0;
-  const active = run && !["completed", "cancelled"].includes(run.status);
-  const [instruction, setInstruction] = useState(premise);
-  const [busy, setBusy] = useState(false);
-  async function perform(action: () => Promise<unknown>) { setBusy(true); try { await action(); } catch (error) { message.error(error instanceof Error ? error.message : "操作失败"); } finally { setBusy(false); } }
-  return <section className="novel-project-generation"><header><div><span>AI PROJECT PIPELINE</span><h3>从创意生成全案</h3><p>每个阶段先生成候选，审核采纳后自动进入下一阶段。</p></div><div>{pendingCount > 0 && <Tag color="gold">{pendingCount} 项待审核</Tag>}{run && <Tag color={run.status === "failed" ? "red" : run.status === "completed" ? "green" : "gold"}>{run.status}</Tag>}</div></header>
-    <div className="novel-project-stage-rail">{PROJECT_GENERATION_STAGES.map((stage, index) => <div key={stage} className={run && index < run.stageIndex ? "done" : run?.currentStage === stage ? "active" : ""}><i>{index + 1}</i><span>{PROJECT_STAGE_LABELS[stage]}</span></div>)}</div>
-    {!active && <><div className="novel-project-generation-launch"><Input.TextArea rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="输入核心创意、题材方向或整套规划要求" /><Button type="primary" size="large" icon={<ThunderboltOutlined />} loading={busy} onClick={() => void perform(() => startProjectGeneration(projectId, instruction || premise))}>开始生成全案</Button></div><div className="novel-project-positioning"><strong>只完善项目定位</strong><GenerationComposer projectId={projectId} scope="dashboard" taskKeys={["project-positioning"]} compact /></div></>}
-    {active && run.status !== "failed" && <GenerationComposer projectId={projectId} scope={PROJECT_STAGE_SCOPE[run.currentStage]} taskKeys={[PROJECT_STAGE_TASK[run.currentStage]]} projectGenerationRunId={run.id} />}
-    {active && <footer>{run.status === "failed" && <><p>{run.error}</p><Button icon={<ReloadOutlined />} loading={busy} onClick={() => void perform(() => retryProjectGeneration(run.id))}>重试当前阶段</Button></>}<Button onClick={() => void perform(() => skipProjectGenerationStage(run.id))}>跳过当前阶段</Button><Button danger onClick={() => void perform(() => cancelProjectGeneration(run.id))}>取消全案流程</Button></footer>}
+  const proposals = useLiveQuery(() => novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt"), [projectId]) ?? [];
+  const pendingCount = proposals.filter((item) => item.status === "pending").length;
+  const [selectedTask, setSelectedTask] = useState<NovelGenerationTaskKey>(DASHBOARD_GENERATION_TABS[0].key);
+  const [instructions, setInstructions] = useState<Record<string, string>>(() => Object.fromEntries(DASHBOARD_GENERATION_TABS.map((item) => [item.key, `${getGenerationTask(item.key).defaultInstruction}\n\n项目创意：${premise}`])));
+  const selected = DASHBOARD_GENERATION_TABS.find((item) => item.key === selectedTask) ?? DASHBOARD_GENERATION_TABS[0];
+  function taskStatus(taskKey: NovelGenerationTaskKey) {
+    const proposal = proposals.find((item) => item.taskKey === taskKey);
+    if (!proposal) return undefined;
+    return proposal.status === "pending" ? "pending" : ["accepted", "partially_accepted"].includes(proposal.status) ? "done" : undefined;
+  }
+  return <section className="novel-project-generation"><header><div><span>AI TASK STUDIO</span><h3>分阶段生成小说方案</h3><p>选择任务、调整提示词并手动开始。采纳后不会自动执行其他阶段。</p></div><div>{pendingCount > 0 && <Tag color="gold">{pendingCount} 项待审核</Tag>}</div></header>
+    <div className="novel-project-stage-rail" role="tablist" aria-label="全案生成任务">{DASHBOARD_GENERATION_TABS.map((item, index) => { const status = taskStatus(item.key); return <button type="button" role="tab" aria-selected={selectedTask === item.key} key={item.key} className={`${selectedTask === item.key ? "active" : ""}${status === "done" ? " done" : ""}${status === "pending" ? " pending" : ""}`} onClick={() => setSelectedTask(item.key)}><i>{index + 1}</i><span>{item.label}</span>{status && <b>{status === "pending" ? "待审" : "完成"}</b>}</button>; })}</div>
+    <div role="tabpanel" className="novel-project-task-panel"><GenerationComposer projectId={projectId} scope={selected.scope} taskKeys={[selected.key]} includeProjectGenerationProposals instructionValue={instructions[selected.key]} onInstructionChange={(value) => setInstructions((current) => ({ ...current, [selected.key]: value }))} /></div>
   </section>;
 }
 
@@ -286,7 +293,7 @@ function DashboardView({ projectId, onWrite, onAI, onWorkflow }: { projectId: st
   if (!project) return <Spin />;
   return <div className="novel-view-content novel-dashboard"><ProjectGenerationPanel projectId={projectId} premise={project.premise} /><SectionTitle eyebrow="STORY NOW" title="近期剧情" description="写下一章之前，先看清故事此刻停在哪里。" action={<div className="novel-dashboard-actions"><Button className="novel-dashboard-action-primary" icon={<EditOutlined />} onClick={onWrite}>继续写作</Button><Button className="novel-dashboard-action-secondary" icon={<DeploymentUnitOutlined />} onClick={onWorkflow}>章节流程</Button><Tooltip title="打开任务历史"><Button className="novel-dashboard-action-tool" aria-label="打开任务历史" icon={<RobotOutlined />} onClick={onAI} /></Tooltip></div>} />
     <div className="novel-metric-grid"><Metric label="总字数" value={words.toLocaleString()} note={`目标 ${project.targetWords.toLocaleString()}`} /><Metric label="章节" value={documents.length} note={`${documents.filter((item) => item.status === "final").length} 章定稿`} /><Metric label="活跃剧情线" value={threads.filter((item) => item.status === "active").length} note={`${threads.length} 条已登记`} tone="good" /><Metric label="连续性风险" value={clues.filter((item) => item.urgency > 70 && item.status !== "resolved").length} note="需要关注" tone={clues.some((item) => item.urgency > 70) ? "warn" : "neutral"} /></div>
-    <div className="novel-dashboard-grid"><section className="novel-current-state"><div className="novel-panel-heading"><span>CURRENT STATE</span><h3>故事现在发生了什么</h3></div>{documents.slice(-5).reverse().map((doc, index) => <article key={doc.id}><span>{index === 0 ? "现在" : `-${index}`}</span><div><strong>{doc.title}</strong><p>{doc.summary || doc.plainText.slice(0, 100) || "本章尚未形成摘要"}</p></div><Tag>{doc.status}</Tag></article>)}{documents.length === 0 && <Empty description="暂无章节" />}</section><section className="novel-active-cast"><div className="novel-panel-heading"><span>ACTIVE CAST</span><h3>活跃人物</h3></div>{entities.filter((item) => item.kind === "character").slice(0, 6).map((entity) => <article key={entity.id}><span>{entity.name.slice(0, 1)}</span><div><strong>{entity.name}</strong><p>{entity.character?.state.objective || "尚未记录当前目标"}</p></div><small>{entity.character?.state.emotional || "未知"}</small></article>)}</section><section className="novel-open-loops"><div className="novel-panel-heading"><span>OPEN LOOPS</span><h3>未闭合线索</h3></div>{clues.filter((item) => item.status !== "resolved").slice(0, 5).map((clue) => <article key={clue.id}><div><strong>{clue.title}</strong><p>{clue.clue || "等待补充线索表现"}</p></div><Progress percent={clue.urgency} showInfo={false} strokeColor={clue.urgency > 70 ? "#c45c4e" : "#ad8b51"} /></article>)}</section><section className="novel-next-moves"><div className="novel-panel-heading"><span>NEXT MOVES</span><h3>接下来要推进</h3></div>{threads.filter((item) => item.status !== "resolved").slice(0, 5).map((thread) => <article key={thread.id}><Tag>{thread.kind}</Tag><div><strong>{thread.title}</strong><p>{thread.nextMove || "等待确定下一步动作"}</p></div></article>)}</section></div>
+    <div className="novel-dashboard-grid"><section className="novel-current-state"><div className="novel-panel-heading"><span>CURRENT STATE</span><h3>故事现在发生了什么</h3></div>{documents.slice(-5).reverse().map((doc, index) => <article key={doc.id}><span>{index === 0 ? "现在" : `-${index}`}</span><div><strong>{doc.title}</strong><p>{doc.summary || doc.plainText.slice(0, 100) || "本章尚未形成摘要"}</p></div><Tag>{doc.status}</Tag></article>)}{documents.length === 0 && <Empty description="暂无章节" />}</section><section className="novel-active-cast"><div className="novel-panel-heading"><span>ACTIVE CAST</span><h3>活跃人物</h3></div>{entities.filter((item) => item.kind === "character").slice(0, 6).map((entity) => <CharacterCard key={entity.id} entity={entity} mode="compact" />)}</section><section className="novel-open-loops"><div className="novel-panel-heading"><span>OPEN LOOPS</span><h3>未闭合线索</h3></div>{clues.filter((item) => item.status !== "resolved").slice(0, 5).map((clue) => <article key={clue.id}><div><strong>{clue.title}</strong><p>{clue.clue || "等待补充线索表现"}</p></div><Progress percent={clue.urgency} showInfo={false} strokeColor={clue.urgency > 70 ? "#c45c4e" : "#ad8b51"} /></article>)}</section><section className="novel-next-moves"><div className="novel-panel-heading"><span>NEXT MOVES</span><h3>接下来要推进</h3></div>{threads.filter((item) => item.status !== "resolved").slice(0, 5).map((thread) => <article key={thread.id}><Tag>{thread.kind}</Tag><div><strong>{thread.title}</strong><p>{thread.nextMove || "等待确定下一步动作"}</p></div></article>)}</section></div>
   </div>;
 }
 

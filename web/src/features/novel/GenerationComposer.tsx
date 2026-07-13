@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { App, Button, Checkbox, Input, Select, Tag } from "antd";
 import { CheckCircleOutlined, CloseOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -15,11 +15,9 @@ import {
   updateProposalItemPayload,
 } from "./generation";
 import { novelDb } from "./db";
-import type { NovelGenerationScope, NovelGenerationTaskKey, ProposalItem } from "./types";
-
-function PayloadEditor({ item, value, onChange }: { item: ProposalItem; value: string; onChange: (value: string) => void }) {
-  return <Input.TextArea aria-label={`${item.label}候选数据`} autoSize={{ minRows: 4, maxRows: 12 }} value={value} onChange={(event) => onChange(event.target.value)} />;
-}
+import type { NovelGenerationScope, NovelGenerationTaskKey } from "./types";
+import CharacterCard, { isCharacterEntityData, type CharacterCardData } from "./CharacterCard";
+import ProposalDataCard from "./ProposalDataCard";
 
 export default function GenerationComposer({
   projectId,
@@ -27,16 +25,22 @@ export default function GenerationComposer({
   targetId,
   taskKeys,
   projectGenerationRunId,
+  includeProjectGenerationProposals = false,
   placeholder,
   compact = false,
+  instructionValue,
+  onInstructionChange,
 }: {
   projectId: string;
   scope: NovelGenerationScope;
   targetId?: string;
   taskKeys?: NovelGenerationTaskKey[];
   projectGenerationRunId?: string;
+  includeProjectGenerationProposals?: boolean;
   placeholder?: string;
   compact?: boolean;
+  instructionValue?: string;
+  onInstructionChange?: (value: string) => void;
 }) {
   const { message } = App.useApp();
   const tasks = useMemo(() => {
@@ -46,17 +50,20 @@ export default function GenerationComposer({
   const [taskKey, setTaskKey] = useState<NovelGenerationTaskKey>(tasks[0]?.key ?? "architecture");
   const task = tasks.find((item) => item.key === taskKey) ?? tasks[0];
   const [instruction, setInstruction] = useState(task?.defaultInstruction ?? "");
+  const commandInstruction = instructionValue ?? instruction;
+  const changeInstruction = onInstructionChange ?? setInstruction;
   const [busy, setBusy] = useState(false);
+  const actionInFlight = useRef(false);
   const proposal = useLiveQuery(async () => {
     const items = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
     return items.find((item) => item.status === "pending"
       && item.scope === scope
       && (!taskKeys || (item.taskKey && taskKeys.includes(item.taskKey)))
-      && (projectGenerationRunId ? item.projectGenerationRunId === projectGenerationRunId : !item.projectGenerationRunId)
+      && (projectGenerationRunId ? item.projectGenerationRunId === projectGenerationRunId : includeProjectGenerationProposals || !item.projectGenerationRunId)
       && (targetId ? item.targetId === targetId : !item.targetId)) ?? null;
-  }, [projectId, scope, targetId, taskKeys, projectGenerationRunId], null);
+  }, [projectId, scope, targetId, taskKeys, projectGenerationRunId, includeProjectGenerationProposals], null);
   const [selected, setSelected] = useState<string[]>([]);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
 
   useEffect(() => {
     if (!task || task.key === taskKey) return;
@@ -69,27 +76,30 @@ export default function GenerationComposer({
   useEffect(() => {
     if (!proposal) { setSelected([]); setDrafts({}); return; }
     setSelected(proposal.items.filter((item) => item.status === "pending").map((item) => item.id));
-    setDrafts(Object.fromEntries(proposal.items.map((item) => [item.id, JSON.stringify(item.payload, null, 2)])));
+    setDrafts(Object.fromEntries(proposal.items.map((item) => [item.id, structuredClone(item.payload)])));
   }, [proposal?.id, proposal?.revision]);
 
   async function perform(action: () => Promise<unknown>, success?: string) {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     try { await action(); if (success) message.success(success); }
     catch (error) { message.error(error instanceof Error ? error.message : "操作失败"); }
-    finally { setBusy(false); }
+    finally { actionInFlight.current = false; setBusy(false); }
   }
 
   async function generate() {
-    if (!task) return;
-    await perform(() => runGenerationTask({ projectId, taskKey: task.key, instruction: instruction.trim() || task.defaultInstruction, targetId }), "候选内容已生成，请审核");
+    if (!task || busy || proposal) return;
+    await perform(() => runGenerationTask({ projectId, taskKey: task.key, instruction: commandInstruction.trim() || task.defaultInstruction, targetId }), "候选内容已生成，请审核");
   }
 
   async function apply() {
     if (!proposal) return;
     for (const id of selected) {
-      let payload: Record<string, unknown>;
-      try { payload = JSON.parse(drafts[id]) as Record<string, unknown>; }
-      catch { throw new Error(`“${proposal.items.find((item) => item.id === id)?.label}”的候选数据不是有效 JSON`); }
+      const item = proposal.items.find((candidate) => candidate.id === id);
+      if (!item) continue;
+      const payload = drafts[id];
+      if (!payload) throw new Error(`“${item.label}”缺少候选数据`);
       await updateProposalItemPayload(proposal.id, id, payload);
     }
     const result = await applyProposalItems(proposal.id, selected);
@@ -101,25 +111,30 @@ export default function GenerationComposer({
     if (!proposal) return;
     await rejectProposal(proposal.id);
     if (proposal.projectGenerationRunId) await retryProjectGeneration(proposal.projectGenerationRunId);
-    else await runGenerationTask({ projectId, taskKey: proposal.taskKey!, instruction, targetId });
+    else await runGenerationTask({ projectId, taskKey: proposal.taskKey!, instruction: commandInstruction, targetId });
   }
 
-  return <section className={`novel-generation-composer${compact ? " compact" : ""}`}>
+  return <section className={`novel-generation-composer${compact ? " compact" : ""}${tasks.length === 1 ? " single-task" : ""}`}>
     <div className="novel-generation-command">
       {tasks.length > 1 && <Select value={taskKey} onChange={(value) => setTaskKey(value)} options={tasks.map((item) => ({ value: item.key, label: item.label }))} />}
-      <Input.TextArea autoSize={{ minRows: compact ? 1 : 2, maxRows: 5 }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={placeholder || "输入一句创意、补充要求或要完成的任务"} />
-      <Button type="primary" icon={<ThunderboltOutlined />} loading={busy} onClick={() => void generate()}>生成候选</Button>
+      <Input.TextArea autoSize={{ minRows: compact ? 1 : 2, maxRows: 7 }} value={commandInstruction} onChange={(event) => changeInstruction(event.target.value)} placeholder={placeholder || "输入一句创意、补充要求或要完成的任务"} />
+      <Button className={`novel-generation-trigger${busy || proposal ? " active" : ""}`} type="primary" icon={<ThunderboltOutlined />} loading={busy} disabled={busy || Boolean(proposal)} onClick={() => void generate()}>{busy ? "正在生成" : proposal ? "等待审核" : "开始生成任务"}</Button>
     </div>
     {proposal && <div className="novel-generation-review">
       <header><div><Tag color="gold">待审核</Tag><strong>{proposal.title}</strong><small>{proposal.items.length} 个候选项</small></div><Checkbox checked={selected.length > 0 && selected.length === proposal.items.filter((item) => item.status === "pending").length} indeterminate={selected.length > 0 && selected.length < proposal.items.filter((item) => item.status === "pending").length} onChange={(event) => setSelected(event.target.checked ? proposal.items.filter((item) => item.status === "pending").map((item) => item.id) : [])}>全选</Checkbox></header>
       <div className="novel-generation-summary"><ReactMarkdown remarkPlugins={[remarkGfm]}>{proposal.previewMarkdown}</ReactMarkdown></div>
-      <div className="novel-generation-items">{proposal.items.map((item) => <article key={item.id} className={item.status === "conflict" ? "conflict" : ""}>
-        <header><Checkbox disabled={item.status === "conflict"} checked={selected.includes(item.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><div><strong>{item.label}</strong><small>{item.status === "conflict" ? "版本冲突 · 请重新生成" : item.operation === "create" ? "新增" : "更新"} · {item.targetTable}</small></div><Button type="text" icon={<ReloadOutlined />} loading={busy} title="重新生成本项" onClick={() => void perform(async () => { await regenerateProposalItem(proposal.id, item.id, instruction); }, "该候选项已重新生成")} /></header>
+      <div className="novel-generation-items">{proposal.items.map((item) => {
+        const draft = drafts[item.id] ?? item.payload;
+        const characterCandidate = item.targetTable === "entities" && isCharacterEntityData(draft);
+        return <article key={item.id} className={`${item.status === "conflict" ? "conflict" : ""}${characterCandidate ? " character-candidate" : ""}`}>
+        <header><Checkbox disabled={item.status === "conflict"} checked={selected.includes(item.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><div><strong>{item.label}</strong><small>{item.status === "conflict" ? "版本冲突 · 请重新生成" : item.operation === "create" ? "新增" : "更新"} · {item.targetTable}</small></div><Button type="text" icon={<ReloadOutlined />} loading={busy} title="重新生成本项" onClick={() => void perform(async () => { await regenerateProposalItem(proposal.id, item.id, commandInstruction); }, "该候选项已重新生成")} /></header>
         <p>{item.rationale}</p>
-        {item.before && <details><summary>查看修改前内容</summary><pre>{JSON.stringify(item.before, null, 2)}</pre></details>}
-        <small className="novel-generation-after-label">修改后</small>
-        <PayloadEditor item={item} value={drafts[item.id] ?? "{}"} onChange={(value) => setDrafts((current) => ({ ...current, [item.id]: value }))} />
-      </article>)}</div>
+        {item.before && <details><summary>查看修改前内容</summary>{isCharacterEntityData(item.before) ? <CharacterCard entity={item.before} mode="compact" /> : <ProposalDataCard value={item.before} />}</details>}
+        {characterCandidate
+          ? <CharacterCard entity={draft as unknown as CharacterCardData} mode="detail" editable onChange={(next) => setDrafts((current) => ({ ...current, [item.id]: next as unknown as Record<string, unknown> }))} />
+          : <><small className="novel-generation-after-label">修改后</small><ProposalDataCard value={draft} editable onChange={(next) => setDrafts((current) => ({ ...current, [item.id]: next }))} /></>}
+      </article>;
+      })}</div>
       <footer><Button icon={<CloseOutlined />} disabled={busy} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
     </div>}
   </section>;

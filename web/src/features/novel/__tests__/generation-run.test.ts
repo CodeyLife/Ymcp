@@ -35,19 +35,17 @@ describe("project generation workflow", () => {
     expect(vi.mocked(callStructuredNovelModel).mock.calls[0][0].prompt).toContain("生成可支撑长篇的全书架构");
   });
 
-  it("automatically advances after each approved proposal and completes all stages", async () => {
-    const project = await createNovelProject({ title: "推进测试", genre: ["奇幻"], premise: "记忆可以被交易。" });
+  it("completes only the approved task and does not start the next stage", async () => {
+    const project = await createNovelProject({ title: "手动推进测试", genre: ["奇幻"], premise: "记忆可以被交易。" });
     let run = await startProjectGeneration(project.id, project.premise);
-    for (let index = 0; index < PROJECT_GENERATION_STAGES.length; index += 1) {
-      expect(run.status).toBe("waiting-approval");
-      expect(run.currentStage).toBe(PROJECT_GENERATION_STAGES[index]);
-      const proposal = await novelDb.proposals.get(run.activeProposalId!);
-      await applyProposalItems(proposal!.id, proposal!.items.map((item) => item.id));
-      run = (await novelDb.projectGenerationRuns.get(run.id))!;
-    }
+    expect(run.currentStage).toBe(PROJECT_GENERATION_STAGES[0]);
+    const proposal = await novelDb.proposals.get(run.activeProposalId!);
+    await applyProposalItems(proposal!.id, proposal!.items.map((item) => item.id));
+    run = (await novelDb.projectGenerationRuns.get(run.id))!;
     expect(run.status).toBe("completed");
-    expect(run.proposalIds).toHaveLength(PROJECT_GENERATION_STAGES.length);
-    expect(await novelDb.documents.where("projectId").equals(project.id).count()).toBeGreaterThan(0);
+    expect(run.currentStage).toBe("architecture");
+    expect(run.proposalIds).toHaveLength(1);
+    expect(vi.mocked(callStructuredNovelModel)).toHaveBeenCalledTimes(1);
   });
 
   it("rejects the pending proposal when a stage is skipped", async () => {

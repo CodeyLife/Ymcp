@@ -45,6 +45,30 @@ describe("structured proposal application", () => {
     expect(relation?.toEntityId).toBe(entity?.id);
   });
 
+  it("resolves a reference alias from an already accepted character proposal", async () => {
+    const project = await createNovelProject({ title: "跨阶段引用", genre: ["悬疑"], premise: "角色会进入后续大纲。" });
+    const entity: StoryEntity = { ...recordBase(project.id), kind: "character", name: "陆沉", aliases: [], summary: "记录员", description: "", tags: [], lockedFacts: [], attributes: {}, character: characterPayload("陆沉").character };
+    await novelDb.entities.add(entity);
+    const characterProposal = proposal(project.id, [{ id: "character", label: "陆沉", operation: "create", targetTable: "entities", tempId: "character_luchen", status: "accepted", payload: characterPayload("陆沉"), rationale: "主角", dependencies: [] }]);
+    characterProposal.status = "accepted";
+    await novelDb.proposals.add(characterProposal);
+    const outlineProposal = proposal(project.id, [{ id: "event", label: "陆沉发现缺页", operation: "create", targetTable: "outlineNodes", status: "pending", payload: { kind: "event", title: "发现缺页", summary: "陆沉发现档案缺页", order: 0, causality: "记录异常", outcome: "开始调查", characterIds: ["ref:character_luchen"] }, rationale: "开端事件", dependencies: [] }]);
+    outlineProposal.taskKey = "outline";
+    outlineProposal.scope = "outline";
+    await novelDb.proposals.add(outlineProposal);
+    await applyProposalItems(outlineProposal.id, ["event"]);
+    expect((await novelDb.outlineNodes.where("projectId").equals(project.id).first())?.characterIds).toEqual([entity.id]);
+  });
+
+  it("stores the formal target id on accepted temporary objects", async () => {
+    const project = await createNovelProject({ title: "引用落盘", genre: ["都市"], premise: "人物拥有稳定标识。" });
+    const draft = proposal(project.id, [{ id: "character", label: "林澈", operation: "create", targetTable: "entities", tempId: "character_linche", status: "pending", payload: characterPayload("林澈"), rationale: "主角", dependencies: [] }]);
+    await novelDb.proposals.add(draft);
+    await applyProposalItems(draft.id, ["character"]);
+    const stored = await novelDb.proposals.get(draft.id);
+    expect(stored?.items[0].targetId).toBe((await novelDb.entities.where("projectId").equals(project.id).first())?.id);
+  });
+
   it("refuses to apply a candidate without its generated dependency", async () => {
     const project = await createNovelProject({ title: "依赖测试", genre: ["都市"], premise: "所有关系都会留下伤痕。" });
     const draft = proposal(project.id, [
