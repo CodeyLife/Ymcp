@@ -30,6 +30,8 @@ interface UIState {
   setIncomingImage: (img: { src: string; from: string } | null) => void;
   apiBaseUrl: string;
   apiKey: string;
+  /** OpenAI-compatible chat model. "auto" lets the upstream choose. */
+  chatModel: string;
   thumbSize: number;
   greenscreenPrompt: string;
   spritesheetPrompt: string;
@@ -37,6 +39,7 @@ interface UIState {
   imageGenAdapter: ImageGenAdapter;
   setApiBaseUrl: (baseUrl: string) => void;
   setApiKey: (apiKey: string) => void;
+  setChatModel: (model: string) => void;
   setThumbSize: (size: number) => void;
   setGreenscreenPrompt: (prompt: string) => void;
   setSpritesheetPrompt: (prompt: string) => void;
@@ -53,12 +56,14 @@ export const useUIStore = create<UIState>()(
       setIncomingImage: (img) => set({ incomingImage: img }),
       apiBaseUrl: "",
       apiKey: "",
+      chatModel: "auto",
       thumbSize: 256,
       greenscreenPrompt: "",
       spritesheetPrompt: "",
       imageGenAdapter: "task",
       setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) }),
       setApiKey: (apiKey) => set({ apiKey }),
+      setChatModel: (chatModel) => set({ chatModel: chatModel.trim() || "auto" }),
       setThumbSize: (size) => set({ thumbSize: size }),
       setGreenscreenPrompt: (prompt) => set({ greenscreenPrompt: prompt }),
       setSpritesheetPrompt: (prompt) => set({ spritesheetPrompt: prompt }),
@@ -66,7 +71,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "ymcp-ui",
-      version: 2,
+      version: 3,
       // v0 -> v1：老版本将默认提示词写入了 localStorage；迁移时把等于旧默认值的字段清空，
       // 让这些字段回到"未配置"状态，从而走默认配置读取逻辑。
       // v1 -> v2：新增 imageGenAdapter 字段，老数据缺失时回退到默认 "task"。
@@ -84,11 +89,15 @@ export const useUIStore = create<UIState>()(
             persistedState.imageGenAdapter = "task";
           }
         }
+        if (persistedState && version < 3) {
+          persistedState.chatModel = "auto";
+        }
         return persistedState;
       },
       partialize: (state) => ({
         apiBaseUrl: state.apiBaseUrl,
         apiKey: state.apiKey,
+        chatModel: state.chatModel,
         thumbSize: state.thumbSize,
         greenscreenPrompt: state.greenscreenPrompt,
         spritesheetPrompt: state.spritesheetPrompt,

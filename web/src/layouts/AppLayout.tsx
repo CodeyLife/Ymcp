@@ -12,6 +12,7 @@ import {
   SettingOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ReadOutlined,
 } from "@ant-design/icons";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "motion/react";
@@ -39,6 +40,7 @@ const groups: NavGroup[] = [
     items: [
       { key: "", label: "工作台", icon: <AppstoreOutlined /> },
       { key: "image-gen", label: "AI 生图", icon: <PictureOutlined /> },
+      { key: "novels", label: "小说创作", icon: <ReadOutlined /> },
       { key: "video-gen", label: "视频生成", icon: <VideoCameraOutlined />, badge: "预留" },
     ],
   },
@@ -78,7 +80,7 @@ export default function AppLayout() {
 
   const currentKey = useMemo(() => {
     const path = location.pathname.replace(/^\//, "");
-    return path === "" ? "" : path;
+    return path === "" ? "" : path.split("/")[0];
   }, [location.pathname]);
 
   // 为每个 item 分配全局递增 index，用于首次入场 stagger 延迟

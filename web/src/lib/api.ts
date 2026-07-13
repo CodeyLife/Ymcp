@@ -266,6 +266,24 @@ function resolveBaseUrl(baseUrl: string): string {
   return baseUrl;
 }
 
+/** Return model ids exposed by the configured OpenAI-compatible endpoint. */
+export async function listChatModels(config: { baseUrl: string; apiKey: string }): Promise<string[]> {
+  const response = await fetch(`${resolveBaseUrl(config.baseUrl)}/models`, {
+    headers: config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : undefined,
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json();
+  const ids: unknown[] = Array.isArray(payload?.data)
+    ? payload.data.map((item: unknown) => typeof item === "string" ? item : (item as { id?: unknown })?.id)
+    : [];
+  const modelIds = ids.filter((id): id is string => (
+    typeof id === "string" &&
+    id.trim().length > 0 &&
+    !/(?:^|[-_])image(?:[-_]|$)/i.test(id)
+  ));
+  return [...new Set(modelIds)].sort((a, b) => a.localeCompare(b));
+}
+
 function isImageDataUrl(value: string): boolean {
   return /^data:image\/(png|jpe?g|webp|gif|avif|bmp);base64,/i.test(value);
 }
@@ -1350,13 +1368,13 @@ export async function polishPrompt(params: {
   apiKey: string;
   prompt: string;
   styleFragment?: string;
+  model?: string;
 }): Promise<string> {
   const { baseUrl, apiKey, prompt, styleFragment } = params;
   const endpoint = resolveBaseUrl(baseUrl);
 
-  // TODO P1: 模型名暂时硬编码 gpt-4o-mini，后续可在 Settings 中暴露 chatModel 配置项
   const body = {
-    model: "gpt-4o-mini",
+    model: params.model?.trim() || "auto",
     messages: [
       { role: "system", content: IMAGEGEN_SYSTEM_PROMPT },
       { role: "user", content: buildPolishUserMessage(prompt, styleFragment) },

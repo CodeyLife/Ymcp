@@ -3,6 +3,7 @@ import { SettingOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig, type ImageGenAdapter } from "@/stores/ui";
 import { DEFAULT_GREENSCREEN_PROMPT, DEFAULT_SPRITESHEET_PROMPT } from "@/config/defaults";
 import { PageHeader } from "@/components/showtime";
+import { ChatModelSelect } from "@/components/ChatModelSelect";
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -11,12 +12,14 @@ export default function Settings() {
   const { message } = App.useApp();
   const apiBaseUrl = useUIStore((s) => s.apiBaseUrl);
   const apiKey = useUIStore((s) => s.apiKey);
+  const chatModel = useUIStore((s) => s.chatModel);
   const thumbSize = useUIStore((s) => s.thumbSize);
   const greenscreenPrompt = useUIStore((s) => s.greenscreenPrompt);
   const spritesheetPrompt = useUIStore((s) => s.spritesheetPrompt);
   const imageGenAdapter = useUIStore((s) => s.imageGenAdapter);
   const setApiBaseUrl = useUIStore((s) => s.setApiBaseUrl);
   const setApiKey = useUIStore((s) => s.setApiKey);
+  const setChatModel = useUIStore((s) => s.setChatModel);
   const setThumbSize = useUIStore((s) => s.setThumbSize);
   const setGreenscreenPrompt = useUIStore((s) => s.setGreenscreenPrompt);
   const setSpritesheetPrompt = useUIStore((s) => s.setSpritesheetPrompt);
@@ -26,12 +29,14 @@ export default function Settings() {
   function onSave(values: {
     api_base_url: string;
     api_key: string;
+    chat_model: string;
     thumb_size: number;
     greenscreen_prompt: string;
     spritesheet_prompt: string;
   }) {
     setApiBaseUrl(values.api_base_url || "");
     setApiKey(values.api_key || "");
+    setChatModel(values.chat_model || "auto");
     setThumbSize(values.thumb_size || 256);
     setGreenscreenPrompt(values.greenscreen_prompt || "");
     setSpritesheetPrompt(values.spritesheet_prompt || "");
@@ -68,6 +73,7 @@ export default function Settings() {
           initialValues={{
             api_base_url: apiBaseUrl,
             api_key: apiKey,
+            chat_model: chatModel,
             thumb_size: thumbSize,
             greenscreen_prompt: greenscreenPrompt,
             spritesheet_prompt: spritesheetPrompt,
@@ -79,6 +85,9 @@ export default function Settings() {
           </Form.Item>
           <Form.Item label="API Key" name="api_key" help={apiKey ? "使用自有 Key" : "留空使用默认 Key（不显示）"}>
             <Input.Password placeholder="sk-..." />
+          </Form.Item>
+          <Form.Item label="对话模型" name="chat_model" help="默认 auto，由接口自动选择可用模型">
+            <ChatModelSelect style={{ width: "100%" }} />
           </Form.Item>
           <Divider style={{ borderColor: "#27272a" }} />
           <Form.Item

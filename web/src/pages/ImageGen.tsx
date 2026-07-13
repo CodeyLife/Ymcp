@@ -2019,7 +2019,7 @@ export default function ImageGen() {
     try {
       const { baseUrl, apiKey } = getEffectiveApiConfig();
       const styleFragment = STYLE_PRESETS.find((s) => s.id === styleId)?.fragment;
-      const polished = await polishPrompt({ baseUrl, apiKey, prompt, styleFragment });
+      const polished = await polishPrompt({ baseUrl, apiKey, prompt, styleFragment, model: useUIStore.getState().chatModel });
       setUndoPrompt(prompt);
       setPrompt(polished);
       message.success("已应用 AI 润色结果");

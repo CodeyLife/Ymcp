@@ -7,6 +7,7 @@ import {
   BorderOuterOutlined,
   ArrowRightOutlined,
   QqOutlined,
+  ReadOutlined,
 } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { motion } from "motion/react";
@@ -31,6 +32,13 @@ interface QuickAction {
 }
 
 const actions: QuickAction[] = [
+  {
+    key: "novels",
+    title: "小说创作",
+    desc: "从故事圣经、人物关系和剧情线一路写到完整章节。",
+    icon: <ReadOutlined />,
+    span: "wide",
+  },
   {
     key: "image-gen",
     title: "AI 生图",

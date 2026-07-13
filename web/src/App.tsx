@@ -5,6 +5,8 @@ import AppLayout from "@/layouts/AppLayout";
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const ImageGen = lazy(() => import("@/pages/ImageGen"));
 const VideoGen = lazy(() => import("@/pages/VideoGen"));
+const NovelProjects = lazy(() => import("@/pages/NovelProjects"));
+const NovelStudio = lazy(() => import("@/pages/NovelStudio"));
 const Workbench = lazy(() => import("@/pages/Workbench"));
 const Matte = lazy(() => import("@/pages/Matte"));
 const SpriteSplit = lazy(() => import("@/pages/SpriteSplit"));
@@ -28,6 +30,7 @@ export default function App() {
         <Route index element={<Suspense fallback={<RouteFallback />}><Dashboard /></Suspense>} />
         <Route path="image-gen" element={<Suspense fallback={<RouteFallback />}><ImageGen /></Suspense>} />
         <Route path="video-gen" element={<Suspense fallback={<RouteFallback />}><VideoGen /></Suspense>} />
+        <Route path="novels" element={<Suspense fallback={<RouteFallback />}><NovelProjects /></Suspense>} />
         <Route path="workbench" element={<Suspense fallback={<RouteFallback />}><Workbench /></Suspense>} />
         <Route path="matte" element={<Suspense fallback={<RouteFallback />}><Matte /></Suspense>} />
         <Route path="sprite-split" element={<Suspense fallback={<RouteFallback />}><SpriteSplit /></Suspense>} />
@@ -37,6 +40,7 @@ export default function App() {
         <Route path="settings" element={<Suspense fallback={<RouteFallback />}><Settings /></Suspense>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
+      <Route path="novels/:projectId" element={<Suspense fallback={<RouteFallback />}><NovelStudio /></Suspense>} />
     </Routes>
   );
 }
