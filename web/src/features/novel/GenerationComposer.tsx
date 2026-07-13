@@ -25,6 +25,7 @@ export default function GenerationComposer({
   taskKeys,
   placeholder,
   compact = false,
+  actionLabel,
 }: {
   projectId: string;
   scope: NovelGenerationScope;
@@ -32,6 +33,7 @@ export default function GenerationComposer({
   taskKeys?: NovelGenerationTaskKey[];
   placeholder?: string;
   compact?: boolean;
+  actionLabel?: string;
 }) {
   const { message } = App.useApp();
   const tasks = useMemo(() => {
@@ -109,7 +111,18 @@ export default function GenerationComposer({
     <div className="novel-generation-command">
       {tasks.length > 1 && <Select value={taskKey} disabled={Boolean(proposal)} onChange={(value) => setTaskKey(value)} options={tasks.map((item) => ({ value: item.key, label: item.label }))} />}
       <Input.TextArea autoSize={{ minRows: compact ? 1 : 2, maxRows: 7 }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={placeholder || "输入一句创意、补充要求或要完成的任务"} />
-      <Button className={`novel-generation-trigger${busy || proposal ? " active" : ""}`} type="primary" icon={<ThunderboltOutlined />} loading={busy} disabled={busy || Boolean(proposal)} onClick={() => void generate()}>{busy ? "正在生成" : proposal ? "等待审核" : "开始生成任务"}</Button>
+      <Button
+        className={`novel-generation-trigger${busy || proposal ? " active" : ""}`}
+        type="primary"
+        icon={<ThunderboltOutlined />}
+        loading={busy}
+        disabled={busy || Boolean(proposal)}
+        aria-label={busy ? "正在生成" : proposal ? "等待审核" : actionLabel || "开始生成任务"}
+        title={busy ? "正在生成" : proposal ? "等待审核" : actionLabel || "开始生成任务"}
+        onClick={() => void generate()}
+      >
+        {busy ? "正在生成" : proposal ? "等待审核" : actionLabel || "开始生成任务"}
+      </Button>
     </div>
     {proposal && <div className="novel-generation-review">
       <header><div><Tag color="gold">待审核</Tag><strong>{proposal.title}</strong><small>{proposal.items.length} 个候选项</small></div><Checkbox checked={selected.length > 0 && selected.length === proposal.items.filter((item) => item.status === "pending").length} indeterminate={selected.length > 0 && selected.length < proposal.items.filter((item) => item.status === "pending").length} onChange={(event) => setSelected(event.target.checked ? proposal.items.filter((item) => item.status === "pending").map((item) => item.id) : [])}>全选</Checkbox></header>

@@ -29,7 +29,6 @@ describe("context invariants and fact commits", () => {
     await saveStoryArchitecture({
       ...architecture!,
       status: "approved",
-      endingPromise: "主角决定保留所有人遗忘的代价。",
       phases: [{ id: "phase-1", title: "中段升级", purpose: "主角发现丢失的时间被人保存。", turningPoint: "主角决定夺回时间。", order: 0, locked: true }],
     });
     const document = await createChapter(project.id, "第一章");

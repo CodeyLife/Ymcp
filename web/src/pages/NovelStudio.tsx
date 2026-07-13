@@ -81,6 +81,13 @@ const ENTITY_KIND_LABEL: Record<StoryEntity["kind"], string> = {
   character: "角色", location: "地点", organization: "组织", faction: "势力", item: "物品", species: "种族", rule: "规则", ability: "能力", term: "术语",
 };
 
+const DOCUMENT_STATUS_LABEL: Record<ManuscriptDocument["status"], string> = {
+  outline: "提纲",
+  draft: "草稿",
+  review: "修订",
+  final: "定稿",
+};
+
 const COLLAB_CLEANUP_TIMERS = new WeakMap<object, ReturnType<typeof setTimeout>>();
 
 function countWords(text: string) {
@@ -163,20 +170,21 @@ function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; o
   return (
     <div className="novel-editor-shell">
       <div className="novel-editor-toolbar">
-        <div>
-          <Button type={editor?.isActive("bold") ? "primary" : "text"} onClick={() => editor?.chain().focus().toggleBold().run()}><strong>B</strong></Button>
-          <Button type={editor?.isActive("italic") ? "primary" : "text"} onClick={() => editor?.chain().focus().toggleItalic().run()}><em>I</em></Button>
+        <div className="novel-editor-tools" aria-label="正文格式工具">
+          <Tooltip title="加粗"><Button aria-label="加粗" type={editor?.isActive("bold") ? "primary" : "text"} onClick={() => editor?.chain().focus().toggleBold().run()}><strong>B</strong></Button></Tooltip>
+          <Tooltip title="斜体"><Button aria-label="斜体" type={editor?.isActive("italic") ? "primary" : "text"} onClick={() => editor?.chain().focus().toggleItalic().run()}><em>I</em></Button></Tooltip>
+          <span className="novel-toolbar-divider" />
           <Button type={editor?.isActive("blockquote") ? "primary" : "text"} onClick={() => editor?.chain().focus().toggleBlockquote().run()}>引用</Button>
           <Button type={editor?.isActive("bulletList") ? "primary" : "text"} onClick={() => editor?.chain().focus().toggleBulletList().run()}>列表</Button>
-          <Button type="text" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>场景线</Button>
+          <Button type="text" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>分隔线</Button>
         </div>
-        <div>
-          <span>{editor?.storage.characterCount.characters() ?? 0} 字符</span>
-          <Button icon={<HistoryOutlined />} onClick={() => void save(true)}>检查点</Button>
+        <div className="novel-editor-actions">
+          <span>{(editor?.storage.characterCount.characters() ?? 0).toLocaleString()} 字</span>
+          <Tooltip title="创建正文检查点"><Button aria-label="创建正文检查点" icon={<HistoryOutlined />} onClick={() => void save(true)}>检查点</Button></Tooltip>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存</Button>
         </div>
       </div>
-      <div className="novel-paper"><div className="novel-paper-heading"><span>MANUSCRIPT</span><h1>{document.title}</h1><small>{document.status.toUpperCase()} · {document.branch}</small></div><EditorContent editor={editor} /></div>
+      <div className="novel-paper"><div className="novel-paper-heading"><span>正文</span><h1>{document.title}</h1><small>{DOCUMENT_STATUS_LABEL[document.status]} · {document.branch}</small></div><EditorContent editor={editor} /></div>
     </div>
   );
 }
@@ -253,7 +261,6 @@ function ContinuityView({ projectId, type }: { projectId: string; type: "threads
   </div>;
 }
 
-
 function DashboardView({ projectId, onWrite, onAI, onWorkflow }: { projectId: string; onWrite: () => void; onAI: () => void; onWorkflow: () => void }) {
   const project = useLiveQuery(() => novelDb.projects.get(projectId), [projectId]);
   const documents = useLiveQuery(() => novelDb.documents.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
@@ -319,7 +326,31 @@ export default function NovelStudio() {
   const assistantScope = (["dashboard", "planning", "writing", "library", "review", "settings"].includes(view) ? view : "dashboard") as "dashboard" | "planning" | "writing" | "library" | "review" | "settings";
   const assistantDocument = assistantScope === "writing" || assistantScope === "review" ? selectedDocument : undefined;
   const assistantTarget = assistantScope === "planning" ? "当前故事规划" : assistantScope === "library" ? "当前资料库" : assistantScope === "review" ? "当前审校任务" : undefined;
-  return <div className="novel-studio"><header className="novel-studio-topbar"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate("/novels")} /><Button className="novel-mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileNav(true)} /><span className="novel-mini-cover" style={{ background: project.coverColor }}>{project.title.slice(0, 1)}</span><div><strong>{project.title}</strong><small>{view === "settings" ? "项目设置" : VIEW_ITEMS.find((item) => item.key === view)?.label ?? "总览"}</small></div></div><div className="novel-topbar-status"><span><CloudSyncOutlined /> 本地已保存</span>{conflicts > 0 && <Tag color="red">{conflicts} 个同步冲突</Tag>}<Button type={view === "settings" ? "primary" : "default"} icon={<ToolOutlined />} onClick={() => setView("settings")}>项目设置</Button><Dropdown menu={{ items: exportItems }}><Button icon={<ExportOutlined />}>导出 <MoreOutlined /></Button></Dropdown></div></header><div className="novel-studio-body"><nav className="novel-workspace-nav">{groups.map((group) => <section key={group}><span>{group}</span>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}>{item.icon}<span>{item.label}</span>{item.key === "review" && urgentForeshadowingCount > 0 && <i title={`${urgentForeshadowingCount} 条高紧迫度伏笔需要关注`} />}</button>)}</section>)}</nav><main className="novel-workspace-main">{renderView()}</main><Suspense fallback={<button className="novel-ai-collapsed"><RobotOutlined /><span>AI</span></button>}><AIWorkbench projectId={projectId} document={assistantDocument} scope={assistantScope} targetLabel={assistantTarget} collapsed={aiCollapsed} onToggle={() => setAiCollapsed((value) => !value)} /></Suspense></div><footer className="novel-taskbar"><span><span className="online-dot" /> 数据库在线</span><span>Schema v{project.schemaVersion}</span><span>修订 {project.revision}</span><span className="spacer" /><span>{documents.reduce((sum, item) => sum + item.wordCount, 0).toLocaleString()} 字</span><span>今日目标 {project.dailyGoal.toLocaleString()}</span></footer><Drawer placement="left" width={280} open={mobileNav} onClose={() => setMobileNav(false)} title={project.title}>{groups.map((group) => <div className="novel-mobile-nav" key={group}><strong>{group}</strong>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <Button key={item.key} type={view === item.key ? "primary" : "text"} icon={item.icon} onClick={() => setView(item.key)} block>{item.label}</Button>)}</div>)}</Drawer></div>;
+  return <div className="novel-studio">
+    <header className="novel-studio-topbar">
+      <div className="novel-project-identity">
+        <Tooltip title="返回项目中心"><Button className="novel-icon-button" aria-label="返回项目中心" type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate("/novels")} /></Tooltip>
+        <Tooltip title="打开导航"><Button className="novel-mobile-menu novel-icon-button" aria-label="打开导航" type="text" icon={<MenuOutlined />} onClick={() => setMobileNav(true)} /></Tooltip>
+        <span className="novel-mini-cover" style={{ background: project.coverColor }}>{project.title.slice(0, 1)}</span>
+        <div className="novel-project-title"><strong>{project.title}</strong><small>{view === "settings" ? "项目设置" : VIEW_ITEMS.find((item) => item.key === view)?.label ?? "总览"}</small></div>
+      </div>
+      <div className="novel-topbar-status">
+        <span className="novel-save-state"><CloudSyncOutlined /> 本地已保存</span>
+        {conflicts > 0 && <Tag color="red">{conflicts} 个同步冲突</Tag>}
+        <Tooltip title="项目设置"><Button className="novel-topbar-tool" aria-label="项目设置" type={view === "settings" ? "primary" : "default"} icon={<ToolOutlined />} onClick={() => setView("settings")} /></Tooltip>
+        <Dropdown menu={{ items: exportItems }} placement="bottomRight"><Button className="novel-export-button" icon={<ExportOutlined />}>导出 <MoreOutlined /></Button></Dropdown>
+      </div>
+    </header>
+    <div className="novel-studio-body">
+      <nav className="novel-workspace-nav" aria-label="创作工作区">
+        {groups.map((group) => <section key={group}><span>{group}</span>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <Tooltip key={item.key} title={item.label} placement="right"><button aria-label={item.label} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}>{item.icon}<span>{item.label}</span>{item.key === "review" && urgentForeshadowingCount > 0 && <i title={`${urgentForeshadowingCount} 条高紧迫度伏笔需要关注`} />}</button></Tooltip>)}</section>)}
+      </nav>
+      <main className="novel-workspace-main">{renderView()}</main>
+      <Suspense fallback={<button className="novel-ai-collapsed" aria-label="加载 AI 任务中心"><RobotOutlined /><span>AI</span></button>}><AIWorkbench projectId={projectId} document={assistantDocument} scope={assistantScope} targetLabel={assistantTarget} collapsed={aiCollapsed} onToggle={() => setAiCollapsed((value) => !value)} /></Suspense>
+    </div>
+    <footer className="novel-taskbar"><span><span className="online-dot" /> 数据库在线</span><span>Schema v{project.schemaVersion}</span><span>修订 {project.revision}</span><span className="spacer" /><span>{documents.reduce((sum, item) => sum + item.wordCount, 0).toLocaleString()} 字</span><span>今日目标 {project.dailyGoal.toLocaleString()}</span></footer>
+    <Drawer placement="left" width={280} open={mobileNav} onClose={() => setMobileNav(false)} title={project.title}>{groups.map((group) => <div className="novel-mobile-nav" key={group}><strong>{group}</strong>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <Button key={item.key} type={view === item.key ? "primary" : "text"} icon={item.icon} onClick={() => setView(item.key)} block>{item.label}</Button>)}</div>)}</Drawer>
+  </div>;
 }
 
 
@@ -332,7 +363,7 @@ function ChapterPlanEditor({ document }: { document?: ManuscriptDocument }) {
     await appendOperation(document.projectId, "documents", document.id, "update", { value: { before: document, after: next } });
   };
   const blueprint = document.blueprint;
-  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="chapters" targetId={document.id} taskKeys={["chapter-plan"]} compact /><SectionTitle eyebrow="CHAPTER PLAN" title={document.title} description="章节蓝图只约束本章写作，不与故事大纲建立硬关联。" action={<Tag>{document.status}</Tag>} />
+  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="chapters" targetId={document.id} taskKeys={["chapter-plan"]} actionLabel="生成章节蓝图" compact /><SectionTitle eyebrow="本章蓝图" title={document.title} description="章节蓝图只约束本章写作，不与故事大纲建立硬关联。" action={<Tag>{DOCUMENT_STATUS_LABEL[document.status]}</Tag>} />
     <div className="novel-architecture-form"><label>章节标题<Input value={document.title} onChange={(event) => void save({ title: event.target.value })} /></label><label>章节摘要<Input.TextArea rows={3} value={document.summary} onChange={(event) => void save({ summary: event.target.value })} /></label><label>本章目标<Input.TextArea rows={2} value={blueprint.objective} onChange={(event) => void save({ blueprint: { ...blueprint, objective: event.target.value } })} /></label><label>冲突<Input.TextArea rows={2} value={blueprint.conflict} onChange={(event) => void save({ blueprint: { ...blueprint, conflict: event.target.value } })} /></label><label>转折<Input.TextArea rows={2} value={blueprint.turningPoint} onChange={(event) => void save({ blueprint: { ...blueprint, turningPoint: event.target.value } })} /></label><label>章尾钩子<Input.TextArea rows={2} value={blueprint.hook} onChange={(event) => void save({ blueprint: { ...blueprint, hook: event.target.value } })} /></label><label>目标字数<InputNumber min={100} max={50000} value={blueprint.targetWords} onChange={(value) => void save({ blueprint: { ...blueprint, targetWords: value ?? 3000 } })} /></label></div>
     <Button icon={<SaveOutlined />} onClick={() => message.success("章节规划实时保存")}>确认规划</Button>
   </div>;
@@ -349,7 +380,7 @@ function ScenePlanner({ document }: { document?: ManuscriptDocument }) {
     await novelDb.scenes.add(scene); setSelectedId(scene.id);
   }
   async function updateScene(changes: Record<string, unknown>) { if (selected) await novelDb.scenes.update(selected.id, { ...changes, revision: selected.revision + 1, updatedAt: Date.now() }); }
-  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="scenes" targetId={document.id} taskKeys={["scene-design"]} compact /><SectionTitle eyebrow="SCENE DESIGN" title={`${document.title} · 场景`} description="按目标、阻碍、结果和行动节拍设计本章内部推进。" action={<Button type="primary" icon={<PlusOutlined />} onClick={() => void addScene()}>添加场景</Button>} />
+  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="scenes" targetId={document.id} taskKeys={["scene-design"]} actionLabel="生成场景方案" compact /><SectionTitle eyebrow="场景设计" title={`${document.title} · 场景`} description="按目标、阻碍、结果和行动节拍设计本章内部推进。" action={<Button type="primary" icon={<PlusOutlined />} onClick={() => void addScene()}>添加场景</Button>} />
     <div className="novel-scene-layout"><aside>{scenes.map((scene) => <button key={scene.id} className={selected?.id === scene.id ? "active" : ""} onClick={() => setSelectedId(scene.id)}><strong>{scene.title}</strong><small>{scene.purpose || "等待定义场景功能"}</small></button>)}</aside>{selected ? <div className="novel-scene-detail"><div className="novel-scene-title-row"><Input value={selected.title} onChange={(event) => void updateScene({ title: event.target.value })} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${selected.title}”？`, okButtonProps: { danger: true }, onOk: async () => { await novelDb.scenes.delete(selected.id); setSelectedId(undefined); } })} /></div><Input.TextArea rows={2} placeholder="场景功能" value={selected.purpose} onChange={(event) => void updateScene({ purpose: event.target.value })} /><Input.TextArea rows={2} placeholder="目标与阻碍" value={selected.conflict} onChange={(event) => void updateScene({ conflict: event.target.value })} /><Input.TextArea rows={2} placeholder="结果、代价或新决定" value={selected.outcome} onChange={(event) => void updateScene({ outcome: event.target.value })} /><div className="novel-scene-beats"><header><strong>行动节拍</strong><Button type="text" icon={<PlusOutlined />} onClick={() => void updateScene({ beats: [...(selected.beats ?? []), { id: crypto.randomUUID(), text: "", order: selected.beats?.length ?? 0 }] })}>添加</Button></header>{(selected.beats ?? []).map((beat, index) => <div key={beat.id}><i>{index + 1}</i><Input value={beat.text} onChange={(event) => void updateScene({ beats: (selected.beats ?? []).map((item) => item.id === beat.id ? { ...item, text: event.target.value } : item) })} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => void updateScene({ beats: (selected.beats ?? []).filter((item) => item.id !== beat.id).map((item, order) => ({ ...item, order })) })} /></div>)}</div></div> : <Empty description="添加一个场景" />}</div>
   </div>;
 }
@@ -375,8 +406,8 @@ function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocu
     await novelDb.documents.bulkPut(reordered.map((item, order) => ({ ...item, order, revision: item.revision + 1, updatedAt: Date.now() })));
     setDraggedId(undefined);
   }
-  const chapterList = <aside className="novel-chapter-list"><header><div><span>MANUSCRIPT</span><strong>章节管理</strong></div><Button type="text" icon={<PlusOutlined />} title="新增章节" onClick={async () => { const chapter = await createChapter(projectId); onSelectDocument(chapter.id); }} /></header><GenerationComposer projectId={projectId} scope="chapters" taskKeys={["chapter-arrangement"]} compact />{documents.map((doc) => <div className={`novel-chapter-row${selectedDocument?.id === doc.id ? " active" : ""}`} key={doc.id} draggable onDragStart={() => setDraggedId(doc.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void dropChapter(doc.id)}><button onClick={() => onSelectDocument(doc.id)}><span>{String(doc.order + 1).padStart(2, "0")}</span><div><strong>{doc.title}</strong><small>{doc.wordCount} 字 · {doc.status}</small></div></button><div><Button type="text" icon={<ArrowUpOutlined />} onClick={() => void moveChapter(doc, -1)} /><Button type="text" icon={<ArrowDownOutlined />} onClick={() => void moveChapter(doc, 1)} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${doc.title}”？`, content: "本章场景、正文版本和章节流程将一并删除，大纲不会受到影响。", okButtonProps: { danger: true }, onOk: async () => { if (selectedDocument?.id === doc.id) { onSelectDocument(documents.find((item) => item.id !== doc.id)?.id ?? ""); await new Promise((resolve) => setTimeout(resolve, 0)); } await deleteChapter(doc.id); } })} /></div></div>)}{!documents.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无章节，可手动新增或让 AI 编排" />}</aside>;
-  const content = mode === "plan" ? <ChapterPlanEditor document={selectedDocument} /> : mode === "scenes" ? <ScenePlanner document={selectedDocument} /> : mode === "manuscript" ? <div className="novel-manuscript-with-command"><GenerationComposer projectId={projectId} scope="writing" targetId={selectedDocument?.id} taskKeys={["chapter-draft"]} compact /><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div> : <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载章节流程</span></div>}><WorkflowCenter projectId={projectId} document={selectedDocument} /></Suspense>;
+  const chapterList = <aside className="novel-chapter-list"><header><div><span>章节</span><strong>章节管理</strong><small>{documents.length} 章 · 拖动可排序</small></div><Tooltip title="新增章节"><Button aria-label="新增章节" type="text" icon={<PlusOutlined />} onClick={async () => { const chapter = await createChapter(projectId); onSelectDocument(chapter.id); }} /></Tooltip></header><GenerationComposer projectId={projectId} scope="chapters" taskKeys={["chapter-arrangement"]} actionLabel="AI 编排章节" compact />{documents.map((doc) => <div className={`novel-chapter-row${selectedDocument?.id === doc.id ? " active" : ""}`} key={doc.id} draggable onDragStart={() => setDraggedId(doc.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void dropChapter(doc.id)}><button onClick={() => onSelectDocument(doc.id)}><span>{String(doc.order + 1).padStart(2, "0")}</span><div><strong>{doc.title}</strong><small>{doc.wordCount.toLocaleString()} 字 · {DOCUMENT_STATUS_LABEL[doc.status]}</small></div></button><div><Tooltip title="上移章节"><Button aria-label="上移章节" type="text" icon={<ArrowUpOutlined />} onClick={() => void moveChapter(doc, -1)} /></Tooltip><Tooltip title="下移章节"><Button aria-label="下移章节" type="text" icon={<ArrowDownOutlined />} onClick={() => void moveChapter(doc, 1)} /></Tooltip><Tooltip title="删除章节"><Button aria-label="删除章节" danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${doc.title}”？`, content: "本章场景、正文版本和章节流程将一并删除，大纲不会受到影响。", okButtonProps: { danger: true }, onOk: async () => { if (selectedDocument?.id === doc.id) { onSelectDocument(documents.find((item) => item.id !== doc.id)?.id ?? ""); await new Promise((resolve) => setTimeout(resolve, 0)); } await deleteChapter(doc.id); } })} /></Tooltip></div></div>)}{!documents.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无章节，可手动新增或让 AI 编排" />}</aside>;
+  const content = mode === "plan" ? <ChapterPlanEditor document={selectedDocument} /> : mode === "scenes" ? <ScenePlanner document={selectedDocument} /> : mode === "manuscript" ? <div className="novel-manuscript-with-command"><GenerationComposer projectId={projectId} scope="writing" targetId={selectedDocument?.id} taskKeys={["chapter-draft"]} actionLabel="生成正文草稿" compact /><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div> : <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载章节流程</span></div>}><WorkflowCenter projectId={projectId} document={selectedDocument} /></Suspense>;
   return <div className="novel-writing-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "plan", label: "章节规划" }, { value: "scenes", label: "场景设计" }, { value: "manuscript", label: "正文编辑" }, { value: "workflow", label: "自动流程" }]} /></div><div className="novel-writing-body">{chapterList}{content}</div></div>;
 }
 

@@ -27,7 +27,7 @@ export interface GenerationTaskDefinition {
 
 const TASKS: GenerationTaskDefinition[] = [
   { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。" },
-  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "生成可支撑长篇的全书架构，明确核心冲突、失败代价、读者承诺、结局承诺与宏观阶段。" },
+  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "生成可支撑长篇的全书架构，明确核心冲突、读者承诺与宏观阶段。" },
   { key: "outline", label: "规划故事大纲", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "按幕、序列、事件建立层级故事大纲，强调因果、人物选择、转折和结果，不使用章节编号。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。" },
   { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "设计有明确欲望、恐惧、错误信念、秘密、人物弧和差异化声音的角色。" },
@@ -57,7 +57,7 @@ export function tasksForScope(scope: NovelGenerationScope) {
 
 const payloadContract = `字段契约：
 - projects: title, subtitle, premise, genre, audience, themes, sellingPoints, pov, tense, tone, languageStyle, targetWords
-- architectures: framework, status, centralQuestion, readerPromise, centralConflict, stakes, endingPromise, synopsis, phases[{id,title,purpose,turningPoint,order,locked}]
+- architectures: framework, status, centralQuestion, readerPromise, centralConflict, synopsis, phases[{id,title,purpose,turningPoint,order,locked}]
 - outlineNodes: parentId(可用 ref:临时ID), kind(act|sequence|event), title, summary, order, status, storyTime, causality, outcome, characterIds, plotThreadIds, foreshadowingIds, tension, emotion, information, tags
 - documents: order, title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,conflict,informationRelease,turningPoint,hook,mustHappen,flexible,forbidden,targetWords}；正文任务可额外给 plainText
 - scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, entryState, outcome, wordTarget, beats[{id,text,order}]
@@ -79,7 +79,7 @@ const characterSchema = {
 } as const;
 const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>> = {
   projects: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, subtitle: { type: "string" }, premise: { type: "string" }, genre: stringArraySchema, audience: { type: "string" }, themes: stringArraySchema, sellingPoints: stringArraySchema, pov: { type: "string" }, tense: { type: "string" }, tone: { type: "string" }, languageStyle: { type: "string" }, targetWords: { type: "number", minimum: 1 } } },
-  architectures: { type: "object", additionalProperties: false, properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, readerPromise: { type: "string" }, centralConflict: { type: "string" }, stakes: { type: "string" }, endingPromise: { type: "string" }, synopsis: { type: "string" }, phases: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string" }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" } } } } } },
+  architectures: { type: "object", additionalProperties: false, properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, readerPromise: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, phases: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string" }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" } } } } } },
   outlineNodes: { type: "object", additionalProperties: false, properties: { parentId: { type: "string" }, kind: { enum: ["act", "sequence", "event"] }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "resolved"] }, storyTime: { type: "string" }, causality: { type: "string" }, outcome: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, tension: { type: "number", minimum: 0, maximum: 100 }, emotion: { type: "number", minimum: 0, maximum: 100 }, information: { type: "number", minimum: 0, maximum: 100 }, tags: stringArraySchema } },
   documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, turningPoint: { type: "string" }, hook: { type: "string" }, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
   scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, entryState: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
@@ -94,7 +94,7 @@ const payloadAjv = new Ajv({ allErrors: true, strict: false });
 const PAYLOAD_VALIDATORS = Object.fromEntries(Object.entries(TABLE_PAYLOAD_SCHEMAS).map(([table, schema]) => [table, payloadAjv.compile(schema)])) as Record<ProposalTargetTable, ValidateFunction>;
 const CREATE_REQUIRED_FIELDS: Record<ProposalTargetTable, string[]> = {
   projects: ["title", "premise"],
-  architectures: ["centralQuestion", "centralConflict", "stakes", "readerPromise", "endingPromise", "synopsis", "phases"],
+  architectures: ["centralQuestion", "centralConflict", "readerPromise", "synopsis", "phases"],
   outlineNodes: ["kind", "title", "summary", "order", "causality", "outcome"],
   documents: ["order", "title", "blueprint"],
   scenes: ["chapterId", "title", "order", "purpose", "conflict", "outcome"],
@@ -312,7 +312,7 @@ function normalizeDocumentPayload(payload: Record<string, unknown>) {
 
 function normalizedCreate(table: ProposalTargetTable, projectId: string, id: string, payload: Record<string, unknown>) {
   const base = { ...recordBase(projectId), id };
-  if (table === "architectures") return { ...base, framework: "free", status: "draft", centralQuestion: "", readerPromise: "", centralConflict: "", stakes: "", endingPromise: "", synopsis: "", phases: [], ...payload };
+  if (table === "architectures") return { ...base, framework: "free", status: "draft", centralQuestion: "", readerPromise: "", centralConflict: "", synopsis: "", phases: [], ...payload };
   if (table === "outlineNodes") return { ...base, parentId: undefined, kind: "event", title: "未命名事件", summary: "", order: 0, status: "idea", causality: "", outcome: "", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tension: 30, emotion: 30, information: 30, tags: [], ...payload };
   if (table === "documents") {
     const { blueprint, ...rest } = payload;

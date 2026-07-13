@@ -83,8 +83,6 @@ export async function compileNovelContext(params: {
         `核心问题：${architecture.centralQuestion}`,
         `读者承诺：${architecture.readerPromise}`,
         `核心冲突：${architecture.centralConflict}`,
-        `失败代价：${architecture.stakes}`,
-        `结局承诺：${architecture.endingPromise}`,
         `全书梗概：${architecture.synopsis}`,
         `结构阶段：\n${architecture.phases.map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`).join("\n")}`,
       ].join("\n"),

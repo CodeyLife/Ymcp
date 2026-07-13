@@ -167,8 +167,6 @@ export async function createNovelProject(input: Pick<StoryProject, "title" | "ge
     centralQuestion: input.premise,
     readerPromise: "",
     centralConflict: "",
-    stakes: "",
-    endingPromise: "",
     synopsis: "",
     phases: [],
   };
@@ -193,8 +191,6 @@ export async function ensureStoryArchitecture(projectId: string) {
     centralQuestion: project.premise,
     readerPromise: "",
     centralConflict: "",
-    stakes: "",
-    endingPromise: "",
     synopsis: "",
     phases: [],
   };

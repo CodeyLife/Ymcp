@@ -142,8 +142,6 @@ export interface StoryArchitecture extends VersionedRecord {
   centralQuestion: string;
   readerPromise: string;
   centralConflict: string;
-  stakes: string;
-  endingPromise: string;
   synopsis: string;
   phases: ArchitecturePhase[];
 }
@@ -355,7 +353,6 @@ export interface AIProposal extends VersionedRecord {
   model: string;
   artifactId?: string;
 }
-
 
 export interface AgentStep {
   id: string;

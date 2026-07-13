@@ -29,9 +29,7 @@ function ArchitectureView({ projectId }: { projectId: string }) {
       <section><label>结构方法<Select value={draft.framework} options={[{ value: "free", label: "自由结构" }, { value: "three-act", label: "三幕式" }, { value: "four-part", label: "起承转合" }, { value: "save-the-cat", label: "Save the Cat" }, { value: "snowflake", label: "雪花写作法" }]} onChange={(framework) => setDraft({ ...draft, framework })} /></label><label>状态<Select value={draft.status} options={[{ value: "draft", label: "草案" }, { value: "approved", label: "已批准" }]} onChange={(status) => setDraft({ ...draft, status })} /></label></section>
       <label>核心问题<Input value={draft.centralQuestion} onChange={(event) => setDraft({ ...draft, centralQuestion: event.target.value })} /></label>
       <label>核心冲突<Input.TextArea rows={2} value={draft.centralConflict} onChange={(event) => setDraft({ ...draft, centralConflict: event.target.value })} /></label>
-      <label>失败代价<Input.TextArea rows={2} value={draft.stakes} onChange={(event) => setDraft({ ...draft, stakes: event.target.value })} /></label>
       <label>读者承诺<Input.TextArea rows={2} value={draft.readerPromise} onChange={(event) => setDraft({ ...draft, readerPromise: event.target.value })} /></label>
-      <label>结局承诺<Input.TextArea rows={2} value={draft.endingPromise} onChange={(event) => setDraft({ ...draft, endingPromise: event.target.value })} /></label>
       <label>全书梗概<Input.TextArea rows={6} value={draft.synopsis} onChange={(event) => setDraft({ ...draft, synopsis: event.target.value })} /></label>
     </div>
     <section className="novel-architecture-beats"><header><div><span>MACRO PHASES</span><h3>宏观阶段</h3></div><Button icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, phases: [...draft.phases, { id: crypto.randomUUID(), title: `阶段 ${draft.phases.length + 1}`, purpose: "", turningPoint: "", order: draft.phases.length, locked: false }] })}>添加阶段</Button></header>
