@@ -535,28 +535,6 @@
 .novel-data-tags span { padding: 3px 6px; border: 1px solid #3b3e41; color: #aaaead; font-size: 10px; }
 .novel-data-tags em { color: #666b6f; font-size: 10px; font-style: normal; }
 
-.novel-project-generation { margin-bottom: 24px; padding: 18px; border-block: 1px solid #35383b; background: #151719; }
-.novel-project-generation > header { display: flex; justify-content: space-between; gap: 16px; }
-.novel-project-generation > header span { color: #a9665c; font: 9px var(--font-mono); letter-spacing: .12em; }
-.novel-project-generation > header h3 { margin: 4px 0; font: 500 21px Georgia, serif; }
-.novel-project-generation > header p { margin: 0; color: #787c80; font-size: 11px; }
-.novel-project-stage-rail { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); margin: 18px 0 12px; border-block: 1px solid #303236; }
-.novel-project-stage-rail > button { min-width: 0; min-height: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px; padding: 8px; color: #72767a; border: 0; border-right: 1px solid #303236; background: transparent; text-align: left; cursor: pointer; }
-.novel-project-stage-rail > button:last-child { border-right: 0; }
-.novel-project-stage-rail i { width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid #44484b; font: normal 9px var(--font-mono); }
-.novel-project-stage-rail span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.novel-project-stage-rail .active { color: #e4a096; background: rgba(181,72,58,.12); }
-.novel-project-stage-rail .active i { border-color: #b5483a; color: #e78376; }
-.novel-project-stage-rail .done { color: #78a68c; }
-.novel-project-stage-rail .pending { color: #d0aa70; }
-.novel-project-stage-rail b { grid-column: 2; color: currentColor; font: 8px var(--font-mono); }
-.novel-project-task-panel { min-width: 0; }
-.novel-project-generation-launch { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
-.novel-project-generation > footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.novel-project-generation > footer p { margin-right: auto; color: #cc756a; }
-.novel-project-positioning { margin-top: 14px; padding-top: 12px; border-top: 1px solid #303236; }
-.novel-project-positioning > strong { display: block; margin-bottom: 5px; color: #8c9094; font-size: 10px; }
-
 .novel-architecture-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
 .novel-architecture-form > section, .novel-architecture-form > label:last-child { grid-column: 1 / -1; }
 .novel-architecture-form > section { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -594,10 +572,6 @@
 .novel-scene-title-row { grid-template-columns: minmax(0, 1fr) 32px; }
 
 .novel-task-history { overflow-y: auto; }
-.novel-ai-run { padding: 14px; border-bottom: 1px solid #303236; }
-.novel-ai-run > div { display: flex; align-items: center; gap: 8px; }
-.novel-ai-run .ant-progress { margin: 10px 0 4px; }
-.novel-ai-run small { color: #73777b; }
 .novel-ai-history { padding: 14px; border-bottom: 1px solid #303236; }
 .novel-ai-history > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .novel-ai-history article { padding: 9px 0; border-top: 1px solid #282b2d; }
@@ -609,8 +583,6 @@
   .novel-generation-items { grid-template-columns: 1fr; }
   .novel-data-object { grid-template-columns: 1fr; }
   .novel-character-card-grid { grid-template-columns: 1fr; }
-  .novel-project-stage-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .novel-project-stage-rail > button:nth-child(3n) { border-right: 0; }
   .novel-writing-body { grid-template-columns: 220px minmax(0, 1fr); }
   .novel-chapter-list .novel-generation-review { left: 220px; width: calc(100vw - 220px); }
 }
@@ -621,10 +593,6 @@
   .novel-character-card-state { grid-template-columns: 1fr; }
   .novel-character-card.rail { grid-template-columns: 40px minmax(0, 1fr); }
   .novel-character-card.rail .novel-character-card-emotion { display: none; }
-  .novel-project-stage-rail { display: flex; overflow-x: auto; }
-  .novel-project-stage-rail > button { min-width: 126px; }
-  .novel-project-generation-launch { grid-template-columns: 1fr; }
-  .novel-project-generation-launch .ant-btn { width: 100%; }
   .novel-architecture-form, .novel-architecture-form > section { grid-template-columns: 1fr; }
   .novel-architecture-form > section { grid-column: auto; }
   .novel-writing-body { grid-template-columns: 1fr; grid-template-rows: 112px minmax(0, 1fr); }

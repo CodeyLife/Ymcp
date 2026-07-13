@@ -9,7 +9,6 @@ import {
   getGenerationTask,
   regenerateProposalItem,
   rejectProposal,
-  retryProjectGeneration,
   runGenerationTask,
   tasksForScope,
   updateProposalItemPayload,
@@ -24,23 +23,15 @@ export default function GenerationComposer({
   scope,
   targetId,
   taskKeys,
-  projectGenerationRunId,
-  includeProjectGenerationProposals = false,
   placeholder,
   compact = false,
-  instructionValue,
-  onInstructionChange,
 }: {
   projectId: string;
   scope: NovelGenerationScope;
   targetId?: string;
   taskKeys?: NovelGenerationTaskKey[];
-  projectGenerationRunId?: string;
-  includeProjectGenerationProposals?: boolean;
   placeholder?: string;
   compact?: boolean;
-  instructionValue?: string;
-  onInstructionChange?: (value: string) => void;
 }) {
   const { message } = App.useApp();
   const tasks = useMemo(() => {
@@ -50,8 +41,6 @@ export default function GenerationComposer({
   const [taskKey, setTaskKey] = useState<NovelGenerationTaskKey>(tasks[0]?.key ?? "architecture");
   const task = tasks.find((item) => item.key === taskKey) ?? tasks[0];
   const [instruction, setInstruction] = useState(task?.defaultInstruction ?? "");
-  const commandInstruction = instructionValue ?? instruction;
-  const changeInstruction = onInstructionChange ?? setInstruction;
   const [busy, setBusy] = useState(false);
   const actionInFlight = useRef(false);
   const proposal = useLiveQuery(async () => {
@@ -59,9 +48,8 @@ export default function GenerationComposer({
     return items.find((item) => item.status === "pending"
       && item.scope === scope
       && (!taskKeys || (item.taskKey && taskKeys.includes(item.taskKey)))
-      && (projectGenerationRunId ? item.projectGenerationRunId === projectGenerationRunId : includeProjectGenerationProposals || !item.projectGenerationRunId)
       && (targetId ? item.targetId === targetId : !item.targetId)) ?? null;
-  }, [projectId, scope, targetId, taskKeys, projectGenerationRunId, includeProjectGenerationProposals], null);
+  }, [projectId, scope, targetId, taskKeys], null);
   const [selected, setSelected] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
 
@@ -69,6 +57,10 @@ export default function GenerationComposer({
     if (!task || task.key === taskKey) return;
     setTaskKey(task.key);
   }, [task, taskKey]);
+  useEffect(() => {
+    if (!proposal?.taskKey || proposal.taskKey === taskKey || !tasks.some((item) => item.key === proposal.taskKey)) return;
+    setTaskKey(proposal.taskKey);
+  }, [proposal?.taskKey, taskKey, tasks]);
   useEffect(() => {
     if (!task) return;
     setInstruction(task.defaultInstruction);
@@ -90,7 +82,7 @@ export default function GenerationComposer({
 
   async function generate() {
     if (!task || busy || proposal) return;
-    await perform(() => runGenerationTask({ projectId, taskKey: task.key, instruction: commandInstruction.trim() || task.defaultInstruction, targetId }), "候选内容已生成，请审核");
+    await perform(() => runGenerationTask({ projectId, taskKey: task.key, instruction: instruction.trim() || task.defaultInstruction, targetId }), "候选内容已生成，请审核");
   }
 
   async function apply() {
@@ -110,14 +102,13 @@ export default function GenerationComposer({
   async function rejectAndRegenerate() {
     if (!proposal) return;
     await rejectProposal(proposal.id);
-    if (proposal.projectGenerationRunId) await retryProjectGeneration(proposal.projectGenerationRunId);
-    else await runGenerationTask({ projectId, taskKey: proposal.taskKey!, instruction: commandInstruction, targetId });
+    await runGenerationTask({ projectId, taskKey: proposal.taskKey!, instruction, targetId });
   }
 
   return <section className={`novel-generation-composer${compact ? " compact" : ""}${tasks.length === 1 ? " single-task" : ""}`}>
     <div className="novel-generation-command">
-      {tasks.length > 1 && <Select value={taskKey} onChange={(value) => setTaskKey(value)} options={tasks.map((item) => ({ value: item.key, label: item.label }))} />}
-      <Input.TextArea autoSize={{ minRows: compact ? 1 : 2, maxRows: 7 }} value={commandInstruction} onChange={(event) => changeInstruction(event.target.value)} placeholder={placeholder || "输入一句创意、补充要求或要完成的任务"} />
+      {tasks.length > 1 && <Select value={taskKey} disabled={Boolean(proposal)} onChange={(value) => setTaskKey(value)} options={tasks.map((item) => ({ value: item.key, label: item.label }))} />}
+      <Input.TextArea autoSize={{ minRows: compact ? 1 : 2, maxRows: 7 }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={placeholder || "输入一句创意、补充要求或要完成的任务"} />
       <Button className={`novel-generation-trigger${busy || proposal ? " active" : ""}`} type="primary" icon={<ThunderboltOutlined />} loading={busy} disabled={busy || Boolean(proposal)} onClick={() => void generate()}>{busy ? "正在生成" : proposal ? "等待审核" : "开始生成任务"}</Button>
     </div>
     {proposal && <div className="novel-generation-review">
@@ -127,7 +118,7 @@ export default function GenerationComposer({
         const draft = drafts[item.id] ?? item.payload;
         const characterCandidate = item.targetTable === "entities" && isCharacterEntityData(draft);
         return <article key={item.id} className={`${item.status === "conflict" ? "conflict" : ""}${characterCandidate ? " character-candidate" : ""}`}>
-        <header><Checkbox disabled={item.status === "conflict"} checked={selected.includes(item.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><div><strong>{item.label}</strong><small>{item.status === "conflict" ? "版本冲突 · 请重新生成" : item.operation === "create" ? "新增" : "更新"} · {item.targetTable}</small></div><Button type="text" icon={<ReloadOutlined />} loading={busy} title="重新生成本项" onClick={() => void perform(async () => { await regenerateProposalItem(proposal.id, item.id, commandInstruction); }, "该候选项已重新生成")} /></header>
+        <header><Checkbox disabled={item.status === "conflict"} checked={selected.includes(item.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><div><strong>{item.label}</strong><small>{item.status === "conflict" ? "版本冲突 · 请重新生成" : item.operation === "create" ? "新增" : "更新"} · {item.targetTable}</small></div><Button type="text" icon={<ReloadOutlined />} loading={busy} title="重新生成本项" onClick={() => void perform(async () => { await regenerateProposalItem(proposal.id, item.id, instruction); }, "该候选项已重新生成")} /></header>
         <p>{item.rationale}</p>
         {item.before && <details><summary>查看修改前内容</summary>{isCharacterEntityData(item.before) ? <CharacterCard entity={item.before} mode="compact" /> : <ProposalDataCard value={item.before} />}</details>}
         {characterCandidate

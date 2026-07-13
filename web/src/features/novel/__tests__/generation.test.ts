@@ -1,7 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { applyProposalItems } from "../generation";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../ai", () => ({
+  callStructuredNovelModel: vi.fn(async () => ({
+    data: { summary: "项目定位候选", items: [{ label: "定位", operation: "update", targetTable: "projects", targetId: "ignored", payload: { audience: "青年悬疑读者" }, rationale: "明确受众" }] },
+    usage: { inputTokens: 10, outputTokens: 10 },
+    promptHash: "test-hash",
+  })),
+}));
+
+import { applyProposalItems, getGenerationTask, runGenerationTask, tasksForScope, updateProposalItemPayload } from "../generation";
 import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, novelDb, recordBase } from "../db";
-import type { AIProposal, ProjectGenerationRun, StoryEntity, WorkflowRun } from "../types";
+import type { AIProposal, StoryEntity, WorkflowRun } from "../types";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -16,6 +25,27 @@ function proposal(projectId: string, items: AIProposal["items"]): AIProposal {
 function characterPayload(name: string) {
   return { kind: "character", name, summary: "核心人物", description: "负责推动故事选择", character: { role: "主角", appearance: "", personality: "谨慎", desire: "找出真相", motivation: "保护记忆", weakness: "过度怀疑", secret: "", abilities: [], voice: "简短", arc: "从记录走向行动", knowledge: { known: [], suspected: [], mistaken: [], unknown: [] }, state: { location: "", physical: "正常", emotional: "警惕", objective: "调查", inventory: [], relationshipNotes: [] } } };
 }
+
+describe("generation task ownership", () => {
+  it("exposes project positioning alongside story data in the bible scope", () => {
+    expect(getGenerationTask("project-positioning").scope).toBe("bible");
+    expect(tasksForScope("bible").map((task) => task.key)).toEqual(["project-positioning", "story-bible"]);
+  });
+
+  it("generates, edits, and accepts project positioning as a bible proposal", async () => {
+    const project = await createNovelProject({ title: "定位测试", genre: ["悬疑"], premise: "每个人都会遗忘一个名字。" });
+    const { proposal: generated } = await runGenerationTask({ projectId: project.id, taskKey: "project-positioning", instruction: "完善项目定位" });
+    const visibleProposal = (await novelDb.proposals.where("projectId").equals(project.id).reverse().sortBy("createdAt")).find((item) => item.status === "pending" && item.scope === "bible" && ["project-positioning", "story-bible"].includes(item.taskKey ?? ""));
+    expect(visibleProposal?.id).toBe(generated.id);
+    expect(generated).toMatchObject({ scope: "bible", taskKey: "project-positioning", targetId: undefined });
+    expect(generated.items[0]).toMatchObject({ operation: "update", targetTable: "projects", targetId: project.id });
+
+    await updateProposalItemPayload(generated.id, generated.items[0].id, { audience: "成年悬疑读者" });
+    await applyProposalItems(generated.id, [generated.items[0].id]);
+    expect((await novelDb.projects.get(project.id))?.audience).toBe("成年悬疑读者");
+    expect((await novelDb.proposals.get(generated.id))?.status).toBe("accepted");
+  });
+});
 
 describe("structured proposal application", () => {
   it("applies only selected items and marks a partial acceptance", async () => {
@@ -120,31 +150,6 @@ describe("structured proposal application", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(await novelDb.entities.where("projectId").equals(project.id).count()).toBe(1);
-  });
-
-  it("keeps a project stage waiting when any selected update conflicts", async () => {
-    const project = await createNovelProject({ title: "阶段冲突", genre: ["悬疑"], premise: "两份记录不能同时为真。" });
-    const first: StoryEntity = { ...recordBase(project.id), kind: "item", name: "记录甲", aliases: [], summary: "旧", description: "", tags: [], lockedFacts: [], attributes: {} };
-    const second: StoryEntity = { ...recordBase(project.id), kind: "item", name: "记录乙", aliases: [], summary: "旧", description: "", tags: [], lockedFacts: [], attributes: {} };
-    await novelDb.entities.bulkAdd([first, second]);
-    const run: ProjectGenerationRun = { ...recordBase(project.id), instruction: project.premise, status: "waiting-approval", currentStage: "story-bible", stageIndex: 1, proposalIds: [], startedAt: Date.now() };
-    const draft = proposal(project.id, [
-      { id: "first", label: "更新甲", operation: "update", targetTable: "entities", targetId: first.id, expectedRevision: first.revision, status: "pending", payload: { summary: "新甲" }, rationale: "更新", dependencies: [] },
-      { id: "second", label: "更新乙", operation: "update", targetTable: "entities", targetId: second.id, expectedRevision: second.revision, status: "pending", payload: { summary: "新乙" }, rationale: "更新", dependencies: [] },
-    ]);
-    draft.projectGenerationRunId = run.id;
-    run.activeProposalId = draft.id;
-    run.proposalIds = [draft.id];
-    await novelDb.projectGenerationRuns.add(run);
-    await novelDb.proposals.add(draft);
-    await novelDb.entities.update(second.id, { summary: "用户修改", revision: second.revision + 1 });
-    const result = await applyProposalItems(draft.id, ["first", "second"]);
-    expect(result).toEqual(expect.objectContaining({ applied: 1, conflicts: 1 }));
-    expect((await novelDb.projectGenerationRuns.get(run.id))?.currentStage).toBe("story-bible");
-    expect((await novelDb.projectGenerationRuns.get(run.id))?.status).toBe("waiting-approval");
-    const storedProposal = await novelDb.proposals.get(draft.id);
-    expect(storedProposal?.status).toBe("pending");
-    expect(storedProposal?.items.map((item) => item.status)).toEqual(["accepted", "conflict"]);
   });
 
   it("normalizes generated chapter prose into html, plain text, and word count", async () => {

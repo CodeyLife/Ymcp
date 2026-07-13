@@ -52,8 +52,6 @@ import type {
   Foreshadowing,
   EntityRelation,
   ManuscriptDocument,
-  NovelGenerationScope,
-  NovelGenerationTaskKey,
   NovelWorkspaceView,
   PlotThread,
   StoryEntity,
@@ -62,7 +60,6 @@ import type {
 } from "@/features/novel/types";
 import GenerationComposer from "@/features/novel/GenerationComposer";
 import CharacterCard from "@/features/novel/CharacterCard";
-import { getGenerationTask } from "@/features/novel/generation";
 import "@/features/novel/novel.css";
 
 const SkillCenter = lazy(() => import("@/features/novel/SkillCenter"));
@@ -256,32 +253,6 @@ function ContinuityView({ projectId, type }: { projectId: string; type: "threads
   </div>;
 }
 
-const DASHBOARD_GENERATION_TABS: Array<{ key: NovelGenerationTaskKey; label: string; scope: NovelGenerationScope }> = [
-  { key: "project-positioning", label: "项目定位", scope: "dashboard" },
-  { key: "architecture", label: "全书架构", scope: "architecture" },
-  { key: "story-bible", label: "资料库", scope: "bible" },
-  { key: "outline", label: "故事大纲", scope: "outline" },
-  { key: "story-control", label: "剧情控制", scope: "review" },
-  { key: "chapter-arrangement", label: "章节编排", scope: "chapters" },
-  { key: "review", label: "一致性检查", scope: "review" },
-];
-
-function ProjectGenerationPanel({ projectId, premise }: { projectId: string; premise: string }) {
-  const proposals = useLiveQuery(() => novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt"), [projectId]) ?? [];
-  const pendingCount = proposals.filter((item) => item.status === "pending").length;
-  const [selectedTask, setSelectedTask] = useState<NovelGenerationTaskKey>(DASHBOARD_GENERATION_TABS[0].key);
-  const [instructions, setInstructions] = useState<Record<string, string>>(() => Object.fromEntries(DASHBOARD_GENERATION_TABS.map((item) => [item.key, `${getGenerationTask(item.key).defaultInstruction}\n\n项目创意：${premise}`])));
-  const selected = DASHBOARD_GENERATION_TABS.find((item) => item.key === selectedTask) ?? DASHBOARD_GENERATION_TABS[0];
-  function taskStatus(taskKey: NovelGenerationTaskKey) {
-    const proposal = proposals.find((item) => item.taskKey === taskKey);
-    if (!proposal) return undefined;
-    return proposal.status === "pending" ? "pending" : ["accepted", "partially_accepted"].includes(proposal.status) ? "done" : undefined;
-  }
-  return <section className="novel-project-generation"><header><div><span>AI TASK STUDIO</span><h3>分阶段生成小说方案</h3><p>选择任务、调整提示词并手动开始。采纳后不会自动执行其他阶段。</p></div><div>{pendingCount > 0 && <Tag color="gold">{pendingCount} 项待审核</Tag>}</div></header>
-    <div className="novel-project-stage-rail" role="tablist" aria-label="全案生成任务">{DASHBOARD_GENERATION_TABS.map((item, index) => { const status = taskStatus(item.key); return <button type="button" role="tab" aria-selected={selectedTask === item.key} key={item.key} className={`${selectedTask === item.key ? "active" : ""}${status === "done" ? " done" : ""}${status === "pending" ? " pending" : ""}`} onClick={() => setSelectedTask(item.key)}><i>{index + 1}</i><span>{item.label}</span>{status && <b>{status === "pending" ? "待审" : "完成"}</b>}</button>; })}</div>
-    <div role="tabpanel" className="novel-project-task-panel"><GenerationComposer projectId={projectId} scope={selected.scope} taskKeys={[selected.key]} includeProjectGenerationProposals instructionValue={instructions[selected.key]} onInstructionChange={(value) => setInstructions((current) => ({ ...current, [selected.key]: value }))} /></div>
-  </section>;
-}
 
 function DashboardView({ projectId, onWrite, onAI, onWorkflow }: { projectId: string; onWrite: () => void; onAI: () => void; onWorkflow: () => void }) {
   const project = useLiveQuery(() => novelDb.projects.get(projectId), [projectId]);
@@ -291,7 +262,7 @@ function DashboardView({ projectId, onWrite, onAI, onWorkflow }: { projectId: st
   const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const words = documents.reduce((sum, item) => sum + item.wordCount, 0);
   if (!project) return <Spin />;
-  return <div className="novel-view-content novel-dashboard"><ProjectGenerationPanel projectId={projectId} premise={project.premise} /><SectionTitle eyebrow="STORY NOW" title="近期剧情" description="写下一章之前，先看清故事此刻停在哪里。" action={<div className="novel-dashboard-actions"><Button className="novel-dashboard-action-primary" icon={<EditOutlined />} onClick={onWrite}>继续写作</Button><Button className="novel-dashboard-action-secondary" icon={<DeploymentUnitOutlined />} onClick={onWorkflow}>章节流程</Button><Tooltip title="打开任务历史"><Button className="novel-dashboard-action-tool" aria-label="打开任务历史" icon={<RobotOutlined />} onClick={onAI} /></Tooltip></div>} />
+  return <div className="novel-view-content novel-dashboard"><SectionTitle eyebrow="STORY NOW" title="近期剧情" description="写下一章之前，先看清故事此刻停在哪里。" action={<div className="novel-dashboard-actions"><Button className="novel-dashboard-action-primary" icon={<EditOutlined />} onClick={onWrite}>继续写作</Button><Button className="novel-dashboard-action-secondary" icon={<DeploymentUnitOutlined />} onClick={onWorkflow}>章节流程</Button><Tooltip title="打开任务历史"><Button className="novel-dashboard-action-tool" aria-label="打开任务历史" icon={<RobotOutlined />} onClick={onAI} /></Tooltip></div>} />
     <div className="novel-metric-grid"><Metric label="总字数" value={words.toLocaleString()} note={`目标 ${project.targetWords.toLocaleString()}`} /><Metric label="章节" value={documents.length} note={`${documents.filter((item) => item.status === "final").length} 章定稿`} /><Metric label="活跃剧情线" value={threads.filter((item) => item.status === "active").length} note={`${threads.length} 条已登记`} tone="good" /><Metric label="连续性风险" value={clues.filter((item) => item.urgency > 70 && item.status !== "resolved").length} note="需要关注" tone={clues.some((item) => item.urgency > 70) ? "warn" : "neutral"} /></div>
     <div className="novel-dashboard-grid"><section className="novel-current-state"><div className="novel-panel-heading"><span>CURRENT STATE</span><h3>故事现在发生了什么</h3></div>{documents.slice(-5).reverse().map((doc, index) => <article key={doc.id}><span>{index === 0 ? "现在" : `-${index}`}</span><div><strong>{doc.title}</strong><p>{doc.summary || doc.plainText.slice(0, 100) || "本章尚未形成摘要"}</p></div><Tag>{doc.status}</Tag></article>)}{documents.length === 0 && <Empty description="暂无章节" />}</section><section className="novel-active-cast"><div className="novel-panel-heading"><span>ACTIVE CAST</span><h3>活跃人物</h3></div>{entities.filter((item) => item.kind === "character").slice(0, 6).map((entity) => <CharacterCard key={entity.id} entity={entity} mode="compact" />)}</section><section className="novel-open-loops"><div className="novel-panel-heading"><span>OPEN LOOPS</span><h3>未闭合线索</h3></div>{clues.filter((item) => item.status !== "resolved").slice(0, 5).map((clue) => <article key={clue.id}><div><strong>{clue.title}</strong><p>{clue.clue || "等待补充线索表现"}</p></div><Progress percent={clue.urgency} showInfo={false} strokeColor={clue.urgency > 70 ? "#c45c4e" : "#ad8b51"} /></article>)}</section><section className="novel-next-moves"><div className="novel-panel-heading"><span>NEXT MOVES</span><h3>接下来要推进</h3></div>{threads.filter((item) => item.status !== "resolved").slice(0, 5).map((thread) => <article key={thread.id}><Tag>{thread.kind}</Tag><div><strong>{thread.title}</strong><p>{thread.nextMove || "等待确定下一步动作"}</p></div></article>)}</section></div>
   </div>;
@@ -411,8 +382,8 @@ function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocu
 
 function LibraryWorkspace({ projectId }: { projectId: string }) {
   const [mode, setMode] = useState<"bible" | "characters" | "relations" | "timeline" | "foreshadowing">("bible");
-  const generation = mode === "bible" ? { scope: "bible" as const, task: "story-bible" as const } : mode === "characters" ? { scope: "characters" as const, task: "characters" as const } : mode === "relations" ? { scope: "relations" as const, task: "relations" as const } : mode === "timeline" ? { scope: "timeline" as const, task: "timeline" as const } : { scope: "foreshadowing" as const, task: "foreshadowing" as const };
-  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "bible", label: "故事圣经" }, { value: "characters", label: "角色" }, { value: "relations", label: "关系" }, { value: "timeline", label: "时间线" }, { value: "foreshadowing", label: "伏笔" }]} /></div><GenerationComposer projectId={projectId} scope={generation.scope} taskKeys={[generation.task]} compact />{mode === "bible" ? <BibleView projectId={projectId} /> : mode === "characters" ? <CharactersView projectId={projectId} /> : mode === "relations" ? <RelationsView projectId={projectId} /> : <ContinuityView projectId={projectId} type={mode} />}</div>;
+  const generation = mode === "characters" ? { scope: "characters" as const, task: "characters" as const } : mode === "relations" ? { scope: "relations" as const, task: "relations" as const } : mode === "timeline" ? { scope: "timeline" as const, task: "timeline" as const } : { scope: "foreshadowing" as const, task: "foreshadowing" as const };
+  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "bible", label: "故事圣经" }, { value: "characters", label: "角色" }, { value: "relations", label: "关系" }, { value: "timeline", label: "时间线" }, { value: "foreshadowing", label: "伏笔" }]} /></div>{mode === "bible" ? <GenerationComposer projectId={projectId} scope="bible" taskKeys={["project-positioning", "story-bible"]} /> : <GenerationComposer projectId={projectId} scope={generation.scope} taskKeys={[generation.task]} compact />}{mode === "bible" ? <BibleView projectId={projectId} /> : mode === "characters" ? <CharactersView projectId={projectId} /> : mode === "relations" ? <RelationsView projectId={projectId} /> : <ContinuityView projectId={projectId} type={mode} />}</div>;
 }
 
 function ReviewWorkspace({ projectId }: { projectId: string }) {

@@ -14,7 +14,6 @@ import type {
   PlotThread,
   PreferenceSignal,
   ProjectSkillBinding,
-  ProjectGenerationRun,
   ProjectTasteProfile,
   QualityReport,
   FactCandidate,
@@ -29,7 +28,7 @@ import type {
   WorkflowDefinition,
   WorkflowRun,
 } from "./types";
-import { RECORD_SCHEMA_VERSION, V4_STORES } from "./db-schema";
+import { migrateLegacyProposal, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -73,7 +72,6 @@ export class NovelDatabase extends Dexie {
   contextPackets!: EntityTable<NovelContextPacket, "id">;
   proposals!: EntityTable<AIProposal, "id">;
   agentRuns!: EntityTable<AgentRun, "id">;
-  projectGenerationRuns!: EntityTable<ProjectGenerationRun, "id">;
   operations!: EntityTable<ChangeOperation, "id">;
   conflicts!: EntityTable<SyncConflict, "id">;
   skills!: EntityTable<NovelSkillManifest, "id">;
@@ -90,6 +88,9 @@ export class NovelDatabase extends Dexie {
   constructor() {
     super("ymcp-novel-db-v4");
     this.version(4).stores(V4_STORES);
+    this.version(5).stores(V5_STORES).upgrade(async (transaction) => {
+      await transaction.table("proposals").toCollection().modify(migrateLegacyProposal);
+    });
   }
 }
 

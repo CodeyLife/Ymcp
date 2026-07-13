@@ -321,7 +321,7 @@ export interface ProposalItem {
   dependencies: string[];
 }
 
-export type NovelGenerationScope = "dashboard" | "architecture" | "outline" | "chapters" | "scenes" | "bible" | "characters" | "relations" | "timeline" | "foreshadowing" | "threads" | "review" | "writing";
+export type NovelGenerationScope = "architecture" | "outline" | "chapters" | "scenes" | "bible" | "characters" | "relations" | "timeline" | "foreshadowing" | "threads" | "review" | "writing";
 
 export type NovelGenerationTaskKey =
   | "project-positioning"
@@ -354,22 +354,8 @@ export interface AIProposal extends VersionedRecord {
   agentRunId?: string;
   model: string;
   artifactId?: string;
-  projectGenerationRunId?: string;
 }
 
-export type ProjectGenerationStage = "architecture" | "story-bible" | "outline" | "story-control" | "chapters" | "review";
-
-export interface ProjectGenerationRun extends VersionedRecord {
-  instruction: string;
-  status: "running" | "waiting-approval" | "completed" | "failed" | "cancelled";
-  currentStage: ProjectGenerationStage;
-  stageIndex: number;
-  proposalIds: string[];
-  activeProposalId?: string;
-  error?: string;
-  startedAt: number;
-  finishedAt?: number;
-}
 
 export interface AgentStep {
   id: string;

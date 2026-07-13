@@ -2,13 +2,16 @@ import { Document, HeadingLevel, Packer, Paragraph } from "docx";
 import { strToU8, zipSync } from "fflate";
 import type { Table } from "dexie";
 import { novelDb } from "./db";
+import { migrateLegacyProposal } from "./db-schema";
+
+const BACKUP_SCHEMA_VERSION = 5;
+const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
 
 async function bundleProject(projectId: string) {
   const project = await novelDb.projects.get(projectId);
   if (!project) throw new Error("项目不存在");
-  const tableNames = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "projectGenerationRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
-  const data: Record<string, unknown> = { manifest: { format: "ymcp-novel", schemaVersion: 4, exportedAt: Date.now() }, project };
-  for (const tableName of tableNames) data[tableName] = await novelDb[tableName].where("projectId").equals(projectId).toArray();
+  const data: Record<string, unknown> = { manifest: { format: "ymcp-novel", schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: Date.now() }, project };
+  for (const tableName of BACKUP_TABLES) data[tableName] = await novelDb[tableName].where("projectId").equals(projectId).toArray();
   return data;
 }
 
@@ -64,13 +67,15 @@ export async function exportNovel(projectId: string, format: "json" | "markdown"
 
 export async function importNovel(file: File) {
   const payload = JSON.parse(await file.text()) as Record<string, unknown> & { manifest?: { format?: string; schemaVersion?: number }; project?: { id?: string } };
-  if (payload.manifest?.format !== "ymcp-novel" || payload.manifest.schemaVersion !== 4 || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4 文件");
+  if (payload.manifest?.format !== "ymcp-novel" || ![4, 5].includes(payload.manifest.schemaVersion ?? 0) || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4/v5 文件");
   const projectId = payload.project.id;
-  const tables = ["projects", "architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "projectGenerationRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
+  const tables = ["projects", ...BACKUP_TABLES] as const;
   await novelDb.transaction("rw", novelDb.tables, async () => {
     for (const table of tables) {
       const value = table === "projects" ? [payload.project] : payload[table];
-      if (Array.isArray(value)) await (novelDb[table] as unknown as Table<Record<string, unknown>, string>).bulkPut(value as Record<string, unknown>[]);
+      if (!Array.isArray(value)) continue;
+      const records = table === "proposals" ? value.map((entry) => migrateLegacyProposal({ ...(entry as Record<string, unknown>) })) : value as Record<string, unknown>[];
+      await (novelDb[table] as unknown as Table<Record<string, unknown>, string>).bulkPut(records);
     }
   });
   return projectId;

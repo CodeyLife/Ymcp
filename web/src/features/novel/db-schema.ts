@@ -1,5 +1,5 @@
-/** 新小说工作区不读取旧数据库，版本只描述当前结构。 */
-export const DB_VERSION = 4;
+/** IndexedDB 结构版本；历史 schema 会保留用于原地升级。 */
+export const DB_VERSION = 5;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
@@ -37,3 +37,15 @@ export const V4_STORES: Record<string, string> = {
   tasteProfiles: "id, projectId, status, updatedAt",
   embeddings: "id, projectId, targetTable, targetId, model, updatedAt, [projectId+targetTable]",
 };
+
+export const V5_STORES: Record<string, string | null> = {
+  ...V4_STORES,
+  proposals: "id, projectId, targetId, status, createdAt, operation",
+  projectGenerationRuns: null,
+};
+
+export function migrateLegacyProposal(proposal: Record<string, unknown>) {
+  delete proposal.projectGenerationRunId;
+  if (proposal.taskKey === "project-positioning" && proposal.scope === "dashboard") proposal.scope = "bible";
+  return proposal;
+}

@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import Dexie from "dexie";
 import "./setup";
 import { createNovelProject, novelDb, recordBase, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES } from "../db-schema";
-import { importNovel } from "../export";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES } from "../db-schema";
+import { exportNovel, importNovel } from "../export";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -11,18 +12,20 @@ beforeEach(async () => {
 });
 
 describe("db-schema constants", () => {
-  it("DB_VERSION is 4", () => {
-    expect(DB_VERSION).toBe(4);
+  it("DB_VERSION is 5", () => {
+    expect(DB_VERSION).toBe(5);
   });
 
   it("RECORD_SCHEMA_VERSION is 4", () => {
     expect(RECORD_SCHEMA_VERSION).toBe(4);
   });
 
-  it("V4_STORES includes architecture, automation, and embeddings tables", () => {
+  it("keeps the v4 schema for migration and removes project generation runs in v5", () => {
     expect(V4_STORES.architectures).toBeDefined();
     expect(V4_STORES.projectGenerationRuns).toBeDefined();
-    expect(V4_STORES.embeddings).toContain("[projectId+targetTable]");
+    expect(V5_STORES.projectGenerationRuns).toBeNull();
+    expect(V5_STORES.proposals).not.toContain("projectGenerationRunId");
+    expect(V5_STORES.embeddings).toContain("[projectId+targetTable]");
   });
 
   it("V4_STORES adds composite index to entities", () => {
@@ -38,16 +41,107 @@ describe("db-schema constants", () => {
   });
 });
 
-describe("database v4 schema", () => {
-  it("opens successfully at v4", () => {
+describe("database v5 schema", () => {
+  it("opens successfully at v5 without the retired table", () => {
     expect(novelDb.isOpen()).toBe(true);
     expect(novelDb.verno).toBe(DB_VERSION);
     expect(novelDb.name).toBe("ymcp-novel-db-v4");
+    expect(novelDb.tables.some((table) => table.name === "projectGenerationRuns")).toBe(false);
   });
 
-  it("rejects v3 project imports", async () => {
+  it("rejects project imports older than v4", async () => {
     const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 3 }, project: { id: "legacy" } }) } as File;
-    await expect(importNovel(file)).rejects.toThrow(/v4/);
+    await expect(importNovel(file)).rejects.toThrow(/v4\/v5/);
+  });
+
+  it("imports v4 backups without retired run data or proposal links", async () => {
+    const project = await createNovelProject({ title: "v4 导入", genre: ["悬疑"], premise: "旧流程已经结束。" });
+    const document = { ...recordBase(project.id), id: "v4-document", order: 0, status: "draft", branch: "main", title: "保留正文", plainText: "旧正文" };
+    const agent = { ...recordBase(project.id), id: "v4-agent", status: "completed", goal: "保留模型历史", model: "test", promptVersion: "test", steps: [] };
+    const proposal = {
+      ...recordBase(project.id),
+      title: "旧候选",
+      operation: "structured:story-bible",
+      taskKey: "project-positioning",
+      scope: "dashboard",
+      targetId: undefined,
+      status: "pending",
+      previewMarkdown: "# 旧候选",
+      patches: [],
+      items: [],
+      contextPacketId: "context",
+      model: "test",
+      projectGenerationRunId: "legacy-run",
+    };
+    const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 4 }, project, documents: [document], proposals: [proposal], agentRuns: [agent], projectGenerationRuns: [{ id: "legacy-run", projectId: project.id }] }) } as File;
+    await importNovel(file);
+    const imported = await novelDb.proposals.get(proposal.id) as Record<string, unknown> | undefined;
+    expect(imported?.title).toBe("旧候选");
+    expect(imported).not.toHaveProperty("projectGenerationRunId");
+    expect(imported?.scope).toBe("bible");
+    expect((await novelDb.documents.get(document.id))?.plainText).toBe("旧正文");
+    expect((await novelDb.agentRuns.get(agent.id))?.goal).toBe("保留模型历史");
+    expect(novelDb.tables.some((table) => table.name === "projectGenerationRuns")).toBe(false);
+  });
+
+  it("imports v5 backups with ordinary candidates and agent history", async () => {
+    const project = await createNovelProject({ title: "v5 导入", genre: ["科幻"], premise: "任务按页面归属。" });
+    const document = { ...recordBase(project.id), id: "v5-document", order: 0, status: "draft", branch: "main", title: "当前正文", plainText: "新正文" };
+    const proposal = { ...recordBase(project.id), id: "v5-proposal", title: "资料候选", operation: "structured:story-bible", taskKey: "story-bible", scope: "bible", status: "pending", previewMarkdown: "# 资料候选", patches: [], items: [], contextPacketId: "context", model: "test" };
+    const agent = { ...recordBase(project.id), id: "v5-agent", status: "completed", goal: "生成故事资料", model: "test", promptVersion: "test", steps: [] };
+    const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 5 }, project, documents: [document], proposals: [proposal], agentRuns: [agent] }) } as File;
+    await expect(importNovel(file)).resolves.toBe(project.id);
+    expect((await novelDb.documents.get(document.id))?.plainText).toBe("新正文");
+    expect((await novelDb.proposals.get(proposal.id))?.title).toBe("资料候选");
+    expect((await novelDb.agentRuns.get(agent.id))?.goal).toBe("生成故事资料");
+  });
+
+  it("upgrades v4 data in place and removes only retired workflow state", async () => {
+    novelDb.close();
+    await novelDb.delete();
+    const legacy = new Dexie(novelDb.name);
+    legacy.version(4).stores(V4_STORES);
+    await legacy.open();
+    const projectId = "legacy-project";
+    const proposalId = "legacy-proposal";
+    await legacy.table("projects").put({ id: projectId, title: "保留项目", status: "planning", updatedAt: Date.now(), genre: ["悬疑"] });
+    await legacy.table("documents").put({ id: "chapter-1", projectId, order: 0, status: "draft", updatedAt: Date.now(), branch: "main", title: "保留正文", plainText: "正文" });
+    await legacy.table("proposals").put({ id: proposalId, projectId, status: "pending", createdAt: Date.now(), operation: "structured:project-positioning", taskKey: "project-positioning", scope: "dashboard", projectGenerationRunId: "legacy-run", title: "保留候选" });
+    await legacy.table("projectGenerationRuns").put({ id: "legacy-run", projectId, status: "waiting-approval", currentStage: "story-bible", updatedAt: Date.now() });
+    legacy.close();
+
+    await novelDb.open();
+    expect((await novelDb.projects.get(projectId))?.title).toBe("保留项目");
+    expect((await novelDb.documents.get("chapter-1"))?.plainText).toBe("正文");
+    const proposal = await novelDb.proposals.get(proposalId) as Record<string, unknown> | undefined;
+    expect(proposal?.title).toBe("保留候选");
+    expect(proposal).not.toHaveProperty("projectGenerationRunId");
+    expect(proposal?.scope).toBe("bible");
+    expect(novelDb.tables.some((table) => table.name === "projectGenerationRuns")).toBe(false);
+  });
+
+  it("exports v5 backups without retired workflow data", async () => {
+    const project = await createNovelProject({ title: "v5 导出", genre: ["悬疑"], premise: "总览只展示当前状态。" });
+    let exportedBlob: Blob | undefined;
+    const previousDocument = globalThis.document;
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement: () => ({ click: () => undefined, href: "", download: "" }) } });
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      exportedBlob = blob as Blob;
+      return "blob:test";
+    });
+    const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    try {
+      await exportNovel(project.id, "json");
+      expect(exportedBlob).toBeDefined();
+      const backup = JSON.parse(await exportedBlob!.text()) as Record<string, unknown> & { manifest: { schemaVersion: number } };
+      expect(backup.manifest.schemaVersion).toBe(5);
+      expect(backup).not.toHaveProperty("projectGenerationRuns");
+    } finally {
+      createObjectUrl.mockRestore();
+      revokeObjectUrl.mockRestore();
+      if (previousDocument) Object.defineProperty(globalThis, "document", { configurable: true, value: previousDocument });
+      else Reflect.deleteProperty(globalThis, "document");
+    }
   });
 
   it("has embeddings table", () => {

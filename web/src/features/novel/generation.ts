@@ -11,8 +11,6 @@ import type {
   NovelGenerationScope,
   NovelGenerationTaskKey,
   NovelSkillStage,
-  ProjectGenerationRun,
-  ProjectGenerationStage,
   ProposalItem,
   ProposalTargetTable,
 } from "./types";
@@ -28,7 +26,7 @@ export interface GenerationTaskDefinition {
 }
 
 const TASKS: GenerationTaskDefinition[] = [
-  { key: "project-positioning", label: "完善项目定位", scope: "dashboard", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。" },
+  { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。" },
   { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "生成可支撑长篇的全书架构，明确核心冲突、失败代价、读者承诺、结局承诺与宏观阶段。" },
   { key: "outline", label: "规划故事大纲", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "按幕、序列、事件建立层级故事大纲，强调因果、人物选择、转折和结果，不使用章节编号。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。" },
@@ -46,7 +44,6 @@ const TASKS: GenerationTaskDefinition[] = [
 ];
 
 export const NOVEL_GENERATION_TASKS = TASKS;
-const PROJECT_RUN_ABORTS = new Map<string, AbortController>();
 
 export function getGenerationTask(key: NovelGenerationTaskKey) {
   const task = TASKS.find((item) => item.key === key);
@@ -152,7 +149,10 @@ function proposalMarkdown(title: string, summary: string, items: ProposalItem[])
 async function existingInventory(projectId: string, tables: ProposalTargetTable[]) {
   const lines: string[] = [];
   for (const tableName of tables) {
-    const records = await novelDb.table(tableName).where("projectId").equals(projectId).limit(120).toArray() as Array<Record<string, unknown>>;
+    const project = tableName === "projects" ? await novelDb.projects.get(projectId) : undefined;
+    const records = tableName === "projects"
+      ? project ? [project as unknown as Record<string, unknown>] : []
+      : await novelDb.table(tableName).where("projectId").equals(projectId).limit(120).toArray() as Array<Record<string, unknown>>;
     for (const record of records) lines.push(`${tableName} | id=${record.id} | revision=${record.revision} | ${String(record.title || record.name || record.id)}`);
   }
   return lines.join("\n") || "当前没有同类正式资料。";
@@ -172,8 +172,6 @@ export async function runGenerationTask(params: {
   taskKey: NovelGenerationTaskKey;
   instruction: string;
   targetId?: string;
-  projectGenerationRunId?: string;
-  signal?: AbortSignal;
 }) {
   const task = getGenerationTask(params.taskKey);
   const project = await novelDb.projects.get(params.projectId);
@@ -193,7 +191,6 @@ export async function runGenerationTask(params: {
       role: task.role,
       skillPrompt: formatSkillPrompt(skills.skills),
       schema: proposalSchema(task.allowedTables),
-      signal: params.signal,
       prompt: `# 任务\n${params.instruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n只生成待用户审核的候选项，不得声称已修改项目。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有对象时必须使用对象索引中的真实 ID，或使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
     });
     const rawItems = Array.isArray(result.data.items) ? result.data.items as Array<Record<string, unknown>> : [];
@@ -245,7 +242,6 @@ export async function runGenerationTask(params: {
       items,
       contextPacketId: packet.id,
       agentRunId: agent.id,
-      projectGenerationRunId: params.projectGenerationRunId,
       model: project.settings.textModel,
     };
     agent.status = "completed";
@@ -260,7 +256,7 @@ export async function runGenerationTask(params: {
     });
     return { proposal, packet, agent };
   } catch (error) {
-    agent.status = params.signal?.aborted ? "cancelled" : "failed";
+    agent.status = "failed";
     agent.finishedAt = Date.now();
     agent.steps[0].status = "failed";
     agent.steps[0].error = error instanceof Error ? error.message : "生成失败";
@@ -396,7 +392,6 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
   const embeddings: Array<{ table: ProposalTargetTable; id: string; record: Record<string, unknown> }> = [];
   let appliedCount = 0;
   let conflictCount = 0;
-  let generationRunId: string | undefined;
   await novelDb.transaction("rw", tables, async () => {
     const proposal = await novelDb.proposals.get(proposalId);
     if (!proposal || proposal.status !== "pending") throw new Error("提案已由其他操作处理");
@@ -448,135 +443,11 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     await novelDb.proposals.put({ ...proposal, items: nextItems, status, revision: proposal.revision + 1, updatedAt: Date.now() });
     appliedCount = applicable.length;
     conflictCount = conflicts.length;
-    generationRunId = applicable.length && conflicts.length === 0 ? proposal.projectGenerationRunId : undefined;
   });
   const { upsertEmbedding } = await import("./retrieval");
   const embeddingResults = await Promise.allSettled(embeddings.map(({ table, id, record }) => {
     const content = embeddingText(table, record);
     return content ? upsertEmbedding({ projectId: initialProposal.projectId, targetTable: table as "entities", targetId: id, content }) : Promise.resolve();
   }));
-  if (generationRunId) await completeProjectGenerationTask(generationRunId, proposalId);
   return { applied: appliedCount, conflicts: conflictCount, embeddingFailures: embeddingResults.filter((result) => result.status === "rejected").length };
-}
-
-async function completeProjectGenerationTask(runId: string, proposalId: string) {
-  return novelDb.transaction("rw", novelDb.projectGenerationRuns, async () => {
-    const run = await novelDb.projectGenerationRuns.get(runId);
-    if (!run || run.status !== "waiting-approval" || run.activeProposalId !== proposalId) return run;
-    const completed = { ...run, status: "completed" as const, activeProposalId: undefined, finishedAt: Date.now(), revision: run.revision + 1, updatedAt: Date.now() };
-    await novelDb.projectGenerationRuns.put(completed);
-    return completed;
-  });
-}
-
-export const PROJECT_GENERATION_STAGES: ProjectGenerationStage[] = ["architecture", "story-bible", "outline", "story-control", "chapters", "review"];
-const STAGE_TASK: Record<ProjectGenerationStage, NovelGenerationTaskKey> = {
-  architecture: "architecture",
-  "story-bible": "story-bible",
-  outline: "outline",
-  "story-control": "story-control",
-  chapters: "chapter-arrangement",
-  review: "review",
-};
-
-async function generateCurrentProjectStage(run: ProjectGenerationRun): Promise<ProjectGenerationRun> {
-  const task = getGenerationTask(STAGE_TASK[run.currentStage]);
-  const controller = new AbortController();
-  PROJECT_RUN_ABORTS.set(run.id, controller);
-  let result: Awaited<ReturnType<typeof runGenerationTask>>;
-  try {
-    result = await runGenerationTask({ projectId: run.projectId, taskKey: task.key, instruction: `${task.defaultInstruction}\n\n用户全案要求：${run.instruction}`, projectGenerationRunId: run.id, signal: controller.signal });
-  } finally {
-    if (PROJECT_RUN_ABORTS.get(run.id) === controller) PROJECT_RUN_ABORTS.delete(run.id);
-  }
-  return novelDb.transaction("rw", novelDb.projectGenerationRuns, novelDb.proposals, async () => {
-    const current = await novelDb.projectGenerationRuns.get(run.id);
-    if (!current || current.status !== "running" || current.currentStage !== run.currentStage || current.revision !== run.revision) {
-      await rejectProposal(result.proposal.id);
-      return current ?? { ...run, status: "cancelled", finishedAt: Date.now() };
-    }
-    const next = { ...current, status: "waiting-approval" as const, activeProposalId: result.proposal.id, proposalIds: [...current.proposalIds, result.proposal.id], revision: current.revision + 1, updatedAt: Date.now(), error: undefined };
-    await novelDb.projectGenerationRuns.put(next);
-    return next;
-  });
-}
-
-async function failProjectGenerationStage(run: ProjectGenerationRun, error: unknown): Promise<ProjectGenerationRun> {
-  return novelDb.transaction("rw", novelDb.projectGenerationRuns, async () => {
-    const current = await novelDb.projectGenerationRuns.get(run.id);
-    if (!current || current.status !== "running" || current.currentStage !== run.currentStage || current.revision !== run.revision) return current ?? run;
-    const failed = { ...current, status: "failed" as const, error: error instanceof Error ? error.message : "生成失败", revision: current.revision + 1, updatedAt: Date.now() };
-    await novelDb.projectGenerationRuns.put(failed);
-    return failed;
-  });
-}
-
-export async function startProjectGeneration(projectId: string, instruction: string): Promise<ProjectGenerationRun> {
-  const result = await novelDb.transaction("rw", novelDb.projectGenerationRuns, async () => {
-    const active = await novelDb.projectGenerationRuns.where("projectId").equals(projectId).and((item) => ["running", "waiting-approval"].includes(item.status)).first();
-    if (active) return { run: active, created: false };
-    const created: ProjectGenerationRun = { ...recordBase(projectId), instruction, status: "running", currentStage: PROJECT_GENERATION_STAGES[0], stageIndex: 0, proposalIds: [], startedAt: Date.now() };
-    await novelDb.projectGenerationRuns.add(created);
-    return { run: created, created: true };
-  });
-  if (!result.created) return result.run;
-  try { return await generateCurrentProjectStage(result.run); }
-  catch (error) { return failProjectGenerationStage(result.run, error); }
-}
-
-export async function advanceProjectGeneration(runId: string, expectedProposalId?: string, expectedRevision?: number) {
-  const transition = await novelDb.transaction("rw", novelDb.projectGenerationRuns, async () => {
-    const run = await novelDb.projectGenerationRuns.get(runId);
-    if (!run || ["cancelled", "completed"].includes(run.status)) return { run, generate: false };
-    if (expectedProposalId && (run.status !== "waiting-approval" || run.activeProposalId !== expectedProposalId)) return { run, generate: false };
-    if (expectedRevision !== undefined && run.revision !== expectedRevision) return { run, generate: false };
-    const stageIndex = run.stageIndex + 1;
-    if (stageIndex >= PROJECT_GENERATION_STAGES.length) {
-      const completed = { ...run, status: "completed" as const, activeProposalId: undefined, finishedAt: Date.now(), revision: run.revision + 1, updatedAt: Date.now() };
-      await novelDb.projectGenerationRuns.put(completed);
-      return { run: completed, generate: false };
-    }
-    const next = { ...run, status: "running" as const, stageIndex, currentStage: PROJECT_GENERATION_STAGES[stageIndex], activeProposalId: undefined, revision: run.revision + 1, updatedAt: Date.now() };
-    await novelDb.projectGenerationRuns.put(next);
-    return { run: next, generate: true };
-  });
-  if (!transition.run || !transition.generate) return transition.run;
-  try { return await generateCurrentProjectStage(transition.run); }
-  catch (error) { return failProjectGenerationStage(transition.run, error); }
-}
-
-export async function skipProjectGenerationStage(runId: string) {
-  PROJECT_RUN_ABORTS.get(runId)?.abort();
-  const run = await novelDb.projectGenerationRuns.get(runId);
-  if (!run) return run;
-  if (run.activeProposalId) await rejectProposal(run.activeProposalId);
-  return advanceProjectGeneration(runId, run.activeProposalId, run.revision);
-}
-
-export async function retryProjectGeneration(runId: string) {
-  const next = await novelDb.transaction("rw", novelDb.projectGenerationRuns, async () => {
-    const run = await novelDb.projectGenerationRuns.get(runId);
-    if (!run || !["failed", "waiting-approval"].includes(run.status)) return run;
-    const resumed = { ...run, status: "running" as const, activeProposalId: undefined, error: undefined, revision: run.revision + 1, updatedAt: Date.now() };
-    await novelDb.projectGenerationRuns.put(resumed);
-    return resumed;
-  });
-  if (!next || next.status !== "running") return next;
-  try { return await generateCurrentProjectStage(next); }
-  catch (error) { return failProjectGenerationStage(next, error); }
-}
-
-export async function cancelProjectGeneration(runId: string) {
-  PROJECT_RUN_ABORTS.get(runId)?.abort();
-  return novelDb.transaction("rw", novelDb.projectGenerationRuns, novelDb.proposals, async () => {
-    const run = await novelDb.projectGenerationRuns.get(runId);
-    if (!run || ["completed", "cancelled"].includes(run.status)) return run;
-    if (run.activeProposalId) {
-      const proposal = await novelDb.proposals.get(run.activeProposalId);
-      if (proposal?.status === "pending") await novelDb.proposals.put({ ...proposal, status: "rejected", items: proposal.items.map((item) => ({ ...item, status: "rejected" as const })), revision: proposal.revision + 1, updatedAt: Date.now() });
-    }
-    const next = { ...run, status: "cancelled" as const, finishedAt: Date.now(), revision: run.revision + 1, updatedAt: Date.now() };
-    await novelDb.projectGenerationRuns.put(next);
-    return next;
-  });
 }
