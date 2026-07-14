@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Dexie from "dexie";
 import "./setup";
 import { createNovelProject, getCanvasLayout, novelDb, recordBase, saveCanvasLayout, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES } from "../db-schema";
-import { exportNovel, importNovel } from "../export";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES } from "../db-schema";
+import { exportNovel, importNovel, verifyProjectArchive } from "../export";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -12,12 +12,12 @@ beforeEach(async () => {
 });
 
 describe("db-schema constants", () => {
-  it("DB_VERSION is 6", () => {
-    expect(DB_VERSION).toBe(6);
+  it("DB_VERSION is 11", () => {
+    expect(DB_VERSION).toBe(11);
   });
 
-  it("RECORD_SCHEMA_VERSION is 4", () => {
-    expect(RECORD_SCHEMA_VERSION).toBe(4);
+  it("RECORD_SCHEMA_VERSION is 6", () => {
+    expect(RECORD_SCHEMA_VERSION).toBe(6);
   });
 
   it("keeps the v4 schema for migration and removes project generation runs in v5", () => {
@@ -45,20 +45,51 @@ describe("db-schema constants", () => {
     expect(V6_STORES.canvasLayouts).toContain("[projectId+panelKey]");
     expect(V6_STORES.canvasLayouts).toContain("panelKey");
   });
+
+  it("V7_STORES keeps the v6 indexes while migrating architecture data", () => {
+    expect(V7_STORES).toEqual(V6_STORES);
+  });
+
+  it("V8_STORES adds the append-only truth and character-knowledge ledgers", () => {
+    expect(V8_STORES.factAssertions).toContain("[projectId+status]");
+    expect(V8_STORES.factAssertions).toContain("sourceRevisionId");
+    expect(V8_STORES.knowledgeAssertions).toContain("[projectId+characterId]");
+  });
+
+  it("V9_STORES adds narrative ownership and hierarchical derived memory", () => {
+    expect(V9_STORES.narrativeUnits).toContain("[projectId+kind]");
+    expect(V9_STORES.outlineRealizations).toContain("[projectId+documentId]");
+    expect(V9_STORES.derivedMemories).toContain("[projectId+level]");
+    expect(V9_STORES.derivedMemories).toContain("sourceRevisionId");
+  });
+
+  it("V10_STORES adds revision-bound manuscript changes", () => {
+    expect(V10_STORES.manuscriptChanges).toContain("[documentId+status]");
+    expect(V10_STORES.manuscriptChanges).toContain("[workflowRunId+status]");
+  });
+
+  it("V11_STORES keeps the v10 indexes for the data-cleanup migration", () => {
+    expect(V11_STORES).toEqual(V10_STORES);
+  });
 });
 
-describe("database v6 schema", () => {
-  it("opens successfully at v6 with canvasLayouts table and without the retired table", () => {
+describe("database v9 schema", () => {
+  it("opens successfully at v9 with truth and memory tables and without the retired table", () => {
     expect(novelDb.isOpen()).toBe(true);
     expect(novelDb.verno).toBe(DB_VERSION);
     expect(novelDb.name).toBe("ymcp-novel-db-v4");
     expect(novelDb.tables.some((table) => table.name === "projectGenerationRuns")).toBe(false);
     expect(novelDb.tables.some((table) => table.name === "canvasLayouts")).toBe(true);
+    expect(novelDb.tables.some((table) => table.name === "factAssertions")).toBe(true);
+    expect(novelDb.tables.some((table) => table.name === "knowledgeAssertions")).toBe(true);
+    expect(novelDb.tables.some((table) => table.name === "narrativeUnits")).toBe(true);
+    expect(novelDb.tables.some((table) => table.name === "outlineRealizations")).toBe(true);
+    expect(novelDb.tables.some((table) => table.name === "derivedMemories")).toBe(true);
   });
 
   it("rejects project imports older than v4", async () => {
     const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 3 }, project: { id: "legacy" } }) } as File;
-    await expect(importNovel(file)).rejects.toThrow(/v4\/v5/);
+    await expect(importNovel(file)).rejects.toThrow(/v4-v9/);
   });
 
   it("imports v4 backups without retired run data or proposal links", async () => {
@@ -103,6 +134,134 @@ describe("database v6 schema", () => {
     expect((await novelDb.agentRuns.get(agent.id))?.goal).toBe("生成故事资料");
   });
 
+  it("removes reader promises from imported architectures and proposals", async () => {
+    const project = await createNovelProject({ title: "旧架构导入", genre: ["悬疑"], premise: "旧字段不再使用。" });
+    const currentArchitecture = await novelDb.architectures.where("projectId").equals(project.id).first();
+    expect(currentArchitecture).toBeDefined();
+    const architecture = { ...currentArchitecture!, readerPromise: "旧读者承诺" };
+    const proposal = {
+      ...recordBase(project.id),
+      id: "legacy-architecture-proposal",
+      title: "旧架构候选",
+      operation: "structured:architecture",
+      taskKey: "architecture",
+      scope: "architecture",
+      status: "pending",
+      previewMarkdown: "",
+      patches: [],
+      contextPacketId: "context",
+      model: "test",
+      items: [{ id: "item-1", label: "架构", operation: "update", targetTable: "architectures", targetId: architecture.id, status: "pending", dependencies: [], payload: { centralConflict: "新冲突", readerPromise: "旧读者承诺" }, after: { centralConflict: "新冲突", readerPromise: "旧读者承诺" } }],
+    };
+    const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 5 }, project, architectures: [architecture], proposals: [proposal] }) } as File;
+    await importNovel(file);
+    expect(await novelDb.architectures.get(architecture.id) as unknown as Record<string, unknown>).not.toHaveProperty("readerPromise");
+    const importedProposal = await novelDb.proposals.get(proposal.id) as unknown as Record<string, unknown>;
+    expect(((importedProposal.items as Array<Record<string, unknown>>)[0].payload as Record<string, unknown>)).not.toHaveProperty("readerPromise");
+  });
+
+  it("normalizes removed fields and orphaned references from older imports", async () => {
+    const project = await createNovelProject({ title: "旧引用导入", genre: ["悬疑"], premise: "旧数据需要清理。" });
+    const character = { ...recordBase(project.id), id: "import-character", kind: "character", name: "导入角色", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {} };
+    const thread = { ...recordBase(project.id), id: "import-thread", kind: "main", title: "导入主线", summary: "", status: "planned", priority: 50, participantIds: [character.id, "missing-entity"], progress: 0, nextMove: "" };
+    const clue = { ...recordBase(project.id), id: "import-clue", title: "导入伏笔", clue: "", truth: "", status: "seeded", urgency: 50, notes: "" };
+    const outline = { ...recordBase(project.id), id: "import-outline", kind: "event", title: "导入事件", summary: "", order: 0, status: "planned", causality: "", outcome: "", characterIds: [character.id, "missing-character"], plotThreadIds: [thread.id, "missing-thread"], foreshadowingIds: [clue.id, "human_rule_foreshadowing"], tension: 70, emotion: 60, information: 50, tags: [] };
+    const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 8 }, project, entities: [character], plotThreads: [thread], foreshadowing: [clue], outlineNodes: [outline] }) } as File;
+
+    await importNovel(file);
+
+    const imported = await novelDb.outlineNodes.get(outline.id) as unknown as Record<string, unknown>;
+    expect(imported).not.toHaveProperty("tension");
+    expect(imported.characterIds).toEqual([character.id]);
+    expect(imported.plotThreadIds).toEqual([thread.id]);
+    expect(imported.foreshadowingIds).toEqual([clue.id]);
+    expect((await novelDb.plotThreads.get(thread.id))?.participantIds).toEqual([character.id]);
+  });
+
+  it("removes reader promises when upgrading v6 data", async () => {
+    novelDb.close();
+    await novelDb.delete();
+    const legacy = new Dexie(novelDb.name);
+    legacy.version(6).stores(V6_STORES);
+    await legacy.open();
+    await legacy.table("architectures").put({ id: "legacy-architecture", projectId: "legacy-project", status: "draft", updatedAt: Date.now(), centralQuestion: "问题", centralConflict: "冲突", readerPromise: "旧读者承诺", synopsis: "梗概", phases: [] });
+    await legacy.table("proposals").put({ id: "legacy-proposal", projectId: "legacy-project", status: "pending", createdAt: Date.now(), items: [{ id: "item-1", payload: { readerPromise: "旧读者承诺" }, before: { readerPromise: "旧值" }, after: { readerPromise: "新值" } }] });
+    legacy.close();
+
+    await novelDb.open();
+    expect(await novelDb.architectures.get("legacy-architecture") as unknown as Record<string, unknown>).not.toHaveProperty("readerPromise");
+    const proposal = await novelDb.proposals.get("legacy-proposal") as unknown as Record<string, unknown>;
+    const item = (proposal.items as Array<Record<string, unknown>>)[0];
+    expect(item.payload).not.toHaveProperty("readerPromise");
+    expect(item.before).not.toHaveProperty("readerPromise");
+    expect(item.after).not.toHaveProperty("readerPromise");
+  });
+
+  it("upgrades v10 data by removing outline intensity fields and orphaned references", async () => {
+    novelDb.close();
+    await novelDb.delete();
+    const legacy = new Dexie(novelDb.name);
+    legacy.version(10).stores(V10_STORES);
+    await legacy.open();
+    const projectId = "reference-project";
+    const otherProjectId = "other-project";
+    await legacy.table("entities").bulkPut([
+      { id: "character-valid", projectId, kind: "character", name: "有效角色" },
+      { id: "location-valid", projectId, kind: "location", name: "有效地点" },
+      { id: "character-cross-project", projectId: otherProjectId, kind: "character", name: "其他项目角色" },
+    ]);
+    await legacy.table("plotThreads").put({ id: "thread-valid", projectId, kind: "main", status: "active", priority: 80, participantIds: ["character-valid", "location-valid", "character-cross-project", "missing-entity"] });
+    await legacy.table("foreshadowing").put({ id: "clue-valid", projectId, status: "seeded", urgency: 50 });
+    await legacy.table("outlineNodes").put({
+      id: "outline-legacy", projectId, kind: "event", order: 0, status: "planned",
+      characterIds: ["character-valid", "location-valid", "character-cross-project", "missing-character", "character-valid"],
+      plotThreadIds: ["thread-valid", "survival_thread"],
+      foreshadowingIds: ["clue-valid", "human_rule_foreshadowing"],
+      tension: 70, emotion: 65, information: 60,
+    });
+    await legacy.table("scenes").put({
+      id: "scene-legacy", projectId, chapterId: "chapter-legacy", order: 0, status: "planned",
+      characterIds: ["character-valid", "missing-character"], plotThreadIds: ["thread-valid", "missing-thread"],
+      foreshadowingIds: ["clue-valid", "missing-clue"], povCharacterId: "missing-character",
+    });
+    await legacy.table("documents").put({
+      id: "chapter-legacy", projectId, order: 0, status: "outline", branch: "main", updatedAt: Date.now(),
+      blueprint: { characterIds: ["character-valid", "missing-character"], povCharacterId: "missing-character" },
+    });
+    await legacy.table("timelineEvents").put({ id: "timeline-legacy", projectId, narrativeOrder: 0, participantIds: ["character-valid", "location-valid", "missing-entity"] });
+    await legacy.table("proposals").put({
+      id: "proposal-legacy", projectId, status: "pending", createdAt: Date.now(), items: [{
+        id: "outline-item", targetTable: "outlineNodes", payload: {
+          characterIds: ["character-valid", "missing-character", "ref:new-character"],
+          plotThreadIds: ["thread-valid", "survival_thread"],
+          foreshadowingIds: ["clue-valid", "human_rule_foreshadowing"],
+          tension: 80, emotion: 70, information: 60,
+        },
+      }],
+    });
+    legacy.close();
+
+    await novelDb.open();
+
+    const outline = await novelDb.outlineNodes.get("outline-legacy") as unknown as Record<string, unknown>;
+    expect(outline).not.toHaveProperty("tension");
+    expect(outline).not.toHaveProperty("emotion");
+    expect(outline).not.toHaveProperty("information");
+    expect(outline.characterIds).toEqual(["character-valid"]);
+    expect(outline.plotThreadIds).toEqual(["thread-valid"]);
+    expect(outline.foreshadowingIds).toEqual(["clue-valid"]);
+    expect(await novelDb.scenes.get("scene-legacy")).toMatchObject({ characterIds: ["character-valid"], plotThreadIds: ["thread-valid"], foreshadowingIds: ["clue-valid"], povCharacterId: undefined });
+    expect((await novelDb.documents.get("chapter-legacy"))?.blueprint).toMatchObject({ characterIds: ["character-valid"], povCharacterId: undefined });
+    expect((await novelDb.plotThreads.get("thread-valid"))?.participantIds).toEqual(["character-valid", "location-valid"]);
+    expect((await novelDb.timelineEvents.get("timeline-legacy"))?.participantIds).toEqual(["character-valid", "location-valid"]);
+    const proposal = await novelDb.proposals.get("proposal-legacy") as unknown as Record<string, unknown>;
+    const payload = ((proposal.items as Array<Record<string, unknown>>)[0].payload as Record<string, unknown>);
+    expect(payload).not.toHaveProperty("tension");
+    expect(payload.characterIds).toEqual(["character-valid", "ref:new-character"]);
+    expect(payload.plotThreadIds).toEqual(["thread-valid"]);
+    expect(payload.foreshadowingIds).toEqual(["clue-valid"]);
+  });
+
   it("upgrades v4 data in place and removes only retired workflow state", async () => {
     novelDb.close();
     await novelDb.delete();
@@ -127,8 +286,8 @@ describe("database v6 schema", () => {
     expect(novelDb.tables.some((table) => table.name === "projectGenerationRuns")).toBe(false);
   });
 
-  it("exports v5 backups without retired workflow data", async () => {
-    const project = await createNovelProject({ title: "v5 导出", genre: ["悬疑"], premise: "总览只展示当前状态。" });
+  it("exports v9 integrity-checked archives with all formal ledgers", async () => {
+    const project = await createNovelProject({ title: "v7 导出", genre: ["悬疑"], premise: "总览只展示当前状态。" });
     let exportedBlob: Blob | undefined;
     const previousDocument = globalThis.document;
     Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement: () => ({ click: () => undefined, href: "", download: "" }) } });
@@ -141,7 +300,17 @@ describe("database v6 schema", () => {
       await exportNovel(project.id, "json");
       expect(exportedBlob).toBeDefined();
       const backup = JSON.parse(await exportedBlob!.text()) as Record<string, unknown> & { manifest: { schemaVersion: number } };
-      expect(backup.manifest.schemaVersion).toBe(5);
+      expect(backup.manifest.schemaVersion).toBe(9);
+      expect(backup).toHaveProperty("factAssertions");
+      expect(backup).toHaveProperty("knowledgeAssertions");
+      expect(backup).toHaveProperty("narrativeUnits");
+      expect(backup).toHaveProperty("outlineRealizations");
+      expect(backup).toHaveProperty("derivedMemories");
+      expect(backup).toHaveProperty("manuscriptChanges");
+      expect(backup.manifest).toHaveProperty("integrity");
+      expect(verifyProjectArchive(backup)).toBe(true);
+      backup.project = { ...(backup.project as Record<string, unknown>), title: "被篡改" };
+      expect(() => verifyProjectArchive(backup)).toThrow(/校验失败：project/);
       expect(backup).not.toHaveProperty("projectGenerationRuns");
     } finally {
       createObjectUrl.mockRestore();
@@ -290,9 +459,6 @@ describe("database v6 schema", () => {
       characterIds: [],
       plotThreadIds: [],
       foreshadowingIds: [],
-      tension: 30,
-      emotion: 30,
-      information: 30,
       tags: [],
     });
     await novelDb.outlineNodes.put({
@@ -308,9 +474,6 @@ describe("database v6 schema", () => {
       characterIds: [],
       plotThreadIds: [],
       foreshadowingIds: [],
-      tension: 30,
-      emotion: 30,
-      information: 30,
       tags: [],
     });
 

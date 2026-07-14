@@ -1,19 +1,18 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { App, Button, Empty, Input, Progress, Segmented, Select, Spin, Tag } from "antd";
-import { DeleteOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { App, Button, Empty, Progress, Segmented, Spin, Tag } from "antd";
+import { SaveOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
-import { motion } from "motion/react";
 import { ensureStoryArchitecture, novelDb, saveStoryArchitecture } from "./db";
 import GenerationComposer from "./GenerationComposer";
-import type { ArchitecturePhase, StoryArchitecture } from "./types";
+import ArchitectureDataEditor from "./ArchitectureDataEditor";
+import type { StoryArchitecture } from "./types";
 
-const PlanningCanvasPanel = lazy(() => import("./canvas/PlanningCanvasPanel").then((m) => ({ default: m.PlanningCanvasPanel })));
 const OutlineDocView = lazy(() => import("./OutlineDocView"));
 
-type PlanningMode = "architecture" | "outline" | "matrix" | "board";
+type PlanningMode = "architecture" | "outline" | "matrix";
 
-function SectionTitle({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
-  return <header className="novel-section-title"><div><span>STORY PLANNING</span><h2>{title}</h2><p>{description}</p></div>{action}</header>;
+function SectionTitle({ title, description, action, eyebrow = "STORY PLANNING" }: { title: string; description: string; action?: React.ReactNode; eyebrow?: string }) {
+  return <header className="novel-section-title"><div>{eyebrow && <span>{eyebrow}</span>}<h2>{title}</h2><p>{description}</p></div>{action}</header>;
 }
 
 function ArchitectureView({ projectId }: { projectId: string }) {
@@ -22,20 +21,10 @@ function ArchitectureView({ projectId }: { projectId: string }) {
   const [draft, setDraft] = useState<StoryArchitecture>();
   useEffect(() => { if (saved) setDraft(saved); else if (saved === undefined) void ensureStoryArchitecture(projectId); }, [projectId, saved]);
   if (!draft) return <Empty description="正在建立全书架构" />;
-  const updatePhase = (id: string, changes: Partial<ArchitecturePhase>) => setDraft({ ...draft, phases: draft.phases.map((item) => item.id === id ? { ...item, ...changes } : item) });
-  return <div>
-    <GenerationComposer projectId={projectId} scope="architecture" taskKeys={["architecture"]} />
-    <SectionTitle title="全书架构" description="只定义全书承诺、核心冲突和宏观阶段; 具体故事事件在大纲中展开。" action={<Button type="primary" icon={<SaveOutlined />} onClick={async () => { await saveStoryArchitecture(draft); message.success("全书架构已保存"); }}>保存架构</Button>} />
-    <div className="novel-architecture-form">
-      <section><label>结构方法<Select value={draft.framework} options={[{ value: "free", label: "自由结构" }, { value: "three-act", label: "三幕式" }, { value: "four-part", label: "起承转合" }, { value: "save-the-cat", label: "Save the Cat" }, { value: "snowflake", label: "雪花写作法" }]} onChange={(framework) => setDraft({ ...draft, framework })} /></label><label>状态<Select value={draft.status} options={[{ value: "draft", label: "草案" }, { value: "approved", label: "已批准" }]} onChange={(status) => setDraft({ ...draft, status })} /></label></section>
-      <label>核心问题<Input value={draft.centralQuestion} onChange={(event) => setDraft({ ...draft, centralQuestion: event.target.value })} /></label>
-      <label>核心冲突<Input.TextArea rows={2} value={draft.centralConflict} onChange={(event) => setDraft({ ...draft, centralConflict: event.target.value })} /></label>
-      <label>读者承诺<Input.TextArea rows={2} value={draft.readerPromise} onChange={(event) => setDraft({ ...draft, readerPromise: event.target.value })} /></label>
-      <label>全书梗概<Input.TextArea rows={6} value={draft.synopsis} onChange={(event) => setDraft({ ...draft, synopsis: event.target.value })} /></label>
-    </div>
-    <section className="novel-architecture-beats"><header><div><span>MACRO PHASES</span><h3>宏观阶段</h3></div><Button icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, phases: [...draft.phases, { id: crypto.randomUUID(), title: `阶段 ${draft.phases.length + 1}`, purpose: "", turningPoint: "", order: draft.phases.length, locked: false }] })}>添加阶段</Button></header>
-      {draft.phases.map((phase, index) => <motion.article layout key={phase.id}><i>{String(index + 1).padStart(2, "0")}</i><div><Input value={phase.title} onChange={(event) => updatePhase(phase.id, { title: event.target.value })} /><Input.TextArea rows={2} placeholder="本阶段必须完成的叙事使命" value={phase.purpose} onChange={(event) => updatePhase(phase.id, { purpose: event.target.value })} /><Input placeholder="结束时的不可逆转折" value={phase.turningPoint} onChange={(event) => updatePhase(phase.id, { turningPoint: event.target.value })} /></div><Button danger type="text" icon={<DeleteOutlined />} onClick={() => setDraft({ ...draft, phases: draft.phases.filter((item) => item.id !== phase.id).map((item, order) => ({ ...item, order })) })} /></motion.article>)}
-    </section>
+  return <div className="novel-architecture-view">
+    <SectionTitle eyebrow="" title="全书架构" description="定义核心问题、核心冲突与宏观阶段，具体故事事件在大纲中展开。" action={<Button className="novel-architecture-save" icon={<SaveOutlined />} onClick={async () => { await saveStoryArchitecture(draft); message.success("全书架构已保存"); }}>保存架构</Button>} />
+    <GenerationComposer projectId={projectId} scope="architecture" taskKeys={["architecture"]} actionLabel="生成架构方案" getRefinementSnapshot={() => ({ architectures: [draft as unknown as Record<string, unknown>] })} />
+    <ArchitectureDataEditor value={draft} onChange={(next) => setDraft({ ...draft, ...next })} />
   </div>;
 }
 
@@ -58,8 +47,7 @@ export default function PlanningWorkspace({ projectId }: { projectId: string }) 
   const content = useMemo(() => {
     if (mode === "architecture") return <ArchitectureView projectId={projectId} />;
     if (mode === "matrix") return <MatrixView projectId={projectId} />;
-    if (mode === "outline") return <Suspense fallback={LAZY_FALLBACK}><OutlineDocView projectId={projectId} /></Suspense>;
-    return <Suspense fallback={LAZY_FALLBACK}><PlanningCanvasPanel projectId={projectId} /></Suspense>;
+    return <Suspense fallback={LAZY_FALLBACK}><OutlineDocView projectId={projectId} /></Suspense>;
   }, [mode, projectId]);
-  return <div className="novel-view-content novel-planning-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as PlanningMode)} options={[{ value: "architecture", label: "全书架构" }, { value: "outline", label: "故事大纲" }, { value: "matrix", label: "剧情矩阵" }, { value: "board", label: "策划画布" }]} /></div>{content}</div>;
+  return <div className="novel-planning-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as PlanningMode)} options={[{ value: "architecture", label: "全书架构" }, { value: "outline", label: "故事大纲" }, { value: "matrix", label: "剧情矩阵" }]} /></div><div className="novel-planning-content">{content}</div></div>;
 }

@@ -11,6 +11,32 @@ export interface CollaborativeDocument {
   destroy: () => Promise<void>;
 }
 
+interface StoredManuscriptContent {
+  contentHtml?: string;
+  plainText?: string;
+}
+
+export function resolveStoredManuscriptHtml(document: StoredManuscriptContent): string {
+  if (document.contentHtml?.trim()) return document.contentHtml;
+  if (!document.plainText?.trim()) return "";
+  const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return document.plainText
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escape(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+export function seedEmptyCollaborativeDocument(
+  collaboration: Pick<CollaborativeDocument, "content">,
+  document: StoredManuscriptContent,
+  setContent: (contentHtml: string) => boolean,
+): boolean {
+  if (collaboration.content.length > 0) return false;
+  const contentHtml = resolveStoredManuscriptHtml(document);
+  if (!contentHtml) return false;
+  return setContent(contentHtml);
+}
+
 /**
  * Opens the durable Yjs document used by TipTap collaboration extensions.
  * A websocket provider can be attached to the returned Y.Doc without changing

@@ -31,7 +31,7 @@ export const BUILTIN_CHAPTER_WORKFLOW: WorkflowDefinition = {
   workflowId: CHAPTER_WORKFLOW_ID,
   name: "标准章节创作",
   description: "蓝图审批、正文生成、五类审校、定向修订、正文审批和事实回写。",
-  stages: ["context", "blueprint", "blueprint-approval", "draft", "deterministic-check", "review", "revision", "manuscript-approval", "fact-extraction", "commit"],
+  stages: ["context", "blueprint", "blueprint-approval", "draft", "deterministic-check", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit"],
   requiredSkillIds: ["story-facts-invariant", "chapter-blueprint", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
   maxAutoRevisions: 2,
   qualityThreshold: 3.7,
@@ -70,9 +70,23 @@ export const reviewerSchema = {
 export const factSchema = {
   type: "object", additionalProperties: false, required: ["summary", "facts"], properties: {
     summary: { type: "string" },
-    facts: { type: "array", items: { type: "object", additionalProperties: false, required: ["targetTable", "field", "after", "evidence", "confidence", "novelty", "conflict"], properties: {
-      targetTable: { enum: ["projects", "entities", "relations", "outlineNodes", "plotThreads", "foreshadowing", "timelineEvents", "snapshots"] }, targetId: { type: "string" }, field: { type: "string" }, before: {}, after: {}, evidence: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, confidence: { type: "number", minimum: 0, maximum: 1 }, novelty: { enum: ["new", "update", "duplicate"] }, conflict: { type: "boolean" },
+    facts: { type: "array", items: { type: "object", additionalProperties: false, required: ["targetTable", "field", "subject", "predicate", "object", "polarity", "truthStatus", "timeMode", "humanReadable", "after", "evidence", "confidence", "novelty", "conflict"], properties: {
+      targetTable: { enum: ["projects", "entities", "relations", "outlineNodes", "plotThreads", "foreshadowing", "timelineEvents", "snapshots"] }, targetId: { type: "string" }, field: { type: "string" }, before: {}, after: {},
+      subject: { type: "object", additionalProperties: false, required: ["kind", "id"], properties: { kind: { enum: ["project", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "timeline"] }, id: { type: "string" } } },
+      predicate: { type: "string" },
+      object: { type: "object", additionalProperties: false, required: ["kind", "value"], properties: { kind: { enum: ["entity-ref", "string", "number", "boolean", "json"] }, value: {} } },
+      polarity: { enum: ["affirmed", "negated"] }, truthStatus: { enum: ["objective", "claim", "contested", "open-question"] }, timeMode: { enum: ["timeless", "point", "interval", "open-ended", "unknown"] },
+      validFrom: { $ref: "#/$defs/storyPoint" }, validTo: { $ref: "#/$defs/storyPoint" }, humanReadable: { type: "string" },
+      knowledgeDeltas: { type: "array", items: { type: "object", additionalProperties: false, required: ["characterId", "stance"], properties: { characterId: { type: "string" }, stance: { enum: ["known", "suspected", "mistaken", "unknown"] }, learnedAt: { $ref: "#/$defs/storyPoint" } } } },
+      evidence: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, confidence: { type: "number", minimum: 0, maximum: 1 }, novelty: { enum: ["new", "update", "duplicate"] }, conflict: { type: "boolean" },
     } } },
+  },
+  $defs: {
+    storyPoint: { type: "object", additionalProperties: false, required: ["precision"], properties: {
+      chapterId: { type: "string" }, sceneId: { type: "string" }, narrativeOrder: { type: "number" }, absoluteDate: { type: "string" }, anchorEventId: { type: "string" },
+      relativeOffset: { type: "object", additionalProperties: false, required: ["value", "unit"], properties: { value: { type: "number" }, unit: { enum: ["minute", "hour", "day", "week", "month", "year"] } } },
+      precision: { enum: ["exact", "approximate", "range", "unknown"] },
+    } },
   },
 };
 

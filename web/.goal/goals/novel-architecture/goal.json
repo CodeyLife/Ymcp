@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "id": "novel-architecture",
+  "objective": "将当前小说创作模块实现为适合数千章节、单作者使用的可靠长篇创作系统：严格隔离创作契约、叙事事实、角色认知与候选态，建立可追溯的事实断言和正文修订、分层整合且非破坏性淘汰的长期记忆、按时点和视角隔离且可解释的 LLM 上下文，以及字段级和逐段可审阅的修改流程；保留现有用户改动和可用功能，以测试、类型检查、构建及关键用户流程证明完成。",
+  "status": "complete",
+  "createdAt": "2026-07-14T06:21:35.432Z",
+  "updatedAt": "2026-07-14T08:06:35.670Z",
+  "loopCount": 9,
+  "budgets": {
+    "maxLoops": 100,
+    "maxNoProgressLoops": 8,
+    "maxMinutes": 720
+  },
+  "lastDecision": "complete",
+  "lastCheckpoint": "Audit every agreed architecture area against implementation and verification evidence, then close the goal only if no repository-scoped required work remains. Mapped the agreed truth, time, cognition, memory, context, review, and durability decisions to implemented modules and t...",
+  "completionEvidence": "result=pass All 26 test files and 198 tests pass across truth, memory, context, generation, workflow, migration, collaboration, and paragraph review. command npm test exitCode=0; result=pass TypeScript, production build, and whitespace validation pass. command npm run lint && npm run build && git diff --check exitCode=0; result=pass The editor autosaves visibly, reports DB v10, has no local console errors, and fits desktop and 390px viewports without horizontal overflow. command in-app browser desktop/mobile and autosave verification exitCode=0",
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "final-domain-audit"
+      ]
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "full-verification",
+        "autosave-runtime",
+        "final-test-evidence",
+        "final-runtime-evidence"
+      ]
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "final-scope-audit"
+      ]
+    },
+    {
+      "id": "novel-system-implemented",
+      "text": "The novel studio implements the agreed truth, memory, context, review, and durability architecture for a single author, with verified long-form workflows.",
+      "status": "satisfied",
+      "weight": 5,
+      "evidenceRefs": [
+        "fact-policy-tests",
+        "fact-policy-types",
+        "truth-ledger-tests",
+        "truth-ledger-schema",
+        "approved-revision-flow",
+        "semantic-fact-schema",
+        "knowledge-ledger-test",
+        "memory-lifecycle-tests",
+        "memory-model",
+        "context-boundary-tests",
+        "context-receipt-ui",
+        "context-engine",
+        "field-approval-test",
+        "field-review-ui",
+        "paragraph-review-tests",
+        "paragraph-review-ledger",
+        "paragraph-review-ui",
+        "durability-tests",
+        "autosave-runtime",
+        "archive-integrity",
+        "full-verification",
+        "final-test-evidence",
+        "final-runtime-evidence",
+        "final-domain-audit"
+      ]
+    }
+  ],
+  "strategy": {
+    "current": "Implement the agreed architecture in dependency order, starting with workflow integrity and provenance, while preserving the live worktree and proving each loop with focused tests before broad verification.",
+    "lastChangeReason": "The requirements interview and baseline audit provide enough evidence to begin implementation safely.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 1,
+  "errorPatterns": [
+    {
+      "kind": "command",
+      "canonicalKey": "npm run lint exitcode 0",
+      "examples": [
+        "npm run lint exitCode=0"
+      ],
+      "count": 5,
+      "firstLoop": 1,
+      "lastLoop": 6
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel test truth ledger test ts",
+      "examples": [
+        "src/features/novel/__tests__/truth-ledger.test.ts"
+      ],
+      "count": 2,
+      "firstLoop": 2,
+      "lastLoop": 3
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npm test exitcode 0",
+      "examples": [
+        "npm test exitCode=0"
+      ],
+      "count": 2,
+      "firstLoop": 2,
+      "lastLoop": 9
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src pages novelstudio tsx",
+      "examples": [
+        "src/pages/NovelStudio.tsx"
+      ],
+      "count": 2,
+      "firstLoop": 9,
+      "lastLoop": 9
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel test workflow regressions test ts",
+      "examples": [
+        "src/features/novel/__tests__/workflow-regressions.test.ts"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel facts ts",
+      "examples": [
+        "src/features/novel/facts.ts"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npx vitest run src features novel test facts test ts src features novel test context facts test ts src features nov",
+      "examples": [
+        "npx vitest run src/features/novel/__tests__/facts.test.ts src/features/novel/__tests__/context-facts.test.ts src/features/nov"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel db schema ts",
+      "examples": [
+        "src/features/novel/db-schema.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel db ts",
+      "examples": [
+        "src/features/novel/db.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npm run build exitcode 0",
+      "examples": [
+        "npm run build exitCode=0"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "saction as legacy state projections",
+      "examples": [
+        "saction as legacy state projections."
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel workflow shared ts",
+      "examples": [
+        "src/features/novel/workflow-shared.ts"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npx vitest run src features novel test truth ledger test ts exitcode",
+      "examples": [
+        "npx vitest run src/features/novel/__tests__/truth-ledger.test.ts exitCode="
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel test memory test ts",
+      "examples": [
+        "src/features/novel/__tests__/memory.test.ts"
+      ],
+      "count": 1,
+      "firstLoop": 4,
+      "lastLoop": 4
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel memory ts",
+      "examples": [
+        "src/features/novel/memory.ts"
+      ],
+      "count": 1,
+      "firstLoop": 4,
+      "lastLoop": 4
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npx vitest run src features novel test memory test ts src featur",
+      "examples": [
+        "npx vitest run src/features/novel/__tests__/memory.test.ts src/featur"
+      ],
+      "count": 1,
+      "firstLoop": 4,
+      "lastLoop": 4
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel test context facts test ts",
+      "examples": [
+        "src/features/novel/__tests__/context-facts.test.ts"
+      ],
+      "count": 1,
+      "firstLoop": 5,
+      "lastLoop": 5
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel aiworkbench tsx",
+      "examples": [
+        "src/features/novel/AIWorkbench.tsx"
+      ],
+      "count": 1,
+      "firstLoop": 5,
+      "lastLoop": 5
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel context ts",
+      "examples": [
+        "src/features/novel/context.ts"
+      ],
+      "count": 1,
+      "firstLoop": 5,
+      "lastLoop": 5
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npx vitest run src features novel test context facts test ts src features novel",
+      "examples": [
+        "npx vitest run src/features/novel/__tests__/context-facts.test.ts src/features/novel/"
+      ],
+      "count": 1,
+      "firstLoop": 5,
+      "lastLoop": 5
+    }
+  ],
+  "attestationSha256": "05029cd05fa8c07e6d8987bb0f9924351a946d991814264b4e61cad3bca7ed73"
+}

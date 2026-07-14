@@ -140,7 +140,6 @@ export interface StoryArchitecture extends VersionedRecord {
   framework: StoryFramework;
   status: "draft" | "approved";
   centralQuestion: string;
-  readerPromise: string;
   centralConflict: string;
   synopsis: string;
   phases: ArchitecturePhase[];
@@ -159,9 +158,6 @@ export interface OutlineNode extends VersionedRecord {
   characterIds: string[];
   plotThreadIds: string[];
   foreshadowingIds: string[];
-  tension: number;
-  emotion: number;
-  information: number;
   tags: string[];
 }
 
@@ -195,6 +191,8 @@ export interface ManuscriptDocument extends VersionedRecord {
   wordCount: number;
   branch: string;
   yjsDocumentId: string;
+  approvedRevisionId?: string;
+  primaryNarrativeUnitId?: string;
 }
 
 export interface DocumentRevision extends VersionedRecord {
@@ -205,6 +203,36 @@ export interface DocumentRevision extends VersionedRecord {
   source: "manual" | "ai" | "checkpoint" | "merge";
   parentRevisionId?: string;
   branch: string;
+  approvalStatus?: "checkpoint" | "approved" | "superseded";
+  approvedAt?: number;
+  contentHash?: string;
+  blocks?: ManuscriptBlock[];
+}
+
+export interface ManuscriptBlock {
+  id: string;
+  order: number;
+  text: string;
+  kind: "paragraph";
+}
+
+export interface ManuscriptChange extends VersionedRecord {
+  documentId: string;
+  workflowRunId?: string;
+  sourceArtifactId?: string;
+  baseRevisionId?: string;
+  baseDocumentRevision: number;
+  baseContentHash: string;
+  sourceContentHash: string;
+  operation: "insert" | "replace" | "delete";
+  targetBlockId?: string;
+  proposedBlockId: string;
+  order: number;
+  beforeText?: string;
+  afterText?: string;
+  beforeTextHash?: string;
+  status: "pending" | "accepted" | "rejected" | "conflict";
+  decidedAt?: number;
 }
 
 export interface PlotThread extends VersionedRecord {
@@ -257,7 +285,7 @@ export interface StorySnapshot extends VersionedRecord {
 
 export interface ContextSource {
   id: string;
-  kind: "instruction" | "architecture" | "document" | "entity" | "relation" | "outline" | "scene" | "thread" | "foreshadowing" | "snapshot" | "style" | "skill" | "taste";
+  kind: "instruction" | "architecture" | "document" | "entity" | "relation" | "outline" | "scene" | "thread" | "foreshadowing" | "snapshot" | "style" | "skill" | "taste" | "fact" | "knowledge" | "memory";
   title: string;
   content: string;
   weight: number;
@@ -267,6 +295,8 @@ export interface ContextSource {
   reason: string;
   contentHash: string;
   priorityClass: "invariant" | "working" | "relevant" | "background";
+  layer: "mandatory" | "working" | "continuity" | "retrieval" | "background";
+  visibilityReason: string;
   skillId?: string;
 }
 
@@ -280,6 +310,10 @@ export interface NovelContextPacket extends VersionedRecord {
   omittedSourceIds: string[];
   skillRefs: Array<{ id: string; version: string; name: string; source: NovelSkillSource }>;
   compiledAt: number;
+  informationView?: { mode: "author" | "reader" | "character"; targetDocumentId?: string; targetNarrativeOrder?: number; characterId?: string };
+  layerBudgets?: Record<ContextSource["layer"], number>;
+  layerUsage?: Record<ContextSource["layer"], number>;
+  omissions?: Array<{ sourceId: string; title: string; layer: ContextSource["layer"]; estimatedTokens: number; reason: string }>;
 }
 
 export interface ProposalPatch {
@@ -306,7 +340,7 @@ export type ProposalTargetTable =
 export interface ProposalItem {
   id: string;
   label: string;
-  operation: "create" | "update";
+  operation: "create" | "update" | "delete";
   targetTable: ProposalTargetTable;
   targetId?: string;
   tempId?: string;
@@ -317,9 +351,11 @@ export interface ProposalItem {
   after?: Record<string, unknown>;
   rationale: string;
   dependencies: string[];
+  impact?: string[];
+  acceptedFields?: string[];
 }
 
-export type NovelGenerationScope = "architecture" | "outline" | "chapters" | "scenes" | "bible" | "characters" | "relations" | "timeline" | "foreshadowing" | "threads" | "review" | "writing";
+export type NovelGenerationScope = "architecture" | "outline" | "chapters" | "scenes" | "bible" | "characters" | "relations" | "timeline" | "worldview" | "foreshadowing" | "threads" | "review" | "writing";
 
 export type NovelGenerationTaskKey =
   | "project-positioning"
@@ -331,6 +367,7 @@ export type NovelGenerationTaskKey =
   | "characters"
   | "relations"
   | "timeline"
+  | "worldview"
   | "plot-threads"
   | "foreshadowing"
   | "story-control"
@@ -354,7 +391,19 @@ export interface AIProposal extends VersionedRecord {
   agentRunId?: string;
   model: string;
   artifactId?: string;
+  generationMode?: "generate" | "refine";
+  sourceFingerprint?: string;
 }
+
+export type RefinementSnapshotInput = Partial<Record<ProposalTargetTable, Array<Record<string, unknown>>>>;
+
+export interface RefinementSnapshotRecord {
+  id: string;
+  revision: number;
+  data: Record<string, unknown>;
+}
+
+export type RefinementSnapshot = Partial<Record<ProposalTargetTable, RefinementSnapshotRecord[]>>;
 
 export interface AgentStep {
   id: string;
@@ -495,9 +544,21 @@ export interface QualityReport extends VersionedRecord {
 export interface FactCandidate extends VersionedRecord {
   workflowRunId: string;
   sourceArtifactId: string;
+  sourceRevisionId?: string;
   targetTable: string;
   targetId?: string;
   field: string;
+  subject?: { kind: FactSubjectKind; id: string };
+  predicate?: string;
+  object?: FactObjectValue;
+  polarity?: "affirmed" | "negated";
+  truthStatus?: FactTruthStatus;
+  timeMode?: FactTimeMode;
+  validFrom?: StoryPoint;
+  validTo?: StoryPoint;
+  revealedAt?: StoryPoint;
+  humanReadable?: string;
+  knowledgeDeltas?: FactKnowledgeDelta[];
   before?: unknown;
   after: unknown;
   evidence: string;
@@ -505,7 +566,116 @@ export interface FactCandidate extends VersionedRecord {
   confidence: number;
   novelty: "new" | "update" | "duplicate";
   conflict: boolean;
+  risk: "safe" | "high";
+  riskReason: string;
   status: "pending" | "accepted" | "rejected";
+  decisionSource?: "author" | "auto-policy";
+  decidedAt?: number;
+  committedAssertionId?: string;
+  committedAt?: number;
+}
+
+export type FactTimeMode = "timeless" | "point" | "interval" | "open-ended" | "unknown";
+export type FactTruthStatus = "objective" | "claim" | "contested" | "open-question";
+export type FactSubjectKind = "project" | "entity" | "relation" | "outline" | "scene" | "thread" | "foreshadowing" | "timeline";
+
+export interface StoryPoint {
+  chapterId?: string;
+  sceneId?: string;
+  narrativeOrder?: number;
+  absoluteDate?: string;
+  anchorEventId?: string;
+  relativeOffset?: { value: number; unit: "minute" | "hour" | "day" | "week" | "month" | "year" };
+  precision: "exact" | "approximate" | "range" | "unknown";
+}
+
+export interface FactObjectValue {
+  kind: "entity-ref" | "string" | "number" | "boolean" | "json";
+  value: unknown;
+}
+
+export interface FactAssertion extends VersionedRecord {
+  subject: { kind: FactSubjectKind; id: string };
+  predicate: string;
+  object: FactObjectValue;
+  polarity: "affirmed" | "negated";
+  truthStatus: FactTruthStatus;
+  timeMode: FactTimeMode;
+  validFrom?: StoryPoint;
+  validTo?: StoryPoint;
+  revealedAt?: StoryPoint;
+  sourceRevisionId: string;
+  sourceArtifactId?: string;
+  provenance: "approved-revision" | "legacy-artifact";
+  evidence: string;
+  paragraph?: number;
+  confidence: number;
+  humanReadable: string;
+  status: "active" | "superseded" | "stale" | "retracted";
+  supersedesId?: string;
+  derivedFromCandidateId: string;
+  projection?: { targetTable: string; targetId?: string; field: string };
+}
+
+export interface KnowledgeAssertion extends VersionedRecord {
+  characterId: string;
+  factAssertionId: string;
+  stance: "known" | "suspected" | "mistaken" | "unknown";
+  learnedAt?: StoryPoint;
+  sourceRevisionId: string;
+  status: "active" | "superseded" | "stale" | "retracted";
+  supersedesId?: string;
+}
+
+export interface FactKnowledgeDelta {
+  characterId: string;
+  stance: KnowledgeAssertion["stance"];
+  learnedAt?: StoryPoint;
+}
+
+export type NarrativeUnitKind = "volume" | "arc" | "sequence";
+
+export interface NarrativeUnit extends VersionedRecord {
+  parentId?: string;
+  kind: NarrativeUnitKind;
+  title: string;
+  summary: string;
+  order: number;
+  status: "planned" | "active" | "completed";
+}
+
+export interface OutlineRealization extends VersionedRecord {
+  outlineNodeId: string;
+  documentId: string;
+  sceneId?: string;
+  status: "planned" | "partial" | "realized";
+  note: string;
+}
+
+export interface DerivedMemoryContent {
+  sceneOutcomes: string[];
+  stateChanges: string[];
+  knowledgeChanges: string[];
+  relationshipChanges: string[];
+  threadProgress: string[];
+  foreshadowingProgress: string[];
+  factAssertionIds: string[];
+  inheritedPressures: string[];
+}
+
+export interface DerivedMemory extends VersionedRecord {
+  level: "chapter" | "sequence" | "arc" | "volume" | "book";
+  documentId?: string;
+  narrativeUnitId?: string;
+  sourceRevisionId?: string;
+  sourceMemoryIds: string[];
+  coverage: { chapterIds: string[]; startOrder?: number; endOrder?: number };
+  summary: string;
+  content: DerivedMemoryContent;
+  status: "draft" | "active" | "pending-review" | "cold" | "stale" | "superseded";
+  validation: { passed: boolean; issues: string[]; checkedAt: number };
+  tokenEstimate: number;
+  generatedAt: number;
 }
 
 export interface PreferenceSignal extends VersionedRecord {
@@ -566,8 +736,7 @@ export interface NovelEmbedding extends VersionedRecord {
 /** 画布面板标识 — 每个接入画布的小说板块对应一个 panelKey。 */
 export type CanvasPanelKey =
   | "character-canvas"
-  | "timeline-canvas"
-  | "planning-canvas";
+  | "timeline-canvas";
 
 /**
  * 画布布局持久化记录。

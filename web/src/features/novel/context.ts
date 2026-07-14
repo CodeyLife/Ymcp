@@ -1,26 +1,118 @@
 import { novelDb, recordBase } from "./db";
 import { vectorSearch } from "./retrieval";
 import { resolveNovelSkills } from "./skills";
-import type { ContextSource, NovelContextPacket, NovelSkillManifest, NovelSkillStage } from "./types";
+import type { ContextSource, DerivedMemory, FactAssertion, NovelContextPacket, NovelSkillManifest, NovelSkillStage, StoryEntity } from "./types";
+
+const LAYERS: ContextSource["layer"][] = ["mandatory", "working", "continuity", "retrieval", "background"];
+const FLEXIBLE_LAYER_WEIGHTS: Record<Exclude<ContextSource["layer"], "mandatory">, number> = { working: 0.46, continuity: 0.31, retrieval: 0.15, background: 0.08 };
 
 function estimateTokens(text: string) {
   const cjk = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
   return Math.ceil(cjk * 1.1 + (text.length - cjk) / 4);
 }
 
-function source(
-  kind: ContextSource["kind"],
-  id: string,
-  title: string,
-  content: string,
-  weight: number,
-  pinned = false,
-  reason = "与当前任务相关",
-  priorityClass: ContextSource["priorityClass"] = "relevant",
-): ContextSource {
+function source(params: {
+  kind: ContextSource["kind"];
+  id: string;
+  title: string;
+  content: string;
+  weight: number;
+  layer: ContextSource["layer"];
+  pinned?: boolean;
+  reason?: string;
+  priorityClass?: ContextSource["priorityClass"];
+  visibilityReason?: string;
+}): ContextSource {
   let hash = 2166136261;
-  for (let index = 0; index < content.length; index += 1) hash = Math.imul(hash ^ content.charCodeAt(index), 16777619);
-  return { id, kind, title, content, weight, pinned, estimatedTokens: estimateTokens(content), reason, priorityClass, contentHash: (hash >>> 0).toString(16).padStart(8, "0") };
+  for (let index = 0; index < params.content.length; index += 1) hash = Math.imul(hash ^ params.content.charCodeAt(index), 16777619);
+  return {
+    id: params.id,
+    kind: params.kind,
+    title: params.title,
+    content: params.content,
+    weight: params.weight,
+    pinned: params.pinned ?? false,
+    estimatedTokens: estimateTokens(params.content),
+    reason: params.reason ?? "与当前任务相关",
+    priorityClass: params.priorityClass ?? "relevant",
+    contentHash: (hash >>> 0).toString(16).padStart(8, "0"),
+    layer: params.layer,
+    visibilityReason: params.visibilityReason ?? params.reason ?? "当前信息视角允许读取",
+  };
+}
+
+function searchTerms(instruction: string, targetText: string) {
+  return `${instruction} ${targetText}`.toLowerCase().split(/[\s，。；、！？,.!?;:“”"'（）()\[\]]+/).filter((item) => item.length > 1);
+}
+
+function relevance(terms: string[], text: string) {
+  const lower = text.toLowerCase();
+  return terms.reduce((score, term) => score + (lower.includes(term) ? 8 : 0), 0);
+}
+
+function defaultInformationView(stage: NovelSkillStage, target?: { blueprint?: { povCharacterId?: string } }) {
+  if (stage === "drafting" || stage === "revision") return target?.blueprint?.povCharacterId ? "character" as const : "reader" as const;
+  return "author" as const;
+}
+
+function entityContent(entity: StoryEntity, mode: "author" | "reader" | "character", selectedCharacterId?: string) {
+  if (mode === "author") return [entity.summary, entity.description, ...entity.lockedFacts, entity.character ? JSON.stringify(entity.character) : ""].filter(Boolean).join("\n");
+  if (entity.kind === "rule") return [entity.summary, entity.description, ...entity.lockedFacts].filter(Boolean).join("\n");
+  if (entity.kind !== "character" || !entity.character) return [entity.summary, entity.description].filter(Boolean).join("\n");
+  const shared = [`摘要：${entity.summary}`, `外观：${entity.character.appearance}`, `声音：${entity.character.voice}`];
+  if (mode === "character" && entity.id === selectedCharacterId) shared.push(`当前目标：${entity.character.desire}`, `动机：${entity.character.motivation}`);
+  return shared.filter(Boolean).join("\n");
+}
+
+function memoryText(memory: DerivedMemory) {
+  const details = [
+    ...memory.content.sceneOutcomes,
+    ...memory.content.stateChanges,
+    ...memory.content.knowledgeChanges,
+    ...memory.content.relationshipChanges,
+    ...memory.content.threadProgress,
+    ...memory.content.foreshadowingProgress,
+    ...memory.content.inheritedPressures.map((item) => `继承压力：${item}`),
+  ];
+  return [memory.summary, ...details].filter(Boolean).join("\n");
+}
+
+function revealOrder(assertion: FactAssertion, documentOrderByRevision: Map<string, number>) {
+  return assertion.revealedAt?.narrativeOrder ?? documentOrderByRevision.get(assertion.sourceRevisionId);
+}
+
+function allocateContext(candidates: ContextSource[], budget: number) {
+  const unique = [...new Map(candidates.map((candidate) => [candidate.id, candidate])).values()];
+  const mandatory = unique.filter((candidate) => candidate.layer === "mandatory").sort((a, b) => b.weight - a.weight);
+  const mandatoryTokens = mandatory.reduce((sum, candidate) => sum + candidate.estimatedTokens, 0);
+  if (mandatoryTokens > budget) throw new Error(`必带资料需要 ${mandatoryTokens} tokens，超过当前 ${budget} tokens 上下文预算；请提高预算或缩小当前任务范围`);
+
+  const remaining = budget - mandatoryTokens;
+  const layerBudgets: Record<ContextSource["layer"], number> = {
+    mandatory: mandatoryTokens,
+    working: Math.floor(remaining * FLEXIBLE_LAYER_WEIGHTS.working),
+    continuity: Math.floor(remaining * FLEXIBLE_LAYER_WEIGHTS.continuity),
+    retrieval: Math.floor(remaining * FLEXIBLE_LAYER_WEIGHTS.retrieval),
+    background: remaining,
+  };
+  layerBudgets.background = Math.max(0, remaining - layerBudgets.working - layerBudgets.continuity - layerBudgets.retrieval);
+  const layerUsage = Object.fromEntries(LAYERS.map((layer) => [layer, 0])) as Record<ContextSource["layer"], number>;
+  const included = [...mandatory];
+  layerUsage.mandatory = mandatoryTokens;
+  const omissions: NonNullable<NovelContextPacket["omissions"]> = [];
+
+  for (const layer of LAYERS.slice(1)) {
+    const ranked = unique.filter((candidate) => candidate.layer === layer).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.weight - a.weight);
+    for (const candidate of ranked) {
+      if (layerUsage[layer] + candidate.estimatedTokens <= layerBudgets[layer]) {
+        included.push(candidate);
+        layerUsage[layer] += candidate.estimatedTokens;
+      } else {
+        omissions.push({ sourceId: candidate.id, title: candidate.title, layer, estimatedTokens: candidate.estimatedTokens, reason: `超过${layer}层预算，完整资料未被截断` });
+      }
+    }
+  }
+  return { included, omissions, layerBudgets, layerUsage, estimatedTokens: included.reduce((sum, candidate) => sum + candidate.estimatedTokens, 0) };
 }
 
 export async function compileNovelContext(params: {
@@ -29,12 +121,15 @@ export async function compileNovelContext(params: {
   instruction: string;
   targetDocumentId?: string;
   pinnedSourceIds?: string[];
+  excludedSourceIds?: string[];
   stage?: NovelSkillStage;
   explicitSkillIds?: string[];
   resolvedSkills?: NovelSkillManifest[];
+  informationView?: "author" | "reader" | "character";
+  viewCharacterId?: string;
 }): Promise<NovelContextPacket> {
-  const { projectId, task, instruction, targetDocumentId, pinnedSourceIds = [] } = params;
-  const [project, architecture, entities, relations, outline, scenes, threads, clues, snapshots, documents] = await Promise.all([
+  const { projectId, task, instruction, targetDocumentId, pinnedSourceIds = [], excludedSourceIds = [] } = params;
+  const [project, architecture, entities, relations, outline, scenes, threads, clues, snapshots, documents, revisions, assertions, knowledge, memories, units] = await Promise.all([
     novelDb.projects.get(projectId),
     novelDb.architectures.where("projectId").equals(projectId).first(),
     novelDb.entities.where("projectId").equals(projectId).toArray(),
@@ -44,136 +139,119 @@ export async function compileNovelContext(params: {
     novelDb.plotThreads.where("projectId").equals(projectId).toArray(),
     novelDb.foreshadowing.where("projectId").equals(projectId).toArray(),
     novelDb.snapshots.where("projectId").equals(projectId).reverse().sortBy("createdAt"),
-    novelDb.documents.where("projectId").equals(projectId).reverse().sortBy("updatedAt"),
+    novelDb.documents.where("projectId").equals(projectId).sortBy("order"),
+    novelDb.revisions.where("projectId").equals(projectId).toArray(),
+    novelDb.factAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
+    novelDb.knowledgeAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
+    novelDb.derivedMemories.where("projectId").equals(projectId).and((item) => item.status === "active" || item.status === "cold").toArray(),
+    novelDb.narrativeUnits.where("projectId").equals(projectId).toArray(),
   ]);
   if (!project) throw new Error("项目不存在");
-  const stage = params.stage ?? (task.includes("review") || task === "continuity" ? "review" : task === "draft" ? "drafting" : "planning");
-  const resolvedSkills = params.resolvedSkills ?? (await resolveNovelSkills({ projectId, stage, explicitSkillIds: params.explicitSkillIds })).skills;
-
   const target = targetDocumentId ? documents.find((item) => item.id === targetDocumentId) : undefined;
-  const terms = `${instruction} ${target?.title ?? ""} ${target?.plainText.slice(-3000) ?? ""}`
-    .toLowerCase()
-    .split(/[\s，。；、！？,.!?;:“”"'（）()\[\]]+/)
-    .filter((item) => item.length > 1);
-  const relevance = (text: string) => terms.reduce((score, term) => score + (text.toLowerCase().includes(term) ? 8 : 0), 0);
+  const stage = params.stage ?? (task.includes("review") || task === "continuity" ? "review" : task === "draft" ? "drafting" : "planning");
+  const mode = params.informationView ?? defaultInformationView(stage, target);
+  const characterId = params.viewCharacterId ?? (mode === "character" ? target?.blueprint.povCharacterId : undefined);
+  if (mode === "character" && !characterId) throw new Error("角色视角需要指定角色");
+  const cutoffOrder = target ? target.order - 1 : undefined;
+  const resolvedSkills = params.resolvedSkills ?? (await resolveNovelSkills({ projectId, stage, explicitSkillIds: params.explicitSkillIds })).skills;
+  const terms = searchTerms(instruction, `${target?.title ?? ""} ${target?.plainText.slice(-3000) ?? ""}`);
+  const vectorResults = await vectorSearch({ projectId, query: instruction, targetTables: ["entities", "outlineNodes", "documents", "plotThreads", "foreshadowing"], topK: 30 }).catch(() => [] as Array<{ targetId: string; targetTable: string; score: number }>);
+  const vectorScoreMap = new Map(vectorResults.map((result) => [result.targetId, result.score]));
+  const pinned = new Set(pinnedSourceIds);
+  const excluded = new Set(excludedSourceIds);
+  const candidates: ContextSource[] = [];
+  const push = (candidate: ContextSource) => {
+    if (pinned.has(candidate.id)) { candidate.pinned = true; candidate.layer = "mandatory"; candidate.priorityClass = "invariant"; candidate.visibilityReason = "作者为本次任务临时固定"; }
+    if (!excluded.has(candidate.id) || candidate.layer === "mandatory") candidates.push(candidate);
+  };
 
-  // 向量语义检索：与关键词匹配形成混合检索，提升长篇后期上下文质量。
-  // 失败时（API 错误、空 embedding 表）降级为空数组，行为与纯关键词一致。
-  const vectorResults = await vectorSearch({
-    projectId,
-    query: instruction,
-    targetTables: ["entities", "outlineNodes", "documents", "plotThreads", "foreshadowing"],
-    topK: 30,
-  }).catch(() => [] as Array<{ targetId: string; targetTable: string; score: number }>);
-  const vectorScoreMap = new Map<string, number>();
-  for (const r of vectorResults) vectorScoreMap.set(r.targetId, r.score);
-
-  const candidates: ContextSource[] = [
-    source("instruction", "instruction", "本次任务", instruction, 100, true, "用户本次明确指令", "invariant"),
-    source("style", project.id, "项目定位与文风", [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle].filter(Boolean).join("\n"), 90, true, "项目级创作契约", "invariant"),
-  ];
-
-  if (architecture) {
-    candidates.push(source(
-      "architecture",
-      architecture.id,
-      "已确认的全书架构",
-      [
-        `结构方法：${architecture.framework}`,
-        `核心问题：${architecture.centralQuestion}`,
-        `读者承诺：${architecture.readerPromise}`,
-        `核心冲突：${architecture.centralConflict}`,
-        `全书梗概：${architecture.synopsis}`,
-        `结构阶段：\n${architecture.phases.map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`).join("\n")}`,
-      ].join("\n"),
-      architecture.status === "approved" ? 96 : 78,
-      architecture.status === "approved",
-      architecture.status === "approved" ? "用户已批准的全书结构" : "当前全书结构草案",
-      architecture.status === "approved" ? "invariant" : "working",
-    ));
-  }
-
+  push(source({ kind: "instruction", id: "instruction", title: "本次任务", content: instruction, weight: 100, layer: "mandatory", pinned: true, reason: "作者本次明确指令", priorityClass: "invariant" }));
+  push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant" }));
+  if (architecture) push(source({ kind: "architecture", id: architecture.id, title: architecture.status === "approved" ? "已批准全书架构（创作契约，不是已发生事实）" : "全书架构草案", content: [`结构方法：${architecture.framework}`, `核心问题：${architecture.centralQuestion}`, `核心冲突：${architecture.centralConflict}`, `全书梗概：${architecture.synopsis}`, `结构阶段：\n${architecture.phases.map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`).join("\n")}`].join("\n"), weight: architecture.status === "approved" ? 96 : 72, layer: architecture.status === "approved" ? "mandatory" : "working", pinned: architecture.status === "approved", reason: architecture.status === "approved" ? "作者批准的未来创作契约" : "尚未批准的工作规划", priorityClass: architecture.status === "approved" ? "invariant" : "working" }));
   for (const skill of resolvedSkills) {
-    const item = source("skill", skill.id, `创作技能：${skill.name}`, skill.prompt, 82 + Math.min(18, skill.priority / 50), skill.priority >= 900, `${stage} 阶段启用 · ${skill.source}`, skill.priority >= 900 ? "invariant" : "working");
+    const item = source({ kind: "skill", id: `skill:${skill.id}`, title: `创作技能：${skill.name}`, content: skill.prompt, weight: 82 + Math.min(18, skill.priority / 50), layer: skill.priority >= 900 ? "mandatory" : "working", pinned: skill.priority >= 900, reason: `${stage} 阶段启用 · ${skill.source}`, priorityClass: skill.priority >= 900 ? "invariant" : "working" });
     item.skillId = skill.skillId;
-    candidates.push(item);
+    push(item);
   }
+  if (target) push(source({ kind: "document", id: target.id, title: `当前章节：${target.title}`, content: target.plainText, weight: 98, layer: "mandatory", pinned: true, reason: "当前工作正文", priorityClass: "working" }));
 
-  if (target) candidates.push(source("document", target.id, `当前章节：${target.title}`, target.plainText, 95, true, "当前工作正文", "working"));
   for (const entity of entities) {
-    const detail = [entity.summary, entity.description, ...entity.lockedFacts, entity.character ? JSON.stringify(entity.character) : ""].filter(Boolean).join("\n");
-    const invariant = entity.lockedFacts.length > 0 || entity.kind === "rule";
-    const vScore = vectorScoreMap.get(entity.id) ?? 0;
-    candidates.push(source("entity", entity.id, `${entity.kind}：${entity.name}`, detail, (invariant ? 86 : 50) + relevance(`${entity.name} ${detail}`) + vScore * 40, invariant || pinnedSourceIds.includes(entity.id), invariant ? "锁定事实或世界规则" : "实体名称或内容与任务相关", invariant ? "invariant" : "relevant"));
+    const detail = entityContent(entity, mode, characterId);
+    const invariant = entity.kind === "rule" || (mode === "author" && entity.lockedFacts.length > 0);
+    const related = target?.blueprint.characterIds.includes(entity.id) || target?.blueprint.locationIds.includes(entity.id) || target?.blueprint.povCharacterId === entity.id;
+    push(source({ kind: "entity", id: entity.id, title: `${entity.kind}：${entity.name}`, content: detail, weight: (invariant ? 90 : related ? 82 : 48) + relevance(terms, `${entity.name} ${detail}`) + (vectorScoreMap.get(entity.id) ?? 0) * 40, layer: invariant ? "mandatory" : related ? "working" : "retrieval", pinned: invariant, reason: invariant ? "锁定世界规则或作者事实" : related ? "当前章节直接关联对象" : "实体语义或关键词相关", priorityClass: invariant ? "invariant" : related ? "working" : "relevant" }));
   }
   for (const relation of relations) {
     const from = entities.find((item) => item.id === relation.fromEntityId)?.name ?? "未知";
     const to = entities.find((item) => item.id === relation.toEntityId)?.name ?? "未知";
-    candidates.push(source("relation", relation.id, `${from} → ${to}`, `${relation.relationType}\n表面：${relation.publicLabel}\n真相：${relation.privateTruth}`, 45 + relevance(`${from} ${to}`), pinnedSourceIds.includes(relation.id), "关系人物与任务相关", "relevant"));
+    const content = mode === "author" ? `${relation.relationType}\n表面：${relation.publicLabel}\n真相：${relation.privateTruth}` : `${relation.relationType}\n表面：${relation.publicLabel}`;
+    push(source({ kind: "relation", id: relation.id, title: `${from} → ${to}`, content, weight: 48 + relevance(terms, `${from} ${to}`), layer: "retrieval", reason: "关系人物与当前任务相关" }));
   }
-  for (const node of outline.filter((item) => item.status !== "resolved").slice(0, 30)) {
-    const vScore = vectorScoreMap.get(node.id) ?? 0;
-    candidates.push(source("outline", node.id, `${node.kind}：${node.title}`, `${node.summary}\n因果：${node.causality}\n结果：${node.outcome}`, 55 + relevance(`${node.title} ${node.summary}`) + vScore * 40, pinnedSourceIds.includes(node.id), "未来未完成故事节点", "working"));
+  if (mode === "author") {
+    for (const node of outline.filter((item) => item.status !== "resolved").slice(0, 60)) push(source({ kind: "outline", id: node.id, title: `${node.kind}：${node.title}`, content: `${node.summary}\n因果：${node.causality}\n结果：${node.outcome}`, weight: 55 + relevance(terms, `${node.title} ${node.summary}`) + (vectorScoreMap.get(node.id) ?? 0) * 40, layer: "retrieval", reason: "作者视角中的未来创作契约", priorityClass: "working" }));
   }
-  const targetChapterId = target?.id;
-  for (const scene of scenes.filter((item) => !targetChapterId || item.chapterId === targetChapterId)) {
+  for (const scene of scenes.filter((item) => !target || item.chapterId === target.id)) {
     const characterNames = scene.characterIds.map((id) => entities.find((item) => item.id === id)?.name).filter(Boolean).join("、");
-    candidates.push(source(
-      "scene",
-      scene.id,
-      `场景：${scene.title}`,
-      [`功能：${scene.purpose}`, `冲突：${scene.conflict}`, `结果：${scene.outcome}`, `POV：${entities.find((item) => item.id === scene.povCharacterId)?.name ?? "未设置"}`, `角色：${characterNames || "未设置"}`, `时间：${scene.storyTime ?? "未设置"}`, `节拍：${(scene.beats ?? []).map((beat) => beat.text).join(" → ")}`].join("\n"),
-      targetChapterId === scene.chapterId ? 92 : 48,
-      targetChapterId === scene.chapterId,
-      targetChapterId === scene.chapterId ? "当前章节场景计划" : "相关场景计划",
-      "working",
-    ));
+    push(source({ kind: "scene", id: scene.id, title: `场景：${scene.title}`, content: [`功能：${scene.purpose}`, `冲突：${scene.conflict}`, `结果：${scene.outcome}`, `角色：${characterNames || "未设置"}`, `节拍：${(scene.beats ?? []).map((beat) => beat.text).join(" → ")}`].join("\n"), weight: 92, layer: target ? "working" : "retrieval", pinned: Boolean(target), reason: target ? "当前章节场景创作契约" : "相关场景计划", priorityClass: "working" }));
   }
-  for (const thread of threads.filter((item) => item.status === "active" || item.status === "planned")) {
-    const vScore = vectorScoreMap.get(thread.id) ?? 0;
-    candidates.push(source("thread", thread.id, `剧情线：${thread.title}`, `${thread.summary}\n下一步：${thread.nextMove}`, 65 + thread.priority + relevance(thread.title) + vScore * 40, pinnedSourceIds.includes(thread.id), "活跃或计划中的剧情线", "working"));
-  }
+  for (const thread of threads.filter((item) => item.status === "active" || item.status === "planned")) push(source({ kind: "thread", id: thread.id, title: `剧情线：${thread.title}`, content: `${thread.summary}\n下一步：${thread.nextMove}`, weight: 66 + thread.priority + relevance(terms, thread.title) + (vectorScoreMap.get(thread.id) ?? 0) * 40, layer: "working", reason: "活跃剧情线", priorityClass: "working" }));
   for (const clue of clues.filter((item) => !["resolved", "abandoned"].includes(item.status))) {
-    const vScore = vectorScoreMap.get(clue.id) ?? 0;
-    candidates.push(source("foreshadowing", clue.id, `伏笔：${clue.title}`, `${clue.clue}\n真相：${clue.truth}\n状态：${clue.status}`, 60 + clue.urgency + relevance(clue.title) + vScore * 40, pinnedSourceIds.includes(clue.id), "尚未回收的伏笔", "working"));
-  }
-  if (snapshots[0]) candidates.push(source("snapshot", snapshots[0].id, `当前故事状态：${snapshots[0].label}`, `${snapshots[0].storyTime}\n${snapshots[0].recentSummary}\n未解决冲突：${snapshots[0].unresolvedConflicts.join("；")}`, 88, true, "最新正式故事快照", "invariant"));
-  const taste = await novelDb.tasteProfiles.where("projectId").equals(projectId).and((item) => item.status === "confirmed").last();
-  if (taste) candidates.push(source("taste", taste.id, "项目写作偏好", `${taste.summary}\n偏好：${taste.preferredPatterns.join("；")}\n避免：${taste.avoidedPatterns.join("；")}`, 84, true, "用户已确认的项目内偏好", "invariant"));
-
-  const recentDocs = documents.filter((item) => item.id !== target?.id).slice(0, project.settings.recentChapterCount);
-  for (const doc of recentDocs) {
-    const vScore = vectorScoreMap.get(doc.id) ?? 0;
-    candidates.push(source("document", doc.id, `近期章节：${doc.title}`, doc.summary || doc.plainText.slice(0, 1200), 72 + vScore * 40, pinnedSourceIds.includes(doc.id), "近期章节摘要或原文", "background"));
+    const content = mode === "author" ? `${clue.clue}\n真相：${clue.truth}\n状态：${clue.status}` : `${clue.clue}\n状态：${clue.status}`;
+    push(source({ kind: "foreshadowing", id: clue.id, title: `伏笔：${clue.title}`, content, weight: 62 + clue.urgency + relevance(terms, clue.title) + (vectorScoreMap.get(clue.id) ?? 0) * 40, layer: "working", reason: mode === "author" ? "作者视角中的未回收伏笔" : "当前信息视角允许看到的伏笔表现", priorityClass: "working" }));
   }
 
-  const sorted = candidates.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.weight - a.weight);
-  const included: ContextSource[] = [];
-  const omitted: string[] = [];
-  let used = 0;
-  for (const candidate of sorted) {
-    if (used + candidate.estimatedTokens <= project.settings.contextBudget || candidate.pinned) {
-      if (used + candidate.estimatedTokens > project.settings.contextBudget && candidate.content.length > 1600) {
-        candidate.content = `${candidate.content.slice(0, 1600)}\n[内容已按上下文预算截断]`;
-        candidate.estimatedTokens = estimateTokens(candidate.content);
-        candidate.truncated = true;
-      }
-      included.push(candidate);
-      used += candidate.estimatedTokens;
-    } else {
-      omitted.push(candidate.id);
+  const documentById = new Map(documents.map((document) => [document.id, document]));
+  const documentOrderByRevision = new Map(revisions.map((revision) => [revision.id, documentById.get(revision.documentId)?.order]).filter((entry): entry is [string, number] => typeof entry[1] === "number"));
+  const readerVisibleFacts = assertions.filter((assertion) => (revealOrder(assertion, documentOrderByRevision) ?? Number.POSITIVE_INFINITY) <= (cutoffOrder ?? Number.POSITIVE_INFINITY));
+  const visibleFacts = mode === "author" ? assertions : mode === "reader" ? readerVisibleFacts : [];
+  for (const assertion of visibleFacts) push(source({ kind: "fact", id: assertion.id, title: `正式资料：${assertion.humanReadable}`, content: [`真值：${assertion.truthStatus}`, `时间：${assertion.timeMode}`, `证据：${assertion.evidence}`].join("\n"), weight: assertion.truthStatus === "objective" ? 88 : 72, layer: assertion.truthStatus === "objective" ? "continuity" : "retrieval", reason: mode === "author" ? "作者视角可见全部有效事实" : "揭示点不晚于当前事实截止点", priorityClass: assertion.truthStatus === "objective" ? "invariant" : "relevant" }));
+  if (mode === "character" && characterId) {
+    const assertionById = new Map(assertions.map((assertion) => [assertion.id, assertion]));
+    const knowledgeCutoffOrder = target?.order ?? Number.POSITIVE_INFINITY;
+    for (const item of knowledge.filter((entry) => {
+      if (entry.characterId !== characterId) return false;
+      const learnedOrder = entry.learnedAt?.narrativeOrder
+        ?? (entry.learnedAt?.chapterId ? documentById.get(entry.learnedAt.chapterId)?.order : undefined);
+      return learnedOrder !== undefined && learnedOrder <= knowledgeCutoffOrder;
+    })) {
+      const assertion = assertionById.get(item.factAssertionId);
+      if (!assertion) continue;
+      push(source({ kind: "knowledge", id: item.id, title: `角色认知：${assertion.humanReadable}`, content: `认知状态：${item.stance}\n${assertion.humanReadable}\n证据：${assertion.evidence}`, weight: 94, layer: "mandatory", pinned: true, reason: "当前 POV 角色在目标时点的认知边界", priorityClass: "invariant", visibilityReason: `角色 ${characterId} 的 ${item.stance} 认知` }));
     }
   }
 
+  const unitById = new Map(units.map((unit) => [unit.id, unit]));
+  const currentUnitIds = new Set<string>();
+  let cursor = target?.primaryNarrativeUnitId ? unitById.get(target.primaryNarrativeUnitId) : undefined;
+  while (cursor) { currentUnitIds.add(cursor.id); cursor = cursor.parentId ? unitById.get(cursor.parentId) : undefined; }
+  const eligibleMemories = memories.filter((memory) => mode === "author" || (memory.coverage.endOrder ?? Number.POSITIVE_INFINITY) <= (cutoffOrder ?? Number.POSITIVE_INFINITY));
+  const currentMemories = eligibleMemories.filter((memory) => memory.level === "book" || Boolean(memory.narrativeUnitId && currentUnitIds.has(memory.narrativeUnitId)));
+  const recentLeaves = eligibleMemories.filter((memory) => memory.level === "chapter").sort((a, b) => (b.coverage.endOrder ?? -1) - (a.coverage.endOrder ?? -1)).slice(0, project.settings.recentChapterCount);
+  for (const memory of [...new Map([...currentMemories, ...recentLeaves].map((item) => [item.id, item])).values()]) push(source({ kind: "memory", id: memory.id, title: `${memory.level}记忆：${memory.summary.slice(0, 40)}`, content: memoryText(memory), weight: memory.level === "book" ? 90 : memory.level === "chapter" ? 76 : 86, layer: "continuity", reason: memory.level === "chapter" ? "近期章节叶级记忆" : "当前叙事单元的活跃整合记忆", priorityClass: "working" }));
+  for (const memory of eligibleMemories.filter((item) => item.status === "cold" && !currentMemories.some((current) => current.id === item.id) && relevance(terms, memoryText(item)) > 0).slice(0, 12)) push(source({ kind: "memory", id: memory.id, title: `冷记忆命中：${memory.summary.slice(0, 40)}`, content: memoryText(memory), weight: 55 + relevance(terms, memoryText(memory)), layer: "retrieval", reason: "冷记忆被当前任务精确命中" }));
+
+  if (!eligibleMemories.length) {
+    const recentDocs = documents.filter((item) => item.id !== target?.id && (mode === "author" || target === undefined || item.order < target.order)).slice(-project.settings.recentChapterCount).reverse();
+    for (const document of recentDocs) push(source({ kind: "document", id: `legacy-summary:${document.id}`, title: `旧式近期章节：${document.title}`, content: document.summary || document.plainText, weight: 45, layer: "background", reason: "项目尚未建立章节记忆，临时回退到旧式章节资料" }));
+  }
+  if (snapshots[0]) push(source({ kind: "snapshot", id: snapshots[0].id, title: `旧式故事快照：${snapshots[0].label}`, content: `${snapshots[0].storyTime}\n${snapshots[0].recentSummary}`, weight: 40, layer: "background", reason: "旧项目兼容快照" }));
+  const taste = await novelDb.tasteProfiles.where("projectId").equals(projectId).and((item) => item.status === "confirmed").last();
+  if (taste) push(source({ kind: "taste", id: taste.id, title: "已确认写作偏好", content: `${taste.summary}\n偏好：${taste.preferredPatterns.join("；")}\n避免：${taste.avoidedPatterns.join("；")}`, weight: 88, layer: "working", reason: "作者已确认的文风偏好", priorityClass: "invariant" }));
+
+  const allocated = allocateContext(candidates, project.settings.contextBudget);
   const packet: NovelContextPacket = {
     ...recordBase(projectId),
     task,
     instruction,
     targetId: targetDocumentId,
-    sources: included,
+    sources: allocated.included,
     tokenBudget: project.settings.contextBudget,
-    estimatedTokens: used,
-    omittedSourceIds: omitted,
+    estimatedTokens: allocated.estimatedTokens,
+    omittedSourceIds: allocated.omissions.map((item) => item.sourceId),
+    omissions: allocated.omissions,
+    layerBudgets: allocated.layerBudgets,
+    layerUsage: allocated.layerUsage,
+    informationView: { mode, targetDocumentId, targetNarrativeOrder: target?.order, characterId },
     skillRefs: resolvedSkills.map((skill) => ({ id: skill.skillId, version: skill.version, name: skill.name, source: skill.source })),
     compiledAt: Date.now(),
   };
@@ -182,12 +260,10 @@ export async function compileNovelContext(params: {
 }
 
 export function formatContextPacket(packet: NovelContextPacket) {
-  return packet.sources.map((item) => `## ${item.title}\n[来源理由：${item.reason}；层级：${item.priorityClass}；哈希：${item.contentHash}]\n${item.content}`).join("\n\n");
+  const view = packet.informationView ? `# 信息视角\n${packet.informationView.mode}${packet.informationView.characterId ? ` · 角色 ${packet.informationView.characterId}` : ""}${packet.informationView.targetNarrativeOrder !== undefined ? ` · 截止章节顺序 ${packet.informationView.targetNarrativeOrder - 1}` : ""}\n\n` : "";
+  return `${view}${packet.sources.map((item) => `## ${item.title}\n[层级：${item.layer}；来源理由：${item.reason}；可见理由：${item.visibilityReason}；哈希：${item.contentHash}]\n${item.content}`).join("\n\n")}`;
 }
 
 export function formatReviewerContext(packet: NovelContextPacket) {
-  return packet.sources
-    .filter((source) => source.kind !== "skill" && source.kind !== "architecture" && source.kind !== "outline")
-    .map((source) => `## ${source.title}\n${source.content}`)
-    .join("\n\n");
+  return packet.sources.filter((item) => item.kind !== "skill").map((item) => `## ${item.title}\n[${item.layer} · ${item.visibilityReason}]\n${item.content}`).join("\n\n");
 }

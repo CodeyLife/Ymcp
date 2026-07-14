@@ -13,6 +13,8 @@ describe("chapter workflow policy", () => {
   it("has the two mandatory human gates in the canonical order", () => {
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("blueprint-approval")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("draft"));
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("manuscript-approval")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-extraction"));
+    expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-extraction")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-approval"));
+    expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-approval")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("commit"));
   });
 
   it("stops after the configured limit or when improvement plateaus", () => {
@@ -27,7 +29,7 @@ describe("chapter workflow policy", () => {
     const document = await createChapter(project.id);
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "waiting-approval", currentStage: "fact-approval", stageIndex: 9, revisionIteration: 0, factCandidateIds: [], startedAt: Date.now() };
     await novelDb.workflowRuns.add(run);
-    const candidate = { ...recordBase(project.id), workflowRunId: run.id, sourceArtifactId: "draft", targetTable: "entities", field: "summary", after: "新事实", evidence: "原文证据", confidence: 0.9, novelty: "new" as const, conflict: false, status: "pending" as const };
+    const candidate = { ...recordBase(project.id), workflowRunId: run.id, sourceArtifactId: "draft", targetTable: "entities", field: "summary", after: "新事实", evidence: "原文证据", confidence: 0.9, novelty: "new" as const, conflict: false, risk: "high" as const, riskReason: "新事实必须人工确认", status: "pending" as const };
     await novelDb.factCandidates.add(candidate);
     run.factCandidateIds = [candidate.id];
     await novelDb.workflowRuns.put(run);

@@ -54,4 +54,26 @@ describe("novel AI HTTP handling", () => {
     await expect(pending).resolves.toMatchObject({ data: { value: "ok" } });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("repair prompt forbids summary from describing the schema fix", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sse('{"other":"bad"}'))
+      .mockResolvedValueOnce(sse('{"value":"ok"}'));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callStructuredNovelModel<{ value: string }>({
+      model: "test",
+      temperature: 0,
+      role: "architect",
+      prompt: "test",
+      schema: { type: "object", additionalProperties: false, required: ["value"], properties: { value: { type: "string" } } },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const repairBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    const repairPrompt = String(repairBody.messages[1].content);
+    expect(repairPrompt).toContain("summary 字段只写候选整体概览");
+    expect(repairPrompt).toContain("禁止描述修复过程");
+    expect(repairPrompt).toContain("Schema 约束");
+  });
 });

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { compileNovelContext } from "../context";
 import { createChapter, createNovelProject, novelDb, recordBase, saveStoryArchitecture, updateProject } from "../db";
 import { commitAcceptedFacts, setFactCandidateStatus, storeFactCandidates } from "../facts";
-import type { StoryEntity } from "../types";
+import type { FactAssertion, StoryEntity } from "../types";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -11,16 +11,13 @@ beforeEach(async () => {
 });
 
 describe("context invariants and fact commits", () => {
-  it("keeps locked rules when the context budget is exhausted", async () => {
+  it("stops instead of truncating mandatory rules when the context budget is exhausted", async () => {
     const project = await createNovelProject({ title: "规则测试", genre: ["奇幻"], premise: "潮水会改变记忆。" });
     await updateProject(project.id, { settings: { ...project.settings, contextBudget: 120 } });
     const rule: StoryEntity = { ...recordBase(project.id), kind: "rule", name: "潮汐规则", aliases: [], summary: "退潮前不可说出失踪者姓名", description: "潮水".repeat(1200), tags: [], lockedFacts: ["退潮前说出姓名会让说话者失去相关记忆"], attributes: {} };
     await novelDb.entities.add(rule);
-    const packet = await compileNovelContext({ projectId: project.id, task: "planning", instruction: "规划第一章", stage: "planning" });
-    const source = packet.sources.find((item) => item.id === rule.id);
-    expect(source).toMatchObject({ pinned: true, priorityClass: "invariant", truncated: true });
-    expect(source?.contentHash).toMatch(/^[a-f0-9]{8}$/);
-    expect(packet.omittedSourceIds.length).toBeGreaterThan(0);
+    await expect(compileNovelContext({ projectId: project.id, task: "planning", instruction: "规划第一章", stage: "planning" })).rejects.toThrow(/必带资料需要.*超过当前/);
+    expect(await novelDb.contextPackets.where("projectId").equals(project.id).count()).toBe(0);
   });
 
   it("pins approved architecture and the target chapter scene plan", async () => {
@@ -59,11 +56,116 @@ describe("context invariants and fact commits", () => {
       { targetTable: "entities", targetId: entity.id, field: "description", after: "自动消失", evidence: "可疑描述", confidence: 0.5, novelty: "update", conflict: true },
     ] });
     await setFactCandidateStatus(accepted.id, "accepted");
-    await setFactCandidateStatus(conflict.id, "accepted");
+    await expect(setFactCandidateStatus(conflict.id, "accepted")).rejects.toThrow(/冲突事实/);
     const committed = await commitAcceptedFacts(project.id, "run-1");
     expect(committed).toEqual([accepted.id]);
     expect((await novelDb.entities.get(entity.id))?.summary).toBe("被主角藏在钟楼");
     expect((await novelDb.entities.get(entity.id))?.description).toBe("");
     expect((await novelDb.operations.where("projectId").equals(project.id).toArray()).filter((item) => item.entityId === entity.id)).toHaveLength(1);
+  });
+
+  it("filters formal facts by the target chapter reveal cutoff and records a context receipt", async () => {
+    const project = await createNovelProject({ title: "揭示截止", genre: ["悬疑"], premise: "未来真相不能提前泄露。" });
+    await createChapter(project.id, "第一章");
+    await createChapter(project.id, "第二章");
+    const target = await createChapter(project.id, "第三章");
+    const assertion = (id: string, order: number, text: string): FactAssertion => ({
+      ...recordBase(project.id), id, subject: { kind: "project", id: project.id }, predicate: "mystery.truth", object: { kind: "string", value: text }, polarity: "affirmed", truthStatus: "objective", timeMode: "timeless", revealedAt: { narrativeOrder: order, precision: "exact" }, sourceRevisionId: `revision-${order}`, provenance: "approved-revision", evidence: text, confidence: 1, humanReadable: text, status: "active", derivedFromCandidateId: `candidate-${order}`,
+    });
+    await novelDb.factAssertions.bulkAdd([assertion("fact-early", 1, "钟楼藏有账本"), assertion("fact-future", 4, "凶手是城主")]);
+
+    const packet = await compileNovelContext({ projectId: project.id, task: "chapter-draft", instruction: "写第三章", targetDocumentId: target.id, stage: "drafting", informationView: "reader" });
+
+    expect(packet.sources.some((item) => item.id === "fact-early")).toBe(true);
+    expect(packet.sources.some((item) => item.id === "fact-future")).toBe(false);
+    expect(packet.informationView).toMatchObject({ mode: "reader", targetDocumentId: target.id, targetNarrativeOrder: 2 });
+    expect(packet.layerBudgets).toBeDefined();
+    expect(packet.layerUsage).toBeDefined();
+    expect(packet.sources.every((item) => Boolean(item.layer && item.visibilityReason))).toBe(true);
+  });
+
+  it("shows a character-held secret as cognition without exposing it as reader-visible fact", async () => {
+    const project = await createNovelProject({ title: "角色认知", genre: ["悬疑"], premise: "角色知道的秘密不等于读者已知。" });
+    const character: StoryEntity = { ...recordBase(project.id), kind: "character", name: "陆沉", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {}, character: { role: "主角", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", knowledge: { known: [], suspected: [], mistaken: [], unknown: [] }, state: { location: "", physical: "正常", emotional: "平静", objective: "", inventory: [], relationshipNotes: [] } } };
+    await novelDb.entities.add(character);
+    const target = await createChapter(project.id, "第一章");
+    await novelDb.documents.update(target.id, { blueprint: { ...target.blueprint, povCharacterId: character.id, characterIds: [character.id] } });
+    const fact: FactAssertion = { ...recordBase(project.id), id: "fact-secret", subject: { kind: "project", id: project.id }, predicate: "mystery.truth", object: { kind: "string", value: "城主是凶手" }, polarity: "affirmed", truthStatus: "objective", timeMode: "timeless", revealedAt: { narrativeOrder: 10, precision: "exact" }, sourceRevisionId: "revision-secret", provenance: "approved-revision", evidence: "作者秘密", confidence: 1, humanReadable: "城主是凶手", status: "active", derivedFromCandidateId: "candidate-secret" };
+    await novelDb.factAssertions.add(fact);
+    await novelDb.knowledgeAssertions.add({ ...recordBase(project.id), id: "knowledge-secret", characterId: character.id, factAssertionId: fact.id, stance: "known", learnedAt: { narrativeOrder: 0, precision: "exact" }, sourceRevisionId: "revision-secret", status: "active" });
+
+    const packet = await compileNovelContext({ projectId: project.id, task: "chapter-draft", instruction: "从陆沉视角写作", targetDocumentId: target.id, stage: "drafting" });
+
+    expect(packet.informationView).toMatchObject({ mode: "character", characterId: character.id });
+    expect(packet.sources.some((item) => item.id === fact.id)).toBe(false);
+    expect(packet.sources.find((item) => item.id === "knowledge-secret")).toMatchObject({ kind: "knowledge", layer: "mandatory" });
+  });
+
+  it("keeps character context inside the selected character's knowledge and story-time boundary", async () => {
+    const project = await createNovelProject({ title: "角色边界", genre: ["悬疑"], premise: "读者与角色掌握不同信息。" });
+    const character: StoryEntity = {
+      ...recordBase(project.id),
+      kind: "character",
+      name: "陆沉",
+      aliases: [],
+      summary: "调查员",
+      description: "",
+      tags: [],
+      lockedFacts: [],
+      attributes: {},
+      character: {
+        role: "主角",
+        appearance: "黑色风衣",
+        personality: "谨慎",
+        desire: "找到真相",
+        motivation: "保护证人",
+        weakness: "多疑",
+        secret: "",
+        abilities: [],
+        voice: "简短",
+        arc: "",
+        knowledge: { known: [], suspected: [], mistaken: [], unknown: [] },
+        state: { location: "第十章才抵达的南港", physical: "受伤", emotional: "警惕", objective: "追查", inventory: [], relationshipNotes: [] },
+      },
+    };
+    await novelDb.entities.add(character);
+    await createChapter(project.id, "第一章");
+    await createChapter(project.id, "第二章");
+    const target = await createChapter(project.id, "第三章");
+    await novelDb.documents.update(target.id, { blueprint: { ...target.blueprint, povCharacterId: character.id, characterIds: [character.id] } });
+
+    const assertion = (id: string, text: string, revealedOrder: number): FactAssertion => ({
+      ...recordBase(project.id),
+      id,
+      subject: { kind: "project", id: project.id },
+      predicate: `mystery.${id}`,
+      object: { kind: "string", value: text },
+      polarity: "affirmed",
+      truthStatus: "objective",
+      timeMode: "timeless",
+      revealedAt: { narrativeOrder: revealedOrder, precision: "exact" },
+      sourceRevisionId: `revision-${id}`,
+      provenance: "approved-revision",
+      evidence: text,
+      confidence: 1,
+      humanReadable: text,
+      status: "active",
+      derivedFromCandidateId: `candidate-${id}`,
+    });
+    const readerOnly = assertion("reader-only", "读者知道钟楼有密室", 0);
+    const knownNow = assertion("known-now", "陆沉知道密钥在井里", 8);
+    const learnedLater = assertion("learned-later", "陆沉将在第五章知道城主身份", 8);
+    await novelDb.factAssertions.bulkAdd([readerOnly, knownNow, learnedLater]);
+    await novelDb.knowledgeAssertions.bulkAdd([
+      { ...recordBase(project.id), id: "knowledge-now", characterId: character.id, factAssertionId: knownNow.id, stance: "known", learnedAt: { narrativeOrder: 1, precision: "exact" }, sourceRevisionId: knownNow.sourceRevisionId, status: "active" },
+      { ...recordBase(project.id), id: "knowledge-later", characterId: character.id, factAssertionId: learnedLater.id, stance: "known", learnedAt: { narrativeOrder: 4, precision: "exact" }, sourceRevisionId: learnedLater.sourceRevisionId, status: "active" },
+    ]);
+
+    const packet = await compileNovelContext({ projectId: project.id, task: "chapter-draft", instruction: "从陆沉视角写第三章", targetDocumentId: target.id, stage: "drafting" });
+
+    expect(packet.sources.some((item) => item.id === readerOnly.id)).toBe(false);
+    expect(packet.sources.some((item) => item.id === "knowledge-now")).toBe(true);
+    expect(packet.sources.some((item) => item.id === "knowledge-later")).toBe(false);
+    expect(packet.sources.find((item) => item.id === character.id)?.content).not.toContain("第十章才抵达的南港");
   });
 });

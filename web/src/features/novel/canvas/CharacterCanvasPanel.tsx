@@ -20,6 +20,7 @@ import {
 import { addEntity, appendOperation, novelDb, recordBase, updateEntity } from "../db";
 import type { EntityRelation, StoryEntity } from "../types";
 import CharacterCard from "../CharacterCard";
+import GenerationComposer from "../GenerationComposer";
 import { CharacterNodeContent } from "./CharacterNodeContent";
 import { useCanvasPanel, type CanvasPanelItem } from "./useCanvasPanel";
 import CreateRelationModal from "./CreateRelationModal";
@@ -267,6 +268,7 @@ export function CharacterCanvasPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="novel-view-content" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, gap: 12 }}>
+      <GenerationComposer projectId={projectId} scope="relations" taskKeys={["relations"]} compact getRefinementSnapshot={() => ({ relations: relationDraft ? [relationDraft as unknown as Record<string, unknown>] : [] })} />
       <header className="novel-section-title" style={{ flexShrink: 0 }}>
         <div>
           <span>RELATIONSHIP CANVAS</span>

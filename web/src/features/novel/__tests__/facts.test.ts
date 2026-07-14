@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { addEntity, createNovelProject, novelDb, recordBase } from "../db";
-import { commitAcceptedFacts } from "../facts";
+import { autoAcceptSafeFactCandidates, classifyFactRisk, commitAcceptedFacts, storeFactCandidates } from "../facts";
 import type { WorkflowRun } from "../types";
 
 beforeEach(async () => {
@@ -42,6 +42,8 @@ async function addAcceptedCandidate(projectId: string, workflowRunId: string, ov
     confidence: 0.9,
     novelty: "new" as const,
     conflict: false,
+    risk: "high" as const,
+    riskReason: "新对象必须人工确认",
     status: "accepted" as const,
     ...overrides,
   };
@@ -149,5 +151,33 @@ describe("commitAcceptedFacts - 更新现有记录", () => {
     expect(committed).toHaveLength(1);
     const updated = await novelDb.relations.get(relation.id);
     expect(updated?.bond).toBe("关系亲密，已建立信任");
+  });
+});
+
+describe("fact approval policy", () => {
+  it("classifies only explicit existing-character state changes as safe", () => {
+    expect(classifyFactRisk({ targetTable: "entities", targetId: "character-1", field: "character.state.location", after: "北港", evidence: "她抵达北港。", confidence: 0.96, novelty: "update", conflict: false })).toMatchObject({ risk: "safe" });
+    expect(classifyFactRisk({ targetTable: "entities", targetId: "character-1", field: "character.secret", after: "真实身份", evidence: "她承认了身份。", confidence: 0.99, novelty: "update", conflict: false })).toMatchObject({ risk: "high" });
+    expect(classifyFactRisk({ targetTable: "entities", field: "record", after: { name: "新角色" }, evidence: "有人出现。", confidence: 0.99, novelty: "new", conflict: false })).toMatchObject({ risk: "high" });
+  });
+
+  it("auto-accepts safe updates only when the project policy is enabled", async () => {
+    const { project, charA } = await seedProjectWithCharacters();
+    const candidates = await storeFactCandidates({
+      projectId: project.id,
+      workflowRunId: "run-policy",
+      sourceArtifactId: "draft-policy",
+      facts: [
+        { targetTable: "entities", targetId: charA.id, field: "character.state.location", after: "北港", evidence: "陆沉抵达北港。", confidence: 0.97, novelty: "update", conflict: false },
+        { targetTable: "entities", targetId: charA.id, field: "character.secret", after: "继承人", evidence: "陆沉承认身份。", confidence: 0.99, novelty: "update", conflict: false },
+      ],
+    });
+
+    expect(await autoAcceptSafeFactCandidates(candidates, false)).toEqual([]);
+    expect(await novelDb.factCandidates.where("workflowRunId").equals("run-policy").and((item) => item.status === "pending").count()).toBe(2);
+
+    expect(await autoAcceptSafeFactCandidates(candidates, true)).toEqual([candidates[0].id]);
+    expect(await novelDb.factCandidates.get(candidates[0].id)).toMatchObject({ status: "accepted", decisionSource: "auto-policy" });
+    expect(await novelDb.factCandidates.get(candidates[1].id)).toMatchObject({ status: "pending", risk: "high" });
   });
 });

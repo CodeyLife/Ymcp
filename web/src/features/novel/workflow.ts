@@ -64,7 +64,7 @@ export async function advanceChapterWorkflow(runId: string): Promise<WorkflowRun
   }
 }
 
-export async function approveWorkflowStage(runId: string, params: { approved: boolean; feedback?: string }) {
+export async function approveWorkflowStage(runId: string, params: { approved: boolean; feedback?: string; manuscriptChangeIds?: string[] }) {
   const run = await novelDb.workflowRuns.get(runId);
   if (!run || run.status !== "waiting-approval") throw new Error("工作流当前不在审批状态");
   const handler = APPROVAL_HANDLERS.get(run.currentStage);
@@ -77,14 +77,17 @@ export async function approveWorkflowStage(runId: string, params: { approved: bo
 
 export async function pauseWorkflow(runId: string) {
   const run = await novelDb.workflowRuns.get(runId);
-  if (!run || run.status !== "running") return run;
+  if (!run || !["running", "waiting-approval"].includes(run.status)) return run;
   return transition(run, run.currentStage, "paused");
 }
 
 export async function resumeWorkflow(runId: string) {
   const run = await novelDb.workflowRuns.get(runId);
   if (!run || !["paused", "failed"].includes(run.status)) return run;
-  const resumed = await transition(run, run.currentStage, "running", { error: undefined });
+  const isApprovalStage = run.currentStage.endsWith("-approval");
+  const targetStatus = isApprovalStage ? "waiting-approval" : "running";
+  const resumed = await transition(run, run.currentStage, targetStatus, { error: undefined });
+  if (isApprovalStage) return resumed;
   return advanceChapterWorkflow(resumed.id);
 }
 

@@ -4,6 +4,7 @@ import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from "@ant-d
 import { useLiveQuery } from "dexie-react-hooks";
 
 import { addEntity, appendOperation, novelDb, recordBase, updateEntity } from "./db";
+import GenerationComposer from "./GenerationComposer";
 import type { EntityKind, EntityRelation, StoryEntity } from "./types";
 
 const KIND_LABEL: Record<EntityKind, string> = {
@@ -190,6 +191,7 @@ export function WorldviewLibraryPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="novel-view-content">
+      <GenerationComposer projectId={projectId} scope="worldview" taskKeys={["worldview"]} compact getRefinementSnapshot={() => ({ entities: draft ? [draft as unknown as Record<string, unknown>] : [], relations: relationDraft ? [relationDraft as unknown as Record<string, unknown>] : [] })} />
       <header className="novel-section-title">
         <div>
           <span>WORLDVIEW</span>

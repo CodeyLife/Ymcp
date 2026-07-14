@@ -11,7 +11,7 @@ export const draftStageHandler: StageHandler = {
     const [packet, blueprint, skills] = await Promise.all([
       novelDb.contextPackets.get(run.contextPacketId!),
       novelDb.workflowArtifacts.get(run.blueprintArtifactId!),
-      resolveNovelSkills({ projectId: run.projectId, stage: "drafting", explicitSkillIds: ["embodied-prose", "serial-rhythm", "character-voice-matrix"] }),
+      resolveNovelSkills({ projectId: run.projectId, stage: "drafting", explicitSkillIds: ["embodied-prose", "serial-rhythm", "character-voice-matrix", "imagery-aesthetics", "prose-discipline"] }),
     ]);
     if (!packet || !blueprint) throw new Error("已批准蓝图或上下文不存在");
     const { agent } = await ctx.createAgentRecord({

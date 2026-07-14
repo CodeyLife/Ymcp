@@ -3,7 +3,11 @@ import type { ChapterBlueprint, NovelAgentRole, QualityDimension, QualityIssue, 
 
 const DIMENSIONS: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "pacing", "specificity", "hookPayoff", "continuity"];
 const WEIGHTS: Record<QualityDimension, number> = { plot: 0.17, characterVoice: 0.14, sceneEmbodiment: 0.12, dialogue: 0.1, pacing: 0.14, specificity: 0.1, hookPayoff: 0.1, continuity: 0.13 };
-const TEMPLATE_EXPRESSIONS = ["眼中闪过", "瞳孔微缩", "嘴角微微上扬", "意味深长", "若有所思", "不由自主", "与此同时", "正因如此"];
+const TEMPLATE_EXPRESSIONS = ["眼中闪过", "瞳孔微缩", "嘴角微微上扬", "意味深长", "若有所思", "不由自主", "与此同时", "正因如此", "他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "他感到", "她感到", "第一次意识到", "第一次发现", "第一次明白", "第一次感到", "第一次看清", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
+const EMPHASIS_WORDS = ["第一次", "突然", "忽然", "终于", "竟然", "不由得", "不禁"];
+const EMOTION_DIRECT_WORDS = ["他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "她很悲伤", "她很愤怒", "她很高兴", "她很害怕", "她很孤独", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
+const APHORISM_PATTERNS = [/不是.{1,12}而是/, /也许.{1,12}就是/, /所谓.{1,12}不过/, /这.{0,6}便是/, /或许.{1,12}才是/, /所谓.{1,12}无非/];
+const IMAGERY_WORDS = ["风", "雪", "雨", "月", "灯", "剑", "路", "井", "烟", "尘", "云", "霜", "雾", "影", "光", "火", "水", "石", "树", "花"];
 
 export interface ReviewerFinding {
   role: NovelAgentRole;
@@ -70,6 +74,32 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   const ending = blocks.at(-1) ?? "";
   if (ending && ending.length < 12) issues.push(issue({ dimension: "hookPayoff", severity: "warning", title: "章尾驱动力较弱", description: "最后一段过短且缺少可识别的决定、代价或认知变化。", excerpt: ending, paragraph: blocks.length, rule: "serial.ending-drive", suggestion: "让结尾留下新的行动方向、代价、危险或认知缺口。" }));
 
+  for (const word of EMPHASIS_WORDS) {
+    const hits = countOccurrences(text, word);
+    if (hits > 2) issues.push(issue({ dimension: "specificity", severity: "warning", title: "强调词贬值", description: `“${word}”出现 ${hits} 次，超过单章 2 次上限，强调效果贬值。`, rule: "style.emphasis-devaluation", suggestion: "用具体事件呈现认知转变，或替换为不同表达，删除多余的强调。" }));
+  }
+  for (const phrase of EMOTION_DIRECT_WORDS) {
+    if (text.includes(phrase)) issues.push(issue({ dimension: "sceneEmbodiment", severity: "warning", title: "情绪直说", description: `检测到“${phrase}”，情绪被直接宣告而非通过行动或意象承载。`, excerpt: phrase, rule: "style.emotion-direct", suggestion: "用一个反常动作、环境意象变化或没说完的话来承载该情绪。" }));
+  }
+  let shortSentenceStreaks = 0;
+  for (const block of blocks) {
+    const sentences = block.split(/[。！？\n]/).map((s) => s.trim()).filter(Boolean);
+    let streak = 0;
+    for (const s of sentences) {
+      if (s.length > 0 && s.length <= 6) streak += 1;
+      else streak = 0;
+      if (streak >= 3) { shortSentenceStreaks += 1; streak = 0; }
+    }
+  }
+  if (shortSentenceStreaks > 2) issues.push(issue({ dimension: "pacing", severity: "warning", title: "短句排比过多", description: `检测到 ${shortSentenceStreaks} 处连续短句排比，超过单章 2 处上限。`, rule: "style.short-sentence-tic", suggestion: "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。" }));
+  let aphorismEndings = 0;
+  for (const block of blocks) {
+    const trimmedBlock = block.trim();
+    if (APHORISM_PATTERNS.some((pattern) => pattern.test(trimmedBlock))) aphorismEndings += 1;
+  }
+  if (aphorismEndings > 3) issues.push(issue({ dimension: "specificity", severity: "warning", title: "金句收尾过密", description: `检测到 ${aphorismEndings} 处格言式收尾，超过单章 3 处上限。`, rule: "style.aphorism-density", suggestion: "将部分金句改为行动或沉默收尾，让行为本身承载主题。" }));
+  const imageryHits = IMAGERY_WORDS.reduce((sum, word) => sum + countOccurrences(text, word), 0);
+
   const scores = Object.fromEntries(DIMENSIONS.map((dimension) => [dimension, 4.2])) as Record<QualityDimension, number>;
   for (const found of issues) {
     const penalty = found.severity === "blocker" ? 2 : found.severity === "major" ? 1 : 0.35;
@@ -84,6 +114,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       dialogueRatio: totalChars ? Number((dialogueChars / totalChars).toFixed(3)) : 0,
       paragraphVariation: Number(paragraphVariation.toFixed(3)),
       templateHits,
+      imageryDensity: imageryHits,
     },
   };
 }

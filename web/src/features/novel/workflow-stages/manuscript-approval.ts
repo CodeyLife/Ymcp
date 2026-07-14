@@ -1,11 +1,12 @@
-import { novelDb, saveDocument } from "../db";
+import { novelDb } from "../db";
+import { applyManuscriptChanges, prepareManuscriptChanges } from "../manuscript-review";
 import { recordPreferenceSignal } from "../preferences";
 import type { WorkflowRun } from "../types";
 import type { ApprovalContext, ApprovalHandler } from "../workflow-stages";
 
 export const manuscriptApprovalHandler: ApprovalHandler = {
   stage: "manuscript-approval",
-  async approve(ctx: ApprovalContext, params: { approved: boolean; feedback?: string }): Promise<WorkflowRun> {
+  async approve(ctx: ApprovalContext, params: { approved: boolean; feedback?: string; manuscriptChangeIds?: string[] }): Promise<WorkflowRun> {
     const { run } = ctx;
     const pendingProposals = await novelDb.proposals
       .where("projectId")
@@ -24,6 +25,8 @@ export const manuscriptApprovalHandler: ApprovalHandler = {
         skillRefs: [],
       });
       await Promise.all(pendingProposals.map((item) => novelDb.proposals.update(item.id, { status: "rejected", updatedAt: Date.now() })));
+      const pendingChanges = await novelDb.manuscriptChanges.where("workflowRunId").equals(run.id).filter((change) => change.status === "pending").toArray();
+      if (pendingChanges.length) await novelDb.manuscriptChanges.where("id").anyOf(pendingChanges.map((change) => change.id)).modify({ status: "rejected", decidedAt: Date.now(), updatedAt: Date.now(), updatedBy: "local-user" });
       const nextRun = await ctx.transition(run, "revision", "running");
       return nextRun;
     }
@@ -33,27 +36,26 @@ export const manuscriptApprovalHandler: ApprovalHandler = {
       novelDb.documents.get(run.targetDocumentId),
     ]);
     if (!artifact || !document) throw new Error("正文产物或章节不存在");
-    const html = artifact.contentMarkdown
-      .split(/\n{2,}/)
-      .map((item) => `<p>${item.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</p>`)
-      .join("");
-    await saveDocument(
-      {
-        ...document,
-        contentHtml: html,
-        plainText: artifact.contentMarkdown,
-        wordCount: (artifact.contentMarkdown.match(/[\u3400-\u9fff]|[a-zA-Z0-9]+/g) ?? []).length,
-        status: "review",
-      },
-      `采纳工作流正文前 ${new Date().toLocaleString("zh-CN")}`,
-    );
+    const changes = await prepareManuscriptChanges({
+      projectId: run.projectId,
+      documentId: document.id,
+      proposedText: artifact.contentMarkdown,
+      workflowRunId: run.id,
+      sourceArtifactId: artifact.id,
+    });
+    const applied = await applyManuscriptChanges({
+      documentId: document.id,
+      sourceArtifactId: artifact.id,
+      selectedChangeIds: params.manuscriptChangeIds ?? changes.filter((change) => change.status === "pending").map((change) => change.id),
+      label: `批准正文 ${new Date().toLocaleString("zh-CN")}`,
+    });
     await recordPreferenceSignal({
       projectId: run.projectId,
       sourceType: "proposal-accepted",
       sourceId: artifact.id,
       category: "manuscript",
       preference: "采用该章节正文风格与处理",
-      evidence: artifact.contentMarkdown.slice(0, 300),
+      evidence: applied.document.plainText.slice(0, 300),
       weight: 1,
     });
     await Promise.all(pendingProposals.map((item) => novelDb.proposals.update(item.id, { status: "accepted", updatedAt: Date.now() })));

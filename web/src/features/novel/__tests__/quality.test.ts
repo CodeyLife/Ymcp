@@ -25,3 +25,35 @@ describe("novel quality gates", () => {
     expect(failed.passed).toBe(false);
   });
 });
+
+describe("prose discipline checks", () => {
+  it("flags emphasis word devaluation when a word exceeds 2 occurrences", () => {
+    const text = "他第一次意识到危险。\n\n第一次，他选择了沉默。\n\n这是他第一次真正感到恐惧。";
+    const result = runDeterministicQualityChecks({ text });
+    expect(result.issues.some((item) => item.rule === "style.emphasis-devaluation" && item.description.includes("第一次"))).toBe(true);
+  });
+
+  it("flags direct emotion declarations", () => {
+    const text = "他站在原地，他很悲伤，没有说话。\n\n风继续吹着。";
+    const result = runDeterministicQualityChecks({ text });
+    expect(result.issues.some((item) => item.rule === "style.emotion-direct" && item.excerpt?.includes("他很悲伤"))).toBe(true);
+  });
+
+  it("flags excessive short-sentence streaks beyond 2 occurrences", () => {
+    const text = "速度。力量。变化。\n\n停下。风停。灯灭。\n\n关门。锁门。走人。";
+    const result = runDeterministicQualityChecks({ text });
+    expect(result.issues.some((item) => item.rule === "style.short-sentence-tic")).toBe(true);
+  });
+
+  it("flags aphorism density when exceeding 3 endings", () => {
+    const text = "所谓成长不过是学会沉默。\n\n也许离别就是人生的常态。\n\n这便是命运。\n\n或许遗忘才是最终的答案。";
+    const result = runDeterministicQualityChecks({ text });
+    expect(result.issues.some((item) => item.rule === "style.aphorism-density")).toBe(true);
+  });
+
+  it("counts imagery density in metrics", () => {
+    const text = "风吹过雪地，月光照在剑上，灯火摇曳。";
+    const result = runDeterministicQualityChecks({ text });
+    expect(result.metrics.imageryDensity).toBeGreaterThan(0);
+  });
+});

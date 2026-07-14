@@ -2,17 +2,42 @@ import { Document, HeadingLevel, Packer, Paragraph } from "docx";
 import { strToU8, zipSync } from "fflate";
 import type { Table } from "dexie";
 import { novelDb } from "./db";
-import { migrateLegacyProposal } from "./db-schema";
+import { cleanupReferenceIntegrity, migrateLegacyProposal, removeReaderPromise, removeReaderPromiseFromProposal } from "./db-schema";
 
-const BACKUP_SCHEMA_VERSION = 5;
-const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
+const BACKUP_SCHEMA_VERSION = 9;
+const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "manuscriptChanges", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "factAssertions", "knowledgeAssertions", "narrativeUnits", "outlineRealizations", "derivedMemories", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
 
 async function bundleProject(projectId: string) {
   const project = await novelDb.projects.get(projectId);
   if (!project) throw new Error("项目不存在");
-  const data: Record<string, unknown> = { manifest: { format: "ymcp-novel", schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: Date.now() }, project };
+  const data: Record<string, unknown> = { project };
   for (const tableName of BACKUP_TABLES) data[tableName] = await novelDb[tableName].where("projectId").equals(projectId).toArray();
+  const tables = Object.fromEntries(Object.entries(data).map(([name, value]) => [name, {
+    count: Array.isArray(value) ? value.length : 1,
+    hash: archiveValueHash(value),
+  }]));
+  data.manifest = { format: "ymcp-novel", schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: Date.now(), integrity: { algorithm: "fnv1a-32", tables } };
   return data;
+}
+
+function archiveValueHash(value: unknown) {
+  const serialized = JSON.stringify(value);
+  let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index += 1) hash = Math.imul(hash ^ serialized.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function verifyProjectArchive(payload: Record<string, unknown>) {
+  const manifest = payload.manifest as { integrity?: { algorithm?: string; tables?: Record<string, { count?: number; hash?: string }> } } | undefined;
+  const integrity = manifest?.integrity;
+  if (!integrity) return true;
+  if (integrity.algorithm !== "fnv1a-32" || !integrity.tables) throw new Error("项目归档包使用了不支持的校验格式");
+  for (const [name, expected] of Object.entries(integrity.tables)) {
+    const value = payload[name];
+    const count = Array.isArray(value) ? value.length : value === undefined ? 0 : 1;
+    if (count !== expected.count || archiveValueHash(value) !== expected.hash) throw new Error(`项目归档包校验失败：${name}`);
+  }
+  return true;
 }
 
 function download(blob: Blob, filename: string) {
@@ -66,17 +91,23 @@ export async function exportNovel(projectId: string, format: "json" | "markdown"
 }
 
 export async function importNovel(file: File) {
-  const payload = JSON.parse(await file.text()) as Record<string, unknown> & { manifest?: { format?: string; schemaVersion?: number }; project?: { id?: string } };
-  if (payload.manifest?.format !== "ymcp-novel" || ![4, 5].includes(payload.manifest.schemaVersion ?? 0) || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4/v5 文件");
+  const payload = JSON.parse(await file.text()) as Record<string, unknown> & { manifest?: { format?: string; schemaVersion?: number; integrity?: { algorithm?: string; tables?: Record<string, { count?: number; hash?: string }> } }; project?: { id?: string } };
+  if (payload.manifest?.format !== "ymcp-novel" || ![4, 5, 6, 7, 8, 9].includes(payload.manifest.schemaVersion ?? 0) || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4-v9 文件");
+  verifyProjectArchive(payload);
   const projectId = payload.project.id;
   const tables = ["projects", ...BACKUP_TABLES] as const;
-  await novelDb.transaction("rw", novelDb.tables, async () => {
+  await novelDb.transaction("rw", novelDb.tables, async (transaction) => {
     for (const table of tables) {
       const value = table === "projects" ? [payload.project] : payload[table];
       if (!Array.isArray(value)) continue;
-      const records = table === "proposals" ? value.map((entry) => migrateLegacyProposal({ ...(entry as Record<string, unknown>) })) : value as Record<string, unknown>[];
+      const records = table === "proposals"
+        ? value.map((entry) => removeReaderPromiseFromProposal(migrateLegacyProposal({ ...(entry as Record<string, unknown>) })))
+        : table === "architectures"
+          ? value.map((entry) => removeReaderPromise({ ...(entry as Record<string, unknown>) }))
+          : value as Record<string, unknown>[];
       await (novelDb[table] as unknown as Table<Record<string, unknown>, string>).bulkPut(records);
     }
+    await cleanupReferenceIntegrity(transaction);
   });
   return projectId;
 }

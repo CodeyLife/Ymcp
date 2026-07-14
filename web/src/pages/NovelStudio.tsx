@@ -40,12 +40,14 @@ import {
   deleteChapter,
   novelDb,
   recordBase,
-  saveDocument,
+  saveDocumentContent,
   updateEntity,
   updateProject,
 } from "@/features/novel/db";
 import { exportNovel } from "@/features/novel/export";
-import { openCollaborativeDocument } from "@/features/novel/collaboration";
+import { openCollaborativeDocument, resolveStoredManuscriptHtml, seedEmptyCollaborativeDocument } from "@/features/novel/collaboration";
+import { createManuscriptPersistenceGuard, requestDurableBrowserStorage, shouldApplyStoredManuscriptContent, type ManuscriptSaveState } from "@/features/novel/persistence";
+import { DB_VERSION } from "@/features/novel/db-schema";
 import type {
   Foreshadowing,
   ManuscriptDocument,
@@ -70,8 +72,8 @@ const TimelineCanvasPanel = lazy(() => import("@/features/novel/canvas/TimelineC
 import { WorldviewLibraryPanel } from "@/features/novel/WorldviewLibraryPanel";
 
 const VIEW_ITEMS: Array<{ key: NovelWorkspaceView; label: string; icon: React.ReactNode; group: string }> = [
-  { key: "dashboard", label: "总览", icon: <DashboardOutlined />, group: "创作工作区" },
   { key: "planning", label: "规划", icon: <NodeIndexOutlined />, group: "创作工作区" },
+  { key: "dashboard", label: "总览", icon: <DashboardOutlined />, group: "创作工作区" },
   { key: "writing", label: "写作", icon: <EditOutlined />, group: "创作工作区" },
   { key: "library", label: "资料库", icon: <BookOutlined />, group: "创作工作区" },
   { key: "review", label: "审校", icon: <RadarChartOutlined />, group: "创作工作区" },
@@ -108,10 +110,26 @@ function EmptyPanel({ title, description, action }: { title: string; description
 
 function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; onSaved: () => void }) {
   const { message } = App.useApp();
-  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<ManuscriptSaveState>("saved");
+  const saveStateRef = useRef(saveState);
+  const persistenceGuard = useRef(createManuscriptPersistenceGuard());
+  const [lastSavedAt, setLastSavedAt] = useState<number>();
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const applyingStoredContent = useRef(false);
   const collaboration = useMemo(() => document ? openCollaborativeDocument(document.projectId, document.yjsDocumentId) : undefined, [document?.projectId, document?.yjsDocumentId]);
+  const storedContentHtml = document ? resolveStoredManuscriptHtml(document) : "";
   const [collaborationReady, setCollaborationReady] = useState(false);
   const synchronizedDocument = useRef<{ id?: string; revision?: number }>({});
+  const updateSaveState = (next: ManuscriptSaveState) => {
+    saveStateRef.current = next;
+    setSaveState(next);
+  };
+  useEffect(() => { void requestDurableBrowserStorage(); }, []);
+  useEffect(() => {
+    persistenceGuard.current.reset();
+    updateSaveState("saved");
+    setLastSavedAt(document?.updatedAt);
+  }, [document?.id]);
   useEffect(() => {
     let cancelled = false;
     setCollaborationReady(!collaboration);
@@ -122,20 +140,28 @@ function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; o
   }, [collaboration]);
   const editor = useEditor({
     extensions: [StarterKit.configure({ undoRedo: false }), Placeholder.configure({ placeholder: "落笔。让人物先做出一个选择……" }), CharacterCount, ...(collaboration && collaborationReady ? [Collaboration.configure({ document: collaboration.doc })] : [])],
-    content: document?.contentHtml ?? "",
+    content: storedContentHtml,
     editable: !collaboration || collaborationReady,
   }, [document?.id, collaborationReady]);
   useEffect(() => {
     if (!editor || !document || editor.isDestroyed || !collaborationReady) return;
     if (synchronizedDocument.current.id !== document.id) {
       synchronizedDocument.current = { id: document.id, revision: document.revision };
+      if (collaboration) seedEmptyCollaborativeDocument(collaboration, document, (contentHtml) => {
+        applyingStoredContent.current = true;
+        const applied = editor.commands.setContent(contentHtml);
+        queueMicrotask(() => { applyingStoredContent.current = false; });
+        return applied;
+      });
       return;
     }
     if (synchronizedDocument.current.revision === document.revision) return;
     synchronizedDocument.current.revision = document.revision;
-    if (editor.getHTML() === document.contentHtml) return;
-    editor.commands.setContent(document.contentHtml || "");
-  }, [collaborationReady, document?.contentHtml, document?.id, document?.revision, editor]);
+    if (!shouldApplyStoredManuscriptContent({ saveState: saveStateRef.current, editorHtml: editor.getHTML(), storedContentHtml })) return;
+    applyingStoredContent.current = true;
+    editor.commands.setContent(storedContentHtml);
+    queueMicrotask(() => { applyingStoredContent.current = false; });
+  }, [collaboration, collaborationReady, document, editor, storedContentHtml]);
   useEffect(() => {
     if (!collaboration) return;
     const pendingCleanup = COLLAB_CLEANUP_TIMERS.get(collaboration);
@@ -152,18 +178,58 @@ function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; o
     };
   }, [collaboration]);
 
-  async function save(checkpoint = false) {
+  async function save(checkpoint = false, announce = true) {
     if (!editor || !document) return;
-    setSaving(true);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    const saveVersion = persistenceGuard.current.beginSave();
+    updateSaveState("saving");
     try {
       const plainText = editor.getText({ blockSeparator: "\n\n" });
-      await saveDocument({ ...document, contentHtml: editor.getHTML(), plainText, wordCount: countWords(plainText), status: document.status === "outline" ? "draft" : document.status }, checkpoint ? `手动检查点 ${new Date().toLocaleString("zh-CN")}` : undefined);
-      message.success(checkpoint ? "检查点已创建" : "正文已保存");
+      await saveDocumentContent({
+        documentId: document.id,
+        contentHtml: editor.getHTML(),
+        plainText,
+        wordCount: countWords(plainText),
+        status: document.status === "outline" ? "draft" : undefined,
+        checkpointLabel: checkpoint ? `手动检查点 ${new Date().toLocaleString("zh-CN")}` : undefined,
+      });
+      updateSaveState(persistenceGuard.current.isSaveCurrent(saveVersion) ? "saved" : "dirty");
+      setLastSavedAt(Date.now());
+      if (announce) message.success(checkpoint ? "检查点已创建" : "正文已保存");
       onSaved();
-    } finally {
-      setSaving(false);
+    } catch (error) {
+      updateSaveState("error");
+      message.error(error instanceof Error ? error.message : "正文保存失败");
     }
   }
+
+  useEffect(() => {
+    if (!editor || !document) return;
+    const markDirty = () => {
+      if (applyingStoredContent.current) return;
+      persistenceGuard.current.markEdited();
+      updateSaveState("dirty");
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => void save(false, false), 1500);
+    };
+    editor.on("update", markDirty);
+    const flushWhenHidden = () => {
+      if (globalThis.document.visibilityState === "hidden" && saveStateRef.current === "dirty") void save(false, false);
+    };
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (saveStateRef.current !== "dirty" && saveStateRef.current !== "error") return;
+      event.preventDefault();
+    };
+    globalThis.document.addEventListener("visibilitychange", flushWhenHidden);
+    globalThis.addEventListener("beforeunload", warnBeforeUnload);
+    return () => {
+      editor.off("update", markDirty);
+      globalThis.document.removeEventListener("visibilitychange", flushWhenHidden);
+      globalThis.removeEventListener("beforeunload", warnBeforeUnload);
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (saveStateRef.current === "dirty") void save(false, false);
+    };
+  }, [document?.id, editor]);
 
   if (!document) return <EmptyPanel title="选择一个章节" description="从左侧章节管理器选择或新建章节。" />;
   if (collaboration && !collaborationReady) return <div className="novel-studio-loading"><Spin /><span>正在恢复章节内容</span></div>;
@@ -180,8 +246,9 @@ function ChapterEditor({ document, onSaved }: { document?: ManuscriptDocument; o
         </div>
         <div className="novel-editor-actions">
           <span>{(editor?.storage.characterCount.characters() ?? 0).toLocaleString()} 字</span>
+          <Tag color={saveState === "error" ? "red" : saveState === "dirty" ? "gold" : saveState === "saving" ? "processing" : "green"}>{saveState === "error" ? "保存失败" : saveState === "dirty" ? "未保存" : saveState === "saving" ? "保存中" : lastSavedAt ? `已保存 ${new Date(lastSavedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "已保存"}</Tag>
           <Tooltip title="创建正文检查点"><Button aria-label="创建正文检查点" icon={<HistoryOutlined />} onClick={() => void save(true)}>检查点</Button></Tooltip>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存</Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={saveState === "saving"} onClick={() => void save()}>保存</Button>
         </div>
       </div>
       <div className="novel-paper"><div className="novel-paper-heading"><span>正文</span><h1>{document.title}</h1><small>{DOCUMENT_STATUS_LABEL[document.status]} · {document.branch}</small></div><EditorContent editor={editor} /></div>
@@ -196,7 +263,12 @@ function BibleView({ projectId }: { projectId: string }) {
   const [form] = Form.useForm();
   useEffect(() => { if (project) form.setFieldsValue({ ...project, genre: project.genre.join("、"), themes: project.themes.join("、"), sellingPoints: project.sellingPoints.join("、") }); }, [form, project]);
   if (!project) return <Spin />;
-  return <div className="novel-view-content"><SectionTitle eyebrow="STORY BIBLE" title="故事圣经" description="这里的内容是所有规划、写作和审校任务共同遵守的事实基础。" />
+  const currentProjectSnapshot = () => {
+    const values = form.getFieldsValue(true);
+    const list = (value: unknown) => typeof value === "string" ? value.split(/[、,，]/).filter(Boolean) : Array.isArray(value) ? value : [];
+    return { projects: [{ ...project, ...values, genre: list(values.genre), themes: list(values.themes), sellingPoints: list(values.sellingPoints) }] as Array<Record<string, unknown>> };
+  };
+  return <div className="novel-view-content"><GenerationComposer projectId={projectId} scope="bible" taskKeys={["project-positioning", "story-bible"]} getRefinementSnapshot={currentProjectSnapshot} /><SectionTitle eyebrow="STORY BIBLE" title="故事圣经" description="这里的内容是所有规划、写作和审校任务共同遵守的事实基础。" />
     <Form form={form} layout="vertical" className="novel-bible-form" onFinish={async (values) => { await updateProject(projectId, { ...values, genre: values.genre.split(/[、,，]/).filter(Boolean), themes: values.themes.split(/[、,，]/).filter(Boolean), sellingPoints: values.sellingPoints.split(/[、,，]/).filter(Boolean) }); message.success("故事圣经已保存"); }}>
       <section><h3>作品定位</h3><div className="novel-form-grid"><Form.Item name="title" label="书名"><Input /></Form.Item><Form.Item name="subtitle" label="副标题"><Input /></Form.Item><Form.Item name="genre" label="题材"><Input /></Form.Item><Form.Item name="audience" label="目标读者"><Input /></Form.Item><Form.Item name="pov" label="叙事视角"><Input /></Form.Item><Form.Item name="tense" label="叙事时态"><Input /></Form.Item></div><Form.Item name="premise" label="核心创意"><Input.TextArea rows={3} /></Form.Item></section>
       <section><h3>主题与风格</h3><div className="novel-form-grid"><Form.Item name="themes" label="主题"><Input placeholder="成长、代价、记忆" /></Form.Item><Form.Item name="sellingPoints" label="核心卖点"><Input /></Form.Item><Form.Item name="tone" label="整体基调"><Input /></Form.Item><Form.Item name="languageStyle" label="语言风格"><Input /></Form.Item></div></section>
@@ -213,7 +285,7 @@ function CharactersView({ projectId }: { projectId: string }) {
   const selected = entities.find((item) => item.id === selectedId) ?? entities[0];
   const [draft, setDraft] = useState<StoryEntity>();
   useEffect(() => setDraft(selected ? structuredClone(selected) : undefined), [selected]);
-  return <div className="novel-view-content"><SectionTitle eyebrow="CAST" title="角色档案" description="人物的欲望、知识与实时状态共同决定他们在场景中能做什么。" action={<Button type="primary" icon={<PlusOutlined />} onClick={async () => { const entity = await addEntity(projectId, "character", `新角色 ${entities.length + 1}`); setSelectedId(entity.id); }}>添加角色</Button>} />
+  return <div className="novel-view-content"><GenerationComposer projectId={projectId} scope="characters" taskKeys={["characters"]} compact getRefinementSnapshot={() => ({ entities: draft ? [draft as unknown as Record<string, unknown>] : [] })} /><SectionTitle eyebrow="CAST" title="角色档案" description="人物的欲望、知识与实时状态共同决定他们在场景中能做什么。" action={<Button type="primary" icon={<PlusOutlined />} onClick={async () => { const entity = await addEntity(projectId, "character", `新角色 ${entities.length + 1}`); setSelectedId(entity.id); }}>添加角色</Button>} />
     {entities.length === 0 ? <EmptyPanel title="还没有角色" description="创建主角、对手或关键配角。" /> : <div className="novel-character-layout"><aside>{entities.map((entity) => <button key={entity.id} className={selected?.id === entity.id ? "active" : ""} onClick={() => setSelectedId(entity.id)}><CharacterCard entity={entity} mode="rail" selected={selected?.id === entity.id} /></button>)}</aside>{draft && <main><div className="novel-character-identity"><span>{draft.name.slice(0, 1)}</span><div><Input variant="borderless" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><Input variant="borderless" value={draft.character?.role} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, role: event.target.value } })} /></div><Button type="primary" icon={<SaveOutlined />} onClick={() => void updateEntity(draft)}>保存</Button></div><div className="novel-form-grid"><label>人物摘要<Input.TextArea rows={3} value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} /></label><label>外貌与辨识度<Input.TextArea rows={3} value={draft.character?.appearance} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, appearance: event.target.value } })} /></label><label>性格<Input.TextArea rows={3} value={draft.character?.personality} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, personality: event.target.value } })} /></label><label>欲望<Input.TextArea rows={3} value={draft.character?.desire} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, desire: event.target.value } })} /></label><label>动机<Input.TextArea rows={3} value={draft.character?.motivation} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, motivation: event.target.value } })} /></label><label>弱点<Input.TextArea rows={3} value={draft.character?.weakness} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, weakness: event.target.value } })} /></label><label>秘密<Input.TextArea rows={3} value={draft.character?.secret} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, secret: event.target.value } })} /></label><label>人物弧光<Input.TextArea rows={3} value={draft.character?.arc} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, arc: event.target.value } })} /></label></div><Divider>当前故事状态</Divider><div className="novel-state-row"><Input addonBefore="位置" value={draft.character?.state.location} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, location: event.target.value } } })} /><Input addonBefore="情绪" value={draft.character?.state.emotional} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, emotional: event.target.value } } })} /><Input addonBefore="当前目标" value={draft.character?.state.objective} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, objective: event.target.value } } })} /></div></main>}</div>}
   </div>;
 }
@@ -254,11 +326,8 @@ function AnalysisView({ projectId }: { projectId: string }) {
   const nodes = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).and((item) => item.kind === "event").sortBy("order"), [projectId]) ?? [];
   const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const docs = useLiveQuery(() => novelDb.documents.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
-  const max = Math.max(1, ...nodes.flatMap((node) => [node.tension, node.emotion, node.information]));
-  return <div className="novel-view-content"><SectionTitle eyebrow="EDITORIAL ANALYSIS" title="故事分析" description="用可解释的指标发现节奏、角色与信息分布问题。" /><div className="novel-analysis-grid"><section><h3>故事事件节奏</h3><div className="novel-bar-chart">{nodes.map((node) => <Tooltip key={node.id} title={`${node.title} · 张力 ${node.tension} / 情绪 ${node.emotion} / 信息 ${node.information}`}><div><i style={{ height: `${node.tension / max * 100}%` }} /><i style={{ height: `${node.emotion / max * 100}%` }} /><i style={{ height: `${node.information / max * 100}%` }} /><span>{node.order + 1}</span></div></Tooltip>)}</div><footer><span className="tension">张力</span><span className="emotion">情绪</span><span className="information">信息</span></footer></section><section><h3>作品健康度</h3><div className="novel-health-ring"><Progress type="circle" percent={Math.min(100, 35 + entities.length * 3 + docs.filter((item) => item.summary).length * 4)} strokeColor="#b5483a" trailColor="#2b2927" size={150} /><p>基于设定完整度、章节摘要和连续性记录</p></div></section><section><h3>编辑建议</h3><ul className="novel-editorial-notes"><li><CheckCircleOutlined /> 已建立 {entities.length} 个故事实体</li><li><CheckCircleOutlined /> {nodes.length} 个故事事件进入节奏分析</li><li className={docs.some((item) => !item.summary) ? "warn" : ""}><BulbOutlined /> {docs.filter((item) => !item.summary).length} 章缺少摘要，会影响长期上下文</li><li className={nodes.some((item) => item.tension === nodeAverage(nodes.map((item) => item.tension))) ? "warn" : ""}><RadarChartOutlined /> 建议让相邻事件的张力形成更明显落差</li></ul></section></div></div>;
+  return <div className="novel-view-content"><SectionTitle eyebrow="EDITORIAL ANALYSIS" title="故事分析" description="检查设定、故事事件与章节资料的完整度。" /><div className="novel-analysis-grid"><section><h3>作品健康度</h3><div className="novel-health-ring"><Progress type="circle" percent={Math.min(100, 35 + entities.length * 3 + docs.filter((item) => item.summary).length * 4)} strokeColor="#b5483a" trailColor="#2b2927" size={150} /><p>基于设定完整度、章节摘要和连续性记录</p></div></section><section><h3>编辑建议</h3><ul className="novel-editorial-notes"><li><CheckCircleOutlined /> 已建立 {entities.length} 个故事实体</li><li><CheckCircleOutlined /> 已规划 {nodes.length} 个故事事件</li><li className={docs.some((item) => !item.summary) ? "warn" : ""}><BulbOutlined /> {docs.filter((item) => !item.summary).length} 章缺少摘要，会影响长期上下文</li></ul></section></div></div>;
 }
-
-function nodeAverage(values: number[]) { return values.length ? Math.round(values.reduce((sum, item) => sum + item, 0) / values.length) : 0; }
 
 function VersionsView({ projectId }: { projectId: string }) {
   const revisions = useLiveQuery(() => novelDb.revisions.where("projectId").equals(projectId).reverse().sortBy("createdAt"), [projectId]) ?? [];
@@ -280,7 +349,7 @@ export default function NovelStudio() {
     [projectId],
   ) ?? 0;
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>();
-  const [aiCollapsed, setAiCollapsed] = useState(() => window.matchMedia("(max-width: 700px)").matches);
+  const [aiCollapsed, setAiCollapsed] = useState(() => window.matchMedia("(max-width: 1600px)").matches);
   const [mobileNav, setMobileNav] = useState(false);
   const selectedDocument = documents.find((item) => item.id === selectedDocumentId) ?? documents[0];
   useEffect(() => { if (!selectedDocumentId && documents[0]) setSelectedDocumentId(documents[0].id); }, [documents, selectedDocumentId]);
@@ -323,7 +392,7 @@ export default function NovelStudio() {
       <main className="novel-workspace-main">{renderView()}</main>
       <Suspense fallback={<button className="novel-ai-collapsed" aria-label="加载 AI 任务中心"><RobotOutlined /><span>AI</span></button>}><AIWorkbench projectId={projectId} document={assistantDocument} scope={assistantScope} targetLabel={assistantTarget} collapsed={aiCollapsed} onToggle={() => setAiCollapsed((value) => !value)} /></Suspense>
     </div>
-    <footer className="novel-taskbar"><span><span className="online-dot" /> 数据库在线</span><span>Schema v{project.schemaVersion}</span><span>修订 {project.revision}</span><span className="spacer" /><span>{documents.reduce((sum, item) => sum + item.wordCount, 0).toLocaleString()} 字</span><span>今日目标 {project.dailyGoal.toLocaleString()}</span></footer>
+    <footer className="novel-taskbar"><span><span className="online-dot" /> 数据库在线</span><span>DB v{DB_VERSION}</span><span>修订 {project.revision}</span><span className="spacer" /><span>{documents.reduce((sum, item) => sum + item.wordCount, 0).toLocaleString()} 字</span><span>今日目标 {project.dailyGoal.toLocaleString()}</span></footer>
     <Drawer placement="left" width={280} open={mobileNav} onClose={() => setMobileNav(false)} title={project.title}>{groups.map((group) => <div className="novel-mobile-nav" key={group}><strong>{group}</strong>{VIEW_ITEMS.filter((item) => item.group === group).map((item) => <Button key={item.key} type={view === item.key ? "primary" : "text"} icon={item.icon} onClick={() => setView(item.key)} block>{item.label}</Button>)}</div>)}</Drawer>
   </div>;
 }
@@ -388,8 +457,7 @@ function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocu
 
 function LibraryWorkspace({ projectId }: { projectId: string }) {
   const [mode, setMode] = useState<"bible" | "characters" | "relations" | "timeline" | "worldview" | "foreshadowing">("bible");
-  const generation = mode === "characters" ? { scope: "characters" as const, task: "characters" as const } : mode === "relations" ? { scope: "relations" as const, task: "relations" as const } : mode === "timeline" ? { scope: "timeline" as const, task: "timeline" as const } : { scope: "foreshadowing" as const, task: "foreshadowing" as const };
-  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "bible", label: "故事圣经" }, { value: "characters", label: "角色" }, { value: "relations", label: "关系" }, { value: "timeline", label: "时间线" }, { value: "worldview", label: "世界观" }, { value: "foreshadowing", label: "伏笔" }]} /></div>{mode === "bible" ? <GenerationComposer projectId={projectId} scope="bible" taskKeys={["project-positioning", "story-bible"]} /> : mode === "worldview" ? null : <GenerationComposer projectId={projectId} scope={generation.scope} taskKeys={[generation.task]} compact />}{mode === "bible" ? <BibleView projectId={projectId} /> : mode === "characters" ? <CharactersView projectId={projectId} /> : mode === "relations" ? <Suspense fallback={<Spin />}><CharacterCanvasPanel projectId={projectId} /></Suspense> : mode === "timeline" ? <Suspense fallback={<Spin />}><TimelineCanvasPanel projectId={projectId} /></Suspense> : mode === "worldview" ? <WorldviewLibraryPanel projectId={projectId} /> : <ContinuityView projectId={projectId} type={mode} />}</div>;
+  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "bible", label: "故事圣经" }, { value: "characters", label: "角色" }, { value: "relations", label: "关系" }, { value: "timeline", label: "时间线" }, { value: "worldview", label: "世界观" }, { value: "foreshadowing", label: "伏笔" }]} /></div>{mode === "foreshadowing" && <GenerationComposer projectId={projectId} scope="foreshadowing" taskKeys={["foreshadowing"]} compact />}{mode === "bible" ? <BibleView projectId={projectId} /> : mode === "characters" ? <CharactersView projectId={projectId} /> : mode === "relations" ? <Suspense fallback={<Spin />}><CharacterCanvasPanel projectId={projectId} /></Suspense> : mode === "timeline" ? <Suspense fallback={<Spin />}><TimelineCanvasPanel projectId={projectId} /></Suspense> : mode === "worldview" ? <WorldviewLibraryPanel projectId={projectId} /> : <ContinuityView projectId={projectId} type={mode} />}</div>;
 }
 
 function ReviewWorkspace({ projectId }: { projectId: string }) {

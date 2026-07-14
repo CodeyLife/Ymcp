@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNovelProject, novelDb, recordBase } from "../db";
-import { importNovelSkill, parseNovelSkill, resolveNovelSkills, setProjectSkill } from "../skills";
+import { BUILTIN_NOVEL_SKILLS, formatSkillPrompt, importNovelSkill, parseNovelSkill, resolveNovelSkills, setProjectSkill } from "../skills";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -46,5 +46,56 @@ stages: [drafting, revision]
     await novelDb.skills.bulkAdd([make("cycle-a", "cycle-b"), make("cycle-b", "cycle-a")]);
     await setProjectSkill(project.id, "cycle-a", true);
     await expect(resolveNovelSkills({ projectId: project.id, stage: "drafting" })).rejects.toThrow(/循环/);
+  });
+});
+
+describe("prose aesthetics skills", () => {
+  it("includes imagery-aesthetics and prose-discipline in builtin skills", () => {
+    const ids = BUILTIN_NOVEL_SKILLS.map((s) => s.skillId);
+    expect(ids).toContain("imagery-aesthetics");
+    expect(ids).toContain("prose-discipline");
+  });
+
+  it("has no duplicate skillIds in builtin skills", () => {
+    const ids = BUILTIN_NOVEL_SKILLS.map((s) => s.skillId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("imagery-aesthetics targets drafting and revision stages", () => {
+    const skill = BUILTIN_NOVEL_SKILLS.find((s) => s.skillId === "imagery-aesthetics");
+    expect(skill?.stages).toEqual(expect.arrayContaining(["drafting", "revision"]));
+  });
+
+  it("prose-discipline targets drafting and review stages", () => {
+    const skill = BUILTIN_NOVEL_SKILLS.find((s) => s.skillId === "prose-discipline");
+    expect(skill?.stages).toEqual(expect.arrayContaining(["drafting", "review"]));
+  });
+
+  it("formatSkillPrompt includes skill name and key rules", () => {
+    const skill = BUILTIN_NOVEL_SKILLS.find((s) => s.skillId === "imagery-aesthetics")!;
+    const formatted = formatSkillPrompt([skill]);
+    expect(formatted).toContain("意象美学");
+    expect(formatted).toContain("核心意象系统");
+    expect(formatted).toContain("留白艺术");
+  });
+
+  it("resolves imagery-aesthetics and prose-discipline for drafting stage via default profile", async () => {
+    const project = await createNovelProject({ title: "意境测试", genre: ["奇幻"], premise: "测试意境美 skill 解析。" });
+    const resolved = await resolveNovelSkills({ projectId: project.id, stage: "drafting" });
+    const ids = resolved.skills.map((s) => s.skillId);
+    expect(ids).toContain("imagery-aesthetics");
+    expect(ids).toContain("prose-discipline");
+  });
+
+  it("resolves imagery-aesthetics for revision stage", async () => {
+    const project = await createNovelProject({ title: "修订测试", genre: ["奇幻"], premise: "测试修订阶段 skill 解析。" });
+    const resolved = await resolveNovelSkills({ projectId: project.id, stage: "revision" });
+    expect(resolved.skills.map((s) => s.skillId)).toContain("imagery-aesthetics");
+  });
+
+  it("resolves prose-discipline for review stage", async () => {
+    const project = await createNovelProject({ title: "审校测试", genre: ["奇幻"], premise: "测试审校阶段 skill 解析。" });
+    const resolved = await resolveNovelSkills({ projectId: project.id, stage: "review" });
+    expect(resolved.skills.map((s) => s.skillId)).toContain("prose-discipline");
   });
 });

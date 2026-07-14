@@ -3,9 +3,9 @@ import { Input, InputNumber, Select, Switch } from "antd";
 const FIELD_LABELS: Record<string, string> = {
   kind: "类型", title: "标题", name: "名称", summary: "摘要", description: "说明",
   order: "顺序", status: "状态", centralQuestion: "核心命题", centralConflict: "核心冲突",
-  readerPromise: "读者承诺", phases: "结构阶段",
+  phases: "结构阶段",
   theme: "主题", genre: "题材", tone: "基调", causality: "因果", outcome: "结果",
-  tension: "张力", objective: "目标", conflict: "冲突", turningPoint: "转折", hook: "钩子",
+  objective: "目标", conflict: "冲突", turningPoint: "转折", hook: "钩子",
   targetWords: "目标字数", informationRelease: "信息释放", mustHappen: "必须发生",
   flexible: "可调整", forbidden: "禁止事项", characterIds: "关联角色", locationIds: "关联地点",
   plotThreadIds: "关联剧情线", foreshadowingIds: "关联伏笔", participantIds: "参与对象",
@@ -14,7 +14,7 @@ const FIELD_LABELS: Record<string, string> = {
   clue: "线索表现", truth: "真实含义", urgency: "紧迫度", priority: "优先级", progress: "进度",
 };
 
-function fieldLabel(key: string) {
+export function fieldLabel(key: string) {
   return FIELD_LABELS[key] ?? key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, (value) => value.toUpperCase());
 }
 

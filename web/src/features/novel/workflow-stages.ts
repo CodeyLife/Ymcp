@@ -85,7 +85,7 @@ export interface ApprovalContext {
  */
 export interface ApprovalHandler {
   stage: WorkflowStage;
-  approve(ctx: ApprovalContext, params: { approved: boolean; feedback?: string }): Promise<WorkflowRun>;
+  approve(ctx: ApprovalContext, params: { approved: boolean; feedback?: string; manuscriptChangeIds?: string[] }): Promise<WorkflowRun>;
 }
 
 /**

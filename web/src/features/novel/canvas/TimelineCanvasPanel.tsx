@@ -20,6 +20,7 @@ import {
 import { appendOperation, novelDb, recordBase } from "../db";
 import type { TimelineEvent } from "../types";
 import { TimelineNodeContent } from "./TimelineNodeContent";
+import GenerationComposer from "../GenerationComposer";
 import { useCanvasPanel, type CanvasPanelItem } from "./useCanvasPanel";
 
 const NODE_WIDTH = 220;
@@ -302,6 +303,7 @@ export function TimelineCanvasPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="novel-view-content" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, gap: 12 }}>
+      <GenerationComposer projectId={projectId} scope="timeline" taskKeys={["timeline"]} compact getRefinementSnapshot={() => ({ timelineEvents: eventDraft ? [eventDraft as unknown as Record<string, unknown>] : [] })} />
       <header className="novel-section-title" style={{ flexShrink: 0 }}>
         <div>
           <span>TIMELINE CANVAS</span>

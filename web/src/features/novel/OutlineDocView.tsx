@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { App, Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Tag } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Alert, App, Button, Dropdown, Empty, Input, Modal, Select, Tag } from "antd";
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -15,9 +15,10 @@ import {
 import { useLiveQuery } from "dexie-react-hooks";
 import { AnimatePresence, motion } from "motion/react";
 
-import GenerationComposer from "./GenerationComposer";
 import { addOutlineNode, appendOperation, deleteOutlineBranch, novelDb } from "./db";
 import { applyProposalItems, rejectProposal, runGenerationTask } from "./generation";
+import OutlineProposalReview from "./OutlineProposalReview";
+import { analyzeOutlineStructure, type OutlineStructureIssue } from "./outline-structure";
 import type { AIProposal, Foreshadowing, OutlineKind, OutlineNode, PlotThread, StoryEntity } from "./types";
 
 const FIELD_OPTIONS = [
@@ -41,6 +42,17 @@ function nextTitle(kind: OutlineKind, count: number): string {
   if (kind === "act") return `第${count + 1}幕`;
   if (kind === "sequence") return `序列 ${count + 1}`;
   return `事件 ${count + 1}`;
+}
+
+function compactReferenceLabels(node: OutlineNode, entities: StoryEntity[], threads: PlotThread[], clues: Foreshadowing[]) {
+  const entityMap = new Map(entities.map((item) => [item.id, item.name]));
+  const threadMap = new Map(threads.map((item) => [item.id, item.title]));
+  const clueMap = new Map(clues.map((item) => [item.id, item.title]));
+  return [
+    ...node.characterIds.map((id) => entityMap.get(id) ?? "未知角色"),
+    ...node.plotThreadIds.map((id) => threadMap.get(id) ?? "未知剧情线"),
+    ...node.foreshadowingIds.map((id) => clueMap.get(id) ?? "未知伏笔"),
+  ];
 }
 
 type InlineTextProps = {
@@ -132,6 +144,7 @@ function OutlineNodeBlock({
   const depth = KIND_DEPTH[node.kind];
   const childKind = KIND_CHILD[node.kind];
   const color = KIND_COLOR[node.kind];
+  const compactRefs = compactReferenceLabels(node, entities, threads, clues);
 
   const update = useCallback(
     async (changes: Partial<OutlineNode>) => {
@@ -206,6 +219,13 @@ function OutlineNodeBlock({
           <Button type="text" size="small" icon={<CaretDownOutlined />} aria-label="节点操作" />
         </Dropdown>
       </header>
+
+      {collapsed && node.kind === "event" && (
+        <div className="novel-outline-event-compact">
+          <p>{node.summary || "尚未填写事件概要"}</p>
+          {compactRefs.length > 0 && <div>{compactRefs.slice(0, 5).map((label, index) => <Tag key={`${label}-${index}`}>{label}</Tag>)}{compactRefs.length > 5 && <small>+{compactRefs.length - 5}</small>}</div>}
+        </div>
+      )}
 
       <AnimatePresence initial={false}>
         {sectionProposal && (
@@ -325,11 +345,6 @@ function OutlineNodeBlock({
                 onChange={(event) => void update({ storyTime: event.target.value })}
               />
             </div>
-            <div className="novel-outline-intensity">
-              <label>张力<InputNumber min={0} max={100} value={node.tension} onChange={(value) => void update({ tension: value ?? 0 })} /></label>
-              <label>情绪<InputNumber min={0} max={100} value={node.emotion} onChange={(value) => void update({ emotion: value ?? 0 })} /></label>
-              <label>信息<InputNumber min={0} max={100} value={node.information} onChange={(value) => void update({ information: value ?? 0 })} /></label>
-            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -365,12 +380,76 @@ function OutlineNodeBlock({
   );
 }
 
+function RecoveryNodeRow({
+  node,
+  issue,
+  validNodes,
+  onRepair,
+  onDelete,
+}: {
+  node: OutlineNode;
+  issue?: OutlineStructureIssue;
+  validNodes: OutlineNode[];
+  onRepair: (node: OutlineNode, parentId?: string) => void;
+  onDelete: (nodeId: string) => void;
+}) {
+  const candidates = validNodes.filter((item) => item.kind === (node.kind === "sequence" ? "act" : "sequence") && item.id !== node.id);
+  const [parentId, setParentId] = useState<string>();
+  useEffect(() => { setParentId(candidates[0]?.id); }, [node.id, candidates[0]?.id]);
+  return (
+    <div className="novel-outline-recovery-row">
+      <Tag color={KIND_COLOR[node.kind]}>{KIND_LABEL[node.kind]}</Tag>
+      <div><strong>{node.title}</strong><span>{issue?.message ?? "无法进入有效大纲树"}</span></div>
+      {node.kind === "act" ? (
+        <Button size="small" onClick={() => onRepair(node, undefined)}>设为根幕</Button>
+      ) : (
+        <div className="novel-outline-recovery-parent">
+          <Select size="small" value={parentId} placeholder={node.kind === "sequence" ? "选择所属幕" : "选择所属序列"} options={candidates.map((item) => ({ value: item.id, label: item.title }))} onChange={setParentId} />
+          <Button size="small" disabled={!parentId} onClick={() => onRepair(node, parentId)}>归入</Button>
+        </div>
+      )}
+      <Button danger type="text" size="small" icon={<DeleteOutlined />} aria-label={`删除${node.title}`} onClick={() => onDelete(node.id)} />
+    </div>
+  );
+}
+
+function OutlineRecoveryPanel({
+  invalidNodes,
+  validNodes,
+  issues,
+  onRepair,
+  onDelete,
+  onNormalizeOrders,
+}: {
+  invalidNodes: OutlineNode[];
+  validNodes: OutlineNode[];
+  issues: OutlineStructureIssue[];
+  onRepair: (node: OutlineNode, parentId?: string) => void;
+  onDelete: (nodeId: string) => void;
+  onNormalizeOrders: () => void;
+}) {
+  const issueMap = new Map(issues.map((issue) => [issue.nodeId, issue]));
+  const duplicateOrders = issues.filter((issue) => issue.code === "duplicate-order");
+  if (!invalidNodes.length && !duplicateOrders.length) return null;
+  return (
+    <section className="novel-outline-recovery" aria-label="未归类大纲内容">
+      <header><div><span>STRUCTURE CHECK</span><h3>未归类内容</h3><p>这些节点仍保留在本地，但当前父子关系无法进入正式大纲。</p></div><Tag color="warning">{invalidNodes.length + duplicateOrders.length} 项异常</Tag></header>
+      {duplicateOrders.length > 0 && <Alert type="warning" showIcon message="检测到同级顺序重复" description={<Button size="small" onClick={onNormalizeOrders}>按当前显示顺序重新编号</Button>} />}
+      <div className="novel-outline-recovery-list">{invalidNodes.map((node) => <RecoveryNodeRow key={node.id} node={node} issue={issueMap.get(node.id)} validNodes={validNodes} onRepair={onRepair} onDelete={onDelete} />)}</div>
+    </section>
+  );
+}
+
 export default function OutlineDocView({ projectId }: { projectId: string }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const nodes = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const threads = useLiveQuery(() => novelDb.plotThreads.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const clues = useLiveQuery(() => novelDb.foreshadowing.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
+  const fullProposal = useLiveQuery(async () => {
+    const all = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
+    return all.find((item) => item.status === "pending" && item.taskKey === "outline" && !item.targetId) ?? null;
+  }, [projectId], null);
   const sectionProposals = useLiveQuery(async () => {
     const all = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
     return all.filter((item) => item.status === "pending" && (item.taskKey === "outline-section-update" || item.taskKey === "outline-field-revise"));
@@ -391,7 +470,20 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
   const [fieldReviseTarget, setFieldReviseTarget] = useState<OutlineNode | null>(null);
   const [fieldReviseField, setFieldReviseField] = useState<string>("summary");
   const [fieldReviseInstruction, setFieldReviseInstruction] = useState("");
-  const roots = useMemo(() => nodes.filter((item) => !item.parentId).sort((a, b) => a.order - b.order), [nodes]);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generationBusy, setGenerationBusy] = useState(false);
+  const [generationInstruction, setGenerationInstruction] = useState("按幕、序列、事件建立完整故事大纲。先铺陈人物处境、世态背景与情感底色，让因果、转折与伏笔在事件流中自然浮现，不急于一次性写尽戏剧性。");
+  const knownNodeIds = useRef<Set<string>>(new Set());
+  const structure = useMemo(() => analyzeOutlineStructure(nodes), [nodes]);
+  const roots = structure.roots;
+  const validNodes = structure.validNodes;
+
+  useEffect(() => {
+    const known = knownNodeIds.current;
+    const newEvents = nodes.filter((node) => node.kind === "event" && !known.has(node.id)).map((node) => node.id);
+    if (newEvents.length) setCollapsedIds((current) => new Set([...current, ...newEvents]));
+    knownNodeIds.current = new Set(nodes.map((node) => node.id));
+  }, [nodes]);
 
   const toggleCollapse = useCallback((id: string) => {
     setCollapsedIds((prev) => {
@@ -451,6 +543,51 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
     },
     [projectId, message],
   );
+
+  const onRepairParent = useCallback(
+    async (node: OutlineNode, parentId?: string) => {
+      const before = await novelDb.outlineNodes.get(node.id);
+      if (!before) return;
+      const next = { ...before, parentId, revision: before.revision + 1, updatedAt: Date.now() };
+      await novelDb.outlineNodes.put(next);
+      await appendOperation(projectId, "outlineNodes", node.id, "update", { value: { before, after: next } });
+      message.success(`“${node.title}”已重新归类`);
+    },
+    [projectId, message],
+  );
+
+  const normalizeOrders = useCallback(async () => {
+    const groups = new Map<string, OutlineNode[]>();
+    for (const node of validNodes) {
+      const key = `${node.parentId ?? "root"}:${node.kind}`;
+      const group = groups.get(key) ?? [];
+      group.push(node);
+      groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      const ordered = group.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
+      for (const [order, node] of ordered.entries()) {
+        if (node.order === order) continue;
+        const next = { ...node, order, revision: node.revision + 1, updatedAt: Date.now() };
+        await novelDb.outlineNodes.put(next);
+        await appendOperation(projectId, "outlineNodes", node.id, "update", { value: { before: node, after: next } });
+      }
+    }
+    message.success("同级节点顺序已重新编号");
+  }, [projectId, validNodes, message]);
+
+  const executeFullGeneration = useCallback(async () => {
+    setGenerationBusy(true);
+    try {
+      await runGenerationTask({ projectId, taskKey: "outline", instruction: generationInstruction.trim() });
+      setGenerateOpen(false);
+      message.success("完整大纲候选已生成，请审核层级后采纳");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "故事大纲生成失败");
+    } finally {
+      setGenerationBusy(false);
+    }
+  }, [projectId, generationInstruction, message]);
 
   const onRewriteSubtree = useCallback((node: OutlineNode) => {
     setRewriteTarget(node);
@@ -542,27 +679,56 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
     [message],
   );
 
+  const generationModal = (
+    <Modal
+      title={nodes.length ? "重新生成完整大纲" : "生成完整故事大纲"}
+      open={generateOpen}
+      onCancel={() => setGenerateOpen(false)}
+      confirmLoading={generationBusy}
+      okText={nodes.length ? "生成替换方案" : "开始生成"}
+      cancelText="取消"
+      onOk={() => void executeFullGeneration()}
+    >
+      {nodes.length > 0 && <Alert type="warning" showIcon message="本次结果将作为完整替换方案审核" description="生成不会立即修改正式数据；只有采纳后才会整体替换当前大纲。" />}
+      <Input.TextArea className="novel-outline-generation-instruction" autoSize={{ minRows: 4, maxRows: 9 }} value={generationInstruction} onChange={(event) => setGenerationInstruction(event.target.value)} placeholder="描述故事脉络、人物处境、世态背景与情感走向，可附关键转折但不必写尽" />
+    </Modal>
+  );
+
+  if (fullProposal) {
+    return <>
+      <OutlineProposalReview proposal={fullProposal} replacingCount={nodes.length} entities={entities} threads={threads} clues={clues} onRegenerate={() => setGenerateOpen(true)} />
+      {generationModal}
+    </>;
+  }
+
   return (
-    <div>
-      <GenerationComposer projectId={projectId} scope="outline" taskKeys={["outline"]} />
+    <div className="novel-outline-workspace">
       <header className="novel-section-title">
         <div>
           <span>STORY OUTLINE</span>
           <h2>故事大纲</h2>
-          <p>按幕、序列和事件组织故事因果; 整棵大纲以文档形式同屏呈现, 直接在节点上内联编辑。这里不创建章节, 也不持有正文。</p>
+          <p>按幕、序列和事件铺陈故事——人物处境、世态人情、情感底色先行, 因果与转折在事件流中自然浮现。整棵大纲以文档形式同屏呈现, 直接在节点上内联编辑。这里不创建章节, 也不持有正文。</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="novel-outline-header-actions">
           {roots.length > 0 && (
             <>
               <Button size="small" onClick={expandAll}>展开全部</Button>
               <Button size="small" onClick={collapseAll}>折叠全部</Button>
             </>
           )}
-          <Button icon={<PlusOutlined />} onClick={() => void addRoot("act")}>幕</Button>
-          <Button icon={<PlusOutlined />} onClick={() => void addRoot("sequence")}>序列</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => void addRoot("event")}>事件</Button>
+          <Button icon={<PlusOutlined />} onClick={() => void addRoot("act")}>添加幕</Button>
+          <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setGenerateOpen(true)}>{nodes.length ? "重新生成" : "生成故事大纲"}</Button>
         </div>
       </header>
+
+      <OutlineRecoveryPanel
+        invalidNodes={structure.invalidNodes}
+        validNodes={validNodes}
+        issues={structure.issues}
+        onRepair={(node, parentId) => void onRepairParent(node, parentId)}
+        onDelete={(nodeId) => modal.confirm({ title: "删除未归类节点？", content: "将删除该节点及其下级内容。", okText: "删除", okButtonProps: { danger: true }, onOk: () => onDelete(nodeId) })}
+        onNormalizeOrders={() => void normalizeOrders()}
+      />
 
       {roots.length === 0 ? (
         <div className="novel-empty-panel">
@@ -571,7 +737,8 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
             description={
               <>
                 <strong>尚无故事大纲</strong>
-                <span>使用上方"事件"按钮手动建立, 或在 GenerationComposer 中让 LLM 一次性生成大纲。</span>
+                <span>先添加一幕手动规划，或生成一份完整的幕、序列、事件结构。</span>
+                <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setGenerateOpen(true)}>生成故事大纲</Button>
               </>
             }
           />
@@ -582,7 +749,7 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
             <OutlineNodeBlock
               key={node.id}
               node={node}
-              nodes={nodes}
+              nodes={validNodes}
               entities={entities}
               threads={threads}
               clues={clues}
@@ -601,6 +768,8 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
+
+      {generationModal}
 
       <Modal
         title={`LLM 重写子树 — ${rewriteTarget?.title ?? ""}`}
