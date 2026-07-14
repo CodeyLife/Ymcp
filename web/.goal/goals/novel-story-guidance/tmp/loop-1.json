@@ -1,0 +1,49 @@
+{
+  "loop": 1,
+  "goalId": "novel-story-guidance",
+  "plan": "Loop 1 策略：现状审计+端到端冒烟。启动 dev server，从 premise 走到 fact extraction，记录每一步真实产物，定位首批断点与质量 gap。审计结果决定下一个 loop 切入哪个维度（记忆/整合/质量）。",
+  "actions": [
+    "在 tmp/smoke-e2e.test.ts 编写 12 用例端到端冒烟测试，覆盖 configure API → create project → generate positioning → generate architecture → generate characters → generate outline → create chapter + start workflow → approve blueprint → generate draft → review → manuscript approval → fact extraction",
+    "创建 tmp/vitest.smoke.config.ts 单独配置 vitest include 以绕开主配置只扫描 src/features/novel/__tests__ 的限制",
+    "使用 dev server 的 /ai-proxy 代理（apiBaseUrl=http://localhost:5174/ai-proxy）从 Node 测试环境调用真实 LLM API",
+    "运行 smoke 测试，所有真实产物写入 tmp/artifacts/ 供人工审阅",
+    "阅读 12-blueprint-artifact.md / 13-draft-artifact.md / 12-context-packet.md / 15-agent-runs.txt / 15-final-run.txt 评估质量与断点"
+  ],
+  "verification": [
+    { "result": "pass", "summary": "12 个测试用例中 9 个通过：API 配置、项目创建、定位生成、架构生成、角色生成、大纲生成、状态捕获、章节创建+工作流启动、蓝图生成与批准", "exitCode": 0 },
+    { "result": "pass", "summary": "生成质量优秀：blueprint 含 6 个具体节拍（行动/情绪/结果结构清晰），draft 580 行包含感官细节（'雨下了一整天'）、人物声音（周野'照片可以合成'的回避对白）、潜台词（'不是不相信沈砚，是相信自己的记忆'）、章尾钩子（'那个从自己记忆里消失的人'），直接可用非模板文本", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/13-draft-artifact.md" },
+    { "result": "pass", "summary": "context packet 正确整合 architecture 全文 + 4 个 character JSON + 10 个 outline 节点因果字段 + 11 个 skills 的层级与哈希", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/12-context-packet.md" },
+    { "result": "fail", "summary": "review 阶段失败：5 个 reviewer（style/character/continuity/plot/pacing）卡在 running 状态，错误为 'curl: (28) Operation timed out after 30016 milliseconds'。根因：ai.ts requestChat 无重试逻辑 + review-stage.ts Promise.all 任一超时即全盘失败。workflow 未达 fact extraction，14-fact-candidates.txt 为空数组 []", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/15-final-run.txt" }
+  ],
+  "errors": [
+    "review 阶段上游 API 30s 超时（5 个 reviewer 并行 Promise.all + requestChat 无重试）导致 workflow 失败，端到端闭环未达成",
+    "smoke 流程未生成 plot-threads/foreshadowing/timeline（生成接口存在但未被 smoke 调用，影响大纲-故事线-角色整合维度的完整验证）",
+    "角色创建时 voice 字段为 '暂无固定语言风格设定'，影响人物声音维度的可追溯性"
+  ],
+  "selfReflection": "Loop 1 验证了端到端冒烟的关键路径：premise→positioning→architecture→characters→outline→blueprint→draft 全链路真实产物质量达标，context packet 已正确整合 architecture+characters+outline+skills。但 review 阶段因上游 30s 超时 + 5 个 reviewer 用 Promise.all 并行 + requestChat 无重试逻辑而整体失败，导致 fact extraction 无法触达。这是阻断端到端闭环的首要工程缺陷，必须先修。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "策略仍为'现状审计+端到端冒烟'的延续——审计已完成，下一步是修复审计发现的首要阻断点（review 阶段韧性），然后重跑冒烟。原策略预期会定位到首批断点，这正是首批断点。",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.25,
+  "successSignalUpdates": [
+    { "action": "observe", "id": "e2e-workflow-closed-loop", "status": "observed", "evidenceRefs": [".goal/goals/novel-story-guidance/tmp/artifacts/15-final-run.txt"] },
+    { "action": "observe", "id": "long-term-memory-consistency", "status": "observed", "evidenceRefs": [".goal/goals/novel-story-guidance/tmp/artifacts/12-context-packet.md"] },
+    { "action": "observe", "id": "outline-thread-character-integration", "status": "observed", "evidenceRefs": [".goal/goals/novel-story-guidance/tmp/artifacts/12-context-packet.md", ".goal/goals/novel-story-guidance/tmp/artifacts/12-blueprint-artifact.md"] },
+    { "action": "satisfy", "id": "generation-quality-readable", "evidenceRefs": [".goal/goals/novel-story-guidance/tmp/artifacts/13-draft-artifact.md", ".goal/goals/novel-story-guidance/tmp/artifacts/12-blueprint-artifact.md"] }
+  ],
+  "artifactRefs": [
+    { "id": "smoke-test-suite", "successSignalId": "e2e-workflow-closed-loop", "kind": "test", "path": ".goal/goals/novel-story-guidance/tmp/smoke-e2e.test.ts", "evidence": "12 用例端到端冒烟测试套件", "status": "verified" },
+    { "id": "loop1-blueprint", "successSignalId": "generation-quality-readable", "kind": "evidence", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/12-blueprint-artifact.md", "evidence": "第一章蓝图，6 节拍结构清晰，含 mustHappen/forbidden", "status": "verified" },
+    { "id": "loop1-draft", "successSignalId": "generation-quality-readable", "kind": "evidence", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/13-draft-artifact.md", "evidence": "第一章正文 580 行，感官细节+人物声音+潜台词+章尾钩子，直接可用", "status": "verified" },
+    { "id": "loop1-context-packet", "successSignalId": "outline-thread-character-integration", "kind": "evidence", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/12-context-packet.md", "evidence": "context packet 整合 architecture+4 characters+10 outline nodes+11 skills", "status": "verified" },
+    { "id": "loop1-agent-runs", "successSignalId": "e2e-workflow-closed-loop", "kind": "evidence", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/15-agent-runs.txt", "evidence": "5 个 reviewer 卡在 running 状态，证明 Promise.all 失败", "status": "failed" },
+    { "id": "loop1-final-run", "successSignalId": "e2e-workflow-closed-loop", "kind": "evidence", "path": ".goal/goals/novel-story-guidance/tmp/artifacts/15-final-run.txt", "evidence": "workflow 失败于 review 阶段，错误为 curl: (28) Operation timed out after 30016 milliseconds", "status": "failed" },
+    { "id": "gap-ai-requestChat", "successSignalId": "e2e-workflow-closed-loop", "kind": "gap", "path": "src/features/novel/ai.ts", "evidence": "requestChat 第 46-57 行：无重试，无超时控制，单次失败即抛错", "status": "failed" },
+    { "id": "gap-review-promise-all", "successSignalId": "e2e-workflow-closed-loop", "kind": "gap", "path": "src/features/novel/workflow-stages/review-stage.ts", "evidence": "第 23 行 Promise.all：任一 reviewer 超时即全盘失败", "status": "failed" }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 2：1) 在 ai.ts 的 requestChat 中加入指数退避重试（针对网络错误/超时/5xx，最多 3 次）；2) 在 review-stage.ts 把 Promise.all 改为 Promise.allSettled，失败的 reviewer 记录为降级 finding 而非中断；3) 重跑 smoke 验证 review→revision→manuscript-approval→fact-extraction 全路径"
+}

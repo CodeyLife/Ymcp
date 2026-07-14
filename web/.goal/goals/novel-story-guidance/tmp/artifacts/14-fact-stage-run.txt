@@ -1,0 +1,30 @@
+{
+  "id": "727cd7f2-f4a8-4043-b52a-4cf9d43a47c3",
+  "projectId": "3f1c9e67-1861-4d40-bd9a-4fe69ba6ca86",
+  "schemaVersion": 4,
+  "revision": 12,
+  "createdAt": 1783978775126,
+  "updatedAt": 1783978971072,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "workflowId": "standard-chapter-v2",
+  "targetDocumentId": "700f273b-3fa0-4e83-87ee-384041b84e91",
+  "status": "running",
+  "currentStage": "commit",
+  "stageIndex": 9,
+  "revisionIteration": 1,
+  "factCandidateIds": [
+    "717a3638-b31d-43a2-9101-fbedc290b23d",
+    "698d167a-ad83-470b-8543-10172a2c9d83",
+    "2874f5cb-cfdc-45eb-8d84-b3a17fbbe084",
+    "1540a3ba-2b6c-4f5b-8726-da9360f2eb41",
+    "a1320e96-b931-46f1-a9d9-87866248ada5",
+    "8f894e55-4597-4be9-b9c4-b2ae1e88d3da"
+  ],
+  "startedAt": 1783978775126,
+  "contextPacketId": "1ca81b28-0461-47f9-9dc4-d700676df077",
+  "blueprintArtifactId": "artifact:727cd7f2-f4a8-4043-b52a-4cf9d43a47c3:blueprint:0:blueprint",
+  "draftArtifactId": "artifact:727cd7f2-f4a8-4043-b52a-4cf9d43a47c3:deterministic-check:1:draft",
+  "qualityReportId": "3dab81cb-b4ca-4a27-868d-733d5cd03ad1",
+  "previousScore": 3.62
+}

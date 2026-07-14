@@ -1,41 +1,126 @@
 import { streamNovelModel } from "../ai";
 import { novelDb } from "../db";
 import { formatSkillPrompt, resolveNovelSkills } from "../skills";
+import { asBlueprint } from "../workflow-shared";
+import type { QualityIssue } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
+
+function splitParagraphs(text: string): string[] {
+  return text.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
+}
+
+function findIssueParagraph(issue: QualityIssue, paragraphs: string[]): number {
+  if (typeof issue.paragraph === "number" && issue.paragraph >= 1 && issue.paragraph <= paragraphs.length) {
+    return issue.paragraph - 1;
+  }
+  if (issue.excerpt) {
+    const excerptTrimmed = issue.excerpt.trim().slice(0, 40);
+    const index = paragraphs.findIndex((p) => p.includes(excerptTrimmed));
+    if (index >= 0) return index;
+  }
+  return -1;
+}
 
 export const revisionStageHandler: StageHandler = {
   stage: "revision",
   async execute(ctx: StageContext): Promise<StageResult> {
     const { run, project, document } = ctx;
-    const [draft, report, feedback, skills] = await Promise.all([
+    const [draft, blueprint, report, feedback, skills] = await Promise.all([
       novelDb.workflowArtifacts.get(run.draftArtifactId!),
+      novelDb.workflowArtifacts.get(run.blueprintArtifactId!),
       novelDb.qualityReports.get(run.qualityReportId!),
       ctx.latestArtifact(run.id, ["review"]),
       resolveNovelSkills({ projectId: run.projectId, stage: "revision", explicitSkillIds: ["embodied-prose", "style-specificity-audit"] }),
     ]);
     if (!draft || !report) throw new Error("修订输入不完整");
+    const blueprintData = blueprint?.structuredData ? asBlueprint(blueprint.structuredData) : undefined;
+
+    const paragraphs = splitParagraphs(draft.contentMarkdown);
+    const revisableIssues = report.issues.filter(
+      (item) => !(item.deterministic && item.rule === "chapter-blueprint.mustHappen"),
+    );
+    const blockerAndMajor = revisableIssues.filter((item) => item.severity === "blocker" || item.severity === "major").slice(0, 8);
+
+    const issueParagraphs = new Set<number>();
+    for (const issue of blockerAndMajor) {
+      const idx = findIssueParagraph(issue, paragraphs);
+      if (idx >= 0) issueParagraphs.add(idx);
+    }
+
+    if (issueParagraphs.size === 0) {
+      const nextIteration = run.revisionIteration + 1;
+      const artifact = await ctx.saveArtifact({ ...run, revisionIteration: nextIteration }, {
+        projectId: run.projectId,
+        workflowRunId: run.id,
+        stage: "revision",
+        kind: "revision",
+        title: `${document.title}无变更修订 ${nextIteration}`,
+        contentMarkdown: draft.contentMarkdown,
+        parentArtifactId: draft.id,
+        model: project.settings.textModel,
+        skillRefs: [],
+        contextPacketId: run.contextPacketId,
+      });
+      await ctx.createApprovalProposal(run, artifact, "workflow-manuscript", "质量问题无法自动定位，请人工审阅正文");
+      const nextRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", { draftArtifactId: artifact.id, revisionIteration: nextIteration });
+      return { run: nextRun, continueLoop: false };
+    }
+
+    const mustHappenBlock = blueprintData?.mustHappen?.length
+      ? `\n\n## 必须落实的节拍（硬约束，不可省略）\n${blueprintData.mustHappen.map((item) => `- ${item}`).join("\n")}\n修订后正文必须让以下每个节拍在文中以具体行动和可识别结果呈现。`
+      : "";
+    const forbiddenBlock = blueprintData?.forbidden?.length
+      ? `\n\n## 禁止事项（硬约束，不可触犯）\n${blueprintData.forbidden.map((item) => `- ${item}`).join("\n")}`
+      : "";
+
+    const numberedText = paragraphs.map((p, i) => {
+      const needsRevision = issueParagraphs.has(i);
+      const marker = needsRevision ? `【第${i + 1}段·需修订】` : `【第${i + 1}段·保留】`;
+      return `${marker}\n${p}`;
+    }).join("\n\n");
+
+    const issueList = blockerAndMajor.map((item) => {
+      const paraInfo = typeof item.paragraph === "number" ? `（第${item.paragraph}段）` : item.excerpt ? `（涉及："${item.excerpt.slice(0, 30)}..."）` : "";
+      return `- [${item.severity}] ${item.title}${paraInfo}：${item.description}；建议：${item.suggestion}`;
+    }).join("\n");
+
+    const preserveList = paragraphs.map((_, i) => i + 1).filter((i) => !issueParagraphs.has(i - 1)).join("、");
+
     const { agent } = await ctx.createAgentRecord({
       run,
       role: "revision-editor",
-      goal: "按质量报告定向修订",
+      goal: `定向修订 ${blockerAndMajor.length} 个问题（保留 ${paragraphs.length - issueParagraphs.size} 段不变）`,
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
     });
     const result = await streamNovelModel({
       model: project.settings.textModel,
-      temperature: Math.min(project.settings.temperature, 0.55),
+      temperature: 0.3,
       role: "revision-editor",
       skillPrompt: formatSkillPrompt(skills.skills),
-      prompt: `只输出修订后的完整正文。仅处理报告中的有效问题，保留已通过内容。\n\n质量问题：\n${report.issues.map((item) => `[${item.severity}] ${item.title}：${item.description}；建议：${item.suggestion}`).join("\n")}\n${feedback?.stage === "manuscript-approval" ? `\n用户意见：${feedback.contentMarkdown}` : ""}\n\n原正文：\n${draft.contentMarkdown}`,
+      prompt: `定向修订以下章节正文。只修改标注为「需修订」的段落，标注为「保留」的段落必须原样输出，不得改动任何文字。${mustHappenBlock}${forbiddenBlock}
+
+## 需要处理的问题
+${issueList}
+
+## 原文（带段落标注）
+${numberedText}
+
+## 修订要求
+- 标注为「保留」的段落（第${preserveList}段）必须原样输出，不改一字
+- 标注为「需修订」的段落，根据对应问题进行修改
+- 如果需要在段落之间插入新内容，直接在对应位置添加新段落
+- 不要输出段落标注标记（【第N段·xxx】），只输出正文
+- 保持第三人称限知视角和已有文风
+${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.contentMarkdown}` : ""}`,
     });
     const nextIteration = run.revisionIteration + 1;
-    // saveArtifact 内部使用 run.revisionIteration 生成稳定 ID，需传入更新后的 run
     const revisedRun = { ...run, revisionIteration: nextIteration };
     const artifact = await ctx.saveArtifact(revisedRun, {
       projectId: run.projectId,
       workflowRunId: run.id,
       stage: "revision",
       kind: "revision",
-      title: `${document.title}修订稿 ${nextIteration}`,
+      title: `${document.title}定向修订稿 ${nextIteration}`,
       contentMarkdown: result.content,
       parentArtifactId: draft.id,
       model: project.settings.textModel,

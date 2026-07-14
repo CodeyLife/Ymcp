@@ -1,5 +1,5 @@
 /** IndexedDB 结构版本；历史 schema 会保留用于原地升级。 */
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
@@ -42,6 +42,11 @@ export const V5_STORES: Record<string, string | null> = {
   ...V4_STORES,
   proposals: "id, projectId, targetId, status, createdAt, operation",
   projectGenerationRuns: null,
+};
+
+export const V6_STORES: Record<string, string | null> = {
+  ...V5_STORES,
+  canvasLayouts: "id, projectId, panelKey, updatedAt, [projectId+panelKey]",
 };
 
 export function migrateLegacyProposal(proposal: Record<string, unknown>) {

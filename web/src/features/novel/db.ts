@@ -2,6 +2,8 @@ import Dexie, { type EntityTable } from "dexie";
 import type {
   AgentRun,
   AIProposal,
+  CanvasLayout,
+  CanvasPanelKey,
   ChangeOperation,
   DocumentRevision,
   EntityRelation,
@@ -28,7 +30,8 @@ import type {
   WorkflowDefinition,
   WorkflowRun,
 } from "./types";
-import { migrateLegacyProposal, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES } from "./db-schema";
+import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
+import { migrateLegacyProposal, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -84,6 +87,7 @@ export class NovelDatabase extends Dexie {
   preferenceSignals!: EntityTable<PreferenceSignal, "id">;
   tasteProfiles!: EntityTable<ProjectTasteProfile, "id">;
   embeddings!: EntityTable<NovelEmbedding, "id">;
+  canvasLayouts!: EntityTable<CanvasLayout, "id">;
 
   constructor() {
     super("ymcp-novel-db-v4");
@@ -91,6 +95,7 @@ export class NovelDatabase extends Dexie {
     this.version(5).stores(V5_STORES).upgrade(async (transaction) => {
       await transaction.table("proposals").toCollection().modify(migrateLegacyProposal);
     });
+    this.version(6).stores(V6_STORES);
   }
 }
 
@@ -408,4 +413,35 @@ export async function createCheckpoint(projectId: string, label: string) {
 
 export async function resolveConflict(conflict: SyncConflict, value: unknown, resolution: SyncConflict["status"]) {
   await novelDb.conflicts.update(conflict.id, { status: resolution, localValue: value, updatedAt: Date.now(), revision: conflict.revision + 1 });
+}
+
+export async function getCanvasLayout(projectId: string, panelKey: CanvasPanelKey): Promise<CanvasLayout | undefined> {
+  return novelDb.canvasLayouts.where("[projectId+panelKey]").equals([projectId, panelKey]).first();
+}
+
+export async function saveCanvasLayout(
+  projectId: string,
+  panelKey: CanvasPanelKey,
+  data: { viewport: ViewportTransform; nodes: CanvasNodeLayout[]; edges: CanvasEdge[] },
+): Promise<CanvasLayout> {
+  const existing = await getCanvasLayout(projectId, panelKey);
+  const now = Date.now();
+  if (existing) {
+    const next: CanvasLayout = {
+      ...existing,
+      ...data,
+      revision: existing.revision + 1,
+      updatedAt: now,
+      updatedBy: ACTOR_ID,
+    };
+    await novelDb.canvasLayouts.put(next);
+    return next;
+  }
+  const layout: CanvasLayout = {
+    ...recordBase(projectId),
+    panelKey,
+    ...data,
+  };
+  await novelDb.canvasLayouts.add(layout);
+  return layout;
 }

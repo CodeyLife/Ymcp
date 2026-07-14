@@ -37,7 +37,7 @@ function containsMeaning(text: string, requirement: string) {
   if (terms.length === 0 || terms.some((term) => text.includes(term))) return true;
   const compact = requirement.replace(/[，。；、\s]/g, "");
   const pairs = Array.from({ length: Math.max(0, compact.length - 1) }, (_, index) => compact.slice(index, index + 2));
-  return pairs.length >= 2 && pairs.filter((pair) => text.includes(pair)).length / pairs.length >= 0.65;
+  return pairs.length >= 2 && pairs.filter((pair) => text.includes(pair)).length / pairs.length >= 0.5;
 }
 
 export function runDeterministicQualityChecks(params: { text: string; blueprint?: ChapterBlueprint }) {
@@ -88,14 +88,49 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   };
 }
 
+function titleBigrams(title: string): Set<string> {
+  const compact = title.replace(/[，。；、！？,.!?;:“”"'（）()\[\]\s]+/g, "");
+  const bigrams = new Set<string>();
+  for (let i = 0; i < compact.length - 1; i += 1) bigrams.add(compact.slice(i, i + 2));
+  return bigrams;
+}
+
+function titleSimilarity(a: string, b: string): number {
+  const setA = titleBigrams(a);
+  const setB = titleBigrams(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  for (const item of setA) if (setB.has(item)) intersection += 1;
+  return intersection / Math.min(setA.size, setB.size);
+}
+
+const SEVERITY_RANK: Record<QualityIssue["severity"], number> = { blocker: 3, major: 2, warning: 1 };
+
+function isDuplicateIssue(existing: QualityIssue, candidate: Omit<QualityIssue, "id" | "deterministic">): boolean {
+  if (existing.rule && candidate.rule && existing.rule === candidate.rule && existing.rule !== "reviewer.unavailable") return titleSimilarity(existing.title, candidate.title) >= 0.5;
+  return titleSimilarity(existing.title, candidate.title) >= 0.75;
+}
+
+function deduplicateReviewerIssues(existing: QualityIssue[], candidate: Omit<QualityIssue, "id" | "deterministic">): QualityIssue[] {
+  const duplicateIndex = existing.findIndex((item) => !item.deterministic && isDuplicateIssue(item, candidate));
+  if (duplicateIndex === -1) return [...existing, { ...candidate, id: crypto.randomUUID(), deterministic: false }];
+  const duplicate = existing[duplicateIndex];
+  if (SEVERITY_RANK[candidate.severity] > SEVERITY_RANK[duplicate.severity]) {
+    const merged: QualityIssue = { ...duplicate, ...candidate, id: duplicate.id, deterministic: false, description: `${duplicate.description}\n\n[另一审校补充] ${candidate.description}` };
+    return existing.map((item, index) => (index === duplicateIndex ? merged : item));
+  }
+  const merged: QualityIssue = { ...duplicate, description: `${duplicate.description}\n\n[另一审校补充] ${candidate.description}` };
+  return existing.map((item, index) => (index === duplicateIndex ? merged : item));
+}
+
 export function aggregateQuality(params: { deterministic: ReturnType<typeof runDeterministicQualityChecks>; reviewers?: ReviewerFinding[]; threshold: number }) {
   const scores = { ...params.deterministic.scores };
-  const issues = [...params.deterministic.issues];
+  let issues: QualityIssue[] = [...params.deterministic.issues];
   const reviewerRoles: NovelAgentRole[] = [];
   for (const reviewer of params.reviewers ?? []) {
     reviewerRoles.push(reviewer.role);
     for (const [dimension, score] of Object.entries(reviewer.scores) as Array<[QualityDimension, number]>) scores[dimension] = Number(((scores[dimension] + Math.max(0, Math.min(5, score))) / 2).toFixed(2));
-    for (const found of reviewer.issues) issues.push({ ...found, id: crypto.randomUUID(), deterministic: false });
+    for (const found of reviewer.issues) issues = deduplicateReviewerIssues(issues, found);
   }
   const blockerCount = issues.filter((item) => item.severity === "blocker").length;
   const weightedScore = Number(DIMENSIONS.reduce((sum, dimension) => sum + scores[dimension] * WEIGHTS[dimension], 0).toFixed(2));

@@ -31,7 +31,7 @@ export const BUILTIN_CHAPTER_WORKFLOW: WorkflowDefinition = {
   workflowId: CHAPTER_WORKFLOW_ID,
   name: "标准章节创作",
   description: "蓝图审批、正文生成、五类审校、定向修订、正文审批和事实回写。",
-  stages: ["context", "blueprint", "blueprint-approval", "draft", "deterministic-check", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit"],
+  stages: ["context", "blueprint", "blueprint-approval", "draft", "deterministic-check", "review", "revision", "manuscript-approval", "fact-extraction", "commit"],
   requiredSkillIds: ["story-facts-invariant", "chapter-blueprint", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
   maxAutoRevisions: 2,
   qualityThreshold: 3.7,
@@ -132,6 +132,12 @@ export async function createAgentRecord(params: { run: WorkflowRun; role: NovelA
 
 export async function finishAgent(agent: AgentRun, params: { promptHash: string; usage?: { inputTokens: number; outputTokens: number }; artifactId?: string }) {
   agent.status = "completed"; agent.finishedAt = Date.now(); agent.promptHash = params.promptHash; agent.usage = params.usage; agent.artifactRefs = params.artifactId ? [params.artifactId] : []; agent.steps[0].status = "completed";
+  await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
+}
+
+export async function failAgent(agent: AgentRun, error: unknown) {
+  const message = error instanceof Error ? error.message : "未知错误";
+  agent.status = "failed"; agent.finishedAt = Date.now(); agent.steps[0].status = "failed"; agent.steps[0].error = message;
   await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
 }
 

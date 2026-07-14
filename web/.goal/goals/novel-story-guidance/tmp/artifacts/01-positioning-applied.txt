@@ -1,0 +1,51 @@
+{
+  "id": "3f1c9e67-1861-4d40-bd9a-4fe69ba6ca86",
+  "schemaVersion": 4,
+  "revision": 2,
+  "createdAt": 1783978583247,
+  "updatedAt": 1783978605049,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "title": "遗忘之名",
+  "subtitle": "候选：记住别人，遗失自己",
+  "premise": "候选定位：在一座逐渐失去名字的城市里，每个人都会遗忘某个重要之人的名字，只有主角能够记住这些被世界抹去的名字。但记住一个名字的同时，主角会失去自己的一段记忆。他必须追查名字消失背后的真相，并在保存他人与保存自我之间做出选择。",
+  "genre": [
+    "都市悬疑",
+    "心理悬疑",
+    "身份谜题"
+  ],
+  "audience": "候选：喜欢都市悬疑、心理推理、身份谜题和带有情感反转故事的成年读者；偏好《白夜行》《嫌疑人X的献身》式人物关系悬疑，以及带超现实设定的现实主义悬疑读者。",
+  "themes": [
+    "候选：记忆是否构成人的身份",
+    "如果一个人失去关于自己的过去，是否仍然是同一个人",
+    "人与人之间通过记忆建立的联系是否真实",
+    "面对遗忘，人如何证明自己的存在"
+  ],
+  "sellingPoints": [
+    "候选：高概念设定：所有人都会遗忘名字，只有主角无法遗忘。",
+    "候选：双重悬念：调查他人名字消失的谜团，同时追查自己不断缺失的记忆。",
+    "候选：每次能力使用都产生真实代价，推动人物选择而非单纯解谜。",
+    "候选：都市日常场景与异常规则结合，让熟悉城市产生陌生感。",
+    "候选：身份谜题可持续升级：从个人失忆扩展到群体记忆、城市秘密与主角自身来源。"
+  ],
+  "pov": "第三人称限知",
+  "tense": "候选：过去时叙事",
+  "tone": "克制、清晰、有张力",
+  "languageStyle": "候选：简洁冷静的都市悬疑风格，以场景行动、细节线索和人物选择推动剧情；减少直接心理解释，通过物件、动作和对话呈现人物状态。",
+  "targetWords": 300000,
+  "dailyGoal": 3000,
+  "status": "planning",
+  "coverColor": "#b5483a",
+  "settings": {
+    "textModel": "auto",
+    "temperature": 0.75,
+    "autoCommitFacts": false,
+    "contextBudget": 24000,
+    "recentChapterCount": 5,
+    "encrypted": false,
+    "contentProfile": "general-serial",
+    "maxAutoRevisions": 2,
+    "qualityThreshold": 3.7,
+    "approvalMode": "blueprint-and-manuscript"
+  }
+}

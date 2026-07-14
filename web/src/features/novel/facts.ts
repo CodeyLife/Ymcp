@@ -1,5 +1,6 @@
 import { appendOperation, novelDb, recordBase } from "./db";
-import type { FactCandidate, StorySnapshot } from "./types";
+import { normalizedCreate } from "./generation";
+import type { FactCandidate, ProposalTargetTable, StorySnapshot } from "./types";
 
 export interface ExtractedFact {
   targetTable: string;
@@ -61,9 +62,36 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
   const candidates = await novelDb.factCandidates.where("workflowRunId").equals(workflowRunId).and((item) => item.status === "accepted" && !item.conflict && item.novelty !== "duplicate").toArray();
   const committed: string[] = [];
   for (const candidate of candidates) {
-    if (!candidate.targetId || !MUTABLE_TABLES.has(candidate.targetTable)) continue;
+    if (!MUTABLE_TABLES.has(candidate.targetTable)) continue;
     const table = novelDb.table(candidate.targetTable);
-    const current = await table.get(candidate.targetId) as Record<string, unknown> | undefined;
+
+    if (candidate.novelty === "new" && !candidate.targetId) {
+      const payload = candidate.after as Record<string, unknown>;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) continue;
+      if (candidate.targetTable === "relations") {
+        const fromId = String(payload.fromEntityId ?? "");
+        const toId = String(payload.toEntityId ?? "");
+        if (!fromId || !toId) continue;
+        const existing = await novelDb.relations
+          .where("projectId")
+          .equals(projectId)
+          .and((r) => r.fromEntityId === fromId && r.toEntityId === toId)
+          .first();
+        if (existing) continue;
+      }
+      const id = `${candidate.targetTable.slice(0, 3)}:${crypto.randomUUID()}`;
+      const record = normalizedCreate(candidate.targetTable as ProposalTargetTable, projectId, id, payload);
+      await novelDb.transaction("rw", table, novelDb.operations, async () => {
+        await table.put(record);
+        await appendOperation(projectId, candidate.targetTable, id, "create", { _create: { before: null, after: payload } });
+      });
+      committed.push(candidate.id);
+      continue;
+    }
+
+    const targetId = candidate.targetId;
+    if (!targetId) continue;
+    const current = await table.get(targetId) as Record<string, unknown> | undefined;
     if (!current || current.projectId !== projectId) continue;
     const next = applyField(current, candidate.field, candidate.after);
     next.updatedAt = Date.now();
@@ -71,7 +99,7 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
     next.revision = Number(current.revision ?? 0) + 1;
     await novelDb.transaction("rw", table, novelDb.operations, async () => {
       await table.put(next);
-      await appendOperation(projectId, candidate.targetTable, candidate.targetId!, "update", { [candidate.field]: { before: candidate.before, after: candidate.after } });
+      await appendOperation(projectId, candidate.targetTable, targetId, "update", { [candidate.field]: { before: candidate.before, after: candidate.after } });
     });
     committed.push(candidate.id);
   }

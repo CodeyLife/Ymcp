@@ -43,6 +43,7 @@ export interface StageContext {
     agent: AgentRun,
     params: { promptHash: string; usage?: { inputTokens: number; outputTokens: number }; artifactId?: string },
   ) => Promise<void>;
+  failAgent: (agent: AgentRun, error: unknown) => Promise<void>;
   createApprovalProposal: (
     run: WorkflowRun,
     artifact: WorkflowArtifact,

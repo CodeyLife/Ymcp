@@ -8,6 +8,7 @@ vi.mock("../ai", () => ({
   })),
 }));
 
+import { callStructuredNovelModel } from "../ai";
 import { applyProposalItems, getGenerationTask, runGenerationTask, tasksForScope, updateProposalItemPayload } from "../generation";
 import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, novelDb, recordBase } from "../db";
 import type { AIProposal, StoryEntity, WorkflowRun } from "../types";
@@ -132,6 +133,40 @@ describe("structured proposal application", () => {
     expect((await novelDb.entities.get(entity.id))?.summary).toBe("用户刚刚修改");
     expect((await novelDb.proposals.get(draft.id))?.items[0].status).toBe("conflict");
     expect((await novelDb.proposals.get(draft.id))?.status).toBe("pending");
+  });
+
+  it("keeps the existing outline subtree when the section root has a revision conflict", async () => {
+    const project = await createNovelProject({ title: "子树冲突", genre: ["悬疑"], premise: "每次改写都会留下旧版本。" });
+    const root = await addOutlineNode(project.id, undefined, "act", "第一幕", 0);
+    const child = await addOutlineNode(project.id, root.id, "event", "旧事件", 0);
+    const draft = proposal(project.id, [
+      { id: "root", label: "改写第一幕", operation: "update", targetTable: "outlineNodes", targetId: root.id, expectedRevision: root.revision, status: "pending", payload: { summary: "AI 改写" }, rationale: "重写根节点", dependencies: [] },
+      { id: "new-child", label: "新事件", operation: "create", targetTable: "outlineNodes", tempId: "new-event", status: "pending", payload: { parentId: root.id, kind: "event", title: "新事件", summary: "替代事件", causality: "新的原因", outcome: "新的结果", order: 0 }, rationale: "替换子树", dependencies: [] },
+    ]);
+    draft.taskKey = "outline-section-update";
+    draft.scope = "outline";
+    draft.targetId = root.id;
+    await novelDb.proposals.add(draft);
+    await novelDb.outlineNodes.update(root.id, { summary: "用户刚刚修改", revision: root.revision + 1 });
+
+    const result = await applyProposalItems(draft.id, draft.items.map((item) => item.id));
+
+    expect(result).toEqual({ applied: 0, conflicts: 2, embeddingFailures: 0 });
+    expect(await novelDb.outlineNodes.get(child.id)).toBeDefined();
+    expect((await novelDb.outlineNodes.where("projectId").equals(project.id).toArray()).map((item) => item.title)).toEqual(expect.arrayContaining(["第一幕", "旧事件"]));
+  });
+
+  it("rejects a field revision response that omits the requested field", async () => {
+    const project = await createNovelProject({ title: "字段修订", genre: ["都市"], premise: "只允许修改指定字段。" });
+    const node = await addOutlineNode(project.id, undefined, "event", "原事件", 0);
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
+      data: { summary: "错误字段", items: [{ label: "越界修改", operation: "update", targetTable: "outlineNodes", targetId: node.id, payload: { title: "被改标题" }, rationale: "错误输出" }] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      promptHash: "field-test",
+    });
+
+    await expect(runGenerationTask({ projectId: project.id, taskKey: "outline-field-revise", targetId: node.id, targetField: "summary", instruction: "改写摘要" })).rejects.toThrow(/未返回目标字段/);
+    expect((await novelDb.outlineNodes.get(node.id))?.title).toBe("原事件");
   });
 
   it("rejects malformed create payloads before writing formal data", async () => {

@@ -1,3 +1,5 @@
+import type { CanvasEdge, CanvasNodeLayout } from "@/shared/canvas";
+
 export type EntityKind =
   | "character"
   | "location"
@@ -106,9 +108,7 @@ export interface EntityRelation extends VersionedRecord {
   relationType: string;
   publicLabel: string;
   privateTruth: string;
-  affinity: number;
-  trust: number;
-  conflict: number;
+  bond: string;
   history: Array<{ at: number; chapterId?: string; note: string }>;
 }
 
@@ -325,6 +325,8 @@ export type NovelGenerationTaskKey =
   | "project-positioning"
   | "architecture"
   | "outline"
+  | "outline-section-update"
+  | "outline-field-revise"
   | "story-bible"
   | "characters"
   | "relations"
@@ -559,6 +561,26 @@ export interface NovelEmbedding extends VersionedRecord {
   vector: number[];
   contentHash: string;
   chunkIndex?: number;
+}
+
+/** 画布面板标识 — 每个接入画布的小说板块对应一个 panelKey。 */
+export type CanvasPanelKey =
+  | "character-canvas"
+  | "timeline-canvas"
+  | "planning-canvas";
+
+/**
+ * 画布布局持久化记录。
+ *
+ * 每个 (projectId, panelKey) 对应一条记录，存储视口变换、节点位置/尺寸/分组、
+ * 以及画布级别的连线。领域数据（StoryEntity / TimelineEvent 等）不在此存储，
+ * 加载时通过 node.id 关联回各自业务表。
+ */
+export interface CanvasLayout extends VersionedRecord {
+  panelKey: CanvasPanelKey;
+  viewport: { x: number; y: number; k: number };
+  nodes: CanvasNodeLayout[];
+  edges: CanvasEdge[];
 }
 
 export type NovelWorkspaceView =

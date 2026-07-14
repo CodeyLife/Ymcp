@@ -27,9 +27,69 @@ async function hashPrompt(value: string) {
   return [...new Uint8Array(bytes)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
-function extractContent(payload: Record<string, unknown>) {
-  const choices = payload.choices as Array<{ message?: { content?: string } }> | undefined;
-  return choices?.[0]?.message?.content?.trim() ?? "";
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 1_000;
+
+class NovelHttpError extends Error {
+  constructor(readonly status: number, readonly responseBody: string) {
+    super(`HTTP ${status}${responseBody ? `: ${responseBody}` : ""}`);
+    this.name = "NovelHttpError";
+  }
+}
+
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return false;
+  if (error instanceof NovelHttpError) return error.status === 429 || error.status >= 500;
+  if (error instanceof TypeError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /timed out|timeout|terminated|HTTP 5\d\d|HTTP 429|ECONNRESET|ENOTFOUND|fetch failed|socket hang up/i.test(message);
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchAccumulated(params: {
+  baseUrl: string;
+  apiKey: string;
+  body: Record<string, unknown>;
+  signal?: AbortSignal;
+}) {
+  const response = await fetch(`${endpoint(params.baseUrl)}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${params.apiKey}` },
+    signal: params.signal,
+    body: JSON.stringify({ ...params.body, stream: true, stream_options: { include_usage: true } }),
+  });
+  if (!response.ok) throw new NovelHttpError(response.status, await response.text().catch(() => ""));
+  if (!response.body) throw new Error("AI 响应没有可读取内容");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const raw = line.replace(/^data:\s*/, "").trim();
+      if (!raw || raw === "[DONE]") continue;
+      try {
+        const chunk = JSON.parse(raw);
+        result += chunk?.choices?.[0]?.delta?.content ?? "";
+        if (chunk?.usage) {
+          inputTokens = chunk.usage.prompt_tokens ?? 0;
+          outputTokens = chunk.usage.completion_tokens ?? 0;
+        }
+      } catch { /* vendor keepalive */ }
+    }
+  }
+  if (!result.trim()) throw new Error("AI 未返回有效内容");
+  return { content: result.trim(), usage: { inputTokens, outputTokens } };
 }
 
 async function requestChat(params: {
@@ -41,19 +101,28 @@ async function requestChat(params: {
 }) {
   const config = getEffectiveApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
-  const body: Record<string, unknown> = { model: params.model, temperature: params.temperature, stream: false, messages: params.messages };
+  const body: Record<string, unknown> = { model: params.model, temperature: params.temperature, messages: params.messages };
   if (params.responseSchema) body.response_format = { type: "json_schema", json_schema: { name: "novel_artifact", strict: true, schema: params.responseSchema } };
-  let response = await fetch(`${endpoint(config.baseUrl)}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` }, signal: params.signal, body: JSON.stringify(body) });
-  if (!response.ok && params.responseSchema && [400, 404, 422].includes(response.status)) {
-    delete body.response_format;
-    response = await fetch(`${endpoint(config.baseUrl)}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` }, signal: params.signal, body: JSON.stringify(body) });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+    try {
+      try {
+        return await fetchAccumulated({ baseUrl: config.baseUrl, apiKey: config.apiKey, body, signal: params.signal });
+      } catch (error) {
+        if (params.responseSchema && error instanceof NovelHttpError && [400, 404, 422].includes(error.status)) {
+          const fallbackBody = { ...body };
+          delete fallbackBody.response_format;
+          return await fetchAccumulated({ baseUrl: config.baseUrl, apiKey: config.apiKey, body: fallbackBody, signal: params.signal });
+        }
+        throw error;
+      }
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
+      await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
+    }
   }
-  if (!response.ok) throw new Error((await response.text().catch(() => "")) || `HTTP ${response.status}`);
-  const payload = await response.json() as Record<string, unknown>;
-  const content = extractContent(payload);
-  if (!content) throw new Error("AI 未返回有效内容");
-  const usage = payload.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
-  return { content, usage: { inputTokens: usage?.prompt_tokens ?? 0, outputTokens: usage?.completion_tokens ?? 0 } };
+  throw lastError;
 }
 
 export async function streamNovelModel(params: {
@@ -68,30 +137,40 @@ export async function streamNovelModel(params: {
   const config = getEffectiveApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt].filter(Boolean).join("\n\n");
-  const response = await fetch(`${endpoint(config.baseUrl)}/chat/completions`, {
-    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` }, signal: params.signal,
-    body: JSON.stringify({ model: params.model, temperature: params.temperature, stream: true, messages: [{ role: "system", content: system }, { role: "user", content: params.prompt }] }),
-  });
-  if (!response.ok) throw new Error((await response.text().catch(() => "")) || `HTTP ${response.status}`);
-  if (!response.body) throw new Error("AI 响应没有可读取内容");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let result = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const raw = line.replace(/^data:\s*/, "").trim();
-      if (!raw || raw === "[DONE]") continue;
-      try { const token = JSON.parse(raw)?.choices?.[0]?.delta?.content ?? ""; result += token; params.onToken?.(result); } catch { /* vendor keepalive */ }
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+    let result = "";
+    try {
+      const response = await fetch(`${endpoint(config.baseUrl)}/chat/completions`, {
+        method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` }, signal: params.signal,
+        body: JSON.stringify({ model: params.model, temperature: params.temperature, stream: true, messages: [{ role: "system", content: system }, { role: "user", content: params.prompt }] }),
+      });
+      if (!response.ok) throw new NovelHttpError(response.status, await response.text().catch(() => ""));
+      if (!response.body) throw new Error("AI 响应没有可读取内容");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const raw = line.replace(/^data:\s*/, "").trim();
+          if (!raw || raw === "[DONE]") continue;
+          try { const token = JSON.parse(raw)?.choices?.[0]?.delta?.content ?? ""; result += token; params.onToken?.(result); } catch { /* vendor keepalive */ }
+        }
+      }
+      if (!result.trim()) throw new Error("AI 未返回有效内容");
+      return { content: result.trim(), promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
+      await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
     }
   }
-  if (!result.trim()) throw new Error("AI 未返回有效内容");
-  return { content: result.trim(), promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
+  throw lastError;
 }
 
 function parseJsonContent(content: string) {
@@ -116,11 +195,17 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
   let parsed: Record<string, unknown> | undefined;
   try { parsed = parseJsonContent(response.content); } catch { parsed = undefined; }
   if (!parsed || !validate(parsed)) {
-    const errors = validate.errors?.map((item) => `${item.instancePath || "root"} ${item.message}`).join("；") ?? "无法解析 JSON";
-    const repairPrompt = `把下面输出修复为严格符合给定 Schema 的 JSON。不得增加原输出没有的故事事实。\n\nSchema:\n${JSON.stringify(params.schema)}\n\n校验错误：${errors}\n\n原输出：\n${response.content}`;
-    const repaired = await requestChat({ model: params.model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: repairPrompt }], signal: params.signal, responseSchema: params.schema });
-    response = { content: repaired.content, usage: { inputTokens: response.usage.inputTokens + repaired.usage.inputTokens, outputTokens: response.usage.outputTokens + repaired.usage.outputTokens } };
-    try { parsed = parseJsonContent(response.content); } catch { parsed = undefined; }
+    const schemaStr = JSON.stringify(params.schema, null, 2);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const errors = validate.errors?.map((item) => `${item.instancePath || "root"} ${item.message}`).join("；") ?? "无法解析 JSON";
+      const repairPrompt = attempt === 0
+        ? `把下面输出修复为严格符合给定 Schema 的 JSON。不得增加原输出没有的故事事实。\n\nSchema:\n${schemaStr}\n\n校验错误：${errors}\n\n原输出：\n${response.content}`
+        : `上一次修复仍然失败。请完全重新生成符合 Schema 的 JSON。只输出 JSON，不要输出任何其他内容。\n\n必须包含的字段：${Object.keys(params.schema.properties ?? {}).join(", ")}\n\nSchema:\n${schemaStr}\n\n校验错误：${errors}\n\n原输出：\n${response.content}`;
+      const repaired = await requestChat({ model: params.model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: repairPrompt }], signal: params.signal, responseSchema: params.schema });
+      response = { content: repaired.content, usage: { inputTokens: response.usage.inputTokens + repaired.usage.inputTokens, outputTokens: response.usage.outputTokens + repaired.usage.outputTokens } };
+      try { parsed = parseJsonContent(response.content); } catch { parsed = undefined; }
+      if (parsed && validate(parsed)) break;
+    }
     if (!parsed || !validate(parsed)) throw new Error(`AI 结构化输出无效：${validate.errors?.map((item) => `${item.instancePath || "root"} ${item.message}`).join("；") ?? "JSON 解析失败"}`);
   }
   return { data: parsed as T, usage: response.usage, promptHash: await hashPrompt(`${system}\n${params.prompt}`) };

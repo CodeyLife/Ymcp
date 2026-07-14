@@ -1,8 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { App, Button, Divider, Drawer, Dropdown, Empty, Form, Input, InputNumber, Progress, Segmented, Select, Slider, Spin, Switch, Tag, Tooltip } from "antd";
+import { App, Button, Divider, Drawer, Dropdown, Empty, Form, Input, InputNumber, Progress, Segmented, Select, Spin, Switch, Tag, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import {
-  ApartmentOutlined,
   ArrowDownOutlined,
   ArrowLeftOutlined,
   ArrowUpOutlined,
@@ -33,7 +32,6 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import CharacterCount from "@tiptap/extension-character-count";
 import Collaboration from "@tiptap/extension-collaboration";
-import { motion } from "motion/react";
 import {
   addEntity,
   appendOperation,
@@ -50,7 +48,6 @@ import { exportNovel } from "@/features/novel/export";
 import { openCollaborativeDocument } from "@/features/novel/collaboration";
 import type {
   Foreshadowing,
-  EntityRelation,
   ManuscriptDocument,
   NovelWorkspaceView,
   PlotThread,
@@ -68,6 +65,9 @@ const AIWorkbench = lazy(() => import("@/features/novel/AIWorkbench"));
 import { ChatModelSelect } from "@/components/ChatModelSelect";
 
 const PlanningWorkspace = lazy(() => import("@/features/novel/PlanningWorkspace"));
+const CharacterCanvasPanel = lazy(() => import("@/features/novel/canvas/CharacterCanvasPanel").then((m) => ({ default: m.CharacterCanvasPanel })));
+const TimelineCanvasPanel = lazy(() => import("@/features/novel/canvas/TimelineCanvasPanel").then((m) => ({ default: m.TimelineCanvasPanel })));
+import { WorldviewLibraryPanel } from "@/features/novel/WorldviewLibraryPanel";
 
 const VIEW_ITEMS: Array<{ key: NovelWorkspaceView; label: string; icon: React.ReactNode; group: string }> = [
   { key: "dashboard", label: "总览", icon: <DashboardOutlined />, group: "创作工作区" },
@@ -215,31 +215,6 @@ function CharactersView({ projectId }: { projectId: string }) {
   useEffect(() => setDraft(selected ? structuredClone(selected) : undefined), [selected]);
   return <div className="novel-view-content"><SectionTitle eyebrow="CAST" title="角色档案" description="人物的欲望、知识与实时状态共同决定他们在场景中能做什么。" action={<Button type="primary" icon={<PlusOutlined />} onClick={async () => { const entity = await addEntity(projectId, "character", `新角色 ${entities.length + 1}`); setSelectedId(entity.id); }}>添加角色</Button>} />
     {entities.length === 0 ? <EmptyPanel title="还没有角色" description="创建主角、对手或关键配角。" /> : <div className="novel-character-layout"><aside>{entities.map((entity) => <button key={entity.id} className={selected?.id === entity.id ? "active" : ""} onClick={() => setSelectedId(entity.id)}><CharacterCard entity={entity} mode="rail" selected={selected?.id === entity.id} /></button>)}</aside>{draft && <main><div className="novel-character-identity"><span>{draft.name.slice(0, 1)}</span><div><Input variant="borderless" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><Input variant="borderless" value={draft.character?.role} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, role: event.target.value } })} /></div><Button type="primary" icon={<SaveOutlined />} onClick={() => void updateEntity(draft)}>保存</Button></div><div className="novel-form-grid"><label>人物摘要<Input.TextArea rows={3} value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} /></label><label>外貌与辨识度<Input.TextArea rows={3} value={draft.character?.appearance} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, appearance: event.target.value } })} /></label><label>性格<Input.TextArea rows={3} value={draft.character?.personality} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, personality: event.target.value } })} /></label><label>欲望<Input.TextArea rows={3} value={draft.character?.desire} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, desire: event.target.value } })} /></label><label>动机<Input.TextArea rows={3} value={draft.character?.motivation} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, motivation: event.target.value } })} /></label><label>弱点<Input.TextArea rows={3} value={draft.character?.weakness} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, weakness: event.target.value } })} /></label><label>秘密<Input.TextArea rows={3} value={draft.character?.secret} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, secret: event.target.value } })} /></label><label>人物弧光<Input.TextArea rows={3} value={draft.character?.arc} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, arc: event.target.value } })} /></label></div><Divider>当前故事状态</Divider><div className="novel-state-row"><Input addonBefore="位置" value={draft.character?.state.location} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, location: event.target.value } } })} /><Input addonBefore="情绪" value={draft.character?.state.emotional} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, emotional: event.target.value } } })} /><Input addonBefore="当前目标" value={draft.character?.state.objective} onChange={(event) => setDraft({ ...draft, character: { ...draft.character!, state: { ...draft.character!.state, objective: event.target.value } } })} /></div></main>}</div>}
-  </div>;
-}
-
-function RelationsView({ projectId }: { projectId: string }) {
-  const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).and((item) => item.kind === "character").toArray(), [projectId]) ?? [];
-  const relations = useLiveQuery(() => novelDb.relations.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
-  const [selectedId, setSelectedId] = useState<string>();
-  const selected = relations.find((item) => item.id === selectedId) ?? relations[0];
-  const [draft, setDraft] = useState<EntityRelation>();
-  useEffect(() => setDraft(selected ? structuredClone(selected) : undefined), [selected]);
-  async function addRelation() {
-    if (entities.length < 2) return;
-    const relation: EntityRelation = { ...recordBase(projectId), fromEntityId: entities[0].id, toEntityId: entities[1].id, relationType: "同伴", publicLabel: "", privateTruth: "", affinity: 50, trust: 50, conflict: 20, history: [] };
-    await novelDb.relations.add(relation);
-    await appendOperation(projectId, "relations", relation.id, "create", { relationType: { before: null, after: relation.relationType } });
-    setSelectedId(relation.id);
-  }
-  async function saveRelation() {
-    if (!draft) return;
-    const before = await novelDb.relations.get(draft.id);
-    await novelDb.relations.put({ ...draft, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() });
-    await appendOperation(projectId, "relations", draft.id, "update", { value: { before, after: draft } });
-  }
-  return <div className="novel-view-content"><SectionTitle eyebrow="RELATIONSHIP GRAPH" title="人物关系" description="同一段关系可以同时拥有公开表象、私人真相与动态数值。" action={<Button type="primary" icon={<PlusOutlined />} disabled={entities.length < 2} onClick={() => void addRelation()}>建立关系</Button>} />
-    {entities.length < 2 ? <EmptyPanel title="至少需要两名角色" description="创建角色后即可建立关系。" /> : <><div className="novel-relation-stage">{entities.slice(0, 8).map((entity, index) => <motion.div key={entity.id} className="novel-relation-node" initial={{ opacity: 0, scale: .9 }} animate={{ opacity: 1, scale: 1 }} style={{ "--node-index": index } as React.CSSProperties}><span>{entity.name.slice(0, 1)}</span><strong>{entity.name}</strong><small>{entity.character?.state.emotional || "状态未知"}</small></motion.div>)}<div className="novel-relation-center"><ApartmentOutlined /><span>{relations.length} 条关系</span></div></div><div className="novel-relation-workbench"><aside className="novel-relation-list">{relations.length === 0 ? <p>尚未建立显式关系。</p> : relations.map((relation) => <button key={relation.id} className={selected?.id === relation.id ? "active" : ""} onClick={() => setSelectedId(relation.id)}><strong>{entities.find((item) => item.id === relation.fromEntityId)?.name} → {entities.find((item) => item.id === relation.toEntityId)?.name}</strong><Tag>{relation.relationType}</Tag><span>信任 {relation.trust}</span><span>冲突 {relation.conflict}</span></button>)}</aside>{draft && <section className="novel-relation-editor"><div className="novel-form-grid"><Select value={draft.fromEntityId} options={entities.map((item) => ({ value: item.id, label: item.name }))} onChange={(fromEntityId) => setDraft({ ...draft, fromEntityId })} /><Select value={draft.toEntityId} options={entities.map((item) => ({ value: item.id, label: item.name }))} onChange={(toEntityId) => setDraft({ ...draft, toEntityId })} /></div><Input addonBefore="关系类型" value={draft.relationType} onChange={(event) => setDraft({ ...draft, relationType: event.target.value })} /><Input.TextArea rows={3} value={draft.publicLabel} placeholder="其他人眼中的关系" onChange={(event) => setDraft({ ...draft, publicLabel: event.target.value })} /><Input.TextArea rows={3} value={draft.privateTruth} placeholder="关系双方未公开的真相" onChange={(event) => setDraft({ ...draft, privateTruth: event.target.value })} /><label>亲密度 <Slider value={draft.affinity} onChange={(affinity) => setDraft({ ...draft, affinity })} /></label><label>信任度 <Slider value={draft.trust} onChange={(trust) => setDraft({ ...draft, trust })} /></label><label>冲突度 <Slider value={draft.conflict} onChange={(conflict) => setDraft({ ...draft, conflict })} /></label><Button type="primary" icon={<SaveOutlined />} onClick={() => void saveRelation()}>保存关系</Button></section>}</div></>}
   </div>;
 }
 
@@ -412,9 +387,9 @@ function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocu
 }
 
 function LibraryWorkspace({ projectId }: { projectId: string }) {
-  const [mode, setMode] = useState<"bible" | "characters" | "relations" | "timeline" | "foreshadowing">("bible");
+  const [mode, setMode] = useState<"bible" | "characters" | "relations" | "timeline" | "worldview" | "foreshadowing">("bible");
   const generation = mode === "characters" ? { scope: "characters" as const, task: "characters" as const } : mode === "relations" ? { scope: "relations" as const, task: "relations" as const } : mode === "timeline" ? { scope: "timeline" as const, task: "timeline" as const } : { scope: "foreshadowing" as const, task: "foreshadowing" as const };
-  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "bible", label: "故事圣经" }, { value: "characters", label: "角色" }, { value: "relations", label: "关系" }, { value: "timeline", label: "时间线" }, { value: "foreshadowing", label: "伏笔" }]} /></div>{mode === "bible" ? <GenerationComposer projectId={projectId} scope="bible" taskKeys={["project-positioning", "story-bible"]} /> : <GenerationComposer projectId={projectId} scope={generation.scope} taskKeys={[generation.task]} compact />}{mode === "bible" ? <BibleView projectId={projectId} /> : mode === "characters" ? <CharactersView projectId={projectId} /> : mode === "relations" ? <RelationsView projectId={projectId} /> : <ContinuityView projectId={projectId} type={mode} />}</div>;
+  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "bible", label: "故事圣经" }, { value: "characters", label: "角色" }, { value: "relations", label: "关系" }, { value: "timeline", label: "时间线" }, { value: "worldview", label: "世界观" }, { value: "foreshadowing", label: "伏笔" }]} /></div>{mode === "bible" ? <GenerationComposer projectId={projectId} scope="bible" taskKeys={["project-positioning", "story-bible"]} /> : mode === "worldview" ? null : <GenerationComposer projectId={projectId} scope={generation.scope} taskKeys={[generation.task]} compact />}{mode === "bible" ? <BibleView projectId={projectId} /> : mode === "characters" ? <CharactersView projectId={projectId} /> : mode === "relations" ? <Suspense fallback={<Spin />}><CharacterCanvasPanel projectId={projectId} /></Suspense> : mode === "timeline" ? <Suspense fallback={<Spin />}><TimelineCanvasPanel projectId={projectId} /></Suspense> : mode === "worldview" ? <WorldviewLibraryPanel projectId={projectId} /> : <ContinuityView projectId={projectId} type={mode} />}</div>;
 }
 
 function ReviewWorkspace({ projectId }: { projectId: string }) {

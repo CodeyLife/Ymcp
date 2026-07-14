@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Dexie from "dexie";
 import "./setup";
-import { createNovelProject, novelDb, recordBase, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES } from "../db-schema";
+import { createNovelProject, getCanvasLayout, novelDb, recordBase, saveCanvasLayout, saveStoryArchitecture } from "../db";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES } from "../db-schema";
 import { exportNovel, importNovel } from "../export";
 
 beforeEach(async () => {
@@ -12,8 +12,8 @@ beforeEach(async () => {
 });
 
 describe("db-schema constants", () => {
-  it("DB_VERSION is 5", () => {
-    expect(DB_VERSION).toBe(5);
+  it("DB_VERSION is 6", () => {
+    expect(DB_VERSION).toBe(6);
   });
 
   it("RECORD_SCHEMA_VERSION is 4", () => {
@@ -39,14 +39,21 @@ describe("db-schema constants", () => {
   it("V4_STORES indexes independent chapter order", () => {
     expect(V4_STORES.documents).toContain("order");
   });
+
+  it("V6_STORES adds canvasLayouts with composite [projectId+panelKey] index", () => {
+    expect(V6_STORES.canvasLayouts).toBeDefined();
+    expect(V6_STORES.canvasLayouts).toContain("[projectId+panelKey]");
+    expect(V6_STORES.canvasLayouts).toContain("panelKey");
+  });
 });
 
-describe("database v5 schema", () => {
-  it("opens successfully at v5 without the retired table", () => {
+describe("database v6 schema", () => {
+  it("opens successfully at v6 with canvasLayouts table and without the retired table", () => {
     expect(novelDb.isOpen()).toBe(true);
     expect(novelDb.verno).toBe(DB_VERSION);
     expect(novelDb.name).toBe("ymcp-novel-db-v4");
     expect(novelDb.tables.some((table) => table.name === "projectGenerationRuns")).toBe(false);
+    expect(novelDb.tables.some((table) => table.name === "canvasLayouts")).toBe(true);
   });
 
   it("rejects project imports older than v4", async () => {
@@ -320,5 +327,69 @@ describe("database v5 schema", () => {
     expect(base.schemaVersion).toBe(RECORD_SCHEMA_VERSION);
     expect(base.projectId).toBe("p1");
     expect(base.id).toBeDefined();
+  });
+
+  it("canvas layout save → reload → restore round-trip", async () => {
+    const project = await createNovelProject({ title: "画布项目", genre: ["悬疑"], premise: "画布持久化测试。" });
+    const viewport = { x: 120, y: 80, k: 1.5 };
+    const nodes = [
+      { id: "char-1", kind: "character", position: { x: 200, y: 100 }, width: 240, height: 160 },
+      { id: "char-2", kind: "character", position: { x: 600, y: 100 }, width: 240, height: 160 },
+    ];
+    const edges = [
+      { id: "edge-1", fromNodeId: "char-1", toNodeId: "char-2", label: "盟友", kind: "relation" },
+    ];
+
+    const saved = await saveCanvasLayout(project.id, "character-canvas", { viewport, nodes, edges });
+    expect(saved.panelKey).toBe("character-canvas");
+    expect(saved.projectId).toBe(project.id);
+    expect(saved.revision).toBe(1);
+    expect(saved.viewport).toEqual(viewport);
+    expect(saved.nodes).toHaveLength(2);
+    expect(saved.edges).toHaveLength(1);
+
+    const reloaded = await getCanvasLayout(project.id, "character-canvas");
+    expect(reloaded).toBeDefined();
+    expect(reloaded?.viewport).toEqual(viewport);
+    expect(reloaded?.nodes[0].position).toEqual({ x: 200, y: 100 });
+    expect(reloaded?.edges[0].label).toBe("盟友");
+
+    const updated = await saveCanvasLayout(project.id, "character-canvas", {
+      viewport: { x: 0, y: 0, k: 1 },
+      nodes: [{ id: "char-1", kind: "character", position: { x: 0, y: 0 }, width: 200, height: 120 }],
+      edges: [],
+    });
+    expect(updated.revision).toBe(2);
+    expect(updated.viewport.k).toBe(1);
+    expect(updated.nodes).toHaveLength(1);
+    expect(updated.edges).toHaveLength(0);
+
+    const afterUpdate = await getCanvasLayout(project.id, "character-canvas");
+    expect(afterUpdate?.revision).toBe(2);
+    expect(afterUpdate?.nodes).toHaveLength(1);
+  });
+
+  it("canvas layout isolates by panelKey via [projectId+panelKey] composite index", async () => {
+    const project = await createNovelProject({ title: "多面板", genre: ["奇幻"], premise: "隔离测试。" });
+    await saveCanvasLayout(project.id, "character-canvas", {
+      viewport: { x: 0, y: 0, k: 1 },
+      nodes: [{ id: "n1", kind: "character", position: { x: 0, y: 0 }, width: 200, height: 120 }],
+      edges: [],
+    });
+    await saveCanvasLayout(project.id, "timeline-canvas", {
+      viewport: { x: 50, y: 50, k: 2 },
+      nodes: [{ id: "t1", kind: "event", position: { x: 100, y: 100 }, width: 180, height: 100 }],
+      edges: [],
+    });
+
+    const character = await getCanvasLayout(project.id, "character-canvas");
+    const timeline = await getCanvasLayout(project.id, "timeline-canvas");
+    expect(character?.nodes[0].id).toBe("n1");
+    expect(timeline?.nodes[0].id).toBe("t1");
+    expect(character?.viewport.k).toBe(1);
+    expect(timeline?.viewport.k).toBe(2);
+
+    const all = await novelDb.canvasLayouts.where("projectId").equals(project.id).toArray();
+    expect(all).toHaveLength(2);
   });
 });

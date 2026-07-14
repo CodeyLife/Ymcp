@@ -184,3 +184,10 @@ export async function compileNovelContext(params: {
 export function formatContextPacket(packet: NovelContextPacket) {
   return packet.sources.map((item) => `## ${item.title}\n[来源理由：${item.reason}；层级：${item.priorityClass}；哈希：${item.contentHash}]\n${item.content}`).join("\n\n");
 }
+
+export function formatReviewerContext(packet: NovelContextPacket) {
+  return packet.sources
+    .filter((source) => source.kind !== "skill" && source.kind !== "architecture" && source.kind !== "outline")
+    .map((source) => `## ${source.title}\n${source.content}`)
+    .join("\n\n");
+}

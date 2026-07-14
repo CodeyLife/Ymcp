@@ -1,0 +1,46 @@
+{
+  "loop": 1,
+  "goalId": "canvas-port",
+  "plan": "Study the infinite-canvas reference repo's canvas core implementation and the current project's novel module + persistence layer, then design the port architecture and integration plan. Output: findings.md with file-by-file port map and target src/shared/canvas/ structure.",
+  "actions": [
+    "Cloned https://github.com/basketikun/infinite-canvas.git (depth 1) into .goal/goals/canvas-port/tmp/infinite-canvas/.",
+    "Read core canvas files: infinite-canvas.tsx (viewport pan/zoom/grid, controlled component), canvas-connections.tsx (SVG bezier edges), canvas-mini-map.tsx (world-bounds minimap), canvas-context-menu.tsx (right-click menu), canvas-zoom-controls.tsx (zoom dock), canvas-theme.ts (light/dark tokens), types/canvas.ts (Position/ViewportTransform/CanvasNodeData/CanvasConnection/SelectionBox/ContextMenuState).",
+    "Grepped project.tsx (178KB) for undo/redo: confirmed manual history stack via historyRef useRef {past,future} with 400ms debounced commit, historyPausedRef guard, undoCanvas/redoCanvas callbacks.",
+    "Read current project: novel/types.ts (full domain model — StoryEntity/EntityRelation/TimelineEvent/OutlineNode/PlotThread/Foreshadowing), novel/db.ts (NovelDatabase Dexie v5, VersionedRecord pattern, appendOperation change log), novel/PlanningWorkspace.tsx (architecture/outline/matrix modes, tree+detail layout).",
+    "Confirmed tech stack alignment: both projects use React + Vite + TypeScript + Ant Design + Tailwind + Zustand + Dexie.",
+    "Wrote findings.md with: reference file port map (generic vs. AI-specific), state ownership analysis, generic CanvasNode<T>/CanvasEdge type design, target src/shared/canvas/ folder structure, persistence design (new canvasLayouts Dexie store v6), and per-panel integration pattern for the 4 novel panels."
+  ],
+  "verification": [
+    {
+      "result": "pass",
+      "summary": "findings.md exists with port architecture, file map, generic node type, persistence design, and 4-panel integration plan.",
+      "path": ".goal/goals/canvas-port/findings.md"
+    },
+    "Reference repo clone verified at .goal/goals/canvas-port/tmp/infinite-canvas/web/src/components/canvas/ with 35 canvas component files.",
+    "Confirmed reference InfiniteCanvas is a controlled component (viewport + onViewportChange props) — portable without AI coupling.",
+    "Confirmed novel NovelWorkspaceView union already includes relations/timeline/board keys suitable for canvas views."
+  ],
+  "errors": [],
+  "selfReflection": "The reference canvas core is cleanly separable from AI image generation: InfiniteCanvas (185 lines), CanvasEdges (72), Minimap (121), ContextMenu (37), ZoomControls (76) are all generic controlled components totaling ~490 lines. The 718-line CanvasNode is AI-specific and must be replaced with a new generic CanvasNodeShell. Undo/redo is a simple debounced stack — extractable into a useCanvasHistory hook. The current project's Dexie/VersionedRecord pattern and useLiveQuery reactive queries integrate naturally with a per-panel CanvasLayout record. No architectural blockers identified.",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "Research loop produced a concrete port map and integration design with no open blockers; scope (core + node interactions, 4 panels, IndexedDB persistence) is well-defined and achievable.",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.12,
+  "successSignalUpdates": [
+    { "action": "add", "id": "port-architecture-documented", "text": "Port architecture documented in findings.md: file-by-file port map, generic CanvasNode<T>/CanvasEdge types, target src/shared/canvas/ structure, IndexedDB persistence design, and 4-panel integration plan.", "status": "satisfied", "weight": 1, "evidenceRefs": [".goal/goals/canvas-port/findings.md"] },
+    { "action": "add", "id": "canvas-core-component", "text": "Reusable canvas base capability exists under src/shared/canvas/ with InfiniteCanvas (pan/zoom/grid), CanvasEdges, Minimap, ContextMenu, ZoomControls, CanvasNodeShell, useCanvasHistory, useCanvasKeyboard — verified by passing component/unit tests.", "status": "pending", "weight": 3 },
+    { "action": "add", "id": "canvas-persistence", "text": "Canvas layout persists to IndexedDB via new canvasLayouts store in NovelDatabase; save-to-reload-to-restore round-trip verified by test.", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "character-canvas-panel", "text": "Character relationship panel renders as canvas: StoryEntity (kind=character) nodes connected by EntityRelation edges, backed by CanvasLayout persistence and live-synced to domain data.", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "timeline-canvas-panel", "text": "Plot timeline panel renders as canvas: TimelineEvent nodes positioned by narrativeOrder with cause-to-consequence edges and parallelGroup swimlanes, backed by persistence.", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "worldview-canvas-panel", "text": "Worldview/setting map panel renders as canvas: non-character StoryEntity nodes grouped by kind (location/organization/faction/item/species/rule/ability/term), backed by persistence.", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "planning-canvas-panel", "text": "Planning workspace offers a canvas board mode mixing outline/entity/thread nodes with parent-child and cross-reference edges, alongside existing architecture/outline/matrix modes.", "status": "pending", "weight": 2 }
+  ],
+  "decision": "continue",
+  "nextDirection": "Begin implementation of src/shared/canvas/ core: port types.ts, canvas-theme.ts, InfiniteCanvas.tsx, CanvasEdges.tsx, CanvasMinimap.tsx, CanvasContextMenu.tsx, CanvasZoomControls.tsx from the reference (adapting imports/theme), then build the new generic CanvasNodeShell.tsx and useCanvasHistory/useCanvasKeyboard hooks. Verify with a component test that the canvas renders, pans, and zooms.",
+  "artifactRefs": [
+    { "id": "findings-md", "kind": "design", "path": ".goal/goals/canvas-port/findings.md", "evidence": "findings.md contains the port architecture: reference file port map (InfiniteCanvas/CanvasEdges/Minimap/ContextMenu/ZoomControls port as-is, CanvasNode redesigned), generic CanvasNode<T>/CanvasEdge types, target src/shared/canvas/ folder structure, CanvasLayout Dexie persistence schema, and 4-panel integration plan.", "status": "verified", "successSignalId": "port-architecture-documented" }
+  ]
+}

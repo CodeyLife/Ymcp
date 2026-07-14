@@ -11,6 +11,7 @@ import type {
   NovelGenerationScope,
   NovelGenerationTaskKey,
   NovelSkillStage,
+  OutlineNode,
   ProposalItem,
   ProposalTargetTable,
 } from "./types";
@@ -29,6 +30,8 @@ const TASKS: GenerationTaskDefinition[] = [
   { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。" },
   { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "生成可支撑长篇的全书架构，明确核心冲突、读者承诺与宏观阶段。" },
   { key: "outline", label: "规划故事大纲", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "按幕、序列、事件建立层级故事大纲，强调因果、人物选择、转折和结果，不使用章节编号。" },
+  { key: "outline-section-update", label: "重写子树", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "重写所选节点及其子树，保持兄弟节点不变。" },
+  { key: "outline-field-revise", label: "改写字段", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "改写所选节点的指定字段。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。" },
   { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "设计有明确欲望、恐惧、错误信念、秘密、人物弧和差异化声音的角色。" },
   { key: "relations", label: "设计人物关系", scope: "relations", role: "architect", skillStage: "foundation", allowedTables: ["relations"], defaultInstruction: "根据现有角色设计会推动选择和冲突的人物关系。" },
@@ -62,7 +65,7 @@ const payloadContract = `字段契约：
 - documents: order, title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,conflict,informationRelease,turningPoint,hook,mustHappen,flexible,forbidden,targetWords}；正文任务可额外给 plainText
 - scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, entryState, outcome, wordTarget, beats[{id,text,order}]
 - entities: kind, name, aliases, summary, description, tags, lockedFacts, attributes；角色需包含 character
-- relations: fromEntityId/toEntityId 可用 ref:临时ID，另含 relationType, publicLabel, privateTruth, affinity, trust, conflict, history
+- relations: fromEntityId/toEntityId 可用 ref:临时ID，另含 relationType, publicLabel, privateTruth, bond, history
 - plotThreads: kind, title, summary, status, priority, participantIds, progress, nextMove
 - foreshadowing: title, clue, truth, status, urgency, notes
 - timelineEvents: title, storyDate, duration, narrativeOrder, participantIds, causeIds, consequenceIds, description`;
@@ -84,7 +87,7 @@ const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>
   documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, turningPoint: { type: "string" }, hook: { type: "string" }, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
   scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, entryState: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
   entities: { type: "object", additionalProperties: false, properties: { kind: { enum: ["character", "location", "organization", "faction", "item", "species", "rule", "ability", "term"] }, name: { type: "string" }, aliases: stringArraySchema, summary: { type: "string" }, description: { type: "string" }, tags: stringArraySchema, lockedFacts: stringArraySchema, attributes: { type: "object" }, character: characterSchema }, allOf: [{ if: { properties: { kind: { const: "character" } }, required: ["kind"] }, then: { required: ["character"] } }] },
-  relations: { type: "object", additionalProperties: false, properties: { fromEntityId: { type: "string" }, toEntityId: { type: "string" }, relationType: { type: "string" }, publicLabel: { type: "string" }, privateTruth: { type: "string" }, affinity: { type: "number", minimum: -100, maximum: 100 }, trust: { type: "number", minimum: -100, maximum: 100 }, conflict: { type: "number", minimum: 0, maximum: 100 }, history: { type: "array", items: { type: "object", additionalProperties: false, required: ["at", "note"], properties: { at: { type: "number" }, chapterId: { type: "string" }, note: { type: "string" } } } } } },
+  relations: { type: "object", additionalProperties: false, properties: { fromEntityId: { type: "string" }, toEntityId: { type: "string" }, relationType: { type: "string" }, publicLabel: { type: "string" }, privateTruth: { type: "string" }, bond: { type: "string" }, history: { type: "array", items: { type: "object", additionalProperties: false, required: ["at", "note"], properties: { at: { type: "number" }, chapterId: { type: "string" }, note: { type: "string" } } } } } },
   plotThreads: { type: "object", additionalProperties: false, properties: { kind: { enum: ["main", "subplot", "romance", "growth", "mystery", "antagonist"] }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["planned", "active", "paused", "resolved", "abandoned"] }, priority: { type: "number", minimum: 0, maximum: 100 }, participantIds: stringArraySchema, startNodeId: { type: "string" }, targetNodeId: { type: "string" }, progress: { type: "number", minimum: 0, maximum: 100 }, nextMove: { type: "string" } } },
   foreshadowing: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, clue: { type: "string" }, truth: { type: "string" }, status: { enum: ["seeded", "reminded", "misdirected", "advanced", "revealed", "resolved", "abandoned"] }, seededNodeId: { type: "string" }, targetNodeId: { type: "string" }, urgency: { type: "number", minimum: 0, maximum: 100 }, notes: { type: "string" } } },
   timelineEvents: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, storyDate: { type: "string" }, duration: { type: "string" }, narrativeOrder: { type: "number" }, locationId: { type: "string" }, participantIds: stringArraySchema, causeIds: stringArraySchema, consequenceIds: stringArraySchema, description: { type: "string" }, parallelGroup: { type: "string" } } },
@@ -158,6 +161,78 @@ async function existingInventory(projectId: string, tables: ProposalTargetTable[
   return lines.join("\n") || "当前没有同类正式资料。";
 }
 
+function collectDescendantIds(nodes: OutlineNode[], rootId: string): string[] {
+  const childrenMap = new Map<string, string[]>();
+  for (const node of nodes) {
+    if (node.parentId) {
+      const list = childrenMap.get(node.parentId) ?? [];
+      list.push(node.id);
+      childrenMap.set(node.parentId, list);
+    }
+  }
+  const result: string[] = [];
+  const stack = [rootId];
+  while (stack.length) {
+    const current = stack.pop()!;
+    const children = childrenMap.get(current) ?? [];
+    for (const childId of children) {
+      result.push(childId);
+      stack.push(childId);
+    }
+  }
+  return result;
+}
+
+function formatOutlineNodeDump(node: OutlineNode, indent: number): string {
+  const pad = "  ".repeat(indent);
+  const fields = [
+    `kind=${node.kind}`,
+    `title=${node.title}`,
+    `summary=${node.summary || "(空)"}`,
+    `causality=${node.causality || "(空)"}`,
+    `outcome=${node.outcome || "(空)"}`,
+    `status=${node.status}`,
+    `tension=${node.tension}`,
+    `emotion=${node.emotion}`,
+    `information=${node.information}`,
+  ];
+  if (node.characterIds.length) fields.push(`characters=[${node.characterIds.join(",")}]`);
+  if (node.plotThreadIds.length) fields.push(`threads=[${node.plotThreadIds.join(",")}]`);
+  return `${pad}- id=${node.id}\n${pad}  ${fields.join("\n" + pad + "  ")}`;
+}
+
+function buildSubtreeDump(nodes: OutlineNode[], rootId: string): string {
+  const childrenMap = new Map<string, OutlineNode[]>();
+  let root: OutlineNode | undefined;
+  for (const node of nodes) {
+    if (node.id === rootId) { root = node; continue; }
+    if (node.parentId) {
+      const list = childrenMap.get(node.parentId) ?? [];
+      list.push(node);
+      childrenMap.set(node.parentId, list);
+    }
+  }
+  if (!root) return "(目标节点不存在)";
+  const lines: string[] = [];
+  const walk = (node: OutlineNode, indent: number) => {
+    lines.push(formatOutlineNodeDump(node, indent));
+    const children = (childrenMap.get(node.id) ?? []).sort((a, b) => a.order - b.order);
+    for (const child of children) walk(child, indent + 1);
+  };
+  walk(root, 0);
+  return lines.join("\n");
+}
+
+function buildSiblingDump(nodes: OutlineNode[], rootId: string): string {
+  const root = nodes.find((item) => item.id === rootId);
+  if (!root) return "(无兄弟)";
+  const siblings = nodes
+    .filter((item) => item.parentId === root.parentId && item.id !== rootId)
+    .sort((a, b) => a.order - b.order);
+  if (!siblings.length) return "(无兄弟节点)";
+  return siblings.map((item) => `- id=${item.id} kind=${item.kind} title=${item.title}`).join("\n");
+}
+
 async function attachExpectedRevisions(items: ProposalItem[]) {
   for (const item of items) {
     if (item.operation !== "update" || !item.targetId) continue;
@@ -172,6 +247,7 @@ export async function runGenerationTask(params: {
   taskKey: NovelGenerationTaskKey;
   instruction: string;
   targetId?: string;
+  targetField?: string;
 }) {
   const task = getGenerationTask(params.taskKey);
   const project = await novelDb.projects.get(params.projectId);
@@ -182,7 +258,29 @@ export async function runGenerationTask(params: {
   const inventory = await existingInventory(params.projectId, task.allowedTables);
   const acceptedRefs = await acceptedProjectReferences(params.projectId);
   const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
-  const agent: AgentRun = { ...recordBase(params.projectId), goal: params.instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-structured-v4", contextPacketId: packet.id, role: task.role, skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: task.label, tool: "model.structured", status: "running" }] };
+
+  let effectiveInstruction = params.instruction;
+  let sectionContextBlock = "";
+  if (params.taskKey === "outline-section-update" && params.targetId) {
+    const allNodes = await novelDb.outlineNodes.where("projectId").equals(params.projectId).toArray();
+    const target = allNodes.find((item) => item.id === params.targetId);
+    if (!target) throw new Error("目标大纲节点不存在");
+    const subtreeDump = buildSubtreeDump(allNodes, params.targetId);
+    const siblingDump = buildSiblingDump(allNodes, params.targetId);
+    const descendantIds = collectDescendantIds(allNodes, params.targetId);
+    effectiveInstruction = `${params.instruction || task.defaultInstruction}\n\n重写目标：${target.title} (id=${target.id}, kind=${target.kind})。\n这是 ${target.kind} 级节点，需要重写它本身及其整棵子树。兄弟节点不得修改。`;
+    sectionContextBlock = `\n# 当前子树（将被整体替换，可直接更新根节点，其余子节点将被删除后重建）\n${subtreeDump}\n\n# 即将删除的子节点 ID（供参考，不要为这些节点生成 update）\n${descendantIds.length ? descendantIds.join(", ") : "(无子节点)"}\n\n# 兄弟节点（不可修改）\n${siblingDump}\n\n# 分区重写要求\n1. 为根节点 ${target.id} 生成一个 update 操作，写入重写后的内容。\n2. 为新的子节点生成 create 操作，parentId 使用根节点的真实 ID (${target.id}) 或 ref:tempId。\n3. 不要为即将删除的子节点生成 update 操作——它们会被自动删除。\n4. 保持与兄弟节点一致的故事时间线与因果逻辑。\n`;
+  }
+  if (params.taskKey === "outline-field-revise" && params.targetId) {
+    const target = await novelDb.outlineNodes.get(params.targetId);
+    if (!target) throw new Error("目标大纲节点不存在");
+    const fieldName = params.targetField || "未指定";
+    const currentValue = (params.targetField ? (target as unknown as Record<string, unknown>)[params.targetField] : undefined) ?? "(空)";
+    effectiveInstruction = `${params.instruction || task.defaultInstruction}\n\n字段级修订目标：节点"${target.title}" (id=${target.id}, kind=${target.kind})。\n要求改写的字段：${fieldName}\n当前值：${typeof currentValue === "string" ? currentValue : JSON.stringify(currentValue)}`;
+    sectionContextBlock = `\n# 当前节点完整内容\n${formatOutlineNodeDump(target, 0)}\n\n# 字段级修订要求\n1. 只返回 1 个 update 操作, targetId 为 ${target.id}。\n2. payload 中只包含要修改的字段 (${fieldName}), 不要包含其他字段。\n3. 保持节点类型、父子关系和 ID 不变。\n`;
+  }
+
+  const agent: AgentRun = { ...recordBase(params.projectId), goal: effectiveInstruction, status: "running", model: project.settings.textModel, promptVersion: "novel-structured-v4", contextPacketId: packet.id, role: task.role, skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: task.label, tool: "model.structured", status: "running" }] };
   await novelDb.agentRuns.add(agent);
   try {
     const result = await callStructuredNovelModel<Record<string, unknown>>({
@@ -191,7 +289,7 @@ export async function runGenerationTask(params: {
       role: task.role,
       skillPrompt: formatSkillPrompt(skills.skills),
       schema: proposalSchema(task.allowedTables),
-      prompt: `# 任务\n${params.instruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n只生成待用户审核的候选项，不得声称已修改项目。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有对象时必须使用对象索引中的真实 ID，或使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
+      prompt: `# 任务\n${effectiveInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n只生成待用户审核的候选项，不得声称已修改项目。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有对象时必须使用对象索引中的真实 ID，或使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
     });
     const rawItems = Array.isArray(result.data.items) ? result.data.items as Array<Record<string, unknown>> : [];
     const items: ProposalItem[] = rawItems.map((raw) => ({
@@ -224,6 +322,68 @@ export async function runGenerationTask(params: {
         item.operation = "update";
         item.targetTable = "documents";
         item.targetId = target?.id ?? documents[0].id;
+      }
+    }
+    if (params.taskKey === "outline-section-update" && params.targetId) {
+      const allNodes = await novelDb.outlineNodes.where("projectId").equals(params.projectId).toArray();
+      const descendantIds = new Set(collectDescendantIds(allNodes, params.targetId));
+      let hasRootUpdate = false;
+      const filtered: ProposalItem[] = [];
+      for (const item of items) {
+        if (item.operation === "update" && item.targetId === params.targetId) {
+          hasRootUpdate = true;
+          filtered.push(item);
+          continue;
+        }
+        if (item.operation === "update" && item.targetId && descendantIds.has(item.targetId)) continue;
+        if (item.operation === "create") {
+          if (!item.payload.parentId) item.payload = { ...item.payload, parentId: params.targetId };
+          filtered.push(item);
+          continue;
+        }
+        if (item.operation === "update" && !descendantIds.has(item.targetId ?? "")) filtered.push(item);
+      }
+      if (!hasRootUpdate) {
+        const root = allNodes.find((item) => item.id === params.targetId);
+        if (root) {
+          const firstCreate = filtered.find((item) => item.operation === "create");
+          if (firstCreate) {
+            const rootUpdate: ProposalItem = {
+              id: crypto.randomUUID(),
+              label: `重写：${root.title}`,
+              operation: "update",
+              targetTable: "outlineNodes",
+              targetId: params.targetId,
+              status: "pending",
+              payload: { title: firstCreate.payload.title ?? root.title, summary: firstCreate.payload.summary ?? root.summary, causality: firstCreate.payload.causality ?? root.causality, outcome: firstCreate.payload.outcome ?? root.outcome, status: firstCreate.payload.status ?? root.status, tension: firstCreate.payload.tension ?? root.tension, emotion: firstCreate.payload.emotion ?? root.emotion, information: firstCreate.payload.information ?? root.information, characterIds: firstCreate.payload.characterIds ?? root.characterIds, plotThreadIds: firstCreate.payload.plotThreadIds ?? root.plotThreadIds, foreshadowingIds: firstCreate.payload.foreshadowingIds ?? root.foreshadowingIds, storyTime: firstCreate.payload.storyTime ?? root.storyTime, tags: firstCreate.payload.tags ?? root.tags },
+              after: {},
+              rationale: "根节点重写",
+              dependencies: [],
+            };
+            filtered.unshift(rootUpdate);
+          }
+        }
+      }
+      items.splice(0, items.length, ...filtered);
+    }
+    if (params.taskKey === "outline-field-revise" && params.targetId) {
+      const target = await novelDb.outlineNodes.get(params.targetId);
+      if (!target) throw new Error("目标大纲节点不存在");
+      const fieldName = params.targetField;
+      const fieldReviseItem = items.find((item) => item.operation === "update" && item.targetId === params.targetId) ?? items[0];
+      if (fieldReviseItem) {
+        let sanitizedPayload: Record<string, unknown>;
+        if (fieldName && fieldReviseItem.payload[fieldName] !== undefined) {
+          sanitizedPayload = { [fieldName]: fieldReviseItem.payload[fieldName] };
+        } else {
+          throw new Error(`AI 字段修订未返回目标字段：${fieldName || "未指定"}`);
+        }
+        fieldReviseItem.operation = "update";
+        fieldReviseItem.targetTable = "outlineNodes";
+        fieldReviseItem.targetId = params.targetId;
+        fieldReviseItem.payload = sanitizedPayload;
+        fieldReviseItem.after = { ...sanitizedPayload };
+        items.splice(0, items.length, fieldReviseItem);
       }
     }
     if (!items.length) throw new Error("AI 没有返回可审核的候选项");
@@ -310,7 +470,7 @@ function normalizeDocumentPayload(payload: Record<string, unknown>) {
   return { ...payload, contentHtml: textToHtml(payload.plainText), wordCount, status: payload.status ?? "draft" };
 }
 
-function normalizedCreate(table: ProposalTargetTable, projectId: string, id: string, payload: Record<string, unknown>) {
+export function normalizedCreate(table: ProposalTargetTable, projectId: string, id: string, payload: Record<string, unknown>) {
   const base = { ...recordBase(projectId), id };
   if (table === "architectures") return { ...base, framework: "free", status: "draft", centralQuestion: "", readerPromise: "", centralConflict: "", synopsis: "", phases: [], ...payload };
   if (table === "outlineNodes") return { ...base, parentId: undefined, kind: "event", title: "未命名事件", summary: "", order: 0, status: "idea", causality: "", outcome: "", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tension: 30, emotion: 30, information: 30, tags: [], ...payload };
@@ -328,7 +488,7 @@ function normalizedCreate(table: ProposalTargetTable, projectId: string, id: str
     }
     return record;
   }
-  if (table === "relations") return { ...base, fromEntityId: "", toEntityId: "", relationType: "关联", publicLabel: "", privateTruth: "", affinity: 0, trust: 0, conflict: 0, history: [], ...payload };
+  if (table === "relations") return { ...base, fromEntityId: "", toEntityId: "", relationType: "关联", publicLabel: "", privateTruth: "", bond: "", history: [], ...payload };
   if (table === "plotThreads") return { ...base, kind: "subplot", title: "未命名剧情线", summary: "", status: "planned", priority: 50, participantIds: [], progress: 0, nextMove: "", ...payload };
   if (table === "foreshadowing") return { ...base, title: "未命名伏笔", clue: "", truth: "", status: "seeded", urgency: 30, notes: "", ...payload };
   if (table === "timelineEvents") return { ...base, title: "未命名事件", storyDate: "", duration: "", narrativeOrder: 0, participantIds: [], causeIds: [], consequenceIds: [], description: "", ...payload };
@@ -408,7 +568,21 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
       const current = await novelDb.table(item.targetTable).get(item.targetId) as { revision?: number } | undefined;
       if (!current || current.revision !== item.expectedRevision) conflicts.push(item.id);
     }
+    if (proposal.taskKey === "outline-section-update" && conflicts.length > 0) {
+      for (const item of selected) if (!conflicts.includes(item.id)) conflicts.push(item.id);
+    }
     const applicable = selected.filter((item) => !conflicts.includes(item.id));
+    if (proposal.taskKey === "outline-section-update" && proposal.targetId && conflicts.length === 0) {
+      const allNodes = await novelDb.outlineNodes.where("projectId").equals(proposal.projectId).toArray();
+      const descendantIds = collectDescendantIds(allNodes, proposal.targetId);
+      for (const descendantId of descendantIds) {
+        const before = await novelDb.outlineNodes.get(descendantId);
+        if (!before) continue;
+        await novelDb.outlineNodes.delete(descendantId);
+        await appendOperation(proposal.projectId, "outlineNodes", descendantId, "delete", { value: { before, after: null } });
+        await novelDb.embeddings.where("targetId").equals(descendantId).delete();
+      }
+    }
     for (const item of applicable) {
       const table = novelDb.table(item.targetTable) as Table<Record<string, unknown>, string>;
       const resolved = sanitizePayload(resolveReferences(item.after ?? item.payload, refs) as Record<string, unknown>);

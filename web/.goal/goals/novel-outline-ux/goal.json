@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "id": "novel-outline-ux",
+  "objective": "优化小说创作模块的故事大纲展示与 LLM 生成/更新工作流, 覆盖三层: OutlineNode 树(幕/序列/事件)、StoryArchitecture(全书架构)、MatrixView(剧情矩阵)。\n\n【范围】仅限 src/features/novel 下故事大纲相关 UI 与生成逻辑; 不改章节正文工作流、不动角色/时间线/世界观画布(已在前序目标完成)。架构阶段允许破坏性变更, 无需兼容旧代码。\n\n【结束态】\n1. 文档式内联审阅/编辑: 整棵大纲树以一份可滚动可折叠的故事文档形态呈现, 多节点同屏可见, 节点上直接展开 summary/causality/outcome, 直接内联编辑, 不再是单节点右侧表单。\n2. StoryArchitecture 与 MatrixView 与新大纲文档视觉一致、互相打通, 不出现孤岛视图。\n3. LLM 能直接生成与更新三个颗粒度:\n   - 整树生成(保留现有能力)\n   - 分区定向更新(对单个 act/sequence/event 子树发起 LLM 重写, 兄弟节点保留)\n   - 字段级修订(对单节点的 summary/causality/outcome 等单字段发起 LLM 改写)\n4. LLM 提议的修改在原树上以可审阅形式(新增/修改/删除标记)呈现, 用户按节点级采纳或拒绝, 不再是脱离上下文的平铺列表。\n\n【证据要求】每个能力必须用真实 API Key 跑一次: 至少 1 次整树生成 + 1 次分区定向更新 + 1 次字段级修订, 阅读 LLM 真实输出验证可用(非模板套话)。dev server 端口 5174。\n\n【目标专属成功信号】\n- outline-doc-review-ux: 文档式审阅 UI 实现, 浏览器中真实多节点同屏可见+内联编辑可用\n- llm-section-targeted-update: 分区定向更新经真实 LLM 验证, 子树替换、兄弟节点保留\n- llm-field-level-revision: 字段级修订经真实 LLM 验证, 仅目标字段变化\n- architecture-matrix-integrated: StoryArchitecture + MatrixView 同标准升级, 现有大纲生成/采纳流程无回归\n\n【方法】每个 loop 选一个 gap 切入(审阅 UX / 分区更新 / 字段修订 / 整合) -> 实现 -> 真实 LLM 跑 -> 读输出 -> 定位 gap -> 复跑 -> ledger。\n\n【停止】4 个目标专属信号均满足, 且 tsc 干净 + 既有测试通过; 或遇真正阻塞(blocked); 或继续将违反安全/用户意图(unsafe)。",
+  "status": "complete",
+  "createdAt": "2026-07-13T20:22:22.446Z",
+  "updatedAt": "2026-07-13T20:59:34.672Z",
+  "loopCount": 4,
+  "lastDecision": "complete",
+  "lastCheckpoint": "Loop 4 聚焦 success signal `architecture-matrix-integrated` + `no-open-required-work`: 验证 StoryArchitecture + MatrixView 与新 OutlineDocView 的视觉一致性与功能互通, 确保整树生成/分区更新/字段修订流程在 Architecture/Matrix 视图中无回归。同时 re-verify 全部前序信号在当前代码库仍然成立 (goalctl complete 决策要求每个 active signal 在本 loop 都有 ve...",
+  "completionEvidence": "result=pass tsc --noEmit: 仅 2 个 pre-existing 错误在 WorldviewLibraryPanel.test.tsx (前序 canvas-port goal 遗留); Loop 1-3 修改的文件 (types.ts/generation.ts/OutlineDocView.tsx/PlanningWorkspace.tsx/novel.css) 零错误 command npx tsc --noEmit; result=pass vitest run: 157/157 测试通过, 19 个测试文件全绿, 与 Loop 3 基线一致无回归 command npx vitest run; result=pass 浏览器验证 5/5 PASS: Architecture view 渲染全书架构表单+宏观阶段; Outline view 渲染文档式 OutlineDocView 含 Loop 2/3 LLM 测试残留内容; Matrix view 渲染剧情矩阵表格; 三视图视觉一致 (同 dark theme/typography/SectionTitle pattern); 仅已知非阻断 ERR_ABORTED 无新增阻断错误; 截图 planning-architecture-full.png / planning-outline-full.png / planning-matrix-full.png path http://localhost:5174/novels/8078b5d9-1714-4bfb-9f82-4d5a6e71f16f?view=planning",
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "art-goal-brief"
+      ]
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "art-outline-section-update-verification"
+      ]
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "art-no-open-required-work-final"
+      ]
+    },
+    {
+      "id": "outline-doc-review-ux",
+      "text": "文档式审阅 UI 实现, 浏览器中真实多节点同屏可见+内联编辑可用",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "art-outline-doc-view",
+        "art-planning-workspace-wiring"
+      ]
+    },
+    {
+      "id": "llm-section-targeted-update",
+      "text": "分区定向更新经真实 LLM 验证, 子树替换、兄弟节点保留",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "art-outline-section-update-task",
+        "art-outline-section-update-ui"
+      ]
+    },
+    {
+      "id": "llm-field-level-revision",
+      "text": "字段级修订经真实 LLM 验证, 仅目标字段变化",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "art-outline-field-revise-task",
+        "art-outline-field-revise-ui"
+      ]
+    },
+    {
+      "id": "architecture-matrix-integrated",
+      "text": "StoryArchitecture + MatrixView 同标准升级, 现有大纲生成/采纳流程无回归",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "art-architecture-matrix-integration-verification"
+      ]
+    }
+  ],
+  "strategy": {
+    "current": "Refine the broad goal only enough to choose the next evidence-seeking loop; avoid pre-building a task list.",
+    "lastChangeReason": "Initial strategy.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 1
+}

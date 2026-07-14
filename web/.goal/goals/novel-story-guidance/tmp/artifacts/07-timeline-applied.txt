@@ -1,0 +1,200 @@
+[
+  {
+    "id": "31f56915-ecf4-40c0-b9d4-fb1f1c4100f4",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050597,
+    "updatedAt": 1783978050597,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈默验证第一个被遗忘名字的真实性",
+    "storyDate": "故事开始前数周",
+    "duration": "约一周",
+    "narrativeOrder": 4,
+    "participantIds": [],
+    "causeIds": [
+      "timeline_event_003"
+    ],
+    "consequenceIds": [
+      "timeline_event_005"
+    ],
+    "description": "沈默开始整理与该名字相关的残留线索，尝试确认自己是否记错。调查过程中，他发现零散痕迹仍指向一个真实存在过的人，但官方记录、照片关联和他人记忆均出现缺失。"
+  },
+  {
+    "id": "45062e03-eb17-4470-b1fb-af1a25dba451",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050599,
+    "updatedAt": 1783978050599,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈默发现恢复名字会产生自身记忆损耗",
+    "storyDate": "调查初期后段",
+    "duration": "一次关键事件后确认",
+    "narrativeOrder": 8,
+    "participantIds": [],
+    "causeIds": [
+      "7546b8bc-573e-476b-b337-183ed1a75096",
+      "cc04c92c-856d-4148-a920-f5538eca925f"
+    ],
+    "consequenceIds": [
+      "ac1c0598-4437-4883-a835-b3aa812245ae"
+    ],
+    "description": "沈默尝试帮助某个被遗忘名字重新回到他人的认知中，成功恢复部分社会联系，却发现自己失去了一段私人记忆。此次事件确认他的能力并非单纯优势，而伴随着不可逆代价。"
+  },
+  {
+    "id": "5e65baf8-6098-4d26-a7a6-12030289d49e",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050597,
+    "updatedAt": 1783978050597,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈默发现自己保留了无法被他人记住的名字",
+    "storyDate": "故事开始前数月",
+    "duration": "数天至数周",
+    "narrativeOrder": 3,
+    "participantIds": [],
+    "causeIds": [
+      "75cbb5eb-2449-4af9-8795-d9757ebad49a"
+    ],
+    "consequenceIds": [
+      "timeline_event_004"
+    ],
+    "description": "沈默在日常生活中发现一个曾经熟悉的名字仍清晰存在于自己的记忆中，但身边所有人都无法识别这个名字对应的人。沈默尝试通过照片、记录和共同经历寻找证明，却发现现实资料与自己的记忆产生冲突。"
+  },
+  {
+    "id": "6e769331-330f-40c3-8ab6-4258802ddabf",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050598,
+    "updatedAt": 1783978050598,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈默整理多个遗忘案例并发现共同规律",
+    "storyDate": "故事开始后数周",
+    "duration": "约数周",
+    "narrativeOrder": 6,
+    "participantIds": [],
+    "causeIds": [
+      "timeline_event_005"
+    ],
+    "consequenceIds": [
+      "timeline_event_007"
+    ],
+    "description": "沈默将不同名字消失事件进行比对，发现多个案例都存在异常资料缺失、关联人物记忆断裂等共同特征。部分线索隐约指向某类机构或过去事件，但关键资料已被删除。"
+  },
+  {
+    "id": "75cbb5eb-2449-4af9-8795-d9757ebad49a",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050596,
+    "updatedAt": 1783978050596,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "名字消失现象进入日常化阶段",
+    "storyDate": "故事开始前3年至1年",
+    "duration": "约2年",
+    "narrativeOrder": 2,
+    "participantIds": [],
+    "causeIds": [
+      "f1abc74a-a17f-4a7c-81bc-8e6fc0ab68a5"
+    ],
+    "consequenceIds": [
+      "5e65baf8-6098-4d26-a7a6-12030289d49e"
+    ],
+    "description": "越来越多人经历重要名字被遗忘，但由于缺少证据链和共同记忆，事件始终停留在个人层面。部分被遗忘者开始从社交关系、档案记录和他人叙述中逐渐失去存在痕迹。城市形成了对异常的默认接受。"
+  },
+  {
+    "id": "8f835bcb-2b61-4667-abbc-16929688559c",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050597,
+    "updatedAt": 1783978050597,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈默开始调查名字消失背后的原因",
+    "storyDate": "故事开始",
+    "duration": "数日",
+    "narrativeOrder": 5,
+    "participantIds": [],
+    "causeIds": [
+      "timeline_event_004"
+    ],
+    "consequenceIds": [
+      "timeline_event_006"
+    ],
+    "description": "沈默无法接受一个真实存在的人被所有人遗忘，因此决定追查名字背后的身份。他从个人验证转向主动调查，开始记录异常名字、遗忘案例和残存资料。"
+  },
+  {
+    "id": "f1abc74a-a17f-4a7c-81bc-8e6fc0ab68a5",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050595,
+    "updatedAt": 1783978050595,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "城市首次出现名字消失现象",
+    "storyDate": "故事开始前约5年",
+    "duration": "持续发生，初期无明确调查者关注",
+    "narrativeOrder": 1,
+    "participantIds": [],
+    "causeIds": [],
+    "consequenceIds": [
+      "75cbb5eb-2449-4af9-8795-d9757ebad49a"
+    ],
+    "description": "城市中开始出现一种被普遍视为正常的遗忘现象：人们会在生命某个节点遗忘一个曾经重要的名字。社会将其解释为记忆自然衰退或情感变化，没有形成公开关注。该现象成为后续名字消失机制隐藏运行的社会背景。"
+  },
+  {
+    "id": "f2c6a21d-829d-4f9f-8412-30cf9ea1edba",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050599,
+    "updatedAt": 1783978050599,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈默意识到调查与自身过去存在关联",
+    "storyDate": "第一幕结束前",
+    "duration": "短期认知转变",
+    "narrativeOrder": 9,
+    "participantIds": [],
+    "causeIds": [
+      "timeline_event_007",
+      "timeline_event_008"
+    ],
+    "consequenceIds": [
+      "70e58d05-aad7-4e31-806a-434cbba2650e"
+    ],
+    "description": "沈默发现自己失去的记忆并非随机，而可能与名字消失机制有关。他开始怀疑自己不是单纯的调查者，而可能也是该机制留下的异常变量。第一幕完成不可逆变化：调查目标从寻找消失名字转变为追查机制源头。"
+  },
+  {
+    "id": "f39c1c60-b189-4095-af77-5288445ae12a",
+    "projectId": "2653669f-fc26-4a69-97b3-62e336daf870",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978050598,
+    "updatedAt": 1783978050598,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈默确认名字消失存在人为干预可能",
+    "storyDate": "故事开始后约一个月",
+    "duration": "数天",
+    "narrativeOrder": 7,
+    "participantIds": [],
+    "causeIds": [
+      "timeline_event_006"
+    ],
+    "consequenceIds": [
+      "6496f07c-067c-4ad9-9171-70d8a3474a8a"
+    ],
+    "description": "沈默获得第一批能够证明名字消失并非普通遗忘的线索。他意识到自己调查的不是个体失踪，而是一种影响城市身份记录和集体记忆的异常机制。"
+  }
+]

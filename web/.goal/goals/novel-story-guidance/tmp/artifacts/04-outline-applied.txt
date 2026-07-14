@@ -1,0 +1,95 @@
+[
+  {
+    "id": "4ad0786a-854e-4135-ad10-14f0d543d848",
+    "projectId": "3f1c9e67-1861-4d40-bd9a-4fe69ba6ca86",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978699153,
+    "updatedAt": 1783978699153,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "parentId": "c8fef536-8764-4179-afc1-470915a8443a",
+    "kind": "event",
+    "title": "旧登记册中的名字",
+    "summary": "沈默川整理旧档案时发现一个已无人记得的人名。",
+    "order": 1,
+    "status": "planned",
+    "causality": "沈默川长期保存无人关注的旧物；登记册上的删除痕迹引起注意；档案系统显示该名字不存在；沈默川确认自己仍记得这个名字。",
+    "outcome": "获得第一个调查入口。",
+    "characterIds": [
+      "e86d6287-9f9f-4f82-aeab-d9fe96448b50"
+    ],
+    "plotThreadIds": [],
+    "foreshadowingIds": [],
+    "tension": 30,
+    "emotion": 30,
+    "information": 30,
+    "tags": [
+      "线索"
+    ],
+    "storyTime": "故事开端"
+  },
+  {
+    "id": "60a92a1b-b98f-414e-af2c-3ddba05c9766",
+    "projectId": "3f1c9e67-1861-4d40-bd9a-4fe69ba6ca86",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978699152,
+    "updatedAt": 1783978699152,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "parentId": "475809e1-c594-417b-8b71-fe0f2da56d9e",
+    "kind": "act",
+    "title": "第一幕：被遗忘的人",
+    "summary": "建立名字消失事件、沈默川的异常能力与记忆代价，使他从被动保留名字的人转变为主动调查事件的人。",
+    "order": 1,
+    "status": "planned",
+    "causality": "城市中出现多人无法说出某个重要之人名字的异常现象；沈默川发现自己能够记住一个已经从所有人口中消失的名字；周围人认为名字消失只是个人记忆错误，缺乏可验证证据；沈默川确认自己的能力并非偶然，并决定追查名字消失来源。",
+    "outcome": "主角建立调查目标，并接受保存名字需要付出记忆代价的事实。",
+    "characterIds": [
+      "e86d6287-9f9f-4f82-aeab-d9fe96448b50",
+      "9ac97c56-35f4-4aab-a6a6-621d8a1bcaa8",
+      "497aa0d5-7dfb-40fc-a022-53c391506ed2"
+    ],
+    "plotThreadIds": [],
+    "foreshadowingIds": [],
+    "tension": 30,
+    "emotion": 30,
+    "information": 30,
+    "tags": [
+      "建立谜团",
+      "身份悬疑"
+    ],
+    "storyTime": "故事开端"
+  },
+  {
+    "id": "c8fef536-8764-4179-afc1-470915a8443a",
+    "projectId": "3f1c9e67-1861-4d40-bd9a-4fe69ba6ca86",
+    "schemaVersion": 4,
+    "revision": 1,
+    "createdAt": 1783978699152,
+    "updatedAt": 1783978699152,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "parentId": "60a92a1b-b98f-414e-af2c-3ddba05c9766",
+    "kind": "sequence",
+    "title": "城市第一次失去名字",
+    "summary": "沈默川接触第一个被遗忘者案例，发现城市记忆出现异常。",
+    "order": 1,
+    "status": "planned",
+    "causality": "名字消失事件开始影响普通居民；沈默川在旧登记册中发现被划去但仍能读出的名字；现实记录与大众认知产生矛盾；沈默川确认存在被世界遗忘的人。",
+    "outcome": "沈默川决定寻找更多案例。",
+    "characterIds": [
+      "e86d6287-9f9f-4f82-aeab-d9fe96448b50"
+    ],
+    "plotThreadIds": [],
+    "foreshadowingIds": [],
+    "tension": 30,
+    "emotion": 30,
+    "information": 30,
+    "tags": [
+      "发现"
+    ],
+    "storyTime": "故事开端"
+  }
+]

@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "id": "canvas-port",
+  "objective": "Port the infinite-canvas core (pan/zoom/nodes/edges/minimap/undo-redo/import-export/group nodes + node interactions: selection/multi-select/context-menu/shortcuts/align-distribute) from https://github.com/basketikun/infinite-canvas into the Ymcp web project as a reusable base capability, then integrate canvas into four novel creation panels (character relationship graph, plot timeline, worldview/setting map, planning workspace), persisting canvas state per-project in the existing IndexedDB (novel/db.ts). Boundaries: do NOT port AI image generation, prompts library, or Agent chat. Architecture-phase rules apply: no backward-compat with old code, design optimal architecture directly, breaking changes allowed. Mark unimplemented logic with TODO per user rules.",
+  "status": "completed",
+  "createdAt": "2026-07-13T17:55:49.615Z",
+  "updatedAt": "2026-07-14T11:20:00.000Z",
+  "loopCount": 7,
+  "lastDecision": "continue",
+  "lastCheckpoint": "Implement planning-canvas-panel: PlanningCanvasPanel mixes OutlineNode/StoryEntity/PlotThread nodes on one canvas with parent-child edges (OutlineNode.parentId) and cross-reference edges (characterIds/plotThreadIds). PlanningNodeContent renders 3 node types via discriminated union. Wired into PlanningWorkspace as 'board' mode. 11 SSR tests pass, tsc clean. All 4 canvas panels complete — goal ready for completion.",
+  "completionEvidence": null,
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "goal-brief-intent-check"
+      ]
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "test-run-result",
+        "loop3-test-output",
+        "loop4-test-output",
+        "loop5-test-output",
+        "loop6-test-output",
+        "loop7-test-output"
+      ]
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "all-signals-satisfied",
+        "loop7-test-output"
+      ]
+    },
+    {
+      "id": "port-architecture-documented",
+      "text": "Port architecture documented in findings.md: file-by-file port map, generic CanvasNode<T>/CanvasEdge types, target src/shared/canvas/ structure, IndexedDB persistence design, and 4-panel integration plan.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        ".goal/goals/canvas-port/findings.md"
+      ]
+    },
+    {
+      "id": "canvas-core-component",
+      "text": "Reusable canvas base capability exists under src/shared/canvas/ with InfiniteCanvas (pan/zoom/grid), CanvasEdges, Minimap, ContextMenu, ZoomControls, CanvasNodeShell, useCanvasHistory, useCanvasKeyboard — verified by passing component/unit tests.",
+      "status": "satisfied",
+      "weight": 3,
+      "evidenceRefs": [
+        "canvas-types",
+        "canvas-theme",
+        "canvas-infinite",
+        "canvas-edges",
+        "canvas-node-shell",
+        "canvas-minimap",
+        "canvas-context-menu",
+        "canvas-zoom-controls",
+        "canvas-history-hook",
+        "canvas-history-reducer",
+        "canvas-keyboard-hook",
+        "canvas-barrel",
+        "canvas-test-history",
+        "canvas-test-components"
+      ]
+    },
+    {
+      "id": "canvas-persistence",
+      "text": "Canvas layout persists to IndexedDB via new canvasLayouts store in NovelDatabase; save-to-reload-to-restore round-trip verified by test.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "canvas-layout-type",
+        "canvas-db-schema",
+        "canvas-db-helpers",
+        "canvas-persistence-test"
+      ]
+    },
+    {
+      "id": "character-canvas-panel",
+      "text": "Character relationship panel renders as canvas: StoryEntity (kind=character) nodes connected by EntityRelation edges, backed by CanvasLayout persistence and live-synced to domain data.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "character-node-content",
+        "character-canvas-panel",
+        "character-canvas-panel-test",
+        "use-canvas-panel",
+        "novel-studio-wiring"
+      ]
+    },
+    {
+      "id": "timeline-canvas-panel",
+      "text": "Plot timeline panel renders as canvas: TimelineEvent nodes positioned by narrativeOrder with cause-to-consequence edges and parallelGroup swimlanes, backed by persistence.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "timeline-node-content",
+        "timeline-canvas-panel",
+        "timeline-canvas-panel-test",
+        "use-canvas-panel-position-restore",
+        "novel-studio-timeline-wiring"
+      ]
+    },
+    {
+      "id": "worldview-canvas-panel",
+      "text": "Worldview/setting map panel renders as canvas: non-character StoryEntity nodes grouped by kind (location/organization/faction/item/species/rule/ability/term), backed by persistence.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "worldview-node-content",
+        "worldview-canvas-panel",
+        "worldview-canvas-panel-test",
+        "novel-studio-worldview-wiring"
+      ]
+    },
+    {
+      "id": "planning-canvas-panel",
+      "text": "Planning workspace offers a canvas board mode mixing outline/entity/thread nodes with parent-child and cross-reference edges, alongside existing architecture/outline/matrix modes.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "planning-node-content",
+        "planning-canvas-panel",
+        "planning-canvas-panel-test",
+        "planning-workspace-wiring"
+      ]
+    }
+  ],
+  "strategy": {
+    "current": "Refine the broad goal only enough to choose the next evidence-seeking loop; avoid pre-building a task list.",
+    "lastChangeReason": "Initial strategy.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 1.0,
+  "completionEvidence": "All 10 success signals satisfied. Canvas core (InfiniteCanvas, CanvasNodeShell, CanvasEdges, Minimap, ContextMenu, ZoomControls, useCanvasHistory, useCanvasKeyboard) ported to src/shared/canvas/ with 22 tests. CanvasLayout persistence via IndexedDB canvasLayouts store (DB v6) with round-trip test. Four novel canvas panels implemented: CharacterCanvasPanel (character relationships, 9 tests), TimelineCanvasPanel (plot timeline with cause->consequence edges, 9 tests), WorldviewCanvasPanel (non-character entities clustered by kind, 10 tests), PlanningCanvasPanel (mixed outline/entity/thread nodes with parent-child and cross-reference edges, 11 tests). All panels wired into NovelStudio/PlanningWorkspace. Total: 17 test files, 139 tests pass, tsc clean."
+}

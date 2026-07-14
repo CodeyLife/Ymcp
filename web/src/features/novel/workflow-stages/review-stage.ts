@@ -1,5 +1,5 @@
 import { callStructuredNovelModel } from "../ai";
-import { formatContextPacket } from "../context";
+import { formatReviewerContext } from "../context";
 import { novelDb } from "../db";
 import { runDeterministicQualityChecks, saveQualityReport, type ReviewerFinding } from "../quality";
 import { formatSkillPrompt, resolveNovelSkills } from "../skills";
@@ -20,7 +20,7 @@ export const reviewStageHandler: StageHandler = {
     const blueprintData = blueprint.structuredData ? asBlueprint(blueprint.structuredData) : undefined;
     const deterministic = runDeterministicQualityChecks({ text: draft.contentMarkdown, blueprint: blueprintData });
     const roles: NovelAgentRole[] = ["style-reviewer", "character-reviewer", "continuity-reviewer", "plot-reviewer", "pacing-reviewer"];
-    const reviewers = await Promise.all(
+    const settled = await Promise.allSettled(
       roles.map(async (role) => {
         const skills = await resolveNovelSkills({ projectId: run.projectId, stage: "review" });
         const { agent } = await ctx.createAgentRecord({
@@ -29,19 +29,41 @@ export const reviewStageHandler: StageHandler = {
           goal: `${role} 独立审校`,
           skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
         });
-        const result = await callStructuredNovelModel<Record<string, unknown>>({
-          model: project.settings.textModel,
-          temperature: 0.15,
-          role,
-          skillPrompt: formatSkillPrompt(skills.skills),
-          schema: reviewerSchema,
-          prompt: `独立审校下面正文。不要读取或猜测写作者解释。只报告职责范围内且有证据的问题。\n\n蓝图：\n${blueprint.contentMarkdown}\n\n正文：\n${draft.contentMarkdown}\n\n相关事实：\n${formatContextPacket(packet)}`,
-        });
-        await ctx.finishAgent(agent, result);
-        const data = result.data as { scores: Partial<Record<QualityDimension, number>>; issues: Array<Omit<QualityIssue, "id" | "deterministic">> };
-        return { role, scores: data.scores, issues: data.issues } satisfies ReviewerFinding;
+        try {
+          const result = await callStructuredNovelModel<Record<string, unknown>>({
+            model: project.settings.textModel,
+            temperature: 0.15,
+            role,
+            skillPrompt: formatSkillPrompt(skills.skills),
+            schema: reviewerSchema,
+            prompt: `独立审校下面正文。不要读取或猜测写作者解释。只报告职责范围内且有证据的问题。\n\n蓝图：\n${blueprint.contentMarkdown}\n\n正文：\n${draft.contentMarkdown}\n\n相关事实：\n${formatReviewerContext(packet)}`,
+          });
+          await ctx.finishAgent(agent, result);
+          const data = result.data as { scores: Partial<Record<QualityDimension, number>>; issues: Array<Omit<QualityIssue, "id" | "deterministic">> };
+          return { role, scores: data.scores, issues: data.issues } satisfies ReviewerFinding;
+        } catch (error) {
+          await ctx.failAgent(agent, error);
+          throw error;
+        }
       }),
     );
+    const reviewers: ReviewerFinding[] = settled.map((result, index) => {
+      if (result.status === "fulfilled") return result.value;
+      const role = roles[index];
+      const message = result.reason instanceof Error ? result.reason.message : "未知错误";
+      return {
+        role,
+        scores: {},
+        issues: [{
+          dimension: "continuity",
+          severity: "warning",
+          title: `${role} 审校不可用`,
+          description: `该审校维度因调用失败而降级：${message}`,
+          rule: "reviewer.unavailable",
+          suggestion: "可重试该维度或进行人工审阅。其它维度的审校结果仍然有效。",
+        }],
+      } satisfies ReviewerFinding;
+    });
     const report = await saveQualityReport({
       projectId: run.projectId,
       workflowRunId: run.id,
@@ -52,7 +74,7 @@ export const reviewStageHandler: StageHandler = {
       threshold: project.settings.qualityThreshold,
     });
     // 保存质量报告产物到 artifact 账本（与原实现一致：创建但仅用于审计存档）
-    void ctx.saveArtifact(run, {
+    await ctx.saveArtifact(run, {
       projectId: run.projectId,
       workflowRunId: run.id,
       stage: "review",
@@ -63,6 +85,17 @@ export const reviewStageHandler: StageHandler = {
       skillRefs: [],
       contextPacketId: packet.id,
     });
+    if (run.previousScore !== undefined && report.weightedScore < run.previousScore && draft.parentArtifactId) {
+      const previousDraft = await novelDb.workflowArtifacts.get(draft.parentArtifactId);
+      if (previousDraft) {
+        await ctx.createApprovalProposal(run, previousDraft, "workflow-manuscript", `修订分数由 ${run.previousScore} 降至 ${report.weightedScore}，已恢复上一版本`);
+        const nextRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", {
+          qualityReportId: run.qualityReportId,
+          draftArtifactId: previousDraft.id,
+        });
+        return { run: nextRun, continueLoop: false };
+      }
+    }
     const shouldRevise = shouldAutoRevise({
       passed: report.passed,
       iteration: run.revisionIteration,

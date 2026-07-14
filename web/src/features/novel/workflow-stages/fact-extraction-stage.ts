@@ -32,6 +32,7 @@ export const factExtractionStageHandler: StageHandler = {
     });
     const data = result.data as { summary: string; facts: ExtractedFact[] };
     const facts = await storeFactCandidates({ projectId: run.projectId, workflowRunId: run.id, sourceArtifactId: draft.id, facts: data.facts });
+    await Promise.all(facts.map((item) => novelDb.factCandidates.update(item.id, { status: "accepted", updatedAt: Date.now() })));
     const artifact = await ctx.saveArtifact(run, {
       projectId: run.projectId,
       workflowRunId: run.id,
@@ -45,8 +46,7 @@ export const factExtractionStageHandler: StageHandler = {
       contextPacketId: packet.id,
     });
     await ctx.finishAgent(agent, { ...result, artifactId: artifact.id });
-    await ctx.createApprovalProposal(run, artifact, "workflow-facts", "事实差异待确认");
-    const nextRun = await ctx.transition(run, "fact-approval", "waiting-approval", { factCandidateIds: facts.map((item) => item.id) });
-    return { run: nextRun, continueLoop: false };
+    const nextRun = await ctx.transition(run, "commit", "running", { factCandidateIds: facts.map((item) => item.id) });
+    return { run: nextRun };
   },
 };
