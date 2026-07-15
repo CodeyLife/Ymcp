@@ -3,7 +3,9 @@ import { Input, InputNumber, Select, Switch } from "antd";
 const FIELD_LABELS: Record<string, string> = {
   kind: "类型", title: "标题", name: "名称", summary: "摘要", description: "说明",
   order: "顺序", status: "状态", centralQuestion: "核心命题", centralConflict: "核心冲突",
-  phases: "结构阶段",
+  phases: "幕",
+  phaseId: "所属幕",
+  plotSegmentId: "所属剧情段",
   theme: "主题", genre: "题材", tone: "基调", outcome: "结果",
   objective: "目标", conflict: "冲突", turningPoint: "转折", hook: "钩子",
   targetWords: "目标字数", informationRelease: "信息释放", mustHappen: "必须发生",

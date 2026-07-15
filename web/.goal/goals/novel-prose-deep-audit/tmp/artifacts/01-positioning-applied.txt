@@ -1,0 +1,45 @@
+{
+  "id": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+  "schemaVersion": 8,
+  "revision": 2,
+  "createdAt": 1784104125864,
+  "updatedAt": 1784104153958,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "title": "雾渡旧江湖",
+  "subtitle": "一卷血浸门人录",
+  "premise": "一名背负旧日门派秘案的江湖人，在雾中渡口、旧友恩怨与天下局势交织之中，重新寻找自己的名字与归处，并在复仇、守义与真相之间付出代价。",
+  "genre": [
+    "武侠",
+    "江湖群像",
+    "历史幻想"
+  ],
+  "audience": "喜欢人物群像、江湖恩怨与厚重情感叙事的成年读者。",
+  "themes": [
+    "义与背叛",
+    "人在旧事与今日选择之间如何承受自己的名字与因果",
+    "江湖规则与个人良知的冲突"
+  ],
+  "sellingPoints": [
+    "以一卷血浸门人录串联江湖旧债，以雾中渡口承载记忆与遗忘",
+    "重视人物选择、恩怨纠葛与群像生态，在冷峻江湖中保留偶然出现的侠气与温情"
+  ],
+  "pov": "有限第三人称",
+  "tense": "过去时",
+  "tone": "冷峻克制，偶有侠气",
+  "languageStyle": "半文半白，追求中文意境美与古典美学；以动作、物件、环境和沉默承载情绪，意象密集，少用形容词堆砌，以留白承重。",
+  "targetWords": 2000000,
+  "dailyGoal": 3000,
+  "status": "planning",
+  "coverColor": "#b5483a",
+  "settings": {
+    "textModel": "auto",
+    "temperature": 0.75,
+    "recentChapterCount": 5,
+    "encrypted": false,
+    "contentProfile": "general-serial",
+    "maxAutoRevisions": 2,
+    "qualityThreshold": 3.7,
+    "approvalMode": "blueprint-and-manuscript"
+  }
+}

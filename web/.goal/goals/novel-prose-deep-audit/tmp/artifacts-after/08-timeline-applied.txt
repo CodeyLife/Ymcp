@@ -1,0 +1,211 @@
+[
+  {
+    "id": "15126d19-bcb1-4bfe-99e7-2504f34f74ec",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288874,
+    "updatedAt": 1784106288874,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "雾中渡口相逢，以旧事换渡河",
+    "storyDate": "寒露屠门夜之后第四日",
+    "duration": "半日",
+    "narrativeOrder": 3,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "52ebb50b-2f61-4cf4-986f-9b72aef31414",
+      "c2579cbb-b572-40fb-ac1d-4d8f5963e143"
+    ],
+    "causeIds": [
+      "timeline_escape_fog"
+    ],
+    "consequenceIds": [
+      "timeline_new_identity"
+    ],
+    "description": "沈雁声在浓雾中遇见只在雾起时出现的渡口。哑渡不问姓名，不收金银，只将船篙横在渡前，等待她留下旧事。她交出一段不愿回忆的往事，换得渡河机会，也因此留下与哑渡之间无法轻易偿还的恩情。渡口雾散后，关于那夜的痕迹逐渐被江湖遗忘。"
+  },
+  {
+    "id": "1db992dd-af0c-4854-b45b-d8771c1283a0",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288872,
+    "updatedAt": 1784106288872,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "寒露屠门夜，听潮阁一夜无声",
+    "storyDate": "寒露十年之前",
+    "duration": "一夜",
+    "narrativeOrder": 1,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "ce123ed9-4c09-4f45-965d-e00ceaac828a",
+      "548e38f6-236c-44cd-80f4-4c3e58dfb5b1",
+      "b15eb95a-9b05-4eef-87f6-13f4a4d768ad",
+      "cfc35300-72c4-47e8-abf0-f6ad41252b52"
+    ],
+    "causeIds": [],
+    "consequenceIds": [
+      "timeline_escape_fog",
+      "timeline_ferry_encounter"
+    ],
+    "description": "寒露之夜，江湖第一大派听潮阁覆灭。沈雁声从被众人护在身后的掌门幼女，变成携血染门人录逃命的人。她在混乱中看见熟悉之人的背影，也第一次意识到，门派留下的不是单纯的仇恨，还有一卷无人愿意再提的旧债。听潮阁消失后，江湖势力重新洗牌，归剑山庄与各方势力逐渐填补旧日空缺。"
+  },
+  {
+    "id": "4bd249ae-938f-4d0f-94a0-087df1a9f80f",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288874,
+    "updatedAt": 1784106288874,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "渡河之后，沈雁声改名换姓入江湖",
+    "storyDate": "寒露之后一个月",
+    "duration": "约一个月",
+    "narrativeOrder": 4,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "52ebb50b-2f61-4cf4-986f-9b72aef31414"
+    ],
+    "causeIds": [
+      "timeline_ferry_encounter"
+    ],
+    "consequenceIds": [
+      "timeline_search_sword_path"
+    ],
+    "description": "渡河后的沈雁声以新的身份行走江湖。她没有寻找安稳生活，而是继续整理门人录中的痕迹，试图找到覆灭听潮阁的真正原因。她记住每一个名字，却还无法理解名字背后的恩债与诺债。"
+  },
+  {
+    "id": "691dc977-7ea8-4d03-aff1-0fc2eb2fd973",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288875,
+    "updatedAt": 1784106288875,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "裴门学剑，仇人与恩人的影子重叠",
+    "storyDate": "当下之前数月",
+    "duration": "持续数月",
+    "narrativeOrder": 7,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "548e38f6-236c-44cd-80f4-4c3e58dfb5b1",
+      "52ebb50b-2f61-4cf4-986f-9b72aef31414"
+    ],
+    "causeIds": [
+      "timeline_enter_guijian"
+    ],
+    "consequenceIds": [
+      "timeline_current_hidden_identity"
+    ],
+    "description": "沈雁声在裴长庚门下练剑。她逐渐发现裴长庚对听潮阁旧物的熟悉超过普通仇敌，也发现哑渡的过去似乎与这个人有关。她心中的复仇目标开始出现裂痕：若杀裴长庚，便可能伤及曾救她渡河之人守护的旧事。"
+  },
+  {
+    "id": "87c31f89-7f13-4fe0-826f-a30a1dc9ee27",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288873,
+    "updatedAt": 1784106288873,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "携门人录入雾，沈雁声失去旧身份",
+    "storyDate": "寒露屠门夜之后三日内",
+    "duration": "三日",
+    "narrativeOrder": 2,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "cfc35300-72c4-47e8-abf0-f6ad41252b52",
+      "ce123ed9-4c09-4f45-965d-e00ceaac828a"
+    ],
+    "causeIds": [
+      "timeline_hanlu_night"
+    ],
+    "consequenceIds": [
+      "timeline_ferry_encounter"
+    ],
+    "description": "沈雁声避开追杀，带着血染门人录沿江逃亡。曾经属于听潮阁的身份成为催命符，她不得不舍弃姓名、来历和旧日庇护。逃亡途中，她发现门人录第一页陆无名的名字异常，像一桩尚未结束的旧事，而非单纯的亡者记录。"
+  },
+  {
+    "id": "b5751ce2-9653-408f-b3c4-1454f1802658",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288876,
+    "updatedAt": 1784106288876,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "十年后当下，沈雁声藏剑于归剑山庄",
+    "storyDate": "寒露之后第十年秋",
+    "duration": "当前",
+    "narrativeOrder": 8,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "548e38f6-236c-44cd-80f4-4c3e58dfb5b1",
+      "b964ad45-ecae-46fe-9e39-c38b14b43de0",
+      "52ebb50b-2f61-4cf4-986f-9b72aef31414"
+    ],
+    "causeIds": [
+      "timeline_hidden_sword_training"
+    ],
+    "consequenceIds": [],
+    "description": "十年后的沈雁声仍以新身份潜伏学剑。她手中握着门人录，心中记着寒露夜，也记着雾中渡口留下的旧事。江湖已经习惯忘记听潮阁，但那些未偿还的债并未消失。她即将面对的，不再只是杀一个仇人，而是重新判断一桩旧债该由谁承担。"
+  },
+  {
+    "id": "b9083877-28a8-4588-a6dd-a14ba1e87007",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288875,
+    "updatedAt": 1784106288875,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "十年追索，江湖旧势重新排列",
+    "storyDate": "寒露之后一至九年",
+    "duration": "九年",
+    "narrativeOrder": 5,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "b964ad45-ecae-46fe-9e39-c38b14b43de0",
+      "548e38f6-236c-44cd-80f4-4c3e58dfb5b1",
+      "a70ae883-6136-419c-a2f5-8f793148af4d",
+      "b24b8bd1-5404-4d87-b551-edf86cbd590c"
+    ],
+    "causeIds": [
+      "timeline_new_identity"
+    ],
+    "consequenceIds": [
+      "timeline_enter_guijian"
+    ],
+    "description": "九年间，江湖已经不是当年的江湖。听潮阁成为旧传闻，归剑山庄声势渐盛，玄衣楼收集旧案，白鹭书院整理江湖典籍。沈雁声在各地追查门人录上的名字，却越来越发现，每一个名字背后都有未偿的因果。她原本只想找到仇人，却逐渐被迫面对一个更大的问题：谁真正欠下了谁的债。"
+  },
+  {
+    "id": "e956138f-7a84-4b9e-aa4b-b7993fa1ced8",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106288875,
+    "updatedAt": 1784106288875,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "潜入归剑山庄，拜入仇人门下",
+    "storyDate": "寒露之后第十年初",
+    "duration": "数月",
+    "narrativeOrder": 6,
+    "participantIds": [
+      "3f6d225f-09bf-412d-a99d-668797041554",
+      "548e38f6-236c-44cd-80f4-4c3e58dfb5b1",
+      "dd1a235a-567f-4a32-a3f4-9b995a95f3fd"
+    ],
+    "causeIds": [
+      "timeline_search_sword_path"
+    ],
+    "consequenceIds": [
+      "timeline_hidden_sword_training"
+    ],
+    "description": "沈雁声确认当年听潮阁覆灭与裴长庚有关，于是隐藏真实身份进入归剑山庄。她以弟子身份接近这个温雅有礼的剑宗，却发现对方并非传闻中简单的恶人。裴长庚一边授剑，一边暗中观察她的来历。沈雁声为了接近真相，主动选择把自己置于仇人眼前，也承担身份暴露后再无退路的代价。"
+  }
+]

@@ -76,21 +76,7 @@ export function sanitizeReferenceRecordInPlace(
   preserveTemporaryRefs = false,
 ) {
   if (table === "outlineNodes") {
-    delete record.tension;
-    delete record.emotion;
-    delete record.information;
-    delete record.status;
-    delete record.storyTime;
-    delete record.tags;
-    if (record.kind === "event" || !record.kind) {
-      if ("characterIds" in record) record.characterIds = uniqueValidIds(record.characterIds, catalog.characterIds, preserveTemporaryRefs);
-      if ("plotThreadIds" in record) record.plotThreadIds = uniqueValidIds(record.plotThreadIds, catalog.plotThreadIds, preserveTemporaryRefs);
-      if ("foreshadowingIds" in record) record.foreshadowingIds = uniqueValidIds(record.foreshadowingIds, catalog.foreshadowingIds, preserveTemporaryRefs);
-    } else {
-      delete record.characterIds;
-      delete record.plotThreadIds;
-      delete record.foreshadowingIds;
-    }
+    for (const retiredField of ["parentId", "kind", "tension", "emotion", "information", "status", "storyTime", "tags", "characterIds", "plotThreadIds", "foreshadowingIds"]) delete record[retiredField];
   }
   if (table === "scenes") {
     if ("characterIds" in record) record.characterIds = uniqueValidIds(record.characterIds, catalog.characterIds, preserveTemporaryRefs);
@@ -101,6 +87,8 @@ export function sanitizeReferenceRecordInPlace(
   if (table === "documents" && record.blueprint && typeof record.blueprint === "object" && !Array.isArray(record.blueprint)) {
     const blueprint = { ...(record.blueprint as Record<string, unknown>) };
     if ("characterIds" in blueprint) blueprint.characterIds = uniqueValidIds(blueprint.characterIds, catalog.characterIds, preserveTemporaryRefs);
+    if ("plotThreadIds" in blueprint) blueprint.plotThreadIds = uniqueValidIds(blueprint.plotThreadIds, catalog.plotThreadIds, preserveTemporaryRefs);
+    if ("foreshadowingIds" in blueprint) blueprint.foreshadowingIds = uniqueValidIds(blueprint.foreshadowingIds, catalog.foreshadowingIds, preserveTemporaryRefs);
     if ("povCharacterId" in blueprint) blueprint.povCharacterId = validOptionalId(blueprint.povCharacterId, catalog.characterIds, preserveTemporaryRefs);
     record.blueprint = blueprint;
   }
@@ -202,7 +190,7 @@ function assertPayloadReferences(
   tempRefs: Map<string, Set<ReferenceKind>>,
   aliases: Map<string, string>,
 ) {
-  if (item.targetTable === "outlineNodes" || item.targetTable === "scenes") {
+  if (item.targetTable === "scenes") {
     assertArrayField(item, payload, "characterIds", "character", catalog, tempRefs, aliases);
     assertArrayField(item, payload, "plotThreadIds", "plotThread", catalog, tempRefs, aliases);
     assertArrayField(item, payload, "foreshadowingIds", "foreshadowing", catalog, tempRefs, aliases);
@@ -211,6 +199,8 @@ function assertPayloadReferences(
   if (item.targetTable === "documents" && payload.blueprint && typeof payload.blueprint === "object" && !Array.isArray(payload.blueprint)) {
     const blueprint = payload.blueprint as Record<string, unknown>;
     assertArrayField(item, blueprint, "characterIds", "character", catalog, tempRefs, aliases);
+    assertArrayField(item, blueprint, "plotThreadIds", "plotThread", catalog, tempRefs, aliases);
+    assertArrayField(item, blueprint, "foreshadowingIds", "foreshadowing", catalog, tempRefs, aliases);
     assertOptionalField(item, blueprint, "povCharacterId", "character", catalog, tempRefs, aliases);
   }
   if (item.targetTable === "plotThreads" || item.targetTable === "timelineEvents") {
@@ -306,7 +296,7 @@ export function repairProposalCharacterReferences(
 
     // 处理 characterIds 数组字段（outlineNodes / scenes / documents.blueprint）
     const arrayTargets: Array<{ container: Record<string, unknown>; field: string }> = [];
-    if (table === "outlineNodes" || table === "scenes") {
+    if (table === "scenes") {
       if (Array.isArray(payload.characterIds)) arrayTargets.push({ container: payload, field: "characterIds" });
     }
     if (table === "documents" && payload.blueprint && typeof payload.blueprint === "object" && !Array.isArray(payload.blueprint)) {

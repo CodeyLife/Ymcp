@@ -1,815 +1,199 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Alert, App, Button, Dropdown, Empty, Input, Modal, Select, Tag, Tooltip } from "antd";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, App, Button, Empty, Input, Modal, Select, Tag, Tooltip } from "antd";
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
-  CaretDownOutlined,
-  CaretRightOutlined,
-  CheckCircleOutlined,
-  CloseOutlined,
   DeleteOutlined,
-  LoadingOutlined,
+  EditOutlined,
   PlusOutlined,
+  RobotOutlined,
+  SaveOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
-import { AnimatePresence, motion } from "motion/react";
 
-import { addOutlineNode, appendOperation, deleteOutlineBranch, normalizeArchitecturePhases, novelDb } from "./db";
-import { applyProposalItems, createNextOutlineAct, rejectProposal, runGenerationTask, runPlotDesignTask } from "./generation";
+import ArchitectureDataEditor from "./ArchitectureDataEditor";
+import GenerationComposer from "./GenerationComposer";
 import OutlineProposalReview from "./OutlineProposalReview";
-import { analyzeOutlineStructure, type OutlineStructureIssue } from "./outline-structure";
-import type { AIProposal, Foreshadowing, OutlineKind, OutlineNode, PlotThread, StoryEntity } from "./types";
+import {
+  addOutlineNode,
+  appendOperation,
+  createChapter,
+  deleteChapter,
+  deleteOutlineBranch,
+  ensureStoryArchitecture,
+  normalizeChapterOrderByPlanning,
+  novelDb,
+  saveStoryArchitecture,
+} from "./db";
+import { runPlotDesignTask } from "./generation";
+import type { ArchitecturePhase, ManuscriptDocument, OutlineNode, StoryArchitecture } from "./types";
 
-const FIELD_OPTIONS = [
-  { value: "title", label: "标题" },
-  { value: "summary", label: "概要" },
-];
+type OpenChapterPanel = "plan" | "manuscript" | "workflow";
 
-const KIND_LABEL: Record<OutlineKind, string> = { act: "幕", sequence: "剧情段", event: "事件" };
-const KIND_COLOR: Record<OutlineKind, string> = { act: "#722ed1", sequence: "#1677ff", event: "#13c2c2" };
-const KIND_DEPTH: Record<OutlineKind, number> = { act: 0, sequence: 1, event: 2 };
-const KIND_CHILD: Record<OutlineKind, OutlineKind | null> = { act: "sequence", sequence: "event", event: null };
-function nextTitle(kind: OutlineKind, count: number): string {
-  if (kind === "act") return `第${count + 1}幕`;
-  if (kind === "sequence") return `剧情段 ${count + 1}`;
-  return `事件 ${count + 1}`;
-}
-
-function compactReferenceLabels(node: OutlineNode, entities: StoryEntity[], threads: PlotThread[], clues: Foreshadowing[]) {
-  if (node.kind !== "event") return [];
-  const entityMap = new Map(entities.map((item) => [item.id, item.name]));
-  const threadMap = new Map(threads.map((item) => [item.id, item.title]));
-  const clueMap = new Map(clues.map((item) => [item.id, item.title]));
-  return [
-    ...node.characterIds.map((id) => entityMap.get(id) ?? "未知角色"),
-    ...node.plotThreadIds.map((id) => threadMap.get(id) ?? "未知剧情线"),
-    ...node.foreshadowingIds.map((id) => clueMap.get(id) ?? "未知伏笔"),
-  ];
-}
-
-type InlineTextProps = {
-  value: string;
-  onCommit: (next: string) => void;
-  placeholder?: string;
-  multiline?: boolean;
-  rows?: number;
-  className?: string;
-  style?: CSSProperties;
-};
-
-function InlineText({ value, onCommit, placeholder, multiline, rows = 1, className, style }: InlineTextProps) {
+function InlineText({ value, placeholder, multiline, onCommit }: { value: string; placeholder: string; multiline?: boolean; onCommit: (value: string) => void }) {
   const [draft, setDraft] = useState(value);
-  useEffect(() => { setDraft(value); }, [value]);
-  const commit = useCallback(() => {
-    if (draft !== value) onCommit(draft);
-  }, [draft, value, onCommit]);
-  if (multiline) {
-    return (
-      <Input.TextArea
-        className={className}
-        style={style}
-        value={draft}
-        rows={rows}
-        placeholder={placeholder}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        autoSize={{ minRows: rows, maxRows: 10 }}
-      />
-    );
-  }
-  return (
-    <Input
-      className={className}
-      style={style}
-      value={draft}
-      placeholder={placeholder}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-    />
-  );
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => { if (draft !== value) onCommit(draft); };
+  return multiline
+    ? <Input.TextArea value={draft} placeholder={placeholder} autoSize={{ minRows: 2, maxRows: 6 }} onChange={(event) => setDraft(event.target.value)} onBlur={commit} />
+    : <Input value={draft} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} onBlur={commit} />;
 }
 
-type BlockProps = {
-  node: OutlineNode;
-  nodes: OutlineNode[];
-  entities: StoryEntity[];
-  threads: PlotThread[];
-  clues: Foreshadowing[];
-  collapsedIds: Set<string>;
-  toggleCollapse: (id: string) => void;
-  onAddChild: (parent: OutlineNode, childKind: OutlineKind) => void;
-  onMove: (node: OutlineNode, direction: -1 | 1) => void;
-  onDelete: (nodeId: string) => void;
-  onRewriteSubtree: (node: OutlineNode) => void;
-  onReviseField: (node: OutlineNode) => void;
-  sectionProposalMap: Map<string, AIProposal>;
-  onAcceptSection: (proposalId: string) => void;
-  onRejectSection: (proposalId: string) => void;
-  sectionBusy: boolean;
-};
-
-function OutlineNodeBlock({
-  node,
-  nodes,
-  entities,
-  threads,
-  clues,
-  collapsedIds,
-  toggleCollapse,
-  onAddChild,
-  onMove,
-  onDelete,
-  onRewriteSubtree,
-  onReviseField,
-  sectionProposalMap,
-  onAcceptSection,
-  onRejectSection,
-  sectionBusy,
-}: BlockProps) {
-  const { modal } = App.useApp();
-  const sectionProposal = sectionProposalMap.get(node.id) ?? null;
-  const children = useMemo(
-    () => nodes.filter((item) => item.parentId === node.id).sort((a, b) => a.order - b.order),
-    [nodes, node.id],
-  );
-  const collapsed = collapsedIds.has(node.id);
-  const depth = KIND_DEPTH[node.kind];
-  const childKind = KIND_CHILD[node.kind];
-  const color = KIND_COLOR[node.kind];
-  const compactRefs = compactReferenceLabels(node, entities, threads, clues);
-
-  const update = useCallback(
-    async (changes: Partial<OutlineNode>) => {
-      const before = await novelDb.outlineNodes.get(node.id);
-      if (!before) return;
-      const next = { ...before, ...changes, revision: before.revision + 1, updatedAt: Date.now() };
-      await novelDb.outlineNodes.put(next);
-      await appendOperation(node.projectId, "outlineNodes", node.id, "update", { value: { before, after: next } });
-    },
-    [node.id, node.projectId],
-  );
-
-  const menuItems = [
-    ...(childKind
-      ? [{ key: "add-child", label: `添加${KIND_LABEL[childKind]}`, icon: <PlusOutlined /> }]
-      : []),
-    { key: "up", label: "上移", icon: <ArrowUpOutlined /> },
-    { key: "down", label: "下移", icon: <ArrowDownOutlined /> },
-    { key: "delete", label: "删除分支", icon: <DeleteOutlined />, danger: true },
-    { type: "divider" as const, key: "div-llm" },
-    { key: "llm-subtree", label: "LLM 重写子树", icon: <ThunderboltOutlined />, disabled: sectionBusy },
-    { key: "llm-field", label: "LLM 改写字段", icon: <ThunderboltOutlined />, disabled: sectionBusy },
-  ];
-
-  const onMenuClick = useCallback(
-    ({ key }: { key: string }) => {
-      if (key === "add-child" && childKind) onAddChild(node, childKind);
-      else if (key === "up") onMove(node, -1);
-      else if (key === "down") onMove(node, 1);
-      else if (key === "delete") {
-        modal.confirm({
-          title: `删除"${node.title}"?`,
-          content: "将删除该节点及其所有子节点, 不影响章节正文。",
-          okButtonProps: { danger: true },
-          onOk: () => onDelete(node.id),
-        });
-      } else if (key === "llm-subtree") {
-        onRewriteSubtree(node);
-      } else if (key === "llm-field") {
-        onReviseField(node);
-      }
-    },
-    [childKind, node, onAddChild, onMove, onDelete, onRewriteSubtree, onReviseField, modal, sectionBusy],
-  );
-
-  return (
-    <motion.article layout className="novel-outline-block" style={{ marginLeft: depth * 28 }}>
-      <header className="novel-outline-block-header">
-        <button
-          type="button"
-          className="novel-outline-collapse"
-          onClick={() => toggleCollapse(node.id)}
-          aria-label={collapsed ? "展开" : "折叠"}
-        >
-          {collapsed ? <CaretRightOutlined /> : <CaretDownOutlined />}
-        </button>
-        <Tag className="novel-outline-kind" color={color}>{KIND_LABEL[node.kind]}</Tag>
-        <InlineText
-          className="novel-outline-block-title"
-          value={node.title}
-          placeholder="节点标题"
-          onCommit={(value) => void update({ title: value })}
-        />
-        <Dropdown menu={{ items: menuItems, onClick: onMenuClick }} trigger={["click"]}>
-          <Button type="text" size="small" icon={<CaretDownOutlined />} aria-label="节点操作" />
-        </Dropdown>
-      </header>
-
-      {collapsed && node.kind === "event" && (
-        <div className="novel-outline-event-compact">
-          <p>{node.summary || "尚未填写事件概要"}</p>
-          {compactRefs.length > 0 && <div>{compactRefs.slice(0, 5).map((label, index) => <Tag key={`${label}-${index}`}>{label}</Tag>)}{compactRefs.length > 5 && <small>+{compactRefs.length - 5}</small>}</div>}
-        </div>
-      )}
-
-      <AnimatePresence initial={false}>
-        {sectionProposal && (
-          <motion.div
-            className="novel-outline-section-review"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.18 }}
-          >
-            <header className="novel-outline-section-review-header">
-              <Tag color="gold">{sectionProposal.taskKey === "outline-field-revise" ? "字段修订提议" : "子树重写提议"}</Tag>
-              <span>{sectionProposal.items.length} 个候选项</span>
-              <div className="novel-outline-section-review-actions">
-                <Button
-                  size="small"
-                  icon={sectionBusy ? <LoadingOutlined /> : <CheckCircleOutlined />}
-                  loading={sectionBusy}
-                  onClick={() => onAcceptSection(sectionProposal.id)}
-                >
-                  采纳替换
-                </Button>
-                <Button
-                  size="small"
-                  danger
-                  icon={<CloseOutlined />}
-                  disabled={sectionBusy}
-                  onClick={() => onRejectSection(sectionProposal.id)}
-                >
-                  拒绝
-                </Button>
-              </div>
-            </header>
-            <p className="novel-outline-section-review-summary">{sectionProposal.previewMarkdown.split("\n\n").slice(1).join("\n\n") || sectionProposal.title}</p>
-            <div className="novel-outline-section-review-items">
-              {sectionProposal.items.map((item) => (
-                <div key={item.id} className="novel-outline-section-review-item">
-                  <Tag color={item.operation === "create" ? "green" : "blue"}>
-                    {item.operation === "create" ? "新增" : "更新"}
-                  </Tag>
-                  <strong>{item.label}</strong>
-                  <span className="novel-outline-section-review-item-rationale">{item.rationale}</span>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence initial={false}>
-        {!collapsed && (
-          <motion.div
-            className="novel-outline-block-body"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.18 }}
-          >
-            <InlineText
-              multiline
-              rows={2}
-              className="novel-outline-block-summary"
-              value={node.summary}
-              placeholder="这一节点发生什么"
-              onCommit={(value) => void update({ summary: value })}
-            />
-            {node.kind === "event" && <div className="novel-outline-refs">
-              <Select
-                mode="multiple"
-                placeholder="关联角色"
-                value={node.characterIds}
-                maxTagCount="responsive"
-                options={entities.filter((item) => item.kind === "character").map((item) => ({ value: item.id, label: item.name }))}
-                onChange={(characterIds) => void update({ characterIds })}
-              />
-              <Select
-                mode="multiple"
-                placeholder="剧情线"
-                value={node.plotThreadIds}
-                maxTagCount="responsive"
-                options={threads.map((item) => ({ value: item.id, label: item.title }))}
-                onChange={(plotThreadIds) => void update({ plotThreadIds })}
-              />
-              <Select
-                mode="multiple"
-                placeholder="伏笔"
-                value={node.foreshadowingIds}
-                maxTagCount="responsive"
-                options={clues.map((item) => ({ value: item.id, label: item.title }))}
-                onChange={(foreshadowingIds) => void update({ foreshadowingIds })}
-              />
-            </div>}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence initial={false}>
-        {!collapsed && children.length > 0 && (
-          <motion.div className="novel-outline-children" layout>
-            {children.map((child) => (
-              <OutlineNodeBlock
-                key={child.id}
-                node={child}
-                nodes={nodes}
-                entities={entities}
-                threads={threads}
-                clues={clues}
-                collapsedIds={collapsedIds}
-                toggleCollapse={toggleCollapse}
-                onAddChild={onAddChild}
-                onMove={onMove}
-                onDelete={onDelete}
-                onRewriteSubtree={onRewriteSubtree}
-                onReviseField={onReviseField}
-                sectionProposalMap={sectionProposalMap}
-                onAcceptSection={onAcceptSection}
-                onRejectSection={onRejectSection}
-                sectionBusy={sectionBusy}
-              />
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.article>
-  );
-}
-
-function RecoveryNodeRow({
-  node,
-  issue,
-  validNodes,
-  onRepair,
-  onDelete,
-}: {
-  node: OutlineNode;
-  issue?: OutlineStructureIssue;
-  validNodes: OutlineNode[];
-  onRepair: (node: OutlineNode, parentId?: string) => void;
-  onDelete: (nodeId: string) => void;
+function ChapterRow({ document, onUpdate, onDelete, onOpen }: {
+  document: ManuscriptDocument;
+  onUpdate: (document: ManuscriptDocument, changes: Partial<ManuscriptDocument>) => void;
+  onDelete: (document: ManuscriptDocument) => void;
+  onOpen: (documentId: string, panel: OpenChapterPanel) => void;
 }) {
-  const candidates = validNodes.filter((item) => item.kind === (node.kind === "sequence" ? "act" : "sequence") && item.id !== node.id);
-  const [parentId, setParentId] = useState<string>();
-  useEffect(() => { setParentId(candidates[0]?.id); }, [node.id, candidates[0]?.id]);
-  return (
-    <div className="novel-outline-recovery-row">
-      <Tag color={KIND_COLOR[node.kind]}>{KIND_LABEL[node.kind]}</Tag>
-      <div><strong>{node.title}</strong><span>{issue?.message ?? "无法进入有效大纲树"}</span></div>
-      {node.kind === "act" ? (
-        <Button size="small" onClick={() => onRepair(node, undefined)}>设为根幕</Button>
-      ) : (
-        <div className="novel-outline-recovery-parent">
-          <Select size="small" value={parentId} placeholder={node.kind === "sequence" ? "选择所属幕" : "选择所属剧情段"} options={candidates.map((item) => ({ value: item.id, label: item.title }))} onChange={setParentId} />
-          <Button size="small" disabled={!parentId} onClick={() => onRepair(node, parentId)}>归入</Button>
-        </div>
-      )}
-      <Button danger type="text" size="small" icon={<DeleteOutlined />} aria-label={`删除${node.title}`} onClick={() => onDelete(node.id)} />
+  const [expanded, setExpanded] = useState(false);
+  const blueprint = document.blueprint;
+  return <div className="novel-planning-chapter-row">
+    <header>
+      <span className="novel-planning-chapter-order">{String(document.order + 1).padStart(2, "0")}</span>
+      <div className="novel-planning-chapter-title"><InlineText value={document.title} placeholder="章节标题" onCommit={(title) => onUpdate(document, { title })} /><small>{document.wordCount.toLocaleString()} 字 · {document.status}</small></div>
+      <div className="novel-planning-row-actions">
+        <Tooltip title="编辑章节蓝图"><Button type="text" aria-label="编辑章节蓝图" icon={<EditOutlined />} onClick={() => setExpanded((value) => !value)} /></Tooltip>
+        <Button size="small" onClick={() => onOpen(document.id, "manuscript")}>正文</Button>
+        <Tooltip title="自动章节流程"><Button type="text" aria-label="自动章节流程" icon={<ThunderboltOutlined />} onClick={() => onOpen(document.id, "workflow")} /></Tooltip>
+        <Tooltip title="删除章节"><Button danger type="text" aria-label="删除章节" icon={<DeleteOutlined />} onClick={() => onDelete(document)} /></Tooltip>
+      </div>
+    </header>
+    {expanded && <div className="novel-planning-chapter-editor">
+      <label>章节摘要<InlineText multiline value={document.summary} placeholder="本章推进与结尾变化" onCommit={(summary) => onUpdate(document, { summary })} /></label>
+      <label>本章目标<InlineText multiline value={blueprint.objective} placeholder="本章必须完成什么" onCommit={(objective) => onUpdate(document, { blueprint: { ...blueprint, objective } })} /></label>
+      <label>核心冲突<InlineText multiline value={blueprint.conflict} placeholder="谁想要什么，受到什么阻碍" onCommit={(conflict) => onUpdate(document, { blueprint: { ...blueprint, conflict } })} /></label>
+      <label>必须发生<InlineText multiline value={blueprint.mustHappen.join("\n")} placeholder="每行一个必须发生项" onCommit={(value) => onUpdate(document, { blueprint: { ...blueprint, mustHappen: value.split("\n").map((item) => item.trim()).filter(Boolean) } })} /></label>
+      <Button size="small" onClick={() => onOpen(document.id, "plan")}>打开完整章节规划</Button>
+    </div>}
+  </div>;
+}
+
+function SegmentSection({ segment, chapters, siblings, onUpdate, onMove, onDelete, onAddChapter, onUpdateChapter, onDeleteChapter, onOpenChapter }: {
+  segment: OutlineNode;
+  chapters: ManuscriptDocument[];
+  siblings: OutlineNode[];
+  onUpdate: (segment: OutlineNode, changes: Partial<OutlineNode>) => void;
+  onMove: (segment: OutlineNode, direction: -1 | 1) => void;
+  onDelete: (segment: OutlineNode) => void;
+  onAddChapter: (segment: OutlineNode) => void;
+  onUpdateChapter: (document: ManuscriptDocument, changes: Partial<ManuscriptDocument>) => void;
+  onDeleteChapter: (document: ManuscriptDocument) => void;
+  onOpenChapter: (documentId: string, panel: OpenChapterPanel) => void;
+}) {
+  const index = siblings.findIndex((item) => item.id === segment.id);
+  return <section className="novel-plot-segment">
+    <header className="novel-plot-segment-header">
+      <Tag color="blue">剧情段 {index + 1}</Tag>
+      <div><InlineText value={segment.title} placeholder="剧情段标题" onCommit={(title) => onUpdate(segment, { title })} /><InlineText multiline value={segment.summary} placeholder="人物处境、局部矛盾和结束时的局面变化" onCommit={(summary) => onUpdate(segment, { summary })} /></div>
+      <div className="novel-planning-row-actions">
+        <Tooltip title="上移剧情段"><Button type="text" aria-label="上移剧情段" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => onMove(segment, -1)} /></Tooltip>
+        <Tooltip title="下移剧情段"><Button type="text" aria-label="下移剧情段" icon={<ArrowDownOutlined />} disabled={index === siblings.length - 1} onClick={() => onMove(segment, 1)} /></Tooltip>
+        <Tooltip title="新增章节"><Button type="text" aria-label="新增章节" icon={<PlusOutlined />} onClick={() => onAddChapter(segment)} /></Tooltip>
+        <Tooltip title="删除剧情段"><Button danger type="text" aria-label="删除剧情段" icon={<DeleteOutlined />} onClick={() => onDelete(segment)} /></Tooltip>
+      </div>
+    </header>
+    <div className="novel-planning-chapter-list">
+      {chapters.map((document) => <ChapterRow key={document.id} document={document} onUpdate={onUpdateChapter} onDelete={onDeleteChapter} onOpen={onOpenChapter} />)}
+      {!chapters.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该剧情段还没有章节" />}
     </div>
-  );
+  </section>;
 }
 
-function OutlineRecoveryPanel({
-  invalidNodes,
-  validNodes,
-  issues,
-  onRepair,
-  onDelete,
-  onNormalizeOrders,
-}: {
-  invalidNodes: OutlineNode[];
-  validNodes: OutlineNode[];
-  issues: OutlineStructureIssue[];
-  onRepair: (node: OutlineNode, parentId?: string) => void;
-  onDelete: (nodeId: string) => void;
-  onNormalizeOrders: () => void;
-}) {
-  const issueMap = new Map(issues.map((issue) => [issue.nodeId, issue]));
-  const duplicateOrders = issues.filter((issue) => issue.code === "duplicate-order");
-  if (!invalidNodes.length && !duplicateOrders.length) return null;
-  return (
-    <section className="novel-outline-recovery" aria-label="未归类大纲内容">
-      <header><div><span>STRUCTURE CHECK</span><h3>未归类内容</h3><p>这些节点仍保留在本地，但当前父子关系无法进入正式大纲。</p></div><Tag color="warning">{invalidNodes.length + duplicateOrders.length} 项异常</Tag></header>
-      {duplicateOrders.length > 0 && <Alert type="warning" showIcon message="检测到同级顺序重复" description={<Button size="small" onClick={onNormalizeOrders}>按当前显示顺序重新编号</Button>} />}
-      <div className="novel-outline-recovery-list">{invalidNodes.map((node) => <RecoveryNodeRow key={node.id} node={node} issue={issueMap.get(node.id)} validNodes={validNodes} onRepair={onRepair} onDelete={onDelete} />)}</div>
-    </section>
-  );
-}
-
-export default function OutlineDocView({ projectId }: { projectId: string }) {
+export default function OutlineDocView({ projectId, onOpenChapter }: { projectId: string; onOpenChapter: (documentId: string, panel: OpenChapterPanel) => void }) {
   const { message, modal } = App.useApp();
-  const nodes = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
-  const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
-  const threads = useLiveQuery(() => novelDb.plotThreads.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
-  const clues = useLiveQuery(() => novelDb.foreshadowing.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const architecture = useLiveQuery(() => novelDb.architectures.where("projectId").equals(projectId).first(), [projectId]);
-  const fullProposal = useLiveQuery(async () => {
-    const all = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
-    return all.find((item) => item.status === "pending" && item.taskKey === "plot-design") ?? null;
-  }, [projectId], null);
-  const sectionProposals = useLiveQuery(async () => {
-    const all = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
-    return all.filter((item) => item.status === "pending" && (item.taskKey === "outline-section-update" || item.taskKey === "outline-field-revise"));
-  }, [projectId]) ?? [];
+  const segments = useLiveQuery(() => novelDb.outlineNodes.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
+  const documents = useLiveQuery(() => novelDb.documents.where("projectId").equals(projectId).sortBy("order"), [projectId]) ?? [];
+  const proposal = useLiveQuery(() => novelDb.proposals.where("projectId").equals(projectId).and((item) => item.status === "pending" && item.taskKey === "plot-design").first(), [projectId]);
+  const [draft, setDraft] = useState<StoryArchitecture>();
+  const [architectureOpen, setArchitectureOpen] = useState(true);
+  const [generatePhase, setGeneratePhase] = useState<ArchitecturePhase>();
+  const [instruction, setInstruction] = useState("");
+  const [generating, setGenerating] = useState(false);
 
-  const sectionProposalMap = useMemo(() => {
-    const map = new Map<string, AIProposal>();
-    for (const proposal of sectionProposals) {
-      if (proposal.targetId) map.set(proposal.targetId, proposal);
-    }
-    return map;
-  }, [sectionProposals]);
+  useEffect(() => { if (architecture) setDraft(architecture); else if (architecture === undefined) void ensureStoryArchitecture(projectId); }, [architecture, projectId]);
+  const phaseList = useMemo(() => [...(architecture?.phases ?? [])].sort((left, right) => left.order - right.order), [architecture]);
+  const segmentMap = useMemo(() => new Map(segments.map((segment) => [segment.id, segment])), [segments]);
+  const unassigned = documents.filter((document) => !document.plotSegmentId || !segmentMap.has(document.plotSegmentId));
 
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  const [sectionBusy, setSectionBusy] = useState(false);
-  const [rewriteTarget, setRewriteTarget] = useState<OutlineNode | null>(null);
-  const [rewriteInstruction, setRewriteInstruction] = useState("");
-  const [fieldReviseTarget, setFieldReviseTarget] = useState<OutlineNode | null>(null);
-  const [fieldReviseField, setFieldReviseField] = useState<string>("summary");
-  const [fieldReviseInstruction, setFieldReviseInstruction] = useState("");
-  const [generateOpen, setGenerateOpen] = useState(false);
-  const [generationBusy, setGenerationBusy] = useState(false);
-  const [generationInstruction, setGenerationInstruction] = useState("");
-  const generationAbortRef = useRef<AbortController | null>(null);
-  const knownNodeIds = useRef<Set<string>>(new Set());
-  const structure = useMemo(() => analyzeOutlineStructure(nodes), [nodes]);
-  const roots = structure.roots;
-  const validNodes = structure.validNodes;
-  const nextActTarget = useMemo(() => {
-    const occupiedOrders = new Set(roots.filter((node) => node.kind === "act").map((node) => node.order));
-    const phases = normalizeArchitecturePhases(architecture?.phases ?? []);
-    if (phases.length) {
-      const phase = phases.find((item) => !occupiedOrders.has(item.order));
-      return phase ? { order: phase.order, title: phase.title, phaseCount: phases.length } : null;
-    }
-    let order = 0;
-    while (occupiedOrders.has(order)) order += 1;
-    return { order, phaseCount: 0 };
-  }, [architecture?.phases, roots]);
-  const allArchitecturePhasesGenerated = Boolean(architecture?.phases.length) && !nextActTarget;
-  const nextActLabel = nextActTarget?.title ? `第 ${nextActTarget.order + 1} 幕「${nextActTarget.title}」` : `第 ${(nextActTarget?.order ?? 0) + 1} 幕`;
-  const latestAct = roots[roots.length - 1];
-  const latestActHasSegments = Boolean(latestAct && nodes.some((node) => node.kind === "sequence" && node.parentId === latestAct.id));
+  const updateSegment = useCallback(async (segment: OutlineNode, changes: Partial<OutlineNode>) => {
+    const before = await novelDb.outlineNodes.get(segment.id);
+    if (!before) return;
+    const next = { ...before, ...changes, revision: before.revision + 1, updatedAt: Date.now() };
+    await novelDb.outlineNodes.put(next);
+    await appendOperation(projectId, "outlineNodes", segment.id, "update", { value: { before, after: next } });
+  }, [projectId]);
 
-  useEffect(() => {
-    const known = knownNodeIds.current;
-    const newEvents = nodes.filter((node) => node.kind === "event" && !known.has(node.id)).map((node) => node.id);
-    if (newEvents.length) setCollapsedIds((current) => new Set([...current, ...newEvents]));
-    knownNodeIds.current = new Set(nodes.map((node) => node.id));
-  }, [nodes]);
+  const updateChapter = useCallback(async (document: ManuscriptDocument, changes: Partial<ManuscriptDocument>) => {
+    const before = await novelDb.documents.get(document.id);
+    if (!before) return;
+    const next = { ...before, ...changes, revision: before.revision + 1, updatedAt: Date.now() };
+    await novelDb.documents.put(next);
+    await appendOperation(projectId, "documents", document.id, "update", { value: { before, after: next } });
+  }, [projectId]);
 
-  const toggleCollapse = useCallback((id: string) => {
-    setCollapsedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  const expandAll = useCallback(() => setCollapsedIds(new Set()), []);
-  const collapseAll = useCallback(() => setCollapsedIds(new Set(nodes.map((item) => item.id))), [nodes]);
-
-  const onAddChild = useCallback(
-    async (parent: OutlineNode, childKind: OutlineKind) => {
-      const siblings = nodes.filter((item) => item.parentId === parent.id && item.kind === childKind);
-      await addOutlineNode(projectId, parent.id, childKind, nextTitle(childKind, siblings.length), siblings.length);
-      setCollapsedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(parent.id);
-        return next;
-      });
-      message.success(`已添加${KIND_LABEL[childKind]}`);
-    },
-    [projectId, nodes, message],
-  );
-
-  const onMove = useCallback(
-    async (node: OutlineNode, direction: -1 | 1) => {
-      const siblings = nodes
-        .filter((item) => item.parentId === node.parentId && item.kind === node.kind)
-        .sort((a, b) => a.order - b.order);
-      const index = siblings.findIndex((item) => item.id === node.id);
-      const target = siblings[index + direction];
-      if (!target) return;
-      await novelDb.outlineNodes.bulkPut([
-        { ...node, order: target.order, revision: node.revision + 1, updatedAt: Date.now() },
-        { ...target, order: node.order, revision: target.revision + 1, updatedAt: Date.now() },
-      ]);
-    },
-    [nodes],
-  );
-
-  const onDelete = useCallback(
-    async (nodeId: string) => {
-      await deleteOutlineBranch(projectId, nodeId);
-      message.success("已删除");
-    },
-    [projectId, message],
-  );
-
-  const onRepairParent = useCallback(
-    async (node: OutlineNode, parentId?: string) => {
-      const before = await novelDb.outlineNodes.get(node.id);
-      if (!before) return;
-      const next = { ...before, parentId, revision: before.revision + 1, updatedAt: Date.now() };
-      await novelDb.outlineNodes.put(next);
-      await appendOperation(projectId, "outlineNodes", node.id, "update", { value: { before, after: next } });
-      message.success(`“${node.title}”已重新归类`);
-    },
-    [projectId, message],
-  );
-
-  const normalizeOrders = useCallback(async () => {
-    const groups = new Map<string, OutlineNode[]>();
-    for (const node of validNodes) {
-      const key = `${node.parentId ?? "root"}:${node.kind}`;
-      const group = groups.get(key) ?? [];
-      group.push(node);
-      groups.set(key, group);
-    }
-    for (const group of groups.values()) {
-      const ordered = group.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
-      for (const [order, node] of ordered.entries()) {
-        if (node.order === order) continue;
-        const next = { ...node, order, revision: node.revision + 1, updatedAt: Date.now() };
-        await novelDb.outlineNodes.put(next);
-        await appendOperation(projectId, "outlineNodes", node.id, "update", { value: { before: node, after: next } });
-      }
-    }
-    message.success("同级节点顺序已重新编号");
-  }, [projectId, validNodes, message]);
-
-  const executePlotDesign = useCallback(async () => {
-    const controller = new AbortController();
-    generationAbortRef.current = controller;
-    setGenerationBusy(true);
-    try {
-      await runPlotDesignTask({ projectId, instruction: generationInstruction.trim(), signal: controller.signal });
-      setGenerateOpen(false);
-      message.success("剧情段候选已生成，请审核后追加");
-    } catch (error) {
-      if (!controller.signal.aborted) message.error(error instanceof Error ? error.message : "剧情设计失败");
-    } finally {
-      if (generationAbortRef.current === controller) generationAbortRef.current = null;
-      setGenerationBusy(false);
-    }
-  }, [projectId, generationInstruction, message]);
-
-  const createAct = useCallback(async () => {
-    try {
-      const act = await createNextOutlineAct(projectId);
-      message.success(`已创建“${act.title}”`);
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : "创建下一幕失败");
-    }
-  }, [projectId, message]);
-
-  const requestCreateAct = useCallback(() => {
-    if (latestAct && !latestActHasSegments) {
-      modal.confirm({ title: `“${latestAct.title}”还没有剧情段`, content: "仍要创建下一幕吗？", okText: "继续创建", onOk: createAct });
-      return;
-    }
-    void createAct();
-  }, [latestAct, latestActHasSegments, modal, createAct]);
-
-  const closeGenerationModal = useCallback(() => {
-    generationAbortRef.current?.abort();
-    setGenerateOpen(false);
-  }, []);
-
-  const onRewriteSubtree = useCallback((node: OutlineNode) => {
-    setRewriteTarget(node);
-    setRewriteInstruction(node.summary || `重写"${node.title}"及其子树, 保持兄弟节点不变。`);
-  }, []);
-
-  const executeRewrite = useCallback(
-    async (instruction: string) => {
-      if (!rewriteTarget) return;
-      setSectionBusy(true);
-      try {
-        await runGenerationTask({
-          projectId,
-          taskKey: "outline-section-update",
-          targetId: rewriteTarget.id,
-          instruction: instruction.trim() || `重写"${rewriteTarget.title}"及其子树。`,
-        });
-        setCollapsedIds((prev) => { const next = new Set(prev); next.delete(rewriteTarget.id); return next; });
-        message.success("子树重写提议已生成, 请在节点下方审核");
-      } catch (error) {
-        message.error(error instanceof Error ? error.message : "LLM 重写失败");
-      } finally {
-        setSectionBusy(false);
-        setRewriteTarget(null);
-      }
-    },
-    [projectId, rewriteTarget, message],
-  );
-
-  const onReviseField = useCallback((node: OutlineNode) => {
-    setFieldReviseTarget(node);
-    setFieldReviseField("summary");
-    setFieldReviseInstruction("");
-  }, []);
-
-  const executeFieldRevise = useCallback(
-    async (field: string, instruction: string) => {
-      if (!fieldReviseTarget) return;
-      setSectionBusy(true);
-      try {
-        await runGenerationTask({
-          projectId,
-          taskKey: "outline-field-revise",
-          targetId: fieldReviseTarget.id,
-          targetField: field,
-          instruction: instruction.trim() || `改写"${fieldReviseTarget.title}"的${field}字段。`,
-        });
-        message.success("字段修订提议已生成, 请在节点下方审核");
-      } catch (error) {
-        message.error(error instanceof Error ? error.message : "LLM 字段改写失败");
-      } finally {
-        setSectionBusy(false);
-        setFieldReviseTarget(null);
-      }
-    },
-    [projectId, fieldReviseTarget, message],
-  );
-
-  const onAcceptSection = useCallback(
-    async (proposalId: string) => {
-      setSectionBusy(true);
-      try {
-        const proposal = await novelDb.proposals.get(proposalId);
-        if (!proposal) throw new Error("提议不存在");
-        const result = await applyProposalItems(proposalId, proposal.items.map((item) => item.id));
-        const detail = result.conflicts ? `，${result.conflicts} 项冲突` : "";
-        message.success(`子树已替换 (${result.applied} 项${detail})`);
-      } catch (error) {
-        message.error(error instanceof Error ? error.message : "采纳失败");
-      } finally {
-        setSectionBusy(false);
-      }
-    },
-    [message],
-  );
-
-  const onRejectSection = useCallback(
-    async (proposalId: string) => {
-      setSectionBusy(true);
-      try {
-        await rejectProposal(proposalId);
-        message.success("已拒绝子树重写提议");
-      } catch (error) {
-        message.error(error instanceof Error ? error.message : "拒绝失败");
-      } finally {
-        setSectionBusy(false);
-      }
-    },
-    [message],
-  );
-
-  const generationModal = (
-    <Modal
-      title={`剧情设计 · ${latestAct?.title ?? "尚未创建幕"}`}
-      open={generateOpen}
-      onCancel={closeGenerationModal}
-      confirmLoading={generationBusy}
-      okText="生成候选"
-      cancelText="取消"
-      onOk={() => void executePlotDesign()}
-    >
-      <Alert type="info" showIcon message="向最新幕追加一个剧情段" description="每次生成 1 个剧情段和 2-4 个原子事件；留空时会根据项目记忆和当前大纲自然承接。" />
-      <Input.TextArea className="novel-outline-generation-instruction" autoSize={{ minRows: 4, maxRows: 9 }} value={generationInstruction} onChange={(event) => setGenerationInstruction(event.target.value)} placeholder="可选：指定接下来发生什么、必须出现什么或需要避免什么" />
-    </Modal>
-  );
-
-  if (fullProposal) {
-    return <>
-      <OutlineProposalReview proposal={fullProposal} replacingCount={nodes.length} entities={entities} threads={threads} clues={clues} onRegenerate={() => setGenerateOpen(true)} />
-      {generationModal}
-    </>;
+  async function addSegment(phase: ArchitecturePhase) {
+    const phaseSegments = segments.filter((segment) => segment.phaseId === phase.id);
+    const order = phaseSegments.reduce((max, segment) => Math.max(max, segment.order), -1) + 1;
+    await addOutlineNode(projectId, phase.id, `剧情段 ${order + 1}`, order);
   }
 
-  return (
-    <div className="novel-outline-workspace">
-      <header className="novel-section-title">
-        <div>
-          <span>STORY OUTLINE</span>
-          <h2>故事大纲</h2>
-          <p>按幕、剧情段和事件逐步铺陈故事。幕承接架构阶段，剧情设计每次只向最新幕追加一小段内容；这里不创建章节，也不持有正文。</p>
-        </div>
-        <div className="novel-outline-header-actions">
-          {roots.length > 0 && (
-            <>
-              <Button size="small" onClick={expandAll}>展开全部</Button>
-              <Button size="small" onClick={collapseAll}>折叠全部</Button>
-            </>
-          )}
-          <Tooltip title={allArchitecturePhasesGenerated ? "全部架构阶段均已创建，请先扩展全书架构" : `创建${nextActLabel}`}><span><Button icon={<PlusOutlined />} disabled={allArchitecturePhasesGenerated} onClick={requestCreateAct}>创建下一幕</Button></span></Tooltip>
-          <Tooltip title={latestAct ? `向“${latestAct.title}”追加剧情段` : "请先创建一幕"}><span><Button type="primary" icon={<ThunderboltOutlined />} disabled={!latestAct} onClick={() => setGenerateOpen(true)}>剧情设计</Button></span></Tooltip>
-        </div>
-      </header>
+  async function moveSegment(segment: OutlineNode, direction: -1 | 1) {
+    const siblings = segments.filter((item) => item.phaseId === segment.phaseId).sort((left, right) => left.order - right.order);
+    const index = siblings.findIndex((item) => item.id === segment.id);
+    const target = siblings[index + direction];
+    if (!target) return;
+    await novelDb.outlineNodes.bulkPut([
+      { ...segment, order: target.order, revision: segment.revision + 1, updatedAt: Date.now() },
+      { ...target, order: segment.order, revision: target.revision + 1, updatedAt: Date.now() },
+    ]);
+    await normalizeChapterOrderByPlanning(projectId);
+  }
 
-      <OutlineRecoveryPanel
-        invalidNodes={structure.invalidNodes}
-        validNodes={validNodes}
-        issues={structure.issues}
-        onRepair={(node, parentId) => void onRepairParent(node, parentId)}
-        onDelete={(nodeId) => modal.confirm({ title: "删除未归类节点？", content: "将删除该节点及其下级内容。", okText: "删除", okButtonProps: { danger: true }, onOk: () => onDelete(nodeId) })}
-        onNormalizeOrders={() => void normalizeOrders()}
-      />
+  function removeSegment(segment: OutlineNode) {
+    const chapterCount = documents.filter((document) => document.plotSegmentId === segment.id).length;
+    modal.confirm({ title: `删除“${segment.title}”？`, content: chapterCount ? `${chapterCount} 个章节会保留并移入待整理章节。` : "该剧情段将被删除。", okButtonProps: { danger: true }, onOk: () => deleteOutlineBranch(projectId, segment.id) });
+  }
 
-      {roots.length === 0 ? (
-        <div className="novel-empty-panel">
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={
-              <>
-                <strong>尚无故事大纲</strong>
-                <span>先根据全书架构创建一幕，再逐段进行剧情设计。</span>
-                <Button type="primary" icon={<PlusOutlined />} disabled={allArchitecturePhasesGenerated} onClick={requestCreateAct}>创建下一幕</Button>
-              </>
-            }
-          />
-        </div>
-      ) : (
-        <div className="novel-outline-doc">
-          {roots.map((node) => (
-            <OutlineNodeBlock
-              key={node.id}
-              node={node}
-              nodes={validNodes}
-              entities={entities}
-              threads={threads}
-              clues={clues}
-              collapsedIds={collapsedIds}
-              toggleCollapse={toggleCollapse}
-              onAddChild={onAddChild}
-              onMove={onMove}
-              onDelete={onDelete}
-              onRewriteSubtree={onRewriteSubtree}
-              onReviseField={onReviseField}
-              sectionProposalMap={sectionProposalMap}
-              onAcceptSection={onAcceptSection}
-              onRejectSection={onRejectSection}
-              sectionBusy={sectionBusy}
-            />
-          ))}
-        </div>
-      )}
+  function removeChapter(document: ManuscriptDocument) {
+    modal.confirm({ title: `删除“${document.title}”？`, content: "本章场景、正文版本和自动流程记录将一并删除。", okButtonProps: { danger: true }, onOk: () => deleteChapter(document.id) });
+  }
 
-      {generationModal}
+  async function generate() {
+    if (!generatePhase) return;
+    setGenerating(true);
+    try {
+      await runPlotDesignTask({ projectId, phaseId: generatePhase.id, instruction });
+      setGeneratePhase(undefined);
+      setInstruction("");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "剧情设计失败");
+    } finally {
+      setGenerating(false);
+    }
+  }
 
-      <Modal
-        title={`LLM 重写子树 — ${rewriteTarget?.title ?? ""}`}
-        open={Boolean(rewriteTarget)}
-        onCancel={() => setRewriteTarget(null)}
-        confirmLoading={sectionBusy}
-        okText="开始重写"
-        cancelText="取消"
-        onOk={() => void executeRewrite(rewriteInstruction)}
-      >
-        <p style={{ color: "var(--novel-muted)", fontSize: 12, marginBottom: 8 }}>
-          LLM 将重写该节点及其所有子节点。兄弟节点保持不变。重写后会出现审核面板, 可采纳或拒绝。
-        </p>
-        <Input.TextArea
-          autoSize={{ minRows: 3, maxRows: 8 }}
-          value={rewriteInstruction}
-          onChange={(event) => setRewriteInstruction(event.target.value)}
-          placeholder="输入重写要求, 例如: 增加冲突张力、改变因果方向、引入新角色..."
-        />
-      </Modal>
+  if (proposal) return <OutlineProposalReview proposal={proposal} onRegenerate={() => {
+    const phase = architecture?.phases.find((item) => item.id === proposal.targetId);
+    if (phase) setGeneratePhase(phase);
+  }} />;
 
-      <Modal
-        title={`LLM 改写字段 — ${fieldReviseTarget?.title ?? ""}`}
-        open={Boolean(fieldReviseTarget)}
-        onCancel={() => setFieldReviseTarget(null)}
-        confirmLoading={sectionBusy}
-        okText="开始改写"
-        cancelText="取消"
-        onOk={() => void executeFieldRevise(fieldReviseField, fieldReviseInstruction)}
-      >
-        <p style={{ color: "var(--novel-muted)", fontSize: 12, marginBottom: 8 }}>
-          LLM 将仅改写所选字段, 其他字段保持不变。改写后会出现审核面板, 可采纳或拒绝。
-        </p>
-        <div style={{ marginBottom: 12 }}>
-          <Select
-            style={{ width: "100%" }}
-            value={fieldReviseField}
-            onChange={setFieldReviseField}
-            options={FIELD_OPTIONS}
-          />
-        </div>
-        <Input.TextArea
-          autoSize={{ minRows: 3, maxRows: 8 }}
-          value={fieldReviseInstruction}
-          onChange={(event) => setFieldReviseInstruction(event.target.value)}
-          placeholder="输入改写要求, 例如: 更精炼、增加细节、改变语气..."
-        />
-      </Modal>
-    </div>
-  );
+  return <div className="novel-outline-document">
+    <header className="novel-section-title"><div><span>STORY PLANNING</span><h2>全书规划</h2><p>宏观阶段就是幕；每幕由剧情段组织，剧情段直接承载正式章节。</p></div><Button icon={<EditOutlined />} onClick={() => setArchitectureOpen((value) => !value)}>{architectureOpen ? "收起架构" : "编辑架构"}</Button></header>
+    {draft && architectureOpen && <section className="novel-planning-architecture-editor">
+      <div className="novel-planning-architecture-actions"><GenerationComposer projectId={projectId} scope="architecture" taskKeys={["architecture"]} actionLabel="生成架构方案" compact getRefinementSnapshot={() => ({ architectures: [draft as unknown as Record<string, unknown>] })} /><Button type="primary" icon={<SaveOutlined />} onClick={async () => { const saved = await saveStoryArchitecture(draft); setDraft(saved); message.success("全书架构已保存"); }}>保存架构</Button></div>
+      <ArchitectureDataEditor value={draft} onChange={(next) => setDraft({ ...draft, ...next })} />
+    </section>}
+    {!phaseList.length && <Alert type="warning" showIcon message="先建立至少一个宏观阶段" description="保存全书架构后，阶段会直接作为幕显示在这里。" />}
+    <div className="novel-phase-list">{phaseList.map((phase) => {
+      const phaseSegments = segments.filter((segment) => segment.phaseId === phase.id).sort((left, right) => left.order - right.order);
+      return <section className="novel-phase-section" key={phase.id}>
+        <header className="novel-phase-header"><div><Tag color="purple">第 {phase.order + 1} 幕</Tag><h3>{phase.title}</h3><p>{phase.purpose || "尚未填写叙事使命"}</p>{phase.turningPoint && <small>不可逆转折：{phase.turningPoint}</small>}</div><div><Button icon={<RobotOutlined />} onClick={() => setGeneratePhase(phase)}>AI 设计剧情段与章节</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => void addSegment(phase)}>新增剧情段</Button></div></header>
+        <div className="novel-phase-segments">{phaseSegments.map((segment) => <SegmentSection key={segment.id} segment={segment} siblings={phaseSegments} chapters={documents.filter((document) => document.plotSegmentId === segment.id)} onUpdate={(item, changes) => void updateSegment(item, changes)} onMove={(item, direction) => void moveSegment(item, direction)} onDelete={removeSegment} onAddChapter={async (item) => { const chapter = await createChapter(projectId, undefined, item.id); onOpenChapter(chapter.id, "plan"); }} onUpdateChapter={(document, changes) => void updateChapter(document, changes)} onDeleteChapter={removeChapter} onOpenChapter={onOpenChapter} />)}{!phaseSegments.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该幕还没有剧情段" />}</div>
+      </section>;
+    })}</div>
+    {unassigned.length > 0 && <section className="novel-unassigned-chapters"><header><div><Tag color="orange">待整理章节</Tag><strong>{unassigned.length} 章</strong></div><p>这些章节尚未归属剧情段，仍可编辑，但不会进入按幕组织的规划。</p></header>{unassigned.map((document) => <div key={document.id}><span>{document.title}</span><Select placeholder="选择剧情段" value={document.plotSegmentId} options={segments.map((segment) => ({ value: segment.id, label: `${phaseList.find((phase) => phase.id === segment.phaseId)?.title ?? "未知幕"} / ${segment.title}` }))} onChange={async (plotSegmentId) => { await updateChapter(document, { plotSegmentId }); await normalizeChapterOrderByPlanning(projectId); }} /><Button onClick={() => onOpenChapter(document.id, "manuscript")}>打开正文</Button></div>)}</section>}
+    <Modal title={`为“${generatePhase?.title ?? ""}”设计剧情段与章节`} open={Boolean(generatePhase)} confirmLoading={generating} okText="开始生成" cancelText="取消" onOk={() => void generate()} onCancel={() => { if (!generating) setGeneratePhase(undefined); }}><Input.TextArea rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="可选：说明本段要推进的矛盾、角色或伏笔" /></Modal>
+  </div>;
 }

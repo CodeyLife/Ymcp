@@ -2,9 +2,9 @@ import { Document, HeadingLevel, Packer, Paragraph } from "docx";
 import { strToU8, zipSync } from "fflate";
 import type { Table } from "dexie";
 import { novelDb } from "./db";
-import { cleanupReferenceIntegrity, migrateLegacyProposal, migrateOutlineNodeModel, removeReaderPromise, removeReaderPromiseFromProposal } from "./db-schema";
+import { cleanupReferenceIntegrity } from "./db-schema";
 
-const BACKUP_SCHEMA_VERSION = 12;
+const BACKUP_SCHEMA_VERSION = 13;
 const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "manuscriptChanges", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "factAssertions", "knowledgeAssertions", "narrativeUnits", "outlineRealizations", "derivedMemories", "preferenceSignals", "tasteProfiles", "embeddings", "conversationThreads", "conversationMessages", "conversationMemories", "creativeBriefs", "retrievalRuns", "memoryJobs"] as const;
 
 async function bundleProject(projectId: string) {
@@ -92,7 +92,7 @@ export async function exportNovel(projectId: string, format: "json" | "markdown"
 
 export async function importNovel(file: File) {
   const payload = JSON.parse(await file.text()) as Record<string, unknown> & { manifest?: { format?: string; schemaVersion?: number; integrity?: { algorithm?: string; tables?: Record<string, { count?: number; hash?: string }> } }; project?: { id?: string } };
-  if (payload.manifest?.format !== "ymcp-novel" || ![4, 5, 6, 7, 8, 9, 10, 11, 12].includes(payload.manifest.schemaVersion ?? 0) || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4-v12 文件");
+  if (payload.manifest?.format !== "ymcp-novel" || payload.manifest.schemaVersion !== BACKUP_SCHEMA_VERSION || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v13 文件");
   verifyProjectArchive(payload);
   const projectId = payload.project.id;
   const tables = ["projects", ...BACKUP_TABLES] as const;
@@ -100,21 +100,10 @@ export async function importNovel(file: File) {
     for (const table of tables) {
       const value = table === "projects" ? [payload.project] : payload[table];
       if (!Array.isArray(value)) continue;
-      const records = table === "proposals"
-        ? value.map((entry) => removeReaderPromiseFromProposal(migrateLegacyProposal({ ...(entry as Record<string, unknown>) })))
-        : table === "architectures"
-          ? value.map((entry) => removeReaderPromise({ ...(entry as Record<string, unknown>) }))
-          : table === "conversationMemories"
-            ? value.map((entry) => ({ evidenceQuotes: [], extractorVersion: "legacy-unverified", ...(entry as Record<string, unknown>) }))
-            : table === "retrievalRuns"
-              ? value.map((entry) => ({ purpose: (entry as Record<string, unknown>).messageId ? "conversation" : "workflow-stage", ...(entry as Record<string, unknown>) }))
-              : table === "memoryJobs"
-                ? value.map((entry) => ({ ...(entry as Record<string, unknown>), ...((entry as Record<string, unknown>).status === "running" ? { status: "pending", availableAt: Date.now(), leaseOwner: undefined, leaseExpiresAt: undefined } : {}) }))
-                : value as Record<string, unknown>[];
+      const records = value as Record<string, unknown>[];
       await (novelDb[table] as unknown as Table<Record<string, unknown>, string>).bulkPut(records);
     }
     await cleanupReferenceIntegrity(transaction);
-    await migrateOutlineNodeModel(transaction);
   });
   return projectId;
 }

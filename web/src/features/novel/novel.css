@@ -792,6 +792,54 @@
 .novel-phase-title .ant-input { color: #f1f2ee !important; font: 560 15px Georgia, "Noto Serif SC", serif; }
 .novel-phase-delete.ant-btn { width: 34px; min-width: 34px; height: 34px; padding: 0; color: #777b7f; border: 1px solid transparent; border-radius: 4px; }
 .novel-phase-delete.ant-btn:not(:disabled):hover { color: #ff8c80; border-color: rgba(200,93,78,.42); background: rgba(200,93,78,.12); }
+
+/* Unified phase -> plot segment -> chapter planning hierarchy. */
+.novel-outline-document { display: grid; gap: 22px; }
+.novel-planning-architecture-editor { padding: 18px 0 24px; border-top: 1px solid var(--novel-line); border-bottom: 1px solid var(--novel-line); }
+.novel-planning-architecture-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.novel-phase-list { display: grid; gap: 26px; }
+.novel-phase-section { min-width: 0; border-top: 1px solid #3a3d40; }
+.novel-phase-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 0 18px; }
+.novel-phase-header > div:first-child { min-width: 0; }
+.novel-phase-header h3 { display: inline; margin: 0 0 0 10px; color: #f0efeb; font: 520 21px Georgia, "Noto Serif SC", serif; }
+.novel-phase-header p { max-width: 820px; margin: 10px 0 4px; color: #b3b5b5; line-height: 1.65; }
+.novel-phase-header small { color: #d2a764; }
+.novel-phase-header > div:last-child { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.novel-phase-segments { display: grid; gap: 14px; }
+.novel-plot-segment { border: 1px solid #34373a; background: #181a1c; }
+.novel-plot-segment-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 14px 16px; border-bottom: 1px solid #2c2f31; }
+.novel-plot-segment-header > div:nth-child(2) { min-width: 0; display: grid; gap: 8px; }
+.novel-plot-segment-header .ant-input { border-color: transparent; background: #202326; color: #e6e5e1; }
+.novel-plot-segment-header input.ant-input { font-weight: 600; }
+.novel-planning-row-actions { display: flex; align-items: center; gap: 2px; }
+.novel-planning-chapter-list { background: #121416; }
+.novel-planning-chapter-row { border-bottom: 1px solid #292c2e; }
+.novel-planning-chapter-row:last-child { border-bottom: 0; }
+.novel-planning-chapter-row > header { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 58px; padding: 8px 12px; }
+.novel-planning-chapter-order { color: #73777b; font: 12px var(--font-mono); }
+.novel-planning-chapter-title { min-width: 0; display: grid; gap: 3px; }
+.novel-planning-chapter-title .ant-input { padding: 2px 6px; border-color: transparent; background: transparent; color: #e7e6e2; font-weight: 550; }
+.novel-planning-chapter-title small { padding-left: 7px; color: #767a7e; font: 10px var(--font-mono); }
+.novel-planning-chapter-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px 62px 18px; border-top: 1px solid #292c2e; background: #1a1c1e; }
+.novel-planning-chapter-editor label { display: grid; gap: 6px; color: #94989b; font: 11px var(--font-mono); }
+.novel-planning-chapter-editor .ant-input { border-color: #383b3e; background: #202326; color: #e6e5e1; }
+.novel-planning-chapter-editor > .ant-btn { justify-self: start; align-self: end; }
+.novel-unassigned-chapters { padding-top: 18px; border-top: 1px solid #5b4930; }
+.novel-unassigned-chapters > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.novel-unassigned-chapters > header p { margin: 0; color: var(--novel-muted); }
+.novel-unassigned-chapters > div { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 1fr) auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid #292c2e; }
+
+@media (max-width: 900px) {
+  .novel-phase-header, .novel-planning-architecture-actions { align-items: stretch; flex-direction: column; }
+  .novel-phase-header > div:last-child { justify-content: flex-start; }
+  .novel-plot-segment-header { grid-template-columns: auto minmax(0, 1fr); }
+  .novel-plot-segment-header > .novel-planning-row-actions { grid-column: 2; justify-content: flex-end; }
+  .novel-planning-chapter-row > header { grid-template-columns: 30px minmax(0, 1fr); }
+  .novel-planning-chapter-row .novel-planning-row-actions { grid-column: 2; flex-wrap: wrap; }
+  .novel-planning-chapter-editor { grid-template-columns: 1fr; padding: 14px; }
+  .novel-unassigned-chapters > header { align-items: flex-start; flex-direction: column; }
+  .novel-unassigned-chapters > div { grid-template-columns: 1fr; }
+}
 .novel-planning-workspace > .novel-workspace-tabs .ant-segmented { padding: 3px; border: 1px solid #303530; border-radius: 4px; background: #141714; }
 .novel-planning-workspace > .novel-workspace-tabs .ant-segmented-item { min-height: 30px; border-radius: 3px; color: #969b94; transition: color .2s ease, background .2s ease; }
 .novel-planning-workspace > .novel-workspace-tabs .ant-segmented-item:hover { color: #e6e9e3; }

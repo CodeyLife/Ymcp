@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { compileNovelContext } from "../context";
-import { createChapter, createNovelProject, novelDb, recordBase, saveStoryArchitecture } from "../db";
+import { addOutlineNode, createChapter, createNovelProject, novelDb, recordBase, saveStoryArchitecture } from "../db";
 import { commitAcceptedFacts, setFactCandidateStatus, storeFactCandidates } from "../facts";
 import type { FactAssertion, StoryEntity } from "../types";
 
@@ -11,6 +11,25 @@ beforeEach(async () => {
 });
 
 describe("context invariants and fact commits", () => {
+  it("provides acts, plot segments, and chapter planning data without outline events", async () => {
+    const project = await createNovelProject({ title: "规划上下文", genre: ["悬疑"], premise: "章节直接落实剧情段。" });
+    const architecture = (await novelDb.architectures.where("projectId").equals(project.id).first())!;
+    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase-1", title: "第一幕", purpose: "迫使主角离开", turningPoint: "故乡被封锁", order: 0, locked: false }] });
+    const segment = await addOutlineNode(project.id, "phase-1", "离开故乡", 0);
+    const chapter = await createChapter(project.id, "封锁之夜", segment.id);
+    await novelDb.documents.update(chapter.id, { summary: "主角在封锁前夜作出离开的决定。", blueprint: { ...chapter.blueprint, objective: "离开故乡", plotThreadIds: ["main-thread"], foreshadowingIds: ["sealed-gate"] } });
+
+    const packet = await compileNovelContext({ projectId: project.id, task: "plot-design", instruction: "继续规划", stage: "planning" });
+
+    expect(packet.sources.find((source) => source.kind === "architecture")?.content).toContain("第一幕");
+    expect(packet.sources.find((source) => source.id === segment.id)).toMatchObject({ title: "剧情段：离开故乡" });
+    const chapterSource = packet.sources.find((source) => source.id === chapter.id);
+    expect(chapterSource?.title).toBe("章节：封锁之夜");
+    expect(chapterSource?.content).toContain(`所属剧情段：${segment.id}`);
+    expect(chapterSource?.content).toContain("剧情线：main-thread");
+    expect(packet.sources.some((source) => source.title.includes("事件"))).toBe(false);
+  });
+
   it("includes complete mandatory rules without applying a project token budget", async () => {
     const project = await createNovelProject({ title: "规则测试", genre: ["奇幻"], premise: "潮水会改变记忆。" });
     const rule: StoryEntity = { ...recordBase(project.id), kind: "rule", name: "潮汐规则", aliases: [], summary: "退潮前不可说出失踪者姓名", description: "潮水".repeat(1200), tags: [], lockedFacts: ["退潮前说出姓名会让说话者失去相关记忆"], attributes: {} };

@@ -1,0 +1,16 @@
+[
+  {
+    "id": "5bddd918-cd0e-4023-a481-334e2ee21203",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106181867,
+    "updatedAt": 1784106181867,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "phaseId": "phase_1",
+    "title": "血夜渡雾",
+    "summary": "寒露之后，听潮阁一夜化为废墟，沈雁声从被保护的掌门幼女变成逃亡者。她携血染门人录穿过追杀与风雪，误入雾中渡口，以一段不愿回望的旧事换得渡河，背负无人知晓的旧债。",
+    "order": 0
+  }
+]

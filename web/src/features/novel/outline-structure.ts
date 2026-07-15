@@ -1,211 +1,97 @@
-import type { OutlineKind, OutlineNode, ProposalItem } from "./types";
+import type { ArchitecturePhase, OutlineNode, ProposalItem } from "./types";
 
-export type OutlineStructureNode = Pick<OutlineNode, "id" | "parentId" | "kind" | "title" | "order">;
+export type OutlineStructureIssueCode = "missing-phase" | "duplicate-order" | "invalid-proposal-item";
 
 export interface OutlineStructureIssue {
-  nodeId?: string;
-  code:
-    | "duplicate-id"
-    | "cycle"
-    | "act-has-parent"
-    | "missing-parent"
-    | "wrong-parent-kind"
-    | "invalid-ancestor"
-    | "duplicate-order"
-    | "missing-child"
-    | "invalid-operation"
-    | "invalid-table"
-    | "empty-outline";
+  code: OutlineStructureIssueCode;
+  nodeId: string;
   message: string;
 }
 
-export interface OutlineStructureAnalysis<T extends OutlineStructureNode> {
-  roots: T[];
-  validNodes: T[];
-  invalidNodes: T[];
-  validIds: Set<string>;
+export interface OutlineStructureAnalysis {
+  nodes: OutlineNode[];
+  invalidNodes: OutlineNode[];
   issues: OutlineStructureIssue[];
 }
 
-export interface OutlineProposalNode extends OutlineStructureNode {
-  proposalItemId: string;
-  summary: string;
-  characterIds: string[];
-  plotThreadIds: string[];
-  foreshadowingIds: string[];
-  rationale: string;
+function phaseIdSet(phases: readonly ArchitecturePhase[] | ReadonlySet<string>) {
+  return Array.isArray(phases)
+    ? new Set(phases.map((phase) => phase.id))
+    : new Set(phases as ReadonlySet<string>);
 }
 
-const EXPECTED_PARENT_KIND: Record<Exclude<OutlineKind, "act">, OutlineKind> = {
-  sequence: "act",
-  event: "sequence",
-};
-
-function sorted<T extends OutlineStructureNode>(nodes: T[]) {
-  return [...nodes].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title, "zh-CN"));
-}
-
-function cycleFor(nodeId: string, nodeMap: Map<string, OutlineStructureNode>) {
-  const visited = new Set<string>();
-  let current: OutlineStructureNode | undefined = nodeMap.get(nodeId);
-  while (current?.parentId) {
-    if (current.parentId === nodeId || visited.has(current.parentId)) return true;
-    visited.add(current.parentId);
-    current = nodeMap.get(current.parentId);
-  }
-  return false;
-}
-
-export function analyzeOutlineStructure<T extends OutlineStructureNode>(nodes: T[]): OutlineStructureAnalysis<T> {
+/**
+ * The planning hierarchy has one structural seam: phases own plot segments.
+ * Chapters are validated separately through ManuscriptDocument.plotSegmentId.
+ */
+export function analyzeOutlineStructure(
+  nodes: readonly OutlineNode[],
+  phases: readonly ArchitecturePhase[] | ReadonlySet<string>,
+): OutlineStructureAnalysis {
+  const validPhaseIds = phaseIdSet(phases);
   const issues: OutlineStructureIssue[] = [];
-  const duplicateIds = new Set<string>();
-  const seenIds = new Set<string>();
+  const invalidIds = new Set<string>();
+
   for (const node of nodes) {
-    if (seenIds.has(node.id)) duplicateIds.add(node.id);
-    seenIds.add(node.id);
+    if (!validPhaseIds.has(node.phaseId)) {
+      invalidIds.add(node.id);
+      issues.push({ code: "missing-phase", nodeId: node.id, message: `剧情段“${node.title}”没有归属到有效幕` });
+    }
   }
 
-  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
-  const directInvalid = new Map<string, OutlineStructureIssue>();
+  const orderGroups = new Map<string, OutlineNode[]>();
   for (const node of nodes) {
-    let issue: OutlineStructureIssue | undefined;
-    if (duplicateIds.has(node.id)) {
-      issue = { nodeId: node.id, code: "duplicate-id", message: "节点 ID 重复" };
-    } else if (cycleFor(node.id, nodeMap)) {
-      issue = { nodeId: node.id, code: "cycle", message: "父子关系存在循环引用" };
-    } else if (node.kind === "act" && node.parentId) {
-      issue = { nodeId: node.id, code: "act-has-parent", message: "幕必须位于大纲根级，不能拥有父节点" };
-    } else if (node.kind !== "act") {
-      const parent = node.parentId ? nodeMap.get(node.parentId) : undefined;
-      if (!node.parentId || !parent) {
-        issue = { nodeId: node.id, code: "missing-parent", message: `${node.kind === "sequence" ? "剧情段" : "事件"}缺少有效父节点` };
-      } else if (parent.kind !== EXPECTED_PARENT_KIND[node.kind]) {
-        issue = {
-          nodeId: node.id,
-          code: "wrong-parent-kind",
-          message: node.kind === "sequence" ? "剧情段必须归属于幕" : "事件必须归属于剧情段",
-        };
-      }
-    }
-    if (issue) directInvalid.set(node.id, issue);
+    if (invalidIds.has(node.id)) continue;
+    const key = `${node.phaseId}:${node.order}`;
+    orderGroups.set(key, [...(orderGroups.get(key) ?? []), node]);
   }
-
-  const validity = new Map<string, boolean>();
-  const isValid = (nodeId: string): boolean => {
-    const cached = validity.get(nodeId);
-    if (cached !== undefined) return cached;
-    if (directInvalid.has(nodeId)) {
-      validity.set(nodeId, false);
-      return false;
-    }
-    const node = nodeMap.get(nodeId);
-    if (!node) return false;
-    if (!node.parentId) {
-      const validRoot = node.kind === "act";
-      validity.set(nodeId, validRoot);
-      return validRoot;
-    }
-    validity.set(nodeId, false);
-    const valid = isValid(node.parentId);
-    validity.set(nodeId, valid);
-    return valid;
-  };
-
-  const validIds = new Set(nodes.filter((node) => isValid(node.id)).map((node) => node.id));
-  const invalidNodes = nodes.filter((node) => !validIds.has(node.id));
-  for (const node of invalidNodes) {
-    issues.push(directInvalid.get(node.id) ?? {
-      nodeId: node.id,
-      code: "invalid-ancestor",
-      message: "上级节点结构无效，当前节点无法进入大纲树",
-    });
-  }
-
-  const orderGroups = new Map<string, T[]>();
-  for (const node of nodes.filter((item) => validIds.has(item.id))) {
-    const key = `${node.parentId ?? "root"}:${node.kind}:${node.order}`;
-    const group = orderGroups.get(key) ?? [];
-    group.push(node);
-    orderGroups.set(key, group);
-  }
-  for (const group of orderGroups.values()) {
-    if (group.length < 2) continue;
-    for (const node of group) {
-      issues.push({ nodeId: node.id, code: "duplicate-order", message: "同级节点顺序重复，需要重新排序" });
+  for (const siblings of orderGroups.values()) {
+    if (siblings.length < 2) continue;
+    for (const node of siblings) {
+      invalidIds.add(node.id);
+      issues.push({ code: "duplicate-order", nodeId: node.id, message: `剧情段“${node.title}”与同幕其它剧情段顺序重复` });
     }
   }
 
-  const validNodes = nodes.filter((node) => validIds.has(node.id));
   return {
-    roots: sorted(validNodes.filter((node) => node.kind === "act" && !node.parentId)),
-    validNodes,
-    invalidNodes,
-    validIds,
+    nodes: [...nodes].filter((node) => !invalidIds.has(node.id)).sort((left, right) => left.order - right.order),
+    invalidNodes: [...nodes].filter((node) => invalidIds.has(node.id)),
     issues,
   };
 }
 
-function stringArray(value: unknown) {
-  return Array.isArray(value) ? value.map(String) : [];
-}
-
-function numberValue(value: unknown, fallback: number) {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function proposalNode(item: ProposalItem): OutlineProposalNode {
-  const payload = item.after ?? item.payload;
-  const rawParentId = typeof payload.parentId === "string" ? payload.parentId.trim() : "";
-  return {
-    id: item.tempId?.trim() || item.id,
-    parentId: rawParentId ? (rawParentId.startsWith("ref:") ? rawParentId.slice(4) : rawParentId) : undefined,
-    kind: payload.kind as OutlineKind,
-    title: String(payload.title || item.label || "未命名节点"),
-    summary: String(payload.summary || ""),
-    order: numberValue(payload.order, 0),
-    characterIds: payload.kind === "event" ? stringArray(payload.characterIds) : [],
-    plotThreadIds: payload.kind === "event" ? stringArray(payload.plotThreadIds) : [],
-    foreshadowingIds: payload.kind === "event" ? stringArray(payload.foreshadowingIds) : [],
-    rationale: item.rationale,
-    proposalItemId: item.id,
-  };
-}
-
-export function analyzeOutlineProposal(items: ProposalItem[], requireComplete = true) {
+export function analyzeOutlineProposal(
+  items: readonly ProposalItem[],
+  phases: readonly ArchitecturePhase[] | ReadonlySet<string>,
+): OutlineStructureAnalysis {
   const issues: OutlineStructureIssue[] = [];
-  const outlineItems = items.filter((item) => {
-    if (item.targetTable !== "outlineNodes") {
-      issues.push({ nodeId: item.id, code: "invalid-table", message: "完整大纲只能包含大纲节点" });
-      return false;
+  const nodes: OutlineNode[] = [];
+  for (const item of items) {
+    if (item.operation !== "create" || item.targetTable !== "outlineNodes") continue;
+    const phaseId = typeof item.payload.phaseId === "string" ? item.payload.phaseId : "";
+    const title = typeof item.payload.title === "string" ? item.payload.title : item.label;
+    const summary = typeof item.payload.summary === "string" ? item.payload.summary : "";
+    const order = Number(item.payload.order);
+    if (!phaseId || !Number.isInteger(order) || order < 0) {
+      issues.push({ code: "invalid-proposal-item", nodeId: item.id, message: `剧情段候选“${title}”缺少有效的幕归属或顺序` });
+      continue;
     }
-    if (item.operation !== "create") {
-      issues.push({ nodeId: item.id, code: "invalid-operation", message: "完整大纲必须以新树整体替换，不能混用更新操作" });
-      return false;
-    }
-    return true;
-  });
-  const nodes = outlineItems.map(proposalNode);
-  if (!nodes.length) issues.push({ code: "empty-outline", message: "候选大纲没有可采纳节点" });
-  const analysis = analyzeOutlineStructure(nodes);
-  issues.push(...analysis.issues);
-
-  if (requireComplete) {
-    const childKinds = new Map<string, Set<OutlineKind>>();
-    for (const node of analysis.validNodes) {
-      if (!node.parentId) continue;
-      const kinds = childKinds.get(node.parentId) ?? new Set<OutlineKind>();
-      kinds.add(node.kind);
-      childKinds.set(node.parentId, kinds);
-    }
-    for (const node of analysis.validNodes) {
-      if (node.kind === "act" && !childKinds.get(node.id)?.has("sequence")) {
-        issues.push({ nodeId: node.id, code: "missing-child", message: `幕“${node.title}”至少需要一个剧情段` });
-      }
-      if (node.kind === "sequence" && !childKinds.get(node.id)?.has("event")) {
-        issues.push({ nodeId: node.id, code: "missing-child", message: `剧情段“${node.title}”至少需要一个事件` });
-      }
-    }
+    const now = Date.now();
+    nodes.push({
+      id: item.tempId || item.id,
+      projectId: "proposal",
+      schemaVersion: 0,
+      revision: 0,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "proposal",
+      updatedBy: "proposal",
+      phaseId,
+      title,
+      summary,
+      order,
+    });
   }
-
-  return { ...analysis, nodes, issues };
+  const analysis = analyzeOutlineStructure(nodes, phases);
+  return { ...analysis, issues: [...issues, ...analysis.issues] };
 }

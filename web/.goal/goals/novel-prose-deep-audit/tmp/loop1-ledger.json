@@ -1,0 +1,49 @@
+{
+  "goalId": "novel-prose-deep-audit",
+  "loop": 1,
+  "plan": "Loop 1 策略：用真实 LLM 端到端跑通全新古典题材《寒灯渡》规划阶段 8 步 + 第一章工作流，捕获每步产物；以严格中文读者视角对草稿与终稿做独立文学审查，定位'AI 味'根因。",
+  "actions": [
+    "启动 vite dev server（PID 47904，端口 5175），确认 /ai-proxy 代理可用",
+    "创建 smoke-handeng.test.ts：古典武侠题材《寒灯渡》端到端测试，覆盖定位→时间线 + 第一章 context→manuscript-approval",
+    "适配重构后 API：用 runPlotDesignTask 替代已移除的 outline 任务；增加 getOrCreateThread + getDraftBrief + updateBrief + confirmBrief 流程",
+    "真实 LLM 跑通规划阶段 8 步 + 第一章全 stage，产物落盘 tmp/artifacts/",
+    "阅读草稿 13-chapter1-draft.md（243 段，约 5000 字）、终稿 15-chapter1-final.md（233 段）、质量报告 13-chapter1-quality-report.md（总分 2.75/5）",
+    "阅读 revision-stage.ts / quality.ts / prose-prompts.ts / draft-structure-repair.ts 源码定位工程根因",
+    "以严格中文读者视角做独立文学审查，将 6 大根因（R1-R6）写入 findings.md"
+  ],
+  "verification": [
+    { "result": "pass", "summary": "规划阶段 8 步全部真实生成：定位/架构/角色(5)/世界观/plot-design/剧情线/伏笔(5)/时间线，核心问题有哲学重量，角色声音区分度好", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/10-state-after-planning.md" },
+    { "result": "pass", "summary": "第一章全 stage 真实跑通：context→blueprint→draft→deterministic-check→review→revision→deterministic-check→manuscript-approval，产物完整", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/15-chapter1-final.md" },
+    { "result": "pass", "summary": "终稿成功截断语义性第二个结尾：草稿 231-243 段重复事件链被 revision-stage isRedundantIssue 关键词匹配删除", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/15-chapter1-final.md" },
+    { "result": "fail", "summary": "终稿仍残留解释性心理总结（137行'她第一次知道...'）、对白主题化（129行'活着的人要替死去的人记名字'）、短句排比 15 处、'忽然'3 次——因 revision-stage 只收 blocker+major 丢弃所有 warning", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/15-chapter1-final.md" },
+    { "result": "fail", "summary": "6 个 mustHappen blocker 全是误报：containsMeaning bigram 0.6 阈值对含标点复合要求误判，正文实际已完成节拍只是措辞不同", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/13-chapter1-quality-report.md" },
+    { "result": "pass", "summary": "6 大 AI 味根因（R1-R6）已命名并附真实产物证据：R1 revision 丢弃 warning / R2 无解释性总结修复 / R3 写作契约缺硬约束 / R4 containsMeaning 误判 / R5 短句阈值过严 / R6 修订建议含糊", "path": ".goal/goals/novel-prose-deep-audit/findings.md" }
+  ],
+  "errors": [
+    "第一版 smoke 测试用旧 API（taskKey:'outline'、startChapterWorkflow 无 thread/brief）失败，已适配重构后 API",
+    "TypeError: Invalid argument to Table.get() 在 startChapterWorkflow——需 brief.status==='confirmed'，已增加 getOrCreateThread+updateBrief+confirmBrief 流程"
+  ],
+  "artifactRefs": [
+    { "id": "draft", "successSignalId": "real-e2e-generation", "kind": "test-output", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/13-chapter1-draft.md", "evidence": "草稿 243 段约 5000 字，含语义性第二个结尾", "status": "verified" },
+    { "id": "final", "successSignalId": "real-e2e-generation", "kind": "test-output", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/15-chapter1-final.md", "evidence": "终稿 233 段，第二个结尾已截断但风格类 AI 味残留", "status": "verified" },
+    { "id": "quality-report", "successSignalId": "ai-flavor-rootcaused", "kind": "test-output", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/13-chapter1-quality-report.md", "evidence": "总分 2.75/5，6 误报 blocker + 多个 major/warning", "status": "verified" },
+    { "id": "findings", "successSignalId": "ai-flavor-rootcaused", "kind": "analysis", "path": ".goal/goals/novel-prose-deep-audit/findings.md", "evidence": "独立 LLM 文学审查 + 6 大根因 R1-R6", "status": "produced" },
+    { "id": "context-packet", "successSignalId": "real-e2e-generation", "kind": "test-output", "path": ".goal/goals/novel-prose-deep-audit/tmp/artifacts/12-chapter1-context-packet.md", "evidence": "章节上下文包含角色 voice/伏笔/架构，规划质量证据", "status": "verified" }
+  ],
+  "selfReflection": "Loop 1 成功用真实 LLM 端到端跑通《寒灯渡》规划阶段 + 第一章工作流，捕获全部产物。关键发现：规划阶段质量足够支撑长篇；终稿已成功截断语义性第二个结尾；但风格类 AI 味（解释性心理总结/对白主题化/短句排比/强调词贬值）原样残留。根因清晰：revision-stage 只收 blocker+major 丢弃所有 warning（R1），无确定性修复删除作者式总结句（R2），写作契约缺硬约束（R3），containsMeaning 误判（R4），短句阈值过严（R5），修订建议含糊（R6）。下一循环针对高杠杆缺陷窄改。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "真实端到端+独立审查策略有效，根因已定位并附证据。Loop 2 窄改后重跑即可验证改善。",
+    "confidence": 0.9,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.25,
+  "successSignalUpdates": [
+    { "action": "satisfy", "id": "intent-preserved", "status": "satisfied", "evidenceRefs": [".goal/goals/novel-prose-deep-audit/goal.md"] },
+    { "action": "satisfy", "id": "evidence-reviewed", "status": "satisfied", "evidenceRefs": [".goal/goals/novel-prose-deep-audit/findings.md"] },
+    { "action": "observe", "id": "real-e2e-generation", "status": "observed", "evidenceRefs": [".goal/goals/novel-prose-deep-audit/tmp/artifacts/15-chapter1-final.md"] },
+    { "action": "observe", "id": "ai-flavor-rootcaused", "status": "observed", "evidenceRefs": [".goal/goals/novel-prose-deep-audit/findings.md"] }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 2 策略：按 R3→R2→R1→R6→R4→R5 顺序窄改，重跑同题材第 1 章对比 before/after。\n1. prose-prompts.ts 新增硬约束：禁作者式心理结论句（列举范式+正反例）、禁对白宣告主题、强化短句排比上限\n2. draft-structure-repair.ts 新增 repairInterpretiveSummaries 确定性删除/改写作者式总结句\n3. revision-stage.ts 把风格类 warning 累计达阈值升级 major 送修订 + issueList 追加可执行指令\n4. quality.ts 修 containsMeaning 误报降级 + 短句阈值 ≤6→≤10 字\n5. tsc + 相关测试 + 构建验证\n6. Loop 3 重跑同题材对比"
+}

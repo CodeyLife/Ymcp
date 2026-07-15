@@ -20,14 +20,14 @@ describe("architecture data editor", () => {
     expect(html).toContain("全书梗概");
     expect(html).toContain("宏观阶段");
     expect(html).toContain("缺口出现");
-    expect(html).toContain("添加阶段");
+    expect(html).toContain("添加幕");
   });
 
   it("keeps the domain presentation but hides mutation controls in before-data previews", () => {
     const html = renderToStaticMarkup(<ArchitectureDataEditor value={architecture} readOnly preview />);
     expect(html).toContain("主角是否愿意承担真相的代价");
     expect(html).toContain("主角发现自己的档案也是伪造的");
-    expect(html).not.toContain("添加阶段");
+    expect(html).not.toContain("添加幕");
     expect(html).not.toContain("删除缺口出现");
   });
 

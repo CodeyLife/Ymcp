@@ -11,7 +11,6 @@ export type EntityKind =
   | "ability"
   | "term";
 
-export type OutlineKind = "act" | "sequence" | "event";
 export type StoryFramework = "free" | "three-act" | "four-part" | "save-the-cat" | "snowflake";
 export type PlotThreadKind = "main" | "subplot" | "romance" | "growth" | "mystery" | "antagonist";
 export type ProjectRole = "owner" | "editor" | "commenter" | "reader";
@@ -106,6 +105,8 @@ export interface ChapterBlueprint {
   povCharacterId?: string;
   locationIds: string[];
   characterIds: string[];
+  plotThreadIds: string[];
+  foreshadowingIds: string[];
   conflict: string;
   informationRelease: string[];
   mustHappen: string[];
@@ -132,30 +133,12 @@ export interface StoryArchitecture extends VersionedRecord {
   phases: ArchitecturePhase[];
 }
 
-interface OutlineNodeBase extends VersionedRecord {
-  parentId?: string;
-  kind: OutlineKind;
+export interface OutlineNode extends VersionedRecord {
+  phaseId: string;
   title: string;
   summary: string;
   order: number;
 }
-
-export interface OutlineActNode extends OutlineNodeBase {
-  kind: "act";
-}
-
-export interface OutlineSequenceNode extends OutlineNodeBase {
-  kind: "sequence";
-}
-
-export interface OutlineEventNode extends OutlineNodeBase {
-  kind: "event";
-  characterIds: string[];
-  plotThreadIds: string[];
-  foreshadowingIds: string[];
-}
-
-export type OutlineNode = OutlineActNode | OutlineSequenceNode | OutlineEventNode;
 
 export interface StoryScene extends VersionedRecord {
   chapterId: string;
@@ -177,6 +160,7 @@ export interface StoryScene extends VersionedRecord {
 
 export interface ManuscriptDocument extends VersionedRecord {
   order: number;
+  plotSegmentId?: string;
   title: string;
   blueprint: ChapterBlueprint;
   contentHtml: string;
@@ -435,7 +419,7 @@ export interface NovelRetrievalRound {
 export interface NovelRetrievalRun extends VersionedRecord {
   threadId?: string;
   messageId?: string;
-  targetKind?: "document" | "outline-act" | "project";
+  targetKind?: "document" | "architecture-phase" | "project";
   targetId?: string;
   targetDocumentId?: string;
   informationView: "author" | "reader" | "character";
@@ -509,10 +493,7 @@ export type NovelGenerationScope = "architecture" | "outline" | "plot-design" | 
 export type NovelGenerationTaskKey =
   | "project-positioning"
   | "architecture"
-  | "outline"
   | "plot-design"
-  | "outline-section-update"
-  | "outline-field-revise"
   | "story-bible"
   | "characters"
   | "relations"
@@ -521,7 +502,6 @@ export type NovelGenerationTaskKey =
   | "plot-threads"
   | "foreshadowing"
   | "story-control"
-  | "chapter-arrangement"
   | "chapter-plan"
   | "scene-design"
   | "chapter-draft"
@@ -543,7 +523,7 @@ export interface AIProposal extends VersionedRecord {
   artifactId?: string;
   generationMode?: "generate" | "refine";
   sourceFingerprint?: string;
-  outlineGenerationMode?: "full-replace" | "act-append" | "plot-segment-append";
+  outlineGenerationMode?: "plot-segment-append";
   architecturePhaseId?: string;
   architecturePhaseOrder?: number;
 }

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../ai", () => ({ streamNovelModel: vi.fn() }));
 
 import { streamNovelModel } from "../ai";
-import { repairDraftStructureOnce, repairPunctuationBreaks, truncateTrailingSecondEnding } from "../workflow-stages/draft-structure-repair";
+import { repairDraftStructureOnce, repairEmphasisDevaluation, repairInterpretiveSummaries, repairPunctuationBreaks, truncateTrailingSecondEnding } from "../workflow-stages/draft-structure-repair";
 
 beforeEach(() => {
   vi.mocked(streamNovelModel).mockReset();
@@ -143,5 +143,135 @@ describe("draft structure repair", () => {
     // 引号外多余句号被移除
     expect(result.content).not.toContain("\u201D\u3002");
     expect(result.content).toContain("\u201D阿落忽然开口");
+  });
+
+  it("removes author-style interpretive summary sentences from narrative paragraphs", () => {
+    const content = [
+      "她没有回头。寒露落在发间。",
+      "她第一次知道，离开一座山门，不一定需要有人赶。有时候，是自己先转身。",
+      "她沿着后山旧路奔去，脚踝隐隐作痛。",
+    ].join("\n\n");
+
+    const result = repairInterpretiveSummaries(content);
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCount).toBe(1);
+    expect(result.content).toContain("她没有回头。寒露落在发间。");
+    expect(result.content).toContain("她沿着后山旧路奔去");
+    expect(result.content).not.toContain("她第一次知道");
+  });
+
+  it("removes interpretive sentences within multi-sentence paragraphs without dropping other content", () => {
+    const content = [
+      "她推开暗门。里面没有尸体。也没有打斗痕迹。这意味着有人提前来过，而且知道要找什么。她将铜扣放回原处。",
+    ].join("\n\n");
+
+    const result = repairInterpretiveSummaries(content);
+
+    expect(result.repaired).toBe(true);
+    expect(result.content).toContain("她推开暗门。里面没有尸体。也没有打斗痕迹。");
+    expect(result.content).toContain("她将铜扣放回原处。");
+    expect(result.content).not.toContain("这意味着");
+  });
+
+  it("preserves dialogue paragraphs containing interpretive-looking phrases", () => {
+    const content = [
+      "\u201C她第一次知道这件事的时候，也是在这个渡口。\u201D老人缓缓开口。",
+      "她沿着后山旧路奔去。",
+    ].join("\n\n");
+
+    const result = repairInterpretiveSummaries(content);
+
+    expect(result.repaired).toBe(false);
+    expect(result.content).toBe(content);
+  });
+
+  it("does not remove concrete action without explanatory conclusions", () => {
+    const content = "她咬住牙，沿着后山旧路奔去。身后传来一声闷响。她没有回头。";
+
+    const result = repairInterpretiveSummaries(content);
+
+    expect(result.repaired).toBe(false);
+    expect(result.content).toBe(content);
+  });
+
+  it("removes she-knows-if motivational explanation patterns", () => {
+    const content = [
+      "一路上，她没有喊人，也没有再去看那些倒下的身影。",
+      "不是不想看，而是她知道，若现在停下来，脚就再也迈不出去。",
+      "她转身往正阁走。",
+    ].join("\n\n");
+
+    const result = repairInterpretiveSummaries(content);
+
+    expect(result.repaired).toBe(true);
+    expect(result.content).toContain("一路上，她没有喊人");
+    expect(result.content).toContain("她转身往正阁走。");
+    expect(result.content).not.toContain("她知道，若现在停下来");
+  });
+
+  it("removes 'she first felt' interpretive sentences (D1 觉得 extension)", () => {
+    const content = [
+      "她没有回头。寒露落在发间。",
+      "她第一次觉得，这卷薄薄的册子，比一柄剑还重。",
+      "她转身往正阁走。",
+    ].join("\n\n");
+
+    const result = repairInterpretiveSummaries(content);
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCount).toBe(1);
+    expect(result.content).toContain("她没有回头。寒露落在发间。");
+    expect(result.content).toContain("她转身往正阁走。");
+    expect(result.content).not.toContain("她第一次觉得");
+  });
+
+  it("removes excess emphasis words beyond 2 occurrences", () => {
+    const content = [
+      "院外忽然有人奔来，脚步乱得不像听潮阁弟子。",
+      "藏书楼方向，火光忽然窜起。那不是普通失火。",
+      "直到天将亮时，江面忽然起了大雾。",
+      "忽然，一盏灯出现在雾里。很小。",
+    ].join("\n\n");
+
+    const result = repairEmphasisDevaluation(content);
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCount).toBe(2);
+    // 前两次保留
+    expect(result.content).toContain("院外忽然有人奔来");
+    expect(result.content).toContain("火光忽然窜起");
+    // 第三次及以后删除
+    expect(result.content).not.toContain("江面忽然起了大雾");
+    expect(result.content).toContain("江面起了大雾");
+    // "忽然，"连同逗号删除
+    expect(result.content).not.toContain("忽然，一盏灯");
+    expect(result.content).toContain("一盏灯出现在雾里");
+  });
+
+  it("preserves emphasis words within 2 occurrences", () => {
+    const content = [
+      "院外忽然有人奔来。",
+      "火光忽然窜起。",
+    ].join("\n\n");
+
+    const result = repairEmphasisDevaluation(content);
+
+    expect(result.repaired).toBe(false);
+    expect(result.content).toBe(content);
+  });
+
+  it("does not remove emphasis words from dialogue paragraphs", () => {
+    const content = [
+      "\u201C他忽然回头看了我一眼。\u201D老人缓缓开口。",
+      "\u201C忽然就下雨了。\u201D",
+      "\u201C忽然就不见了。\u201D",
+      "\u201C忽然又出现了。\u201D",
+    ].join("\n\n");
+
+    const result = repairEmphasisDevaluation(content);
+
+    expect(result.repaired).toBe(false);
+    expect(result.content).toBe(content);
   });
 });

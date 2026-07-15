@@ -1,12 +1,12 @@
 import { normalizeArchitecturePhases, novelDb, recordBase } from "./db";
 import { vectorSearch } from "./retrieval";
 import { resolveNovelSkills } from "./skills";
-import type { ContextSource, DerivedMemory, FactAssertion, NovelAgentRole, NovelContextPacket, NovelRetrievalHit, NovelSkillManifest, NovelSkillStage, StoryEntity, WorkflowStage } from "./types";
+import type { ContextSource, DerivedMemory, FactAssertion, ManuscriptDocument, NovelAgentRole, NovelContextPacket, NovelRetrievalHit, NovelSkillManifest, NovelSkillStage, StoryEntity, WorkflowStage } from "./types";
 
 const LAYERS: ContextSource["layer"][] = ["mandatory", "working", "continuity", "retrieval", "background"];
 
 const ROLE_SOURCE_KINDS: Partial<Record<NovelAgentRole, Set<ContextSource["kind"]>>> = {
-  architect: new Set(["instruction", "style", "architecture", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "fact", "memory", "creative-brief", "skill", "conversation-memory"]),
+  architect: new Set(["instruction", "style", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "fact", "memory", "creative-brief", "skill", "conversation-memory"]),
   writer: new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
   "style-reviewer": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill", "conversation-memory"]),
   "character-reviewer": new Set(["instruction", "style", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
@@ -111,6 +111,19 @@ function memoryText(memory: DerivedMemory) {
     ...memory.content.inheritedPressures.map((item) => `继承压力：${item}`),
   ];
   return [memory.summary, ...details].filter(Boolean).join("\n");
+}
+
+function chapterPlanningText(document: ManuscriptDocument) {
+  return [
+    document.plotSegmentId ? `所属剧情段：${document.plotSegmentId}` : "所属剧情段：待整理",
+    `章节摘要：${document.summary || "暂无"}`,
+    `章节目标：${document.blueprint.objective || "暂无"}`,
+    `冲突：${document.blueprint.conflict || "暂无"}`,
+    `角色：${document.blueprint.characterIds.join("、") || "未设置"}`,
+    `剧情线：${(document.blueprint.plotThreadIds ?? []).join("、") || "未设置"}`,
+    `伏笔：${(document.blueprint.foreshadowingIds ?? []).join("、") || "未设置"}`,
+    document.plainText,
+  ].filter(Boolean).join("\n");
 }
 
 function revealOrder(assertion: FactAssertion, documentOrderByRevision: Map<string, number>) {
@@ -218,7 +231,7 @@ export async function compileNovelContext(params: {
     item.skillId = skill.skillId;
     push(item);
   }
-  if (target) push(source({ kind: "document", id: target.id, title: `当前章节：${target.title}`, content: target.plainText, weight: 98, layer: "mandatory", pinned: true, reason: "当前工作正文", priorityClass: "working" }));
+  if (target) push(source({ kind: "document", id: target.id, title: `当前章节：${target.title}`, content: chapterPlanningText(target), weight: 98, layer: "mandatory", pinned: true, reason: "当前章节标题、摘要、蓝图与正文", priorityClass: "working" }));
 
   for (const entity of entities) {
     const detail = entityContent(entity, mode, characterId, { compactCharacter: task === "worldview" });
@@ -240,7 +253,8 @@ export async function compileNovelContext(params: {
     push(source({ kind: "relation", id: relation.id, title: `${from} → ${to}`, content, weight: (task === "worldview" ? 70 : 48) + relevance(terms, `${from} ${to}`), layer: relationLayer, reason: task === "worldview" ? "已有实体关系，生成新设定时参考" : "关系人物与当前任务相关" }));
   }
   if (mode === "author") {
-    for (const node of outline.slice(0, 60)) push(source({ kind: "outline", id: node.id, title: `${node.kind}：${node.title}`, content: node.summary, weight: 55 + relevance(terms, `${node.title} ${node.summary}`) + (vectorScoreMap.get(node.id) ?? 0) * 40, layer: "retrieval", reason: "作者视角中的未来创作契约", priorityClass: "working" }));
+    for (const node of outline.slice(0, 60)) push(source({ kind: "outline", id: node.id, title: `剧情段：${node.title}`, content: `所属幕：${node.phaseId}\n${node.summary}`, weight: 55 + relevance(terms, `${node.title} ${node.summary}`) + (vectorScoreMap.get(node.id) ?? 0) * 40, layer: "retrieval", reason: "作者视角中的未来创作契约", priorityClass: "working" }));
+    for (const document of documents.filter((item) => item.id !== target?.id)) push(source({ kind: "document", id: document.id, title: `章节：${document.title}`, content: chapterPlanningText(document), weight: 54 + relevance(terms, `${document.title} ${document.summary}`) + (vectorScoreMap.get(document.id) ?? 0) * 40, layer: "retrieval", reason: "章节标题、摘要、蓝图与所属剧情段", priorityClass: "working", narrativeOrder: document.order }));
   }
   for (const scene of scenes.filter((item) => !target || item.chapterId === target.id)) {
     const characterNames = scene.characterIds.map((id) => entities.find((item) => item.id === id)?.name).filter(Boolean).join("、");

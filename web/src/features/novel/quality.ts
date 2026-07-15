@@ -94,7 +94,12 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     if (forbidden && containsMeaning(text, forbidden)) issues.push(issue({ dimension: "continuity", severity: "blocker", title: "触发章节禁止事项", description: forbidden, excerpt: forbidden, rule: "chapter-blueprint.forbidden", suggestion: "移除该情节，或先修改并重新批准章节蓝图。" }));
   }
   for (const required of params.blueprint?.mustHappen ?? []) {
-    if (required && !containsMeaning(text, required)) issues.push(issue({ dimension: "plot", severity: "blocker", title: "遗漏必须发生的节拍", description: required, rule: "chapter-blueprint.mustHappen", suggestion: "补写能明确落实该节拍的行动与结果。" }));
+    // R4: containsMeaning bigram 匹配对含标点的复合要求（如"听潮阁屠门夜必须呈现，但不提前揭示幕后真相"）
+    // 有高误报率（措辞不同即判漏）。降级为 major 而非 blocker：
+    // - blockerCount 只反映真实阻断（forbidden 触发等），使 qualityReport.passed 可信
+    // - revision-stage 仍特判过滤 deterministic mustHappen，不影响 LLM 修订
+    // - LLM reviewer (plot-reviewer) 独立检查节拍是否遗漏，可标 major/blocker
+    if (required && !containsMeaning(text, required)) issues.push(issue({ dimension: "plot", severity: "major", title: "遗漏必须发生的节拍", description: required, rule: "chapter-blueprint.mustHappen", suggestion: "补写能明确落实该节拍的行动与结果。" }));
   }
   if (totalChars < 300) issues.push(issue({ dimension: "plot", severity: "major", title: "正文过短", description: "当前文本不足以形成完整章节推进。", rule: "chapter.minimum-substance", suggestion: "依据蓝图补齐场景行动、反应与结果。" }));
   if (blocks.length >= 6 && paragraphVariation < 0.18) issues.push(issue({ dimension: "pacing", severity: "warning", title: "段落节奏过于均匀", description: "段落长度变化很小，可能产生模型化节奏。", rule: "style.paragraph-variation", suggestion: "按动作速度和情绪停顿重新划分段落，而非机械打散。" }));
@@ -126,7 +131,8 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     }
     const sentences = block.split(/[。！？\n]/).map((s) => s.trim()).filter(Boolean);
     for (const s of sentences) {
-      if (s.length > 0 && s.length <= 6) shortSentenceStreak += 1;
+      // R5: 阈值从 ≤6 放宽到 ≤10，覆盖"里面没有尸体。""也没有打斗痕迹。"等 7-10 字短句排比
+      if (s.length > 0 && s.length <= 10) shortSentenceStreak += 1;
       else shortSentenceStreak = 0;
       if (shortSentenceStreak >= 3) { shortSentenceStreaks += 1; shortSentenceStreak = 0; }
     }

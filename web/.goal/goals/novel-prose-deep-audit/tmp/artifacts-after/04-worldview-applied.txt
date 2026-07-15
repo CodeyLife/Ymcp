@@ -1,0 +1,277 @@
+[
+  {
+    "id": "2b29a732-28e5-495f-a395-5153862cee20",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103096,
+    "updatedAt": 1784106103096,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "rule",
+    "name": "记与忘之代价",
+    "aliases": [
+      "遗忘之律"
+    ],
+    "summary": "忘却旧事并非解脱，而是将影响留给后来者。",
+    "description": "主动遗忘旧事会失去相关的人情、判断和部分自我。",
+    "tags": [
+      "记忆",
+      "代价",
+      "因果"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  },
+  {
+    "id": "2f7e2061-c9fa-4e7f-a1c4-b27961f1881b",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103092,
+    "updatedAt": 1784106103092,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "organization",
+    "name": "大晟王朝",
+    "aliases": [
+      "大晟",
+      "晟朝"
+    ],
+    "summary": "江湖诸派与朝堂并存的大江南北之国。",
+    "description": "皇权居上，江湖自成一脉，朝堂通过关隘、盐运、兵籍与名册维持对江湖的牵制。",
+    "tags": [
+      "王朝",
+      "朝堂",
+      "江湖制衡"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  },
+  {
+    "id": "58502927-8e28-41ac-b79c-188580107801",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103096,
+    "updatedAt": 1784106103096,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "rule",
+    "name": "江湖旧债法则",
+    "aliases": [
+      "旧债律"
+    ],
+    "summary": "江湖中恩怨偿还的无形规则。",
+    "description": "旧债分为血债、恩债、诺债，偿债意味着因果不再继续压向后来之人。",
+    "tags": [
+      "世界规则",
+      "因果",
+      "江湖"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  },
+  {
+    "id": "a70ae883-6136-419c-a2f5-8f793148af4d",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103095,
+    "updatedAt": 1784106103095,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "faction",
+    "name": "玄衣楼",
+    "aliases": [
+      "玄衣"
+    ],
+    "summary": "行走于暗处的江湖组织，掌握许多旧案与隐秘交易。",
+    "description": "不立山门，弟子散落各地，以买卖消息和追查旧事为生。",
+    "tags": [
+      "情报",
+      "暗线",
+      "旧闻"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  },
+  {
+    "id": "b15eb95a-9b05-4eef-87f6-13f4a4d768ad",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103093,
+    "updatedAt": 1784106103093,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "organization",
+    "name": "听潮阁",
+    "aliases": [
+      "潮阁",
+      "昔日天下第一派"
+    ],
+    "summary": "寒露夜覆灭的江湖第一大派，留下血浸门人录与未清旧债。",
+    "description": "曾以剑术、藏书和调停江湖纷争闻名，灭亡后江湖势力重新洗牌。",
+    "tags": [
+      "已灭门派",
+      "剑道",
+      "旧债"
+    ],
+    "lockedFacts": [
+      "寒露那年一夜覆灭"
+    ],
+    "attributes": {}
+  },
+  {
+    "id": "b24b8bd1-5404-4d87-b551-edf86cbd590c",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103094,
+    "updatedAt": 1784106103094,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "organization",
+    "name": "白鹭书院",
+    "aliases": [
+      "白鹭院"
+    ],
+    "summary": "以文武并修闻名的江湖势力。",
+    "description": "擅长整理江湖典籍、调停争端，弟子常入朝为官。",
+    "tags": [
+      "书院",
+      "文武",
+      "庙堂关系"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  },
+  {
+    "id": "c2579cbb-b572-40fb-ac1d-4d8f5963e143",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103095,
+    "updatedAt": 1784106103095,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "location",
+    "name": "雾中渡口",
+    "aliases": [
+      "雾渡",
+      "哑渡之舟"
+    ],
+    "summary": "只在大江起雾时出现的渡口，渡人不收金银，只收一桩旧事。",
+    "description": "无固定所在，浓雾遮江时显现，渡客留下旧事后渡过江。",
+    "tags": [
+      "异象",
+      "渡口",
+      "记与忘"
+    ],
+    "lockedFacts": [
+      "只在雾起时浮现",
+      "摆渡不收钱只收旧事",
+      "渡过则旧事归渡口"
+    ],
+    "attributes": {}
+  },
+  {
+    "id": "ce4e0e23-fc51-456b-a8aa-d065752de328",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103097,
+    "updatedAt": 1784106103097,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "location",
+    "name": "寒潮关",
+    "aliases": [
+      "北关"
+    ],
+    "summary": "大江北岸的重要关隘。",
+    "description": "连接朝廷军道与江湖北行之路，由朝廷驻军把守。",
+    "tags": [
+      "关隘",
+      "朝廷",
+      "江湖入口"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  },
+  {
+    "id": "cfc35300-72c4-47e8-abf0-f6ad41252b52",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103096,
+    "updatedAt": 1784106103096,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "item",
+    "name": "门人录",
+    "aliases": [
+      "血录"
+    ],
+    "summary": "记录听潮阁门人与江湖旧债的血染名册。",
+    "description": "名字牵连未偿旧债，传闻录尽之日所有名字背后的债会有一个归处。",
+    "tags": [
+      "名册",
+      "旧债",
+      "听潮阁遗物"
+    ],
+    "lockedFacts": [
+      "沈雁声携带血染门人录"
+    ],
+    "attributes": {}
+  },
+  {
+    "id": "dd1a235a-567f-4a32-a3f4-9b995a95f3fd",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103093,
+    "updatedAt": 1784106103093,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "organization",
+    "name": "归剑山庄",
+    "aliases": [
+      "归剑庄"
+    ],
+    "summary": "现今江湖最负盛名的剑派之一。",
+    "description": "以君子剑法与门规森严著称，十年前听潮阁覆灭一事使其声望之下藏有阴影。",
+    "tags": [
+      "剑派",
+      "名门",
+      "裴长庚"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  },
+  {
+    "id": "fc20c124-b321-428a-92d7-9e28d49bcd86",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106103097,
+    "updatedAt": 1784106103097,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "location",
+    "name": "临江古镇",
+    "aliases": [
+      "临江镇"
+    ],
+    "summary": "大江南岸旧商镇，酒肆、船行与江湖客汇聚之地。",
+    "description": "因水路便利成为各方势力交汇处。",
+    "tags": [
+      "古镇",
+      "市井",
+      "消息"
+    ],
+    "lockedFacts": [],
+    "attributes": {}
+  }
+]

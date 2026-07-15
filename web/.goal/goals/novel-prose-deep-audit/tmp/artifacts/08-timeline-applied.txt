@@ -1,0 +1,203 @@
+[
+  {
+    "id": "09dc85e3-8d6b-4778-8b55-fe4e8beaa1a2",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413009,
+    "updatedAt": 1784104413009,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "改名换姓，潜入旧敌门下",
+    "storyDate": "屠门夜后第一年至第二年",
+    "duration": "约两年",
+    "narrativeOrder": 5,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "2f5e657f-c419-4759-a830-a2bd3b78a9c5"
+    ],
+    "causeIds": [
+      "timeline_event_ferry_after",
+      "timeline_event_search_old_debt"
+    ],
+    "consequenceIds": [
+      "timeline_event_study_sword"
+    ],
+    "description": "沈雁声根据门人录线索靠近裴长庚所在的江湖势力，改换身份进入其门下。她原本将拜师视为复仇道路上的一把刀，只想学会足以杀死仇人的剑。裴长庚接受她，却并未完全信任这个来历不明的弟子，两人在师徒表象下开始了一场彼此试探。"
+  },
+  {
+    "id": "25587d4a-6976-4e76-ae03-5dac08374dca",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413009,
+    "updatedAt": 1784104413009,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "渡尽之后无人归",
+    "storyDate": "寒露屠门夜后一周内",
+    "duration": "数日",
+    "narrativeOrder": 4,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "31276404-538d-4309-9eec-8adc8c03ce76"
+    ],
+    "causeIds": [
+      "timeline_event_cold_lamp_ferry"
+    ],
+    "consequenceIds": [
+      "timeline_event_hidden_identity",
+      "timeline_event_search_old_debt"
+    ],
+    "description": "渡河之后，沈雁声发现世上已经没有她能回去的地方。她带着门人录离开渡口，开始循着其中残缺姓名寻找旧债。她误以为所有名字都是仇人，却在离开渡口时留下第一个疑问：为何哑渡愿意救一个逃亡的听潮阁遗孤，又为何对那些旧事如此执着。"
+  },
+  {
+    "id": "621118ca-61c0-4dbf-a712-a3a7caa135b9",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413010,
+    "updatedAt": 1784104413010,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "十年磨剑，仇人与师",
+    "storyDate": "屠门夜后第三年至第九年",
+    "duration": "约七年",
+    "narrativeOrder": 6,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "2f5e657f-c419-4759-a830-a2bd3b78a9c5"
+    ],
+    "causeIds": [
+      "timeline_event_hidden_identity"
+    ],
+    "consequenceIds": [
+      "timeline_event_old_survivors",
+      "timeline_event_current_sword_training"
+    ],
+    "description": "漫长岁月里，沈雁声在裴长庚门下学剑。她从一个只会记住血债的少女，逐渐变成能够看见剑意背后人的剑修。裴长庚以严苛方式教她，也在日常相处中不断暴露与听潮阁旧案有关的痕迹。江湖十年更替，旧门派散去，新势力兴起，许多人已经忘记听潮阁，但沈雁声始终没有放下那卷染血门人录。"
+  },
+  {
+    "id": "6c9d9e06-d167-4493-b89d-960c0bdaffe0",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413007,
+    "updatedAt": 1784104413007,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "携录入雾，遗孤逃亡",
+    "storyDate": "寒露屠门夜后第一日至第三日",
+    "duration": "三日",
+    "narrativeOrder": 2,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c"
+    ],
+    "causeIds": [
+      "timeline_event_handeng_night"
+    ],
+    "consequenceIds": [
+      "timeline_event_cold_lamp_ferry"
+    ],
+    "description": "沈雁声背着染血门人录逃离听潮阁旧址，沿江躲避追索。她最初只将门人录视作寻找仇人的凭证，试图从血痕与姓名中拼出杀人者。一路上，她第一次失去听潮阁掌门幼女的身份，只能以无名逃亡者的身份活着。江湖仍照常运转，而她眼中的江湖已经变成一片欠债未还的废墟。"
+  },
+  {
+    "id": "8ef021de-d953-4a71-84bb-093871e1e00f",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413005,
+    "updatedAt": 1784104413005,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "寒露屠门夜",
+    "storyDate": "十年前，寒露时节，深秋一夜",
+    "duration": "一夜",
+    "narrativeOrder": 1,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c"
+    ],
+    "causeIds": [],
+    "consequenceIds": [
+      "timeline_event_escape_fog",
+      "timeline_event_cold_lamp_ferry"
+    ],
+    "description": "听潮阁在江风与寒露交织的夜里覆灭。沈雁声从昔日守护她的师门中醒来，面对满阁残火与旧人姓名，第一次明白活下来并不比赴死轻松。她从残阁中带走染血门人录，未能带走任何亲人的遗物，只留下一个被血浸透的名字世界。此夜之后，听潮阁从江湖名门变成一桩无人敢细说的旧案。"
+  },
+  {
+    "id": "9034f3b5-f360-4045-b971-100e3db831bb",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413012,
+    "updatedAt": 1784104413012,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "当下：潜伏学剑接近真相",
+    "storyDate": "屠门夜后第十年",
+    "duration": "当前",
+    "narrativeOrder": 8,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "2f5e657f-c419-4759-a830-a2bd3b78a9c5"
+    ],
+    "causeIds": [
+      "timeline_event_study_sword",
+      "timeline_event_old_survivors"
+    ],
+    "consequenceIds": [],
+    "description": "十年后的沈雁声仍留在裴长庚门下，已能以剑隐藏自己的身份，也已开始怀疑自己最初相信的一切。她拥有接近旧案核心的位置，却发现裴长庚并非简单的仇敌。她继续翻看门人录上的名字，寻找听潮阁灭门真相，也在寻找自己究竟要成为复仇者，还是一个愿意替旧时代收拾残局的人。"
+  },
+  {
+    "id": "bebe3b4e-6bcf-4d90-a7e4-012b1580daca",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413007,
+    "updatedAt": 1784104413007,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "雾里一盏寒灯",
+    "storyDate": "寒露屠门夜后第三夜",
+    "duration": "半夜至黎明",
+    "narrativeOrder": 3,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "31276404-538d-4309-9eec-8adc8c03ce76"
+    ],
+    "causeIds": [
+      "timeline_event_escape_fog"
+    ],
+    "consequenceIds": [
+      "timeline_event_ferry_after",
+      "timeline_event_hidden_identity"
+    ],
+    "description": "沈雁声逃入雾中渡口，遇见守渡的哑渡。哑渡不收钱，只守着自己的规矩，要求她留下一个旧事。沈雁声在寒灯下说出一段不愿再提的往事，换得渡船渡河。她不知道，这一次渡河并非单纯逃生，而是在十年后仍会牵动听潮阁旧案的一次选择。哑渡留下的沉默成为她日后重新理解灭门夜的重要入口。"
+  },
+  {
+    "id": "dbb55240-1983-493e-bff7-499c0e1e65bf",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104413011,
+    "updatedAt": 1784104413011,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "旧人重入江湖，各守一份沉默",
+    "storyDate": "屠门夜后第七年至第九年间",
+    "duration": "约两年间断发生",
+    "narrativeOrder": 7,
+    "participantIds": [
+      "3fd91bfe-b624-40d3-a8d5-7d9555b8650b",
+      "7ef9e023-3e58-446f-beea-65446ac44be4",
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c"
+    ],
+    "causeIds": [
+      "timeline_event_study_sword"
+    ],
+    "consequenceIds": [
+      "timeline_event_current_sword_training"
+    ],
+    "description": "十年江湖变迁中，听潮阁旧人以不同方式活下来。江照成为另一派执剑人，带着未完整的灭门记忆行走江湖；陆无名的名字则早已埋在门人录最前处，成为一桩无人解释的旧债源头。沈雁声逐渐发现，活下来的人并不比死去的人轻松，每个人都背负着自己没有说出口的一部分过去。"
+  }
+]

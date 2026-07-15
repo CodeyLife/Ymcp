@@ -2,13 +2,13 @@
 import type { Transaction } from "dexie";
 import { buildProjectReferenceCatalogs, emptyReferenceCatalog, sanitizeProposalReferencesInPlace, sanitizeReferenceRecordInPlace } from "./reference-integrity";
 
-export const DB_VERSION = 17;
+export const DB_VERSION = 18;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
  * 与 DB_VERSION 解耦：记录版本跟踪单条数据的字段语义，数据库版本跟踪表结构。
  */
-export const RECORD_SCHEMA_VERSION = 7;
+export const RECORD_SCHEMA_VERSION = 8;
 
 export const V4_STORES: Record<string, string> = {
   projects: "id, updatedAt, status, *genre",
@@ -109,6 +109,43 @@ export const V17_STORES: Record<string, string | null> = {
   outlineNodes: "id, projectId, parentId, kind, order, [projectId+kind]",
   retrievalRuns: "id, projectId, threadId, messageId, targetKind, targetId, targetDocumentId, purpose, status, createdAt, [threadId+createdAt], [projectId+purpose]",
 };
+
+export const V18_STORES: Record<string, string | null> = {
+  ...V17_STORES,
+  outlineNodes: "id, projectId, phaseId, order, [projectId+phaseId]",
+  documents: "id, projectId, order, plotSegmentId, status, updatedAt, branch, [projectId+status], [projectId+plotSegmentId]",
+};
+
+const RETIRED_PLANNING_TASKS = new Set([
+  "outline",
+  "plot-design",
+  "outline-section-update",
+  "outline-field-revise",
+  "chapter-arrangement",
+]);
+
+/** V18: discard the retired act/sequence/event outline and its pending review state. */
+export async function resetNovelPlanningHierarchy(transaction: Transaction) {
+  await Promise.all([
+    transaction.table("outlineNodes").clear(),
+    transaction.table("outlineRealizations").clear(),
+    transaction.table("embeddings").where("targetTable").equals("outlineNodes").delete(),
+    transaction.table("proposals").where("status").equals("pending")
+      .filter((proposal: Record<string, unknown>) => RETIRED_PLANNING_TASKS.has(String(proposal.taskKey ?? "")))
+      .delete(),
+  ]);
+  await transaction.table("documents").toCollection().modify((document: Record<string, unknown>) => {
+    const blueprint = document.blueprint && typeof document.blueprint === "object" && !Array.isArray(document.blueprint)
+      ? document.blueprint as Record<string, unknown>
+      : {};
+    document.blueprint = {
+      ...blueprint,
+      plotThreadIds: Array.isArray(blueprint.plotThreadIds) ? blueprint.plotThreadIds : [],
+      foreshadowingIds: Array.isArray(blueprint.foreshadowingIds) ? blueprint.foreshadowingIds : [],
+    };
+    document.schemaVersion = RECORD_SCHEMA_VERSION;
+  });
+}
 
 function cleanOutlineRecord(record: Record<string, unknown>) {
   const kind = record.kind;

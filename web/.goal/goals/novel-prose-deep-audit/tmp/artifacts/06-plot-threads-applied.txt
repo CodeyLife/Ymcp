@@ -1,0 +1,96 @@
+[
+  {
+    "id": "2edd9a28-aba3-4a86-8e6b-c02c47ab4d73",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104349444,
+    "updatedAt": 1784104349444,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "main",
+    "title": "沈雁声潜伏学剑与寻仇",
+    "summary": "沈雁声携染血门人录逃离听潮阁后，改换身份进入裴长庚门下学剑。她原本只想借剑术接近仇人并讨还血债，却在长期相处中逐渐发现仇人与恩人、罪人与守护者之间并非泾渭分明。",
+    "status": "active",
+    "priority": 90,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "2f5e657f-c419-4759-a830-a2bd3b78a9c5",
+      "3fd91bfe-b624-40d3-a8d5-7d9555b8650b"
+    ],
+    "progress": 0,
+    "nextMove": "沈雁声循门人录上的残缺线索靠近裴长庚门下，以隐藏身份学习剑术，同时利用日常相处观察裴长庚与旧案之间的联系。",
+    "startNodeId": "a59657a3-f34c-4b73-a0bf-fcaa6d0aa457"
+  },
+  {
+    "id": "485a5c90-c320-4725-b1ff-f0a1a7f72b05",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104349446,
+    "updatedAt": 1784104349446,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "subplot",
+    "title": "哑渡身份与渡口旧事回收",
+    "summary": "哑渡守在雾中渡口，以不言之身保存多年旧事。他救下沈雁声并非单纯出于怜悯，而是与听潮阁旧案存在无法割舍的因果。随着旧案逐步展开，渡口保存的记忆将成为重新理解灭门之夜的重要线索。",
+    "status": "active",
+    "priority": 60,
+    "participantIds": [
+      "31276404-538d-4309-9eec-8adc8c03ce76",
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "2f5e657f-c419-4759-a830-a2bd3b78a9c5"
+    ],
+    "progress": 0,
+    "nextMove": "沈雁声在追查旧案过程中再次返回雾中渡口，从哑渡保留的旧物、动作和沉默中拼接出屠门夜缺失的一部分经过。",
+    "startNodeId": "a59657a3-f34c-4b73-a0bf-fcaa6d0aa457"
+  },
+  {
+    "id": "7d3fc010-58c3-448a-b9c8-fd955476f9e2",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104349448,
+    "updatedAt": 1784104349448,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "growth",
+    "title": "沈雁声从记恨到辨清债与义",
+    "summary": "沈雁声最初将门人录视为复仇名册，希望用仇人的血证明死者没有白死。随着接触不同幸存者和旧事参与者，她逐渐发现每一个名字背后都有选择与代价，最终必须决定自己要继承的是仇恨还是守住江湖中的某种义。",
+    "status": "active",
+    "priority": 90,
+    "participantIds": [
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "31276404-538d-4309-9eec-8adc8c03ce76",
+      "3fd91bfe-b624-40d3-a8d5-7d9555b8650b",
+      "7ef9e023-3e58-446f-beea-65446ac44be4"
+    ],
+    "progress": 0,
+    "nextMove": "沈雁声将在追查过程中遇见无法简单归类的证人与受害者，被迫在揭露真相、执行复仇和保护无辜之间进行第一次真正选择。",
+    "startNodeId": "a59657a3-f34c-4b73-a0bf-fcaa6d0aa457"
+  },
+  {
+    "id": "ef3ed290-7468-4e1d-a348-ae814c2767b4",
+    "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784104349447,
+    "updatedAt": 1784104349447,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "kind": "antagonist",
+    "title": "裴长庚与听潮阁灭门真相",
+    "summary": "裴长庚掌握听潮阁灭门背后的部分秘密，既可能是旧案中的加害者，也可能是维护某种江湖秩序的执行者。沈雁声追寻他的过程中，将不断面对一个问题：揭露真相是否必然等于复仇。",
+    "status": "active",
+    "priority": 90,
+    "participantIds": [
+      "2f5e657f-c419-4759-a830-a2bd3b78a9c5",
+      "203fdcd9-79f7-4f8e-97f0-ec887f99b49c",
+      "320ea047-58e0-48a1-9469-a9288df0aecf",
+      "7ef9e023-3e58-446f-beea-65446ac44be4"
+    ],
+    "progress": 0,
+    "nextMove": "裴长庚察觉沈雁声身份与剑路中的异常，通过试探、安排任务和控制消息来源阻止她接近核心秘密，同时逐步暴露自己对旧案的真实立场。",
+    "startNodeId": "a59657a3-f34c-4b73-a0bf-fcaa6d0aa457"
+  }
+]

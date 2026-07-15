@@ -1,0 +1,574 @@
+[
+  {
+    "id": "0f888a76-157b-406d-a4cd-a43da3f7377e",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "knowledgeDeltas",
+    "subject": {
+      "kind": "entity",
+      "id": "3f6d225f-09bf-412d-a99d-668797041554"
+    },
+    "predicate": "knows",
+    "object": {
+      "kind": "string",
+      "value": "有人试图搜寻并毁掉听潮阁旧册"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "claim",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声观察到有人试图毁掉听潮阁旧册并搜寻相关物品。",
+    "knowledgeDeltas": [],
+    "after": {
+      "knowledge": "有人试图毁掉听潮阁旧册并搜寻相关物品",
+      "scope": "沈雁声亲眼观察并推断"
+    },
+    "evidence": "“听潮阁今日之后，不留旧册。”“有人故意点燃了存放旧卷的楼阁。”“有人搜到这里了。”",
+    "confidence": 0.95,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "陈述、争议或开放谜题必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "1c1173b8-8d49-49d9-8579-44164ba7fbc1",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436649,
+    "updatedAt": 1784106436649,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "knowledgeDeltas",
+    "subject": {
+      "kind": "entity",
+      "id": "3f6d225f-09bf-412d-a99d-668797041554"
+    },
+    "predicate": "knows",
+    "object": {
+      "kind": "string",
+      "value": "雾散后渡口、老人和船不见踪迹"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声渡河后回望，发现渡口、老人和船消失。",
+    "knowledgeDeltas": [],
+    "after": {
+      "knowledge": "渡河后回望，无法再找到渡口与老人"
+    },
+    "evidence": "“她回头。江面平静。没有船。没有灯。没有渡口。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "1c2a57c3-9144-427b-befa-69efe1c9b1a6",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "record",
+    "subject": {
+      "kind": "entity",
+      "id": "generated"
+    },
+    "predicate": "exists",
+    "object": {
+      "kind": "string",
+      "value": "门人录"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "一卷被血浸透且有火燎痕迹的门人录被沈雁声携带离开听潮阁。",
+    "knowledgeDeltas": [],
+    "after": {
+      "name": "门人录",
+      "description": "记录听潮阁弟子的姓名、籍贯、师承、旧日恩怨的册子，封皮被血浸透且有火燎痕迹",
+      "state": "由沈雁声携带"
+    },
+    "evidence": "“一卷册子躺在石台上。封皮已经被血浸透。”“沈雁声将门人录塞入怀中。”“她坐在船尾，把门人录抱在怀中。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "2426f8fa-c0b2-4f03-a02e-a06b4ba450b6",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "relations",
+    "field": "record",
+    "subject": {
+      "kind": "relation",
+      "id": "generated"
+    },
+    "predicate": "has_relationship",
+    "object": {
+      "kind": "entity-ref",
+      "value": "ce123ed9-4c09-4f45-965d-e00ceaac828a"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "open-ended",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声与江照存在师兄妹关系。",
+    "knowledgeDeltas": [],
+    "after": {
+      "fromEntityId": "3f6d225f-09bf-412d-a99d-668797041554",
+      "toEntityId": "ce123ed9-4c09-4f45-965d-e00ceaac828a",
+      "relationType": "师兄妹",
+      "bond": "关系亲近，江照在危急中保护沈雁声并劝其撤离",
+      "publicLabel": "师兄与师妹",
+      "privateTruth": ""
+    },
+    "evidence": "“她今日练剑时偷了半刻懒，被师兄江照看见”“沈雁声，听我一次。”",
+    "confidence": 0.95,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "4a126a54-91c0-4f0a-8bf9-33369f7ed821",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "timelineEvents",
+    "field": "record",
+    "subject": {
+      "kind": "timeline",
+      "id": "generated"
+    },
+    "predicate": "exchanged",
+    "object": {
+      "kind": "string",
+      "value": "沈雁声以一桩未公开内容的旧事换取老人渡河"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声以未公开的旧事换取老人帮助渡河。",
+    "knowledgeDeltas": [],
+    "after": {
+      "event": "以旧事换渡河",
+      "revealedContent": "未知，正文未公开"
+    },
+    "evidence": "“她开口。声音很轻。”“她没有说自己的姓名。没有说听潮阁。没有说门人录。她只说了那件事。”“沈雁声上船。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "538c2763-9296-42b5-9c9f-628c5a273c88",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "character.state",
+    "subject": {
+      "kind": "entity",
+      "id": "3f6d225f-09bf-412d-a99d-668797041554"
+    },
+    "predicate": "experienced_event",
+    "object": {
+      "kind": "string",
+      "value": "沈雁声经历听潮阁在寒露夜遭遇突袭与覆灭"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声经历了听潮阁遭遇突袭与覆灭的事件。",
+    "knowledgeDeltas": [],
+    "after": {
+      "location": "听潮阁覆灭后的逃亡途中",
+      "emotional": "目睹师门受袭后的震动与克制",
+      "objective": "带走门人录并逃离追杀"
+    },
+    "evidence": "“听潮阁今夜遭遇突袭”“沈雁声穿过剑坪时，看见第一名倒下的师兄”“藏书楼方向，火光忽然窜起”“听潮阁今日之后，不留旧册。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "58e09ad8-cbcd-44a2-8754-ec6c755f7698",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "description",
+    "subject": {
+      "kind": "entity",
+      "id": "generated"
+    },
+    "predicate": "contains_information",
+    "object": {
+      "kind": "string",
+      "value": "门人录记录听潮阁弟子的姓名、籍贯、师承、旧日恩怨"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "timeless",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "门人录包含听潮阁弟子的姓名、籍贯、师承和旧日恩怨信息。",
+    "knowledgeDeltas": [],
+    "after": {
+      "content": "听潮阁弟子的姓名、籍贯、师承、旧日恩怨"
+    },
+    "evidence": "“听潮阁弟子的姓名、籍贯、师承、旧日恩怨，全部记录其中。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "61daf69a-f258-41eb-8ea7-7c08e41cd531",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 2,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436653,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "record",
+    "subject": {
+      "kind": "entity",
+      "id": "generated"
+    },
+    "predicate": "appeared",
+    "object": {
+      "kind": "string",
+      "value": "一名披旧蓑衣的老人出现在雾中渡口并摆渡"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "一名披旧蓑衣的老人在雾中渡口出现并负责摆渡。",
+    "knowledgeDeltas": [],
+    "after": {
+      "kind": "character",
+      "name": "披旧蓑衣的老人",
+      "aliases": [],
+      "summary": "雾中渡口的摆渡老人，提出以旧事换渡河",
+      "description": "披旧蓑衣，手缠磨旧麻绳，使用船篙交流",
+      "character": {
+        "role": "重要配角",
+        "appearance": "披旧蓑衣",
+        "personality": "",
+        "desire": "要求渡客留下旧事",
+        "motivation": "",
+        "weakness": "",
+        "secret": "",
+        "abilities": [],
+        "voice": "不以语言回应，主要通过动作和木牌表达",
+        "arc": "",
+        "state": {
+          "location": "雾中渡口",
+          "physical": "",
+          "emotional": "",
+          "objective": "要求沈雁声留下旧事后渡河",
+          "inventory": [
+            "船篙",
+            "旧木牌"
+          ],
+          "relationshipNotes": []
+        }
+      }
+    },
+    "evidence": "“一个披着旧蓑衣的老人坐在船头，手里缠着一截磨旧的麻绳。”“老人撑船。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "safe",
+    "riskReason": "正文首次出现的重要人物新建",
+    "status": "accepted",
+    "decisionSource": "auto-policy",
+    "decidedAt": 1784106436653
+  },
+  {
+    "id": "8c674e21-2031-414a-be19-ee933a8d26c0",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "record",
+    "subject": {
+      "kind": "entity",
+      "id": "generated"
+    },
+    "predicate": "exists",
+    "object": {
+      "kind": "string",
+      "value": "雾中渡口"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "江雾中存在一处沈雁声此前未见过的渡口。",
+    "knowledgeDeltas": [],
+    "after": {
+      "name": "雾中渡口",
+      "description": "江雾中的陌生渡口，有木桥与一名披旧蓑衣的老人"
+    },
+    "evidence": "“雾中有一座木桥。桥后是一处渡口。她从未见过。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "a9d4857e-7e6b-4f1b-95ac-820d63bd90b5",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "character.state.physical",
+    "subject": {
+      "kind": "entity",
+      "id": "ce123ed9-4c09-4f45-965d-e00ceaac828a"
+    },
+    "predicate": "injured",
+    "object": {
+      "kind": "string",
+      "value": "江照肩部受伤"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "江照肩部受伤，但仍持剑行动。",
+    "knowledgeDeltas": [],
+    "after": "肩上有伤，仍持剑行动",
+    "evidence": "“江照一手握剑，一手按着肩上的伤口，脸色比雪还白。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "d633fdf9-38ec-4107-8fa1-0314ec1c9e01",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436648,
+    "updatedAt": 1784106436648,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "entities",
+    "field": "knowledgeDeltas",
+    "subject": {
+      "kind": "entity",
+      "id": "3f6d225f-09bf-412d-a99d-668797041554"
+    },
+    "predicate": "does_not_know",
+    "object": {
+      "kind": "string",
+      "value": "沈砚川是否还活着"
+    },
+    "polarity": "negated",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声不知道父亲沈砚川是否还活着。",
+    "knowledgeDeltas": [],
+    "after": {
+      "knowledge": "不知道父亲沈砚川是否还活着"
+    },
+    "evidence": "“她不知道追兵有多少，也不知道父亲是否还活着。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "f2337de9-8856-4c63-ade3-3df1d7e872ce",
+    "projectId": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784106436649,
+    "updatedAt": 1784106436649,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "f04213d2-d466-4c86-9f22-506750377f73",
+    "sourceArtifactId": "artifact:f04213d2-d466-4c86-9f22-506750377f73:draft:0:draft",
+    "sourceRevisionId": "a35b342d-160b-49ad-aa1e-dfa5c5b85d52",
+    "targetTable": "foreshadowing",
+    "field": "record",
+    "subject": {
+      "kind": "foreshadowing",
+      "id": "generated"
+    },
+    "predicate": "reveals_clue",
+    "object": {
+      "kind": "string",
+      "value": "门人录第一页出现名字“陆无名”"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "069c8c78-6f09-4ddc-b0db-6d1c1a47b495",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "门人录第一页出现并重复出现“陆无名”这一名字线索。",
+    "knowledgeDeltas": [],
+    "after": {
+      "clue": "门人录第一页上的名字陆无名反复出现",
+      "readerVisible": true,
+      "characterKnowledge": "沈雁声看到该名字",
+      "misinterpretation": "未知",
+      "revealCondition": "",
+      "impact": ""
+    },
+    "evidence": "“她翻开第一页。一个名字映入眼中。陆无名。”“第一页上的名字再次露出。陆无名。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  }
+]

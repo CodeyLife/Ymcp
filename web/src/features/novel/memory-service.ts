@@ -201,10 +201,18 @@ async function buildCandidates(params: { projectId: string; targetDocumentId?: s
     }
   }
   if (informationView === "author") {
-    for (const node of outline) candidates.push({ sourceId: node.id, targetTable: "outlineNodes", targetId: node.id, kind: "outline", title: `${node.kind}：${node.title}`, content: node.summary, reason: "作者视角中的创作契约", authority: "working", evidenceRefs: [node.id], aliases: [node.title] });
+    for (const node of outline) candidates.push({ sourceId: node.id, targetTable: "outlineNodes", targetId: node.id, kind: "outline", title: `剧情段：${node.title}`, content: `所属幕：${node.phaseId}\n${node.summary}`, reason: "作者视角中的创作契约", authority: "working", evidenceRefs: [node.id], aliases: [node.title] });
   }
   for (const document of documents.filter((item) => item.id !== targetDocumentId && item.order <= cutoff && (params.factCutoffOrder === undefined || Boolean(item.approvedRevisionId)))) {
-    const units = splitSemanticUnits([document.title, document.summary, document.plainText].filter(Boolean).join("\n"));
+    const planning = [
+      document.plotSegmentId ? `所属剧情段：${document.plotSegmentId}` : "所属剧情段：待整理",
+      `章节目标：${document.blueprint.objective || "暂无"}`,
+      `冲突：${document.blueprint.conflict || "暂无"}`,
+      `角色：${document.blueprint.characterIds.join("、") || "未设置"}`,
+      `剧情线：${(document.blueprint.plotThreadIds ?? []).join("、") || "未设置"}`,
+      `伏笔：${(document.blueprint.foreshadowingIds ?? []).join("、") || "未设置"}`,
+    ].join("\n");
+    const units = splitSemanticUnits([document.title, document.summary, planning, document.plainText].filter(Boolean).join("\n"));
     units.forEach((content, chunkIndex) => candidates.push({ sourceId: units.length === 1 ? document.id : `${document.id}:chunk:${chunkIndex}`, targetTable: "documents", targetId: document.id, targetChunkIndex: units.length === 1 ? undefined : chunkIndex, kind: "document", title: units.length === 1 ? `章节：${document.title}` : `章节：${document.title} · 语义单元 ${chunkIndex + 1}`, content, reason: "历史已批准章节中的完整语义单元", authority: document.approvedRevisionId ? "approved" : "working", narrativeOrder: document.order, evidenceRefs: [document.approvedRevisionId ?? document.id], aliases: [document.title] }));
   }
   for (const thread of threads.filter((item) => item.status === "active" || item.status === "planned")) candidates.push({ sourceId: thread.id, targetTable: "plotThreads", targetId: thread.id, kind: "thread", title: `剧情线：${thread.title}`, content: `${thread.summary}\n下一步：${thread.nextMove}`, reason: "活跃剧情线", authority: "working", evidenceRefs: [thread.id], aliases: [thread.title] });
@@ -289,7 +297,7 @@ export interface TaskEvidenceResult {
 
 export async function resolveTaskEvidence(params: {
   projectId: string;
-  target: { kind: "document" | "outline-act" | "project"; id?: string };
+  target: { kind: "document" | "architecture-phase" | "project"; id?: string };
   task: string;
   query: string;
   model: string;

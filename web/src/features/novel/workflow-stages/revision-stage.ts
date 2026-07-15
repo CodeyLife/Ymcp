@@ -125,6 +125,32 @@ function formatParagraphSelection(indices: number[]): string {
   return ranges.join("、");
 }
 
+// R1: 风格类 warning 升级为 major——这些规则虽定为 warning，但直接造成"AI 味"，
+// 若不送修订则永远残留。升级为 major 后进入 blockerAndMajor 列表，LLM 会收到并修订。
+const STYLE_RULES_TO_PROMOTE = new Set([
+  "style.short-sentence-tic",
+  "style.interpretive-summary-density",
+  "style.emotion-direct",
+  "style.emphasis-devaluation",
+  "style.template-density",
+  "style.aphorism-density",
+]);
+
+// R6: 按规则追加可执行修订指令——避免 LLM 收到含糊建议只做"润色"而不真正删除问题句
+const ACTIONABLE_INSTRUCTIONS: Record<string, string> = {
+  "style.short-sentence-tic": "可执行：将连续短句排比融入完整句式（2-5句/段），全章仅保留1-2处决断瞬间短句，删除多余的单句成段",
+  "style.interpretive-summary-density": "可执行：删除'她第一次知道/她明白/她意识到/她忽然懂得/这意味着'等解释性总结句，不替换，直接删除让行动自己说话",
+  "style.emotion-direct": "可执行：删除'他很悲伤/她很愤怒/心如刀割'等情绪直说，用反常动作、环境意象或没说完的话承载",
+  "style.emphasis-devaluation": "可执行：删除多余的'忽然/突然/终于/竟然'，每词全章最多保留2次，其余替换为具体事件或删除",
+  "style.template-density": "可执行：替换'眼中闪过/嘴角微扬/若有所思'等模板表达为只能属于该人物的细节",
+  "style.aphorism-density": "可执行：将'不是…而是…/也许…就是…'等格言式收尾改为行动或沉默收尾",
+};
+
+function actionableInstruction(rule?: string): string {
+  if (!rule) return "";
+  return ACTIONABLE_INSTRUCTIONS[rule] ?? "";
+}
+
 export const revisionStageHandler: StageHandler = {
   stage: "revision",
   async execute(ctx: StageContext): Promise<StageResult> {
@@ -141,9 +167,15 @@ export const revisionStageHandler: StageHandler = {
 
     let workingText = draft.contentMarkdown;
     let paragraphs = splitParagraphs(workingText);
-    const revisableIssues = report.issues.filter(
-      (item) => !(item.deterministic && item.rule === "chapter-blueprint.mustHappen"),
-    );
+    const revisableIssues = report.issues
+      .filter((item) => !(item.deterministic && item.rule === "chapter-blueprint.mustHappen"))
+      .map((item) => {
+        // R1: 风格类 warning 升级为 major，使其进入修订列表
+        if (item.severity === "warning" && item.rule && STYLE_RULES_TO_PROMOTE.has(item.rule)) {
+          return { ...item, severity: "major" as const };
+        }
+        return item;
+      });
 
     // 关键修复：对"重复段"类 issue（重复推进/段落完全重复/第二个结尾/重新开场）直接在代码层面删除对应段落，
     // 不交给 LLM 修订——LLM 经常不删除而是改写，导致重复段残留
@@ -241,7 +273,8 @@ export const revisionStageHandler: StageHandler = {
     const issueList = blockerAndMajor.map((item) => {
       const targets = formatParagraphSelection(issueTargets.get(item.id) ?? []);
       const paraInfo = targets ? `（可修改第${targets}段）` : item.excerpt ? `（涉及："${item.excerpt.slice(0, 30)}..."）` : "";
-      return `- [${item.severity}] ${item.title}${paraInfo}：${item.description}；建议：${item.suggestion}`;
+      const instruction = actionableInstruction(item.rule);
+      return `- [${item.severity}] ${item.title}${paraInfo}：${item.description}；建议：${item.suggestion}${instruction ? `\n  ${instruction}` : ""}`;
     }).join("\n");
 
     const preserveList = paragraphs.map((_, i) => i + 1).filter((i) => !issueParagraphs.has(i - 1)).join("、");

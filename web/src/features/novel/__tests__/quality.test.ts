@@ -2,18 +2,21 @@ import { describe, expect, it } from "vitest";
 import { aggregateQuality, runDeterministicQualityChecks } from "../quality";
 
 describe("novel quality gates", () => {
-  it("creates blockers for forbidden content and missing mandatory beats", () => {
+  it("creates blockers for forbidden content and majors for missing mandatory beats", () => {
     const result = runDeterministicQualityChecks({
       text: "主角忽然获得无代价的读心能力。\n\n他立刻离开现场。",
-      blueprint: { objective: "发现线索", locationIds: [], characterIds: [], conflict: "追查", informationRelease: [], mustHappen: ["主角发现染血账本"], flexible: [], forbidden: ["获得读心能力"], targetWords: 3000 },
+      blueprint: { objective: "发现线索", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "追查", informationRelease: [], mustHappen: ["主角发现染血账本"], flexible: [], forbidden: ["获得读心能力"], targetWords: 3000 },
     });
-    expect(result.issues.filter((item) => item.severity === "blocker")).toHaveLength(2);
+    // R4: mustHappen 误报降级为 major（containsMeaning bigram 匹配对措辞不同的高误报率）
+    // forbidden 仍为 blocker
+    expect(result.issues.filter((item) => item.severity === "blocker")).toHaveLength(1);
+    expect(result.issues.some((item) => item.rule === "chapter-blueprint.mustHappen" && item.severity === "major")).toBe(true);
   });
 
   it("does not satisfy a mandatory action from entity mentions alone", () => {
     const result = runDeterministicQualityChecks({
       text: "阿落望向师父，玉佩仍藏在她的袖中。两人没有交谈，随后各自离开。",
-      blueprint: { objective: "交出信物", locationIds: [], characterIds: [], conflict: "是否信任", informationRelease: [], mustHappen: ["阿落取出玉佩交给师父"], flexible: [], forbidden: [], targetWords: 3000 },
+      blueprint: { objective: "交出信物", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "是否信任", informationRelease: [], mustHappen: ["阿落取出玉佩交给师父"], flexible: [], forbidden: [], targetWords: 3000 },
     });
 
     expect(result.issues.some((item) => item.rule === "chapter-blueprint.mustHappen")).toBe(true);
@@ -22,7 +25,7 @@ describe("novel quality gates", () => {
   it("does not satisfy a multi-clause beat from only its first action", () => {
     const result = runDeterministicQualityChecks({
       text: "阿落取出玉佩，握在掌心端详许久，最后又收回袖中。",
-      blueprint: { objective: "交出信物", locationIds: [], characterIds: [], conflict: "是否信任", informationRelease: [], mustHappen: ["阿落取出玉佩，交给师父"], flexible: [], forbidden: [], targetWords: 3000 },
+      blueprint: { objective: "交出信物", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "是否信任", informationRelease: [], mustHappen: ["阿落取出玉佩，交给师父"], flexible: [], forbidden: [], targetWords: 3000 },
     });
 
     expect(result.issues.some((item) => item.rule === "chapter-blueprint.mustHappen")).toBe(true);

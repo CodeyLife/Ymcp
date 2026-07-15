@@ -44,7 +44,7 @@ import type {
   WorkflowRun,
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
-import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES } from "./db-schema";
+import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, resetNovelPlanningHierarchy, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES, V18_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -137,6 +137,7 @@ export class NovelDatabase extends Dexie {
     this.version(15).stores(V15_STORES);
     this.version(16).stores(V16_STORES).upgrade(migrateNovelMemoryReliability);
     this.version(17).stores(V17_STORES).upgrade(migrateOutlineNodeModel);
+    this.version(18).stores(V18_STORES).upgrade(resetNovelPlanningHierarchy);
   }
 }
 
@@ -340,13 +341,67 @@ export function normalizeArchitecturePayload(payload: Record<string, unknown>) {
 export async function saveStoryArchitecture(architecture: StoryArchitecture) {
   const before = await novelDb.architectures.get(architecture.id);
   const next = { ...architecture, phases: normalizeArchitecturePhases(architecture.phases), revision: (before?.revision ?? 0) + 1, updatedAt: Date.now(), updatedBy: ACTOR_ID };
-  await novelDb.transaction("rw", novelDb.architectures, novelDb.operations, async () => {
+  await novelDb.transaction("rw", [novelDb.architectures, novelDb.outlineNodes, novelDb.documents, novelDb.outlineRealizations, novelDb.embeddings, novelDb.operations], async () => {
+    const phaseIds = new Set(next.phases.map((phase) => phase.id));
+    const removedSegments = await novelDb.outlineNodes.where("projectId").equals(architecture.projectId)
+      .and((segment) => !phaseIds.has(segment.phaseId))
+      .toArray();
+    const removedSegmentIds = removedSegments.map((segment) => segment.id);
+    if (removedSegmentIds.length) {
+      const linkedDocuments = await novelDb.documents.where("projectId").equals(architecture.projectId)
+        .and((document) => Boolean(document.plotSegmentId && removedSegmentIds.includes(document.plotSegmentId)))
+        .toArray();
+      if (linkedDocuments.length) {
+        await novelDb.documents.bulkPut(linkedDocuments.map((document) => ({
+          ...document,
+          plotSegmentId: undefined,
+          revision: document.revision + 1,
+          updatedAt: Date.now(),
+        })));
+      }
+      await novelDb.outlineNodes.bulkDelete(removedSegmentIds);
+      await deleteOutlineRealizations(architecture.projectId, removedSegmentIds);
+      await novelDb.embeddings.where("targetId").anyOf(removedSegmentIds).delete();
+    }
     await novelDb.architectures.put(next);
     await appendOperation(architecture.projectId, "architectures", architecture.id, before ? "update" : "create", {
       value: { before, after: next },
     });
   });
+  await normalizeChapterOrderByPlanning(architecture.projectId);
   return next;
+}
+
+export async function normalizeChapterOrderByPlanning(projectId: string) {
+  const [architecture, segments, documents] = await Promise.all([
+    novelDb.architectures.where("projectId").equals(projectId).first(),
+    novelDb.outlineNodes.where("projectId").equals(projectId).toArray(),
+    novelDb.documents.where("projectId").equals(projectId).toArray(),
+  ]);
+  const phaseOrder = new Map((architecture?.phases ?? []).map((phase) => [phase.id, phase.order]));
+  const segmentById = new Map(segments.map((segment) => [segment.id, segment]));
+  const sorted = [...documents].sort((left, right) => {
+    const leftSegment = left.plotSegmentId ? segmentById.get(left.plotSegmentId) : undefined;
+    const rightSegment = right.plotSegmentId ? segmentById.get(right.plotSegmentId) : undefined;
+    if (Boolean(leftSegment) !== Boolean(rightSegment)) return leftSegment ? -1 : 1;
+    if (leftSegment && rightSegment) {
+      const phaseDelta = (phaseOrder.get(leftSegment.phaseId) ?? Number.MAX_SAFE_INTEGER) - (phaseOrder.get(rightSegment.phaseId) ?? Number.MAX_SAFE_INTEGER);
+      if (phaseDelta) return phaseDelta;
+      const segmentDelta = leftSegment.order - rightSegment.order;
+      if (segmentDelta) return segmentDelta;
+    }
+    return left.order - right.order || left.createdAt - right.createdAt;
+  });
+  const changed = sorted.filter((document, order) => document.order !== order);
+  if (!changed.length) return sorted;
+  const now = Date.now();
+  await novelDb.documents.bulkPut(sorted.map((document, order) => document.order === order ? document : {
+    ...document,
+    order,
+    revision: document.revision + 1,
+    updatedAt: now,
+  }));
+  return sorted.map((document, order) => ({ ...document, order }));
 }
 
 export async function updateProject(projectId: string, changes: Partial<StoryProject>) {
@@ -570,16 +625,14 @@ function triggerEntityEmbedding(entity: StoryEntity): void {
   }).catch(() => { /* TODO P3: embedding 更新失败应记录日志而非静默 */ });
 }
 
-export async function addOutlineNode(projectId: string, parentId: string | undefined, kind: OutlineNode["kind"], title: string, order: number) {
-  const node = {
+export async function addOutlineNode(projectId: string, phaseId: string, title: string, order: number) {
+  const node: OutlineNode = {
     ...recordBase(projectId),
-    parentId,
-    kind,
+    phaseId,
     title,
     summary: "",
     order,
-    ...(kind === "event" ? { characterIds: [], plotThreadIds: [], foreshadowingIds: [] } : {}),
-  } as OutlineNode;
+  };
   await novelDb.outlineNodes.add(node);
   await appendOperation(projectId, "outlineNodes", node.id, "create", { title: { before: null, after: title } });
   // 异步触发 embedding 更新
@@ -596,35 +649,42 @@ export async function deleteOutlineBranch(projectId: string, nodeId: string) {
   const nodes = await novelDb.outlineNodes.where("projectId").equals(projectId).toArray();
   const selected = nodes.find((node) => node.id === nodeId);
   if (!selected) return [];
-  const ids = new Set<string>([nodeId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const node of nodes) if (node.parentId && ids.has(node.parentId) && !ids.has(node.id)) { ids.add(node.id); changed = true; }
-  }
-  const removed = [...ids];
-  await novelDb.transaction("rw", novelDb.outlineNodes, novelDb.outlineRealizations, novelDb.embeddings, novelDb.operations, async () => {
+  const removed = [nodeId];
+  await novelDb.transaction("rw", novelDb.outlineNodes, novelDb.documents, novelDb.outlineRealizations, novelDb.embeddings, novelDb.operations, async () => {
+    const linkedDocuments = await novelDb.documents.where("projectId").equals(projectId)
+      .and((document) => document.plotSegmentId === nodeId)
+      .toArray();
+    if (linkedDocuments.length) {
+      await novelDb.documents.bulkPut(linkedDocuments.map((document) => ({
+        ...document,
+        plotSegmentId: undefined,
+        revision: document.revision + 1,
+        updatedAt: Date.now(),
+      })));
+    }
     await novelDb.outlineNodes.bulkDelete(removed);
     await deleteOutlineRealizations(projectId, removed);
     await novelDb.embeddings.where("targetId").anyOf(removed).delete();
     await appendOperation(projectId, "outlineNodes", nodeId, "delete", { title: { before: selected.title, after: null } });
   });
+  await normalizeChapterOrderByPlanning(projectId);
   return removed;
 }
 
 export const DEFAULT_CHAPTER_TARGET_WORDS = 5000;
 
 export function emptyChapterBlueprint(targetWords = DEFAULT_CHAPTER_TARGET_WORDS) {
-  return { objective: "", locationIds: [], characterIds: [], conflict: "", informationRelease: [], mustHappen: [], flexible: [], forbidden: [], targetWords };
+  return { objective: "", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "", informationRelease: [], mustHappen: [], flexible: [], forbidden: [], targetWords };
 }
 
-export async function createChapter(projectId: string, title?: string) {
-  return novelDb.transaction("rw", novelDb.documents, novelDb.operations, async () => {
+export async function createChapter(projectId: string, title?: string, plotSegmentId?: string) {
+  const documentId = await novelDb.transaction("rw", novelDb.documents, novelDb.operations, async () => {
     const documents = await novelDb.documents.where("projectId").equals(projectId).toArray();
     const order = documents.length ? Math.max(...documents.map((item) => item.order)) + 1 : 0;
     const document: ManuscriptDocument = {
       ...recordBase(projectId),
       order,
+      plotSegmentId,
       title: title || `第${order + 1}章`,
       blueprint: emptyChapterBlueprint(),
       contentHtml: "",
@@ -637,8 +697,10 @@ export async function createChapter(projectId: string, title?: string) {
     };
     await novelDb.documents.add(document);
     await appendOperation(projectId, "documents", document.id, "create", { title: { before: null, after: document.title } });
-    return document;
+    return document.id;
   });
+  await normalizeChapterOrderByPlanning(projectId);
+  return (await novelDb.documents.get(documentId))!;
 }
 
 export async function deleteChapter(documentId: string) {

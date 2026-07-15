@@ -102,6 +102,8 @@ export function asBlueprint(data: Record<string, unknown>, existing?: ChapterBlu
     povCharacterId: existing?.povCharacterId,
     locationIds: existing?.locationIds ?? [],
     characterIds: existing?.characterIds ?? [],
+    plotThreadIds: existing?.plotThreadIds ?? [],
+    foreshadowingIds: existing?.foreshadowingIds ?? [],
     conflict: beats.map((item) => item.action).join(" → "),
     informationRelease: data.informationRelease as string[],
     mustHappen: data.mustHappen as string[],

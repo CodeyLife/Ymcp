@@ -1,0 +1,22 @@
+{
+  "id": "9090a06f-59e8-4b34-817d-7b4f23fa32ee",
+  "projectId": "8c1d65dc-e09b-4ff4-a0da-724333a1211f",
+  "schemaVersion": 8,
+  "revision": 3,
+  "createdAt": 1784104413039,
+  "updatedAt": 1784104448220,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "workflowId": "standard-chapter-v2",
+  "targetDocumentId": "842bccd1-848c-44c1-bbe9-c00b8f8e9ec9",
+  "status": "waiting-approval",
+  "currentStage": "blueprint-approval",
+  "stageIndex": 2,
+  "revisionIteration": 0,
+  "factCandidateIds": [],
+  "conversationThreadId": "8d8c3c82-7ba8-4e7d-846c-fa2738a9d214",
+  "creativeBriefId": "106faaa1-6bba-483c-b654-7bda32d88f99",
+  "startedAt": 1784104413039,
+  "contextPacketId": "cb43368e-95dc-4986-a05c-4fabb7a2f19c",
+  "blueprintArtifactId": "artifact:9090a06f-59e8-4b34-817d-7b4f23fa32ee:blueprint:0:blueprint"
+}

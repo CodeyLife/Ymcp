@@ -1,0 +1,38 @@
+{
+  "id": "200751be-bf1a-4b62-97ae-92eff39bea6c",
+  "schemaVersion": 8,
+  "revision": 1,
+  "createdAt": 1784105931688,
+  "updatedAt": 1784105931688,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "title": "寒灯渡",
+  "subtitle": "",
+  "premise": "寒露那年，江湖第一大派听潮阁在一夜之间被屠门，掌门幼女沈雁声携一卷被血浸透的门人录逃入大雾。雾深处有一座只在雾起时浮现的渡口，摆渡人是个不收钱、只收“一桩旧事”的哑巴老人。她用一桩自己也不愿记起的旧事换了渡河，从此改换身份混入仇人门下学剑。她要杀的人，正是当年渡她过河的哑巴老人的旧主——而门人录上每一个名字背后，都藏着一桩被江湖遗忘的旧债。雾散之后，再无人记得那一夜渡口发生的事。",
+  "genre": [
+    "武侠",
+    "古典",
+    "江湖"
+  ],
+  "audience": "成年类型文学读者",
+  "themes": [],
+  "sellingPoints": [],
+  "pov": "第三人称限知",
+  "tense": "过去时",
+  "tone": "克制、清晰、有张力",
+  "languageStyle": "重视场景行动与人物选择，避免空泛总结。",
+  "targetWords": 300000,
+  "dailyGoal": 3000,
+  "status": "planning",
+  "coverColor": "#b5483a",
+  "settings": {
+    "textModel": "auto",
+    "temperature": 0.75,
+    "recentChapterCount": 5,
+    "encrypted": false,
+    "contentProfile": "general-serial",
+    "maxAutoRevisions": 2,
+    "qualityThreshold": 3.7,
+    "approvalMode": "blueprint-and-manuscript"
+  }
+}

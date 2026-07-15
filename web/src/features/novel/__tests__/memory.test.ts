@@ -26,10 +26,10 @@ describe("narrative ownership", () => {
     await expect(createNarrativeUnit({ projectId: project.id, kind: "sequence", parentId: hierarchy.volume.id, title: "错误序列", order: 1 })).rejects.toThrow(/arc/);
   });
 
-  it("links outline events to chapters without adding truth state to the outline", async () => {
+  it("links plot segments to chapters without adding truth state to the planning contract", async () => {
     const project = await createNovelProject({ title: "大纲落实", genre: ["科幻"], premise: "计划与事实保持分离。" });
     const chapter = await createChapter(project.id, "第一章");
-    const outline = { ...recordBase(project.id), parentId: undefined, kind: "event" as const, title: "抵达北港", summary: "", order: 0, characterIds: [], plotThreadIds: [], foreshadowingIds: [] };
+    const outline = { ...recordBase(project.id), phaseId: "phase-1", title: "抵达北港", summary: "", order: 0 };
     await novelDb.outlineNodes.add(outline);
     const link = await linkOutlineRealization({ projectId: project.id, outlineNodeId: outline.id, documentId: chapter.id });
     expect(link).toMatchObject({ outlineNodeId: outline.id, documentId: chapter.id, status: "planned" });

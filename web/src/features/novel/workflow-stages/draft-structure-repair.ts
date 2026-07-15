@@ -205,6 +205,146 @@ export function truncateTrailingSecondEnding(text: string): { truncated: boolean
   };
 }
 
+/**
+ * 确定性删除作者式心理结论句。
+ *
+ * LLM 系统性在行动之后插入替读者总结人物认知或章节意义的句子，
+ * 如"她第一次知道，离开一座山门，不一定需要有人赶"。
+ * 这类句子打破有限第三人称视角，把"成长"直接宣告给读者，
+ * 是中文小说 AI 味最典型的表现之一。
+ *
+ * 检测模式（仅在非对白叙事段中匹配）：
+ * - "她第一次知道/明白/意识到/看清/感到/懂得……"
+ * - "她忽然/突然/终于/这才 懂得/明白/看清/意识到/知道……"
+ * - "这意味着/这说明/这代表着……"
+ * - "也就是说/换句话说/归根结底/说到底……"
+ * - "她知道，……若/如果/一旦/只要……"（替读者解释动机）
+ *
+ * 修复策略：删除匹配的整句（含句末标点）。若段落删除后为空，移除该段。
+ * 只删除明确匹配的句子，不改动其他内容。
+ */
+const INTERPRETIVE_SENTENCE_PATTERNS: RegExp[] = [
+  /(?:他|她)(?:第一次)(?:知道|明白|意识到|看清|感到|懂得|领悟|觉得)/,
+  /(?:他|她)(?:忽然|突然|终于|这才|这才)(?:懂得|明白|看清|意识到|知道|领悟)/,
+  /这(?:意味着|说明|代表着)/,
+  /(?:也就是说|换句话说|归根结底|说到底)[，：]/,
+  /(?:他|她)知道，.{0,24}(?:若|如果|一旦|只要|不然|否则)/,
+];
+
+function splitSentences(paragraph: string): string[] {
+  // 按中文句末标点切分，保留标点
+  const parts = paragraph.split(/(?<=[。！？])/).map((s) => s.trim()).filter(Boolean);
+  return parts;
+}
+
+function isInterpretiveSentence(sentence: string): boolean {
+  return INTERPRETIVE_SENTENCE_PATTERNS.some((pattern) => pattern.test(sentence));
+}
+
+export function repairInterpretiveSummaries(text: string): { repaired: boolean; content: string; removedCount: number } {
+  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (paragraphs.length === 0) return { repaired: false, content: text, removedCount: 0 };
+
+  let removedCount = 0;
+  const repaired: string[] = [];
+
+  for (const para of paragraphs) {
+    // 跳过对白段（含引号的段落）——对白中的总结性表达由审校处理，不在此确定性删除
+    if (isDialogueParagraph(para)) {
+      repaired.push(para);
+      continue;
+    }
+
+    const sentences = splitSentences(para);
+    if (sentences.length <= 1) {
+      // 单句段：若匹配则删除整段，否则保留
+      if (sentences.length === 1 && isInterpretiveSentence(sentences[0])) {
+        removedCount += 1;
+        // 跳过该段（不 push）
+      } else {
+        repaired.push(para);
+      }
+      continue;
+    }
+
+    // 多句段：删除匹配的句子，保留其余
+    const kept = sentences.filter((s) => {
+      if (isInterpretiveSentence(s)) {
+        removedCount += 1;
+        return false;
+      }
+      return true;
+    });
+
+    if (kept.length === 0) {
+      // 整段都被删除——跳过
+      continue;
+    }
+    if (kept.length === sentences.length) {
+      // 没有删除——保留原段（避免不必要的拼接变化）
+      repaired.push(para);
+    } else {
+      repaired.push(kept.join(""));
+    }
+  }
+
+  if (removedCount === 0) return { repaired: false, content: text, removedCount: 0 };
+  return { repaired: true, content: repaired.join("\n\n"), removedCount };
+}
+
+/**
+ * 确定性修复强调词贬值。
+ *
+ * LLM 系统性过度使用"忽然/突然/终于"等强调词，全章超过 2 次后强调效果贬值。
+ * 当 revision-stage 把 style.emphasis-devaluation warning 升级为 major 送 LLM 修订后，
+ * LLM 仍可能不彻底执行删除指令。
+ *
+ * 修复策略：对每个强调词，保留前 2 次出现，从第 3 次开始删除。
+ * - "忽然，" → 删除"忽然，"（连同逗号）
+ * - "忽然" → 只删除"忽然"两字（保持句意通顺）
+ * 只处理非对白段（对白中的强调词可能是人物语气，不删除）。
+ */
+const EMPHASIS_WORDS = ["忽然", "突然", "终于"];
+const EMPHASIS_MAX = 2;
+
+export function repairEmphasisDevaluation(text: string): { repaired: boolean; content: string; removedCount: number } {
+  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (paragraphs.length === 0) return { repaired: false, content: text, removedCount: 0 };
+
+  const globalCount: Record<string, number> = {};
+  for (const word of EMPHASIS_WORDS) globalCount[word] = 0;
+
+  let removedCount = 0;
+  const repaired = paragraphs.map((para) => {
+    // 跳过对白段
+    if (isDialogueParagraph(para)) return para;
+
+    let result = para;
+    for (const word of EMPHASIS_WORDS) {
+      let pos = 0;
+      while (true) {
+        pos = result.indexOf(word, pos);
+        if (pos === -1) break;
+        globalCount[word] += 1;
+        if (globalCount[word] > EMPHASIS_MAX) {
+          // 检查后面是否紧跟逗号
+          const afterComma = result[pos + word.length] === "，";
+          const removeLen = afterComma ? word.length + 1 : word.length;
+          result = result.slice(0, pos) + result.slice(pos + removeLen);
+          removedCount += 1;
+          // 不移动 pos，因为删除后新内容在原位置
+        } else {
+          pos += word.length;
+        }
+      }
+    }
+    return result;
+  });
+
+  if (removedCount === 0) return { repaired: false, content: text, removedCount: 0 };
+  return { repaired: true, content: repaired.join("\n\n"), removedCount };
+}
+
 export async function repairDraftStructureOnce(params: {
   content: string;
   model: string;
@@ -215,6 +355,19 @@ export async function repairDraftStructureOnce(params: {
   // #18 标点断裂修复：对白结束后多余句号（。"。 → 。"）
   // 尽早修复，避免影响后续段落切分与重复检测
   workingContent = repairPunctuationBreaks(workingContent);
+
+  // 确定性删除作者式心理结论句：在段落合并之前删除"她第一次知道..."等范式
+  // 这类句子打破有限第三人称，是 AI 味最典型的表现
+  const summaryResult = repairInterpretiveSummaries(workingContent);
+  if (summaryResult.repaired) {
+    workingContent = summaryResult.content;
+  }
+
+  // 确定性修复强调词贬值：LLM 修订不彻底时，兜底删除超限的"忽然/突然/终于"
+  const emphasisResult = repairEmphasisDevaluation(workingContent);
+  if (emphasisResult.repaired) {
+    workingContent = emphasisResult.content;
+  }
 
   // 确定性去重：在格式修复之前，先移除 LLM 常见的"末尾重述前文"重复段落
   const dedupReport = analyzeDraftStructure(workingContent);

@@ -1,0 +1,296 @@
+{
+  "version": 1,
+  "id": "novel-prose-deep-audit",
+  "objective": "通过真实端到端运行 Ymcp/web 小说创作板块完整工作流（定位→架构→角色→世界观→大纲→剧情线→伏笔→时间线→章节蓝图→正文草稿→审校→修订→终稿），用一个全新古典题材生成前2-3章正文；逐步捕获真实LLM产物并以严格中文读者视角对每步产物做独立LLM文学审查，定位使内容带'AI味'且质量偏低的根因（单句成段碎片化、结构性重复、报表式叙述、模板化意象、解释性心理标注、拒绝消息污染正文、强调词贬值、章尾重述等）；针对高杠杆缺陷优化写作契约、审校维度与确定性修复逻辑并重跑同题材验证改善；目标：产出可读作人写中文小说、具中文意境与美学的章节正文，且管道可向数百万字长篇延伸。保留现有用户改动与功能，以真实生成的章节产物、严格文学审查证据、自动化测试、类型检查与构建证明达成。",
+  "status": "active",
+  "createdAt": "2026-07-15T08:11:00.330Z",
+  "updatedAt": "2026-07-15T09:11:51.845Z",
+  "loopCount": 3,
+  "budgets": {
+    "maxLoops": 12,
+    "maxNoProgressLoops": 4,
+    "maxMinutes": 240
+  },
+  "lastDecision": "continue",
+  "lastCheckpoint": "Loop 3 策略：重跑《寒灯渡》同题材第1章，对比 before/after 验证 R1-R6 修复改善。修改 smoke-handeng.test.ts 输出目录为 artifacts-after/，跑完整端到端测试，逐项对比 before（Loop 1 产物）与 after（Loop 3 产物），将对比证据写入 findings.md。 检查 vite dev server 端口 5175 仍在运行（PID 35524/48016） 修改 smoke-handeng.test.ts 的 ARTIFACTS_DIR 为 artifacts-afte...",
+  "completionEvidence": null,
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        ".goal/goals/novel-prose-deep-audit/goal.md"
+      ]
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        ".goal/goals/novel-prose-deep-audit/findings.md"
+      ]
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "pending",
+      "weight": 1,
+      "evidenceRefs": []
+    },
+    {
+      "id": "real-e2e-generation",
+      "text": "A fresh classical theme's first 2-3 chapters are produced by the real workflow end-to-end through the actual /ai-proxy LLM; every planning step (定位→时间线) and chapter stage (蓝图→终稿) has its actual LLM output captured as an artifact.",
+      "status": "observed",
+      "weight": 2,
+      "evidenceRefs": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts/15-chapter1-final.md",
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts-after/15-chapter1-final.md"
+      ]
+    },
+    {
+      "id": "ai-flavor-rootcaused",
+      "text": "Each captured step's output is independently LLM-audited from a strict Chinese-reader perspective; the recurring root causes of AI flavor are documented with named, evidenced failure modes (not just scores).",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        ".goal/goals/novel-prose-deep-audit/findings.md"
+      ]
+    },
+    {
+      "id": "prose-aesthetics-raised",
+      "text": "After optimizing contracts/review/repair against the root causes, regenerated chapter finals pass a stricter reader-grounded gate: zero leaked meta-text, fragmented single-sentence-paragraph rhythm eliminated, no report-like exposition, Chinese imagery/意境 present, with measurable before/after evidence from the same theme.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "src/features/novel/prose-prompts.ts",
+        "src/features/novel/workflow-stages/draft-structure-repair.ts",
+        ".goal/goals/novel-prose-deep-audit/findings.md",
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts-after/15-chapter1-final.md",
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts-after/13-chapter1-quality-report-json.txt"
+      ]
+    },
+    {
+      "id": "engineering-verification",
+      "text": "Focused prompt/quality/workflow tests, the relevant novel suite, TypeScript checking, and production build pass after changes.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "src/features/novel/__tests__/draft-repair.test.ts",
+        "dist/assets/novel-Btfp3hJs.js"
+      ]
+    }
+  ],
+  "strategy": {
+    "current": "Refine the broad goal only enough to choose the next evidence-seeking loop; avoid pre-building a task list.",
+    "lastChangeReason": "Initial strategy.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 0.818182,
+  "errorPatterns": [
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit findings md",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/findings.md"
+      ],
+      "count": 2,
+      "firstLoop": 1,
+      "lastLoop": 3
+    },
+    {
+      "kind": "error",
+      "canonicalKey": "第一版 smoke 测试用旧 api taskkey outline startchapterworkflow 无 thread brief 失败 已适配重构后 api",
+      "examples": [
+        "第一版 smoke 测试用旧 API（taskKey:'outline'、startChapterWorkflow 无 thread/brief）失败，已适配重构后 API"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "error",
+      "canonicalKey": "typeerror invalid argument to table get 在 startchapterworkflow 需 brief status confirmed 已增加 getorcreatethread updatebrief confirmbrief 流程",
+      "examples": [
+        "TypeError: Invalid argument to Table.get() 在 startChapterWorkflow——需 brief.status==='confirmed'，已增加 getOrCreateThread+updateBrief+confirmBrief 流程"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit tmp artifacts 13 chapter1 draft md",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts/13-chapter1-draft.md"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit tmp artifacts 15 chapter1 final md",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts/15-chapter1-final.md"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit tmp artifacts 13 chapter1 quality report md",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts/13-chapter1-quality-report.md"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit tmp artifacts 12 chapter1 context packet md",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts/12-chapter1-context-packet.md"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "plotdesigntask 替代已移除的 outline 任务 增加 getorcreatethread getdraftbrief updatebrief confirmbrief 流程",
+      "examples": [
+        "PlotDesignTask 替代已移除的 outline 任务；增加 getOrCreateThread + getDraftBrief + updateBrief + confirmBrief 流程"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel prose prompts ts",
+      "examples": [
+        "src/features/novel/prose-prompts.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel workflow stages draft structure repair ts",
+      "examples": [
+        "src/features/novel/workflow-stages/draft-structure-repair.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel workflow stages revision stage ts",
+      "examples": [
+        "src/features/novel/workflow-stages/revision-stage.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel quality ts",
+      "examples": [
+        "src/features/novel/quality.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel test draft repair test ts",
+      "examples": [
+        "src/features/novel/__tests__/draft-repair.test.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "指令到 issuelist path src features novel workflow stages revision stage ts",
+      "examples": [
+        "指令到 issueList path src/features/novel/workflow-stages/revision-stage.ts"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "dmajor 列表送 llm 修订",
+      "examples": [
+        "dMajor 列表送 LLM 修订"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "指令 如 删除该句 改写为行动 避免 llm 收到含糊建议只做润色",
+      "examples": [
+        "指令（如'删除该句''改写为行动'），避免 LLM 收到含糊建议只做润色"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit tmp artifacts after 15 chapter1 final md",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts-after/15-chapter1-final.md"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit tmp artifacts after 13 chapter1 quality report json txt",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts-after/13-chapter1-quality-report-json.txt"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose deep audit tmp artifacts after 13 chapter1 draft md",
+      "examples": [
+        ".goal/goals/novel-prose-deep-audit/tmp/artifacts-after/13-chapter1-draft.md"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "删除指令 path goal goals novel prose deep audit tmp artifacts after 15 chapter1 final md",
+      "examples": [
+        "删除指令 path .goal/goals/novel-prose-deep-audit/tmp/artifacts-after/15-chapter1-final.md"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    }
+  ],
+  "attestationSha256": "774dee9d4fda8638aeb3ad7c14bfe30ff2579032420581936f929ea6dd7ed88d"
+}
