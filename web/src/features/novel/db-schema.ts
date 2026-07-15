@@ -2,7 +2,7 @@
 import type { Transaction } from "dexie";
 import { buildProjectReferenceCatalogs, emptyReferenceCatalog, sanitizeProposalReferencesInPlace, sanitizeReferenceRecordInPlace } from "./reference-integrity";
 
-export const DB_VERSION = 11;
+export const DB_VERSION = 14;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
@@ -77,6 +77,96 @@ export const V10_STORES: Record<string, string | null> = {
 export const V11_STORES: Record<string, string | null> = {
   ...V10_STORES,
 };
+
+export const V12_STORES: Record<string, string | null> = {
+  ...V11_STORES,
+};
+
+export const V13_STORES: Record<string, string | null> = {
+  ...V12_STORES,
+};
+
+export const V14_STORES: Record<string, string | null> = {
+  ...V13_STORES,
+};
+
+/**
+ * 审批元信息污染模式：LLM 在内容字段里添加的"候选/待审核"等状态标记。
+ * 这些状态应由系统通过 ProposalItem.status 管理，不应出现在内容字段值里。
+ * 只剥离明确的尾部审批标记，避免误伤正常内容。
+ */
+const APPROVAL_META_PATTERNS = [
+  /[\s]*[（(]\s*(?:候选设定|候选内容|候选|待审核|待确认|未批准|未经批准|仅供参考|待用户审核)[，,；;]?\s*(?:候选设定|候选内容|候选|待审核|待确认|未批准|未经批准|仅供参考|待用户审核)?\s*[)）][\s]*$/,
+  /[\s]*[【[]\s*(?:候选设定|候选内容|候选|待审核|待确认|未批准|未经批准|仅供参考|待用户审核)[，,；;]?\s*(?:候选设定|候选内容|候选|待审核|待确认|未批准|未经批准|仅供参考|待用户审核)?\s*[】\]][\s]*$/,
+  /[\s]*[-—–]\s*(?:候选设定|候选内容|候选|待审核|待确认|未批准|未经批准|仅供参考|待用户审核)\s*$/,
+];
+
+/** 剥离字符串值尾部的审批元信息标记。 */
+export function stripApprovalMeta(value: string): string {
+  let result = value;
+  for (const pattern of APPROVAL_META_PATTERNS) result = result.replace(pattern, "");
+  return result.trim();
+}
+
+/** 递归清洗记录中所有字符串字段的审批元信息污染（原地修改）。 */
+export function sanitizeApprovalMetaInPlace(record: unknown): void {
+  if (!record || typeof record !== "object") return;
+  for (const key of Object.keys(record as Record<string, unknown>)) {
+    const value = (record as Record<string, unknown>)[key];
+    if (typeof value === "string") {
+      const cleaned = stripApprovalMeta(value);
+      if (cleaned !== value) (record as Record<string, unknown>)[key] = cleaned;
+    } else if (Array.isArray(value)) {
+      for (const item of value) if (item && typeof item === "object") sanitizeApprovalMetaInPlace(item);
+    } else if (value && typeof value === "object") {
+      sanitizeApprovalMetaInPlace(value);
+    }
+  }
+}
+
+/** V14 迁移：清洗历史数据中混入内容字段的审批元信息。 */
+export async function cleanupApprovalMetaPollution(transaction: Transaction) {
+  const TABLES = ["entities", "outlineNodes", "documents", "scenes", "plotThreads", "foreshadowing", "architectures", "timelineEvents", "relations"];
+  await Promise.all(TABLES.map((table) => transaction.table(table).toCollection().modify((record) => sanitizeApprovalMetaInPlace(record))));
+}
+
+export async function cleanupPollutedMemorySummaries(transaction: Transaction) {
+  const PATTERN = /^(已将原输出|原输出包含|原输出|已将)|Schema[\s\S]{0,16}(修复|JSON|字段|校验|映射|移除|超出)|修复为[\s\S]{0,16}Schema/i;
+  await transaction.table("derivedMemories").toCollection().modify((record) => {
+    const summary = typeof record.summary === "string" ? record.summary.trim() : "";
+    if (!summary || !PATTERN.test(summary)) return;
+    const content = (record.content ?? {}) as Record<string, unknown>;
+    const details = [
+      ...(Array.isArray(content.sceneOutcomes) ? content.sceneOutcomes : []),
+      ...(Array.isArray(content.stateChanges) ? content.stateChanges : []),
+      ...(Array.isArray(content.knowledgeChanges) ? content.knowledgeChanges : []),
+      ...(Array.isArray(content.relationshipChanges) ? content.relationshipChanges : []),
+      ...(Array.isArray(content.threadProgress) ? content.threadProgress : []),
+      ...(Array.isArray(content.foreshadowingProgress) ? content.foreshadowingProgress : []),
+      ...((Array.isArray(content.inheritedPressures) ? content.inheritedPressures : []).map((item: unknown) => `继承压力：${item}`)),
+    ].filter((item) => typeof item === "string" && item.trim());
+    record.summary = details[0] ? String(details[0]).slice(0, 200) : "(记忆摘要已清洗)";
+    record.revision = (record.revision ?? 0) + 1;
+    record.updatedAt = Date.now();
+  });
+}
+
+export async function migrateOutlineBeatFields(transaction: Transaction) {
+  await transaction.table("outlineNodes").toCollection().modify((record) => {
+    const causality = typeof record.causality === "string" ? record.causality.trim() : "";
+    const outcome = typeof record.outcome === "string" ? record.outcome.trim() : "";
+    if (!causality && !outcome) {
+      delete record.causality;
+      delete record.outcome;
+      return;
+    }
+    const summary = typeof record.summary === "string" ? record.summary : "";
+    const parts = [summary, causality ? `因果：${causality}` : "", outcome ? `结果：${outcome}` : ""].filter(Boolean);
+    record.summary = parts.join("\n");
+    delete record.causality;
+    delete record.outcome;
+  });
+}
 
 export async function cleanupReferenceIntegrity(transaction: Transaction) {
   const [entities, threads, clues] = await Promise.all([

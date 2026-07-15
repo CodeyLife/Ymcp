@@ -1,4 +1,4 @@
-import { novelDb, recordBase } from "./db";
+import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb, recordBase } from "./db";
 import type {
   AgentRun,
   ChapterBlueprint,
@@ -31,7 +31,7 @@ export const BUILTIN_CHAPTER_WORKFLOW: WorkflowDefinition = {
   workflowId: CHAPTER_WORKFLOW_ID,
   name: "标准章节创作",
   description: "蓝图审批、正文生成、五类审校、定向修订、正文审批和事实回写。",
-  stages: ["context", "blueprint", "blueprint-approval", "draft", "deterministic-check", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit"],
+  stages: ["context", "blueprint", "blueprint-approval", "draft", "deterministic-check", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit", "character-enrichment"],
   requiredSkillIds: ["story-facts-invariant", "chapter-blueprint", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
   maxAutoRevisions: 2,
   qualityThreshold: 3.7,
@@ -46,12 +46,12 @@ export function shouldAutoRevise(params: { passed: boolean; iteration: number; m
 export const blueprintSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "objective", "startingState", "beats", "endingHook", "characters", "locations", "informationRelease", "mustHappen", "flexible", "forbidden", "targetWords"],
+  required: ["title", "objective", "startingState", "beats", "endingHook", "characters", "locations", "informationRelease", "mustHappen", "flexible", "forbidden"],
   properties: {
     title: { type: "string" }, objective: { type: "string" }, startingState: { type: "string" },
     beats: { type: "array", minItems: 4, maxItems: 10, items: { type: "object", additionalProperties: false, required: ["action", "emotion", "outcome"], properties: { action: { type: "string" }, emotion: { type: "string" }, outcome: { type: "string" } } } },
     endingHook: { type: "string" }, characters: { type: "array", items: { type: "string" } }, locations: { type: "array", items: { type: "string" } },
-    informationRelease: { type: "array", items: { type: "string" } }, mustHappen: { type: "array", items: { type: "string" } }, flexible: { type: "array", items: { type: "string" } }, forbidden: { type: "array", items: { type: "string" } }, targetWords: { type: "integer", minimum: 500, maximum: 30000 },
+    informationRelease: { type: "array", items: { type: "string" } }, mustHappen: { type: "array", items: { type: "string" } }, flexible: { type: "array", items: { type: "string" } }, forbidden: { type: "array", items: { type: "string" } },
   },
 };
 
@@ -61,8 +61,8 @@ export const reviewerSchema = {
   type: "object", additionalProperties: false, required: ["scores", "issues"],
   properties: {
     scores: { type: "object", additionalProperties: false, properties: Object.fromEntries(qualityDimensions.map((item) => [item, { type: "number", minimum: 0, maximum: 5 }])) },
-    issues: { type: "array", items: { type: "object", additionalProperties: false, required: ["dimension", "severity", "title", "description", "rule", "suggestion"], properties: {
-      dimension: { enum: qualityDimensions }, severity: { enum: ["blocker", "major", "warning"] }, title: { type: "string" }, description: { type: "string" }, excerpt: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, rule: { type: "string" }, sourceId: { type: "string" }, suggestion: { type: "string" },
+    issues: { type: "array", items: { type: "object", additionalProperties: false, required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion"], properties: {
+      dimension: { enum: qualityDimensions }, severity: { enum: ["blocker", "major", "warning"] }, title: { type: "string" }, description: { type: "string" }, excerpt: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, revisionRanges: { type: "array", items: { type: "object", additionalProperties: false, required: ["start", "end"], properties: { start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 } } } }, rule: { type: "string" }, sourceId: { type: "string" }, suggestion: { type: "string" },
     } } },
   },
 };
@@ -90,9 +90,9 @@ export const factSchema = {
   },
 };
 
-export function blueprintMarkdown(data: Record<string, unknown>) {
+export function blueprintMarkdown(data: Record<string, unknown>, targetWords = DEFAULT_CHAPTER_TARGET_WORDS) {
   const beats = data.beats as Array<{ action: string; emotion: string; outcome: string }>;
-  return `# ${data.title}\n\n## 章节目标\n${data.objective}\n\n## 起点\n${data.startingState}\n\n## 节拍\n${beats.map((beat, index) => `${index + 1}. **行动**：${beat.action}\n   - 情绪：${beat.emotion}\n   - 结果：${beat.outcome}`).join("\n")}\n\n## 章尾驱动力\n${data.endingHook}\n\n## 必须发生\n${(data.mustHappen as string[]).map((item) => `- ${item}`).join("\n")}\n\n## 禁止事项\n${(data.forbidden as string[]).map((item) => `- ${item}`).join("\n") || "- 无"}`;
+  return `# ${data.title}\n\n## 目标字数\n${targetWords} 字\n\n## 章节目标\n${data.objective}\n\n## 起点\n${data.startingState}\n\n## 节拍\n${beats.map((beat, index) => `${index + 1}. **行动**：${beat.action}\n   - 情绪：${beat.emotion}\n   - 结果：${beat.outcome}`).join("\n")}\n\n## 章尾驱动力\n${data.endingHook}\n\n## 必须发生\n${(data.mustHappen as string[]).map((item) => `- ${item}`).join("\n")}\n\n## 禁止事项\n${(data.forbidden as string[]).map((item) => `- ${item}`).join("\n") || "- 无"}`;
 }
 
 export function asBlueprint(data: Record<string, unknown>, existing?: ChapterBlueprint): ChapterBlueprint {
@@ -104,12 +104,10 @@ export function asBlueprint(data: Record<string, unknown>, existing?: ChapterBlu
     characterIds: existing?.characterIds ?? [],
     conflict: beats.map((item) => item.action).join(" → "),
     informationRelease: data.informationRelease as string[],
-    turningPoint: beats.at(-2)?.outcome ?? beats.at(-1)?.outcome ?? "",
-    hook: String(data.endingHook),
     mustHappen: data.mustHappen as string[],
     flexible: data.flexible as string[],
     forbidden: data.forbidden as string[],
-    targetWords: Number(data.targetWords),
+    targetWords: existing?.targetWords ?? DEFAULT_CHAPTER_TARGET_WORDS,
   };
 }
 

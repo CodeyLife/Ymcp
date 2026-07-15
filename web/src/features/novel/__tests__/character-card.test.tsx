@@ -37,4 +37,13 @@ describe("character card", () => {
     expect(isCharacterEntityData(character)).toBe(true);
     expect(isCharacterEntityData({ kind: "location", name: "旧档案馆" })).toBe(false);
   });
+
+  it("marks changed fields and dims unchanged fields in comparison mode", () => {
+    const before = { ...character, character: { ...character.character, weakness: "过度依赖记录" } };
+    const after = { ...character, character: { ...character.character, weakness: "害怕自己的记忆并不可靠" } };
+    const html = renderToStaticMarkup(<CharacterCard entity={after} compareTo={before} mode="detail" editable />);
+
+    expect(html).toMatch(/data-change-state="changed"[^>]*><span>弱点与代价<\/span>/);
+    expect(html).toMatch(/data-change-state="unchanged"[^>]*><span>外貌与辨识度<\/span>/);
+  });
 });

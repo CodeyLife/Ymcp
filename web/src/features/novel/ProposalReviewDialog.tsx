@@ -20,10 +20,10 @@ function architectureValue(value: Record<string, unknown>): ArchitectureEditable
   };
 }
 
-function StructuredDataSurface({ item, value, editable, onChange }: { item: ProposalItem; value: Record<string, unknown>; editable: boolean; onChange?: (next: Record<string, unknown>) => void }) {
-  if (item.targetTable === "architectures") return <ArchitectureDataEditor preview readOnly={!editable} value={architectureValue(value)} onChange={(next) => onChange?.({ ...value, ...next })} />;
-  if (item.targetTable === "entities" && isCharacterEntityData(value)) return <CharacterCard entity={value as unknown as CharacterCardData} mode="detail" editable={editable} onChange={(next) => onChange?.(next as unknown as Record<string, unknown>)} />;
-  return <ProposalDataCard value={value} editable={editable} onChange={onChange} />;
+function StructuredDataSurface({ item, value, compareTo, editable, onChange }: { item: ProposalItem; value: Record<string, unknown>; compareTo?: Record<string, unknown>; editable: boolean; onChange?: (next: Record<string, unknown>) => void }) {
+  if (item.targetTable === "architectures") return <ArchitectureDataEditor preview readOnly={!editable} value={architectureValue(value)} compareTo={compareTo ? architectureValue(compareTo) : undefined} onChange={(next) => onChange?.({ ...value, ...next })} />;
+  if (item.targetTable === "entities" && isCharacterEntityData(value)) return <CharacterCard entity={value as unknown as CharacterCardData} compareTo={compareTo && isCharacterEntityData(compareTo) ? compareTo as unknown as CharacterCardData : undefined} mode="detail" editable={editable} onChange={(next) => onChange?.(next as unknown as Record<string, unknown>)} />;
+  return <ProposalDataCard value={value} compareTo={compareTo} editable={editable} onChange={onChange} />;
 }
 
 export default function ProposalReviewDialog({
@@ -54,8 +54,8 @@ export default function ProposalReviewDialog({
   >
     <div className="novel-proposal-modal-intro"><p>{item.rationale}</p>{item.impact?.length ? <ul>{item.impact.map((impact) => <li key={impact}>{impact}</li>)}</ul> : null}</div>
     <div className={`novel-proposal-compare${hasBefore && hasAfter ? " split" : " single"}`}>
-      {hasBefore && <section className="novel-proposal-compare-panel before"><header><span>修改前</span><small>当前正式数据</small></header><div className="novel-proposal-surface"><StructuredDataSurface item={item} value={item.before!} editable={false} /></div></section>}
-      {hasAfter && <section className="novel-proposal-compare-panel after"><header><span>{item.operation === "create" ? "新增内容" : "修改后"}</span><small>可直接编辑候选字段</small></header><div className="novel-proposal-surface"><StructuredDataSurface item={item} value={after} editable onChange={onChange} /></div></section>}
+      {hasBefore && <section className="novel-proposal-compare-panel before"><header><span>修改前</span><small>当前正式数据</small></header><div className="novel-proposal-surface"><StructuredDataSurface item={item} value={item.before!} compareTo={hasAfter ? after : undefined} editable={false} /></div></section>}
+      {hasAfter && <section className="novel-proposal-compare-panel after"><header><span>{item.operation === "create" ? "新增内容" : "修改后"}</span><small>可直接编辑候选字段</small></header><div className="novel-proposal-surface"><StructuredDataSurface item={item} value={after} compareTo={item.before} editable onChange={onChange} /></div></section>}
     </div>
   </Modal>;
 }

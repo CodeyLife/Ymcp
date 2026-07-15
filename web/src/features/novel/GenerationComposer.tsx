@@ -43,7 +43,7 @@ export default function GenerationComposer({
   actionLabel?: string;
   getRefinementSnapshot?: () => RefinementSnapshotInput | Promise<RefinementSnapshotInput>;
 }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const tasks = useMemo(() => {
     const scoped = tasksForScope(scope);
     return taskKeys ? taskKeys.map(getGenerationTask) : scoped;
@@ -142,6 +142,17 @@ export default function GenerationComposer({
     else await runGenerationTask({ projectId, taskKey: proposal.taskKey!, instruction, targetId });
   }
 
+  function closeProposal() {
+    if (!proposal) return;
+    modal.confirm({
+      title: "关闭当前候选？",
+      content: "将丢弃当前候选内容，不会自动重新生成。",
+      okText: "关闭",
+      okButtonProps: { danger: true },
+      onOk: async () => { await rejectProposal(proposal.id); },
+    });
+  }
+
   const reviewingItem = proposal?.items.find((item) => item.id === reviewingItemId);
   const pendingItems = proposal?.items.filter((item) => item.status === "pending") ?? [];
 
@@ -208,7 +219,7 @@ export default function GenerationComposer({
         <footer><Button icon={<ArrowsAltOutlined />} onClick={() => setReviewingItemId(item.id)}>查看完整预览</Button></footer>
       </article>;
       })}</div>
-      <footer><Button icon={<CloseOutlined />} disabled={busy} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
+      <footer><div className="novel-generation-review-actions"><Button icon={<CloseOutlined />} disabled={busy} onClick={() => closeProposal()}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button></div><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
     </div>}
     <ProposalReviewDialog item={reviewingItem} draft={reviewingItem ? drafts[reviewingItem.id] : undefined} open={Boolean(reviewingItem)} onClose={() => setReviewingItemId(undefined)} onChange={(next) => {
       if (!reviewingItem) return;

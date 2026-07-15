@@ -29,7 +29,7 @@ describe("narrative ownership", () => {
   it("links outline events to chapters without changing their truth status", async () => {
     const project = await createNovelProject({ title: "大纲落实", genre: ["科幻"], premise: "计划与事实保持分离。" });
     const chapter = await createChapter(project.id, "第一章");
-    const outline = { ...recordBase(project.id), parentId: undefined, kind: "event" as const, title: "抵达北港", summary: "", order: 0, status: "planned" as const, causality: "", outcome: "", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [] };
+    const outline = { ...recordBase(project.id), parentId: undefined, kind: "event" as const, title: "抵达北港", summary: "", order: 0, status: "planned" as const, characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [] };
     await novelDb.outlineNodes.add(outline);
     const link = await linkOutlineRealization({ projectId: project.id, outlineNodeId: outline.id, documentId: chapter.id });
     expect(link).toMatchObject({ outlineNodeId: outline.id, documentId: chapter.id, status: "planned" });

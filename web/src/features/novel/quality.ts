@@ -1,4 +1,5 @@
 import { novelDb, recordBase } from "./db";
+import { analyzeDraftStructure, isDialogueOnlyParagraph } from "./draft-structure";
 import type { ChapterBlueprint, NovelAgentRole, QualityDimension, QualityIssue, QualityReport } from "./types";
 
 const DIMENSIONS: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "pacing", "specificity", "hookPayoff", "continuity"];
@@ -8,6 +9,7 @@ const EMPHASIS_WORDS = ["第一次", "突然", "忽然", "终于", "竟然", "�
 const EMOTION_DIRECT_WORDS = ["他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "她很悲伤", "她很愤怒", "她很高兴", "她很害怕", "她很孤独", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
 const APHORISM_PATTERNS = [/不是.{1,12}而是/, /也许.{1,12}就是/, /所谓.{1,12}不过/, /这.{0,6}便是/, /或许.{1,12}才是/, /所谓.{1,12}无非/];
 const IMAGERY_WORDS = ["风", "雪", "雨", "月", "灯", "剑", "路", "井", "烟", "尘", "云", "霜", "雾", "影", "光", "火", "水", "石", "树", "花"];
+const STRUCTURAL_MAJOR_RULES = new Set(["style.fragmented-paragraphs", "plot.exact-paragraph-repeat", "plot.repeated-progression"]);
 
 export interface ReviewerFinding {
   role: NovelAgentRole;
@@ -37,17 +39,44 @@ function countOccurrences(text: string, needle: string) {
 }
 
 function containsMeaning(text: string, requirement: string) {
+  // 带标点的复合要求必须完整命中所有子句，不能只完成前半动作。
   const terms = requirement.split(/[，。；、\s]+/).filter((item) => item.length >= 2);
-  if (terms.length === 0 || terms.some((term) => text.includes(term))) return true;
-  const compact = requirement.replace(/[，。；、\s]/g, "");
+  if (terms.length > 0 && terms.every((term) => text.includes(term))) return true;
+
+  // mustHappen / forbidden 常含"必须""禁止""或"等虚词，但不含标点；
+  // 移除虚词后再做 bigram 匹配，避免"无名锈剑必须首次出现"被当作一个不可分割的长词条
+  const STOP_WORDS = /必须|不得|需要|应当|应该|禁止|或|并|且|而|的|了|着|过|是|在|与|和/g;
+  const compact = requirement.replace(/[，。；、\s]/g, "").replace(STOP_WORDS, "");
+  if (compact.length < 2) return false;
+
   const pairs = Array.from({ length: Math.max(0, compact.length - 1) }, (_, index) => compact.slice(index, index + 2));
-  return pairs.length >= 2 && pairs.filter((pair) => text.includes(pair)).length / pairs.length >= 0.5;
+  if (pairs.length < 2) return false;
+
+  // 关键实体或单个子句出现不足以证明动作和结果已落实。
+  const matchCount = pairs.filter((pair) => text.includes(pair)).length;
+  return matchCount / pairs.length >= 0.6;
 }
 
 export function runDeterministicQualityChecks(params: { text: string; blueprint?: ChapterBlueprint }) {
   const text = params.text.trim();
   const blocks = paragraphs(text);
   const issues: QualityIssue[] = [];
+  const structure = analyzeDraftStructure(text);
+  for (const found of structure.issues) {
+    const dimension: QualityDimension = found.rule.startsWith("plot.") ? "plot" : "pacing";
+    issues.push(issue({
+      dimension,
+      severity: found.severity,
+      title: found.title,
+      description: found.description,
+      paragraph: found.paragraph,
+      revisionRanges: found.revisionRanges,
+      rule: found.rule,
+      suggestion: found.repairable
+        ? "保持事件、措辞和顺序不变，仅移除回复包装并按常规叙事段落重新编排。"
+        : "核对较早段落，只删除或合并后出现的重复推进。",
+    }));
+  }
   const totalChars = text.replace(/\s/g, "").length;
   const dialogueChars = (text.match(/[“「『][^”」』]+[”」』]/g) ?? []).join("").length;
   const templateHits = TEMPLATE_EXPRESSIONS.reduce((sum, word) => sum + countOccurrences(text, word), 0);
@@ -82,13 +111,17 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     if (text.includes(phrase)) issues.push(issue({ dimension: "sceneEmbodiment", severity: "warning", title: "情绪直说", description: `检测到“${phrase}”，情绪被直接宣告而非通过行动或意象承载。`, excerpt: phrase, rule: "style.emotion-direct", suggestion: "用一个反常动作、环境意象变化或没说完的话来承载该情绪。" }));
   }
   let shortSentenceStreaks = 0;
+  let shortSentenceStreak = 0;
   for (const block of blocks) {
+    if (isDialogueOnlyParagraph(block)) {
+      shortSentenceStreak = 0;
+      continue;
+    }
     const sentences = block.split(/[。！？\n]/).map((s) => s.trim()).filter(Boolean);
-    let streak = 0;
     for (const s of sentences) {
-      if (s.length > 0 && s.length <= 6) streak += 1;
-      else streak = 0;
-      if (streak >= 3) { shortSentenceStreaks += 1; streak = 0; }
+      if (s.length > 0 && s.length <= 6) shortSentenceStreak += 1;
+      else shortSentenceStreak = 0;
+      if (shortSentenceStreak >= 3) { shortSentenceStreaks += 1; shortSentenceStreak = 0; }
     }
   }
   if (shortSentenceStreaks > 2) issues.push(issue({ dimension: "pacing", severity: "warning", title: "短句排比过多", description: `检测到 ${shortSentenceStreaks} 处连续短句排比，超过单章 2 处上限。`, rule: "style.short-sentence-tic", suggestion: "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。" }));
@@ -113,6 +146,8 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       paragraphs: blocks.length,
       dialogueRatio: totalChars ? Number((dialogueChars / totalChars).toFixed(3)) : 0,
       paragraphVariation: Number(paragraphVariation.toFixed(3)),
+      singleSentenceNarrativeRatio: Number(structure.singleSentenceNarrativeRatio.toFixed(3)),
+      maxConsecutiveSingleSentenceNarrative: structure.maxConsecutiveSingleSentenceNarrative,
       templateHits,
       imageryDensity: imageryHits,
     },
@@ -142,15 +177,22 @@ function isDuplicateIssue(existing: QualityIssue, candidate: Omit<QualityIssue, 
   return titleSimilarity(existing.title, candidate.title) >= 0.75;
 }
 
+function mergeRevisionRanges(...groups: Array<QualityIssue["revisionRanges"]>): QualityIssue["revisionRanges"] {
+  const ranges = groups.flatMap((group) => group ?? []);
+  if (ranges.length === 0) return undefined;
+  return Array.from(new Map(ranges.map((range) => [`${range.start}:${range.end}`, range])).values())
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
 function deduplicateReviewerIssues(existing: QualityIssue[], candidate: Omit<QualityIssue, "id" | "deterministic">): QualityIssue[] {
   const duplicateIndex = existing.findIndex((item) => !item.deterministic && isDuplicateIssue(item, candidate));
   if (duplicateIndex === -1) return [...existing, { ...candidate, id: crypto.randomUUID(), deterministic: false }];
   const duplicate = existing[duplicateIndex];
   if (SEVERITY_RANK[candidate.severity] > SEVERITY_RANK[duplicate.severity]) {
-    const merged: QualityIssue = { ...duplicate, ...candidate, id: duplicate.id, deterministic: false, description: `${duplicate.description}\n\n[另一审校补充] ${candidate.description}` };
+    const merged: QualityIssue = { ...duplicate, ...candidate, id: duplicate.id, deterministic: false, revisionRanges: mergeRevisionRanges(duplicate.revisionRanges, candidate.revisionRanges), description: `${duplicate.description}\n\n[另一审校补充] ${candidate.description}` };
     return existing.map((item, index) => (index === duplicateIndex ? merged : item));
   }
-  const merged: QualityIssue = { ...duplicate, description: `${duplicate.description}\n\n[另一审校补充] ${candidate.description}` };
+  const merged: QualityIssue = { ...duplicate, revisionRanges: mergeRevisionRanges(duplicate.revisionRanges, candidate.revisionRanges), description: `${duplicate.description}\n\n[另一审校补充] ${candidate.description}` };
   return existing.map((item, index) => (index === duplicateIndex ? merged : item));
 }
 
@@ -164,9 +206,10 @@ export function aggregateQuality(params: { deterministic: ReturnType<typeof runD
     for (const found of reviewer.issues) issues = deduplicateReviewerIssues(issues, found);
   }
   const blockerCount = issues.filter((item) => item.severity === "blocker").length;
+  const structuralMajorCount = issues.filter((item) => item.severity === "major" && STRUCTURAL_MAJOR_RULES.has(item.rule)).length;
   const weightedScore = Number(DIMENSIONS.reduce((sum, dimension) => sum + scores[dimension] * WEIGHTS[dimension], 0).toFixed(2));
   const coreFloorPassed = DIMENSIONS.every((dimension) => scores[dimension] >= 3);
-  return { scores, issues, blockerCount, weightedScore, passed: blockerCount === 0 && coreFloorPassed && weightedScore >= params.threshold, reviewerRoles };
+  return { scores, issues, blockerCount, weightedScore, passed: blockerCount === 0 && structuralMajorCount === 0 && coreFloorPassed && weightedScore >= params.threshold, reviewerRoles };
 }
 
 export async function saveQualityReport(params: {

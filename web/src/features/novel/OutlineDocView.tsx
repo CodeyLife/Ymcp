@@ -292,28 +292,6 @@ function OutlineNodeBlock({
               placeholder="这一节点发生什么"
               onCommit={(value) => void update({ summary: value })}
             />
-            <div className="novel-outline-causal-grid">
-              <div className="novel-outline-causal">
-                <label>因为</label>
-                <InlineText
-                  multiline
-                  rows={2}
-                  value={node.causality}
-                  placeholder="它为什么发生, 与前序事件有何因果"
-                  onCommit={(value) => void update({ causality: value })}
-                />
-              </div>
-              <div className="novel-outline-causal">
-                <label>导致</label>
-                <InlineText
-                  multiline
-                  rows={2}
-                  value={node.outcome}
-                  placeholder="它造成什么不可逆结果"
-                  onCommit={(value) => void update({ outcome: value })}
-                />
-              </div>
-            </div>
             <div className="novel-outline-refs">
               <Select
                 mode="multiple"

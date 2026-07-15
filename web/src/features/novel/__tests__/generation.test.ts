@@ -1,3 +1,4 @@
+import Ajv from "ajv";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../ai", () => ({
@@ -6,9 +7,10 @@ vi.mock("../ai", () => ({
     usage: { inputTokens: 10, outputTokens: 10 },
     promptHash: "test-hash",
   })),
+  streamNovelModel: vi.fn(),
 }));
 
-import { callStructuredNovelModel } from "../ai";
+import { callStructuredNovelModel, streamNovelModel } from "../ai";
 import { applyProposalItems, buildRefinementSnapshot, fingerprintRefinementSnapshot, getGenerationTask, runGenerationTask, runRefinementTask, tasksForScope, updateProposalItemPayload } from "../generation";
 import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, novelDb, recordBase, saveApprovedDocumentRevision } from "../db";
 import { createChapterMemory, linkOutlineRealization } from "../memory";
@@ -18,6 +20,7 @@ beforeEach(async () => {
   await novelDb.delete();
   await novelDb.open();
   localStorage.clear();
+  vi.mocked(streamNovelModel).mockReset();
 });
 
 function proposal(projectId: string, items: AIProposal["items"]): AIProposal {
@@ -25,10 +28,29 @@ function proposal(projectId: string, items: AIProposal["items"]): AIProposal {
 }
 
 function characterPayload(name: string) {
-  return { kind: "character", name, summary: "核心人物", description: "负责推动故事选择", character: { role: "主角", appearance: "", personality: "谨慎", desire: "找出真相", motivation: "保护记忆", weakness: "过度怀疑", secret: "", abilities: [], voice: "简短", arc: "从记录走向行动", knowledge: { known: [], suspected: [], mistaken: [], unknown: [] }, state: { location: "", physical: "正常", emotional: "警惕", objective: "调查", inventory: [], relationshipNotes: [] } } };
+  return { kind: "character", name, summary: "核心人物", description: "负责推动故事选择", character: { role: "主角", appearance: "", personality: "谨慎", desire: "找出真相", motivation: "保护记忆", weakness: "过度怀疑", secret: "", abilities: [], voice: "简短", arc: "从记录走向行动", state: { location: "", physical: "正常", emotional: "警惕", objective: "调查", inventory: [], relationshipNotes: [] } } };
 }
 
 describe("generation task ownership", () => {
+  it("compiles and repairs chapter-draft plainText before creating a proposal", async () => {
+    const project = await createNovelProject({ title: "正文生成", genre: ["悬疑"], premise: "正文必须使用常规段落。" });
+    const chapter = await createChapter(project.id, "第一章");
+    const invalid = ["以下是正文：", "风停了。", "他抬起头。", "远处有人走来。", "脚步越来越近。"].join("\n\n");
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
+      data: { summary: "正文", items: [{ label: "第一章正文", operation: "update", targetTable: "documents", targetId: chapter.id, payload: { plainText: invalid }, rationale: "生成正文" }] },
+      usage: { inputTokens: 10, outputTokens: 10 },
+      promptHash: "chapter-draft",
+    });
+
+    const { proposal: generated } = await runGenerationTask({ projectId: project.id, taskKey: "chapter-draft", instruction: "生成第一章正文", targetId: chapter.id });
+
+    // 改进后：repairDraftStructureOnce 确定性合并短段+移除格式标记，不再调用 LLM
+    expect(streamNovelModel).not.toHaveBeenCalled();
+    // "以下是正文："被移除，3 个短叙事段合并为 1 段，"脚步越来越近。"保留独立
+    expect(generated.items[0].payload.plainText).toBe("风停了。他抬起头。远处有人走来。\n\n脚步越来越近。");
+    expect(vi.mocked(callStructuredNovelModel).mock.calls.at(-1)?.[0].skillPrompt).toContain("普通叙事段落默认包含 2 至 5 句");
+  });
+
   it("exposes project positioning alongside story data in the bible scope", () => {
     expect(getGenerationTask("project-positioning").scope).toBe("bible");
     expect(tasksForScope("bible").map((task) => task.key)).toEqual(["project-positioning", "story-bible"]);
@@ -40,6 +62,33 @@ describe("generation task ownership", () => {
     expect(task.defaultInstruction).toContain("不生成场景");
     expect(task.defaultInstruction).toContain("scenes");
     expect(task.defaultInstruction).toContain("设计场景");
+    expect(task.defaultInstruction).not.toContain("钩子和目标字数");
+  });
+
+  it("sets generated chapter length to 3000 without accepting an LLM-provided value", async () => {
+    const project = await createNovelProject({ title: "默认篇幅", genre: ["悬疑"], premise: "每章都从同一扇门开始。" });
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
+      data: { summary: "章节安排", items: [{
+        label: "第一章",
+        operation: "create",
+        targetTable: "documents",
+        tempId: "chapter-1",
+        payload: { order: 0, title: "门后", blueprint: { objective: "打开门", conflict: "门后有人阻止", targetWords: 9000 } },
+        rationale: "建立开端",
+      }] },
+      usage: { inputTokens: 10, outputTokens: 10 },
+      promptHash: "chapter-length",
+    });
+
+    const { proposal: generated } = await runGenerationTask({ projectId: project.id, taskKey: "chapter-arrangement", instruction: "编排第一章" });
+    const modelCall = vi.mocked(callStructuredNovelModel).mock.calls.at(-1)?.[0];
+    expect(JSON.stringify(modelCall?.schema)).not.toContain("targetWords");
+    expect(modelCall?.prompt).toContain("系统统一设置为 5000 字");
+    expect(generated.items[0].payload.blueprint).not.toHaveProperty("targetWords");
+
+    await applyProposalItems(generated.id, [generated.items[0].id]);
+    const chapter = await novelDb.documents.where("projectId").equals(project.id).first();
+    expect(chapter?.blueprint.targetWords).toBe(5000);
   });
 
   it("generates, edits, and accepts project positioning as a bible proposal", async () => {
@@ -101,6 +150,52 @@ describe("structured refinement", () => {
     expect(result.proposal.items[0]).toMatchObject({ operation: "update", targetId: project.id, before: expect.objectContaining({ tone: project.tone }), after: expect.objectContaining({ tone: "冷峻克制", title: project.title }) });
   });
 
+  it("allows a character refinement to return only the changed nested fields", async () => {
+    const project = await createNovelProject({ title: "角色微调", genre: ["悬疑"], premise: "每个人都隐藏着另一张脸。" });
+    const character: StoryEntity = { ...recordBase(project.id), kind: "character", name: "沈砚", aliases: [], summary: "负责追查失踪者", description: "主角", tags: [], lockedFacts: [], attributes: {}, character: characterPayload("沈砚").character };
+    await novelDb.entities.add(character);
+    const response = {
+      summary: "补充角色弱点与外貌",
+      items: [{
+        label: "补充沈砚设定",
+        operation: "update",
+        targetTable: "entities",
+        targetId: character.id,
+        payload: { character: { weakness: "害怕自己的记忆并不可靠", appearance: "左眉有一道细长旧伤" } },
+        rationale: "按要求补充",
+      }],
+    };
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({ data: response, usage: { inputTokens: 20, outputTokens: 10 }, promptHash: "character-refine" });
+
+    const result = await runRefinementTask({ projectId: project.id, taskKey: "characters", instruction: "只修改沈砚的弱点和外貌" });
+    const schema = vi.mocked(callStructuredNovelModel).mock.calls.at(-1)?.[0].schema;
+    if (!schema) throw new Error("微调调用缺少结构化输出 Schema");
+    const validate = new Ajv({ allErrors: true, strict: false }).compile(schema);
+
+    expect(validate(response), JSON.stringify(validate.errors)).toBe(true);
+    expect(result.proposal.items[0].after).toMatchObject({
+      name: "沈砚",
+      character: {
+        personality: "谨慎",
+        weakness: "害怕自己的记忆并不可靠",
+        appearance: "左眉有一道细长旧伤",
+      },
+    });
+  });
+
+  it("rejects a refinement response that does not change the target", async () => {
+    const project = await createNovelProject({ title: "空微调", genre: ["悬疑"], premise: "所有档案看起来都没有变化。" });
+    const character: StoryEntity = { ...recordBase(project.id), kind: "character", name: "沈砚", aliases: [], summary: "负责追查失踪者", description: "主角", tags: [], lockedFacts: [], attributes: {}, character: characterPayload("沈砚").character };
+    await novelDb.entities.add(character);
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
+      data: { summary: "没有实际变化", items: [{ label: "调整沈砚", operation: "update", targetTable: "entities", targetId: character.id, payload: { character: { weakness: character.character?.weakness, appearance: character.character?.appearance } }, rationale: "按要求补充" }] },
+      usage: { inputTokens: 20, outputTokens: 10 },
+      promptHash: "character-noop",
+    });
+
+    await expect(runRefinementTask({ projectId: project.id, taskKey: "characters", instruction: "修改沈砚的弱点和外貌" })).rejects.toThrow(/没有产生实际变化/);
+  });
+
   it("rejects a refinement operation aimed outside the supplied snapshot", async () => {
     const project = await createNovelProject({ title: "越权测试", genre: ["悬疑"], premise: "档案会说谎。" });
     vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
@@ -124,7 +219,7 @@ describe("structured refinement", () => {
     const entity: StoryEntity = { ...recordBase(project.id), kind: "character", name: "待删除角色", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {}, character: characterPayload("待删除角色").character };
     const other: StoryEntity = { ...recordBase(project.id), kind: "character", name: "保留角色", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {}, character: characterPayload("保留角色").character };
     await novelDb.entities.bulkAdd([entity, other]);
-    await novelDb.relations.add({ ...recordBase(project.id), fromEntityId: entity.id, toEntityId: other.id, relationType: "同伴", publicLabel: "同伴", privateTruth: "旧识", bond: "", history: [] });
+    await novelDb.relations.add({ ...recordBase(project.id), fromEntityId: entity.id, toEntityId: other.id, relationType: "同伴", publicLabel: "同伴", privateTruth: "旧识", bond: "" });
     const node = await addOutlineNode(project.id, undefined, "event", "相遇", 0);
     await novelDb.outlineNodes.update(node.id, { characterIds: [entity.id, other.id] });
     const thread = { ...recordBase(project.id), kind: "main" as const, title: "主线", summary: "", status: "active" as const, priority: 90, participantIds: [entity.id, other.id], progress: 10, nextMove: "继续" };
@@ -153,9 +248,9 @@ describe("structured refinement", () => {
     await novelDb.foreshadowing.add(clue);
     vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
       data: { summary: "大纲", items: [
-        { label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act", payload: { kind: "act", title: "第一幕", summary: "开端", order: 0, causality: "异常", outcome: "调查" }, rationale: "开端" },
-        { label: "追查序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence", payload: { parentId: "ref:act", kind: "sequence", title: "追查", summary: "追查", order: 0, causality: "发现缺页", outcome: "锁定线索" }, rationale: "推进" },
-        { label: "发现缺页", operation: "create", targetTable: "outlineNodes", tempId: "event", payload: { parentId: "ref:sequence", kind: "event", title: "发现缺页", summary: "陆沉发现缺页", order: 0, causality: "档案异常", outcome: "开始调查", characterIds: [character.id], plotThreadIds: [thread.id], foreshadowingIds: [clue.id] }, rationale: "事件" },
+        { label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act", payload: { kind: "act", title: "第一幕", summary: "开端", order: 0 }, rationale: "开端" },
+        { label: "追查序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence", payload: { parentId: "ref:act", kind: "sequence", title: "追查", summary: "追查", order: 0 }, rationale: "推进" },
+        { label: "发现缺页", operation: "create", targetTable: "outlineNodes", tempId: "event", payload: { parentId: "ref:sequence", kind: "event", title: "发现缺页", summary: "陆沉发现缺页", order: 0, characterIds: [character.id], plotThreadIds: [thread.id], foreshadowingIds: [clue.id] }, rationale: "事件" },
       ] },
       usage: { inputTokens: 10, outputTokens: 10 }, promptHash: "reference-catalog",
     });
@@ -174,9 +269,9 @@ describe("structured refinement", () => {
     const project = await createNovelProject({ title: "拒绝假引用", genre: ["悬疑"], premise: "规则名不能冒充伏笔。" });
     vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
       data: { summary: "错误大纲", items: [
-        { label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act", payload: { kind: "act", title: "第一幕", summary: "开端", order: 0, causality: "异常", outcome: "调查" }, rationale: "开端" },
-        { label: "追查序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence", payload: { parentId: "ref:act", kind: "sequence", title: "追查", summary: "追查", order: 0, causality: "异常", outcome: "推进" }, rationale: "推进" },
-        { label: "流民队伍规则", operation: "create", targetTable: "outlineNodes", tempId: "event", payload: { parentId: "ref:sequence", kind: "event", title: "规则", summary: "学习规则", order: 0, causality: "求生", outcome: "适应", plotThreadIds: ["survival_thread"], foreshadowingIds: ["human_rule_foreshadowing"] }, rationale: "事件" },
+        { label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act", payload: { kind: "act", title: "第一幕", summary: "开端", order: 0 }, rationale: "开端" },
+        { label: "追查序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence", payload: { parentId: "ref:act", kind: "sequence", title: "追查", summary: "追查", order: 0 }, rationale: "推进" },
+        { label: "流民队伍规则", operation: "create", targetTable: "outlineNodes", tempId: "event", payload: { parentId: "ref:sequence", kind: "event", title: "规则", summary: "学习规则", order: 0, plotThreadIds: ["survival_thread"], foreshadowingIds: ["human_rule_foreshadowing"] }, rationale: "事件" },
       ] },
       usage: { inputTokens: 10, outputTokens: 10 }, promptHash: "invented-reference",
     });
@@ -247,9 +342,9 @@ describe("structured proposal application", () => {
     characterProposal.status = "accepted";
     await novelDb.proposals.add(characterProposal);
     const outlineProposal = proposal(project.id, [
-      { id: "act", label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act-one", status: "pending", payload: { kind: "act", title: "第一幕", summary: "异常出现", order: 0, causality: "档案失真", outcome: "调查开始" }, rationale: "开端", dependencies: [] },
-      { id: "sequence", label: "缺页序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence-one", status: "pending", payload: { parentId: "ref:act-one", kind: "sequence", title: "缺页序列", summary: "追查记录", order: 0, causality: "记录异常", outcome: "锁定缺页" }, rationale: "推进", dependencies: [] },
-      { id: "event", label: "陆沉发现缺页", operation: "create", targetTable: "outlineNodes", tempId: "event-one", status: "pending", payload: { parentId: "ref:sequence-one", kind: "event", title: "发现缺页", summary: "陆沉发现档案缺页", order: 0, causality: "记录异常", outcome: "开始调查", characterIds: ["ref:character_luchen"] }, rationale: "开端事件", dependencies: [] },
+      { id: "act", label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act-one", status: "pending", payload: { kind: "act", title: "第一幕", summary: "异常出现", order: 0 }, rationale: "开端", dependencies: [] },
+      { id: "sequence", label: "缺页序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence-one", status: "pending", payload: { parentId: "ref:act-one", kind: "sequence", title: "缺页序列", summary: "追查记录", order: 0 }, rationale: "推进", dependencies: [] },
+      { id: "event", label: "陆沉发现缺页", operation: "create", targetTable: "outlineNodes", tempId: "event-one", status: "pending", payload: { parentId: "ref:sequence-one", kind: "event", title: "发现缺页", summary: "陆沉发现档案缺页", order: 0, characterIds: ["ref:character_luchen"] }, rationale: "开端事件", dependencies: [] },
     ]);
     outlineProposal.taskKey = "outline";
     outlineProposal.scope = "outline";
@@ -266,9 +361,9 @@ describe("structured proposal application", () => {
     const chapter = await createChapter(project.id, "旧事件章节");
     const realization = await linkOutlineRealization({ projectId: project.id, outlineNodeId: oldEvent.id, documentId: chapter.id });
     const draft = proposal(project.id, [
-      { id: "act", label: "新第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act-new", status: "pending", payload: { kind: "act", title: "新第一幕", summary: "开端", order: 0, causality: "旧秩序", outcome: "冲突爆发" }, rationale: "完整替换", dependencies: [] },
-      { id: "sequence", label: "进入冲突", operation: "create", targetTable: "outlineNodes", tempId: "sequence-new", status: "pending", payload: { parentId: "ref:act-new", kind: "sequence", title: "进入冲突", summary: "选择", order: 0, causality: "被迫行动", outcome: "无法回头" }, rationale: "完整替换", dependencies: [] },
-      { id: "event", label: "门被打开", operation: "create", targetTable: "outlineNodes", tempId: "event-new", status: "pending", payload: { parentId: "ref:sequence-new", kind: "event", title: "门被打开", summary: "关键事件", order: 0, causality: "主角选择", outcome: "秘密暴露" }, rationale: "完整替换", dependencies: [] },
+      { id: "act", label: "新第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act-new", status: "pending", payload: { kind: "act", title: "新第一幕", summary: "开端", order: 0 }, rationale: "完整替换", dependencies: [] },
+      { id: "sequence", label: "进入冲突", operation: "create", targetTable: "outlineNodes", tempId: "sequence-new", status: "pending", payload: { parentId: "ref:act-new", kind: "sequence", title: "进入冲突", summary: "选择", order: 0 }, rationale: "完整替换", dependencies: [] },
+      { id: "event", label: "门被打开", operation: "create", targetTable: "outlineNodes", tempId: "event-new", status: "pending", payload: { parentId: "ref:sequence-new", kind: "event", title: "门被打开", summary: "关键事件", order: 0 }, rationale: "完整替换", dependencies: [] },
     ]);
     draft.taskKey = "outline";
     draft.scope = "outline";
@@ -318,9 +413,9 @@ describe("structured proposal application", () => {
     await novelDb.entities.add(character);
     const oldNode = await addOutlineNode(project.id, undefined, "act", "保留的旧大纲", 0);
     const draft = proposal(project.id, [
-      { id: "act", label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act", status: "pending", payload: { kind: "act", title: "第一幕", summary: "开端", order: 0, causality: "异常", outcome: "调查" }, rationale: "开端", dependencies: [] },
-      { id: "sequence", label: "追查序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence", status: "pending", payload: { parentId: "ref:act", kind: "sequence", title: "追查", summary: "追查", order: 0, causality: "异常", outcome: "推进" }, rationale: "推进", dependencies: [] },
-      { id: "event", label: "角色行动", operation: "create", targetTable: "outlineNodes", tempId: "event", status: "pending", payload: { parentId: "ref:sequence", kind: "event", title: "行动", summary: "角色行动", order: 0, causality: "发现线索", outcome: "开始调查", characterIds: [character.id] }, rationale: "事件", dependencies: [] },
+      { id: "act", label: "第一幕", operation: "create", targetTable: "outlineNodes", tempId: "act", status: "pending", payload: { kind: "act", title: "第一幕", summary: "开端", order: 0 }, rationale: "开端", dependencies: [] },
+      { id: "sequence", label: "追查序列", operation: "create", targetTable: "outlineNodes", tempId: "sequence", status: "pending", payload: { parentId: "ref:act", kind: "sequence", title: "追查", summary: "追查", order: 0 }, rationale: "推进", dependencies: [] },
+      { id: "event", label: "角色行动", operation: "create", targetTable: "outlineNodes", tempId: "event", status: "pending", payload: { parentId: "ref:sequence", kind: "event", title: "行动", summary: "角色行动", order: 0, characterIds: [character.id] }, rationale: "事件", dependencies: [] },
     ]);
     draft.taskKey = "outline";
     draft.scope = "outline";
@@ -343,13 +438,16 @@ describe("structured proposal application", () => {
     expect(await novelDb.relations.where("projectId").equals(project.id).count()).toBe(0);
   });
 
-  it("refuses unresolved temporary references even when dependencies are omitted", async () => {
+  it("drops unresolved temporary references instead of failing the whole proposal", async () => {
     const project = await createNovelProject({ title: "悬空引用", genre: ["都市"], premise: "一段关系找不到任何一端。" });
     const draft = proposal(project.id, [
       { id: "relation", label: "悬空关系", operation: "create", targetTable: "relations", status: "pending", payload: { fromEntityId: "ref:missing", toEntityId: "ref:missing", relationType: "陌生人", publicLabel: "未知", privateTruth: "未知" }, rationale: "测试引用", dependencies: [] },
     ]);
     await novelDb.proposals.add(draft);
-    await expect(applyProposalItems(draft.id, ["relation"])).rejects.toThrow(/临时对象/);
+    // 改进后：repairUnresolvableTempRefs 静默丢弃 fromEntityId/toEntityId 均无法解析的关系，
+    // 不再抛错导致整个提案无法采纳（问题 #13）
+    const result = await applyProposalItems(draft.id, ["relation"]);
+    expect(result.applied).toBe(0);
     expect(await novelDb.relations.where("projectId").equals(project.id).count()).toBe(0);
   });
 
@@ -373,7 +471,7 @@ describe("structured proposal application", () => {
     const child = await addOutlineNode(project.id, root.id, "event", "旧事件", 0);
     const draft = proposal(project.id, [
       { id: "root", label: "改写第一幕", operation: "update", targetTable: "outlineNodes", targetId: root.id, expectedRevision: root.revision, status: "pending", payload: { summary: "AI 改写" }, rationale: "重写根节点", dependencies: [] },
-      { id: "new-child", label: "新事件", operation: "create", targetTable: "outlineNodes", tempId: "new-event", status: "pending", payload: { parentId: root.id, kind: "event", title: "新事件", summary: "替代事件", causality: "新的原因", outcome: "新的结果", order: 0 }, rationale: "替换子树", dependencies: [] },
+      { id: "new-child", label: "新事件", operation: "create", targetTable: "outlineNodes", tempId: "new-event", status: "pending", payload: { parentId: root.id, kind: "event", title: "新事件", summary: "替代事件", order: 0 }, rationale: "替换子树", dependencies: [] },
     ]);
     draft.taskKey = "outline-section-update";
     draft.scope = "outline";

@@ -30,4 +30,18 @@ describe("architecture data editor", () => {
     expect(html).not.toContain("添加阶段");
     expect(html).not.toContain("删除缺口出现");
   });
+
+  it("marks unchanged architecture fields and changed phase fields in comparison mode", () => {
+    const compared: ArchitectureEditableData = {
+      ...architecture,
+      centralConflict: "管理局开始公开销毁民间档案。",
+      phases: architecture.phases.map((phase) => ({ ...phase, purpose: "迫使主角公开第一份异常档案" })),
+    };
+    const html = renderToStaticMarkup(<ArchitectureDataEditor value={compared} compareTo={architecture} preview />);
+
+    expect(html).toMatch(/data-change-state="unchanged"[^>]*><span>核心问题<\/span>/);
+    expect(html).toMatch(/data-change-state="changed"[^>]*><span>核心冲突<\/span>/);
+    expect(html).toMatch(/data-change-state="changed"[^>]*><span>叙事使命<\/span>/);
+    expect(html).toMatch(/data-change-state="unchanged"[^>]*><span>不可逆转折<\/span>/);
+  });
 });

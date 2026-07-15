@@ -1,0 +1,11 @@
+{
+  "objective": "",
+  "locationIds": [],
+  "characterIds": [],
+  "conflict": "",
+  "informationRelease": [],
+  "mustHappen": [],
+  "flexible": [],
+  "forbidden": [],
+  "targetWords": 5000
+}

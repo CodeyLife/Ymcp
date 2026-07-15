@@ -60,13 +60,6 @@ export interface StoryProject extends Omit<VersionedRecord, "projectId"> {
   };
 }
 
-export interface CharacterKnowledge {
-  known: string[];
-  suspected: string[];
-  mistaken: string[];
-  unknown: string[];
-}
-
 export interface CharacterState {
   location: string;
   physical: string;
@@ -97,7 +90,6 @@ export interface StoryEntity extends VersionedRecord {
     abilities: string[];
     voice: string;
     arc: string;
-    knowledge: CharacterKnowledge;
     state: CharacterState;
   };
 }
@@ -109,7 +101,6 @@ export interface EntityRelation extends VersionedRecord {
   publicLabel: string;
   privateTruth: string;
   bond: string;
-  history: Array<{ at: number; chapterId?: string; note: string }>;
 }
 
 export interface ChapterBlueprint {
@@ -119,8 +110,6 @@ export interface ChapterBlueprint {
   characterIds: string[];
   conflict: string;
   informationRelease: string[];
-  turningPoint: string;
-  hook: string;
   mustHappen: string[];
   flexible: string[];
   forbidden: string[];
@@ -153,8 +142,6 @@ export interface OutlineNode extends VersionedRecord {
   order: number;
   status: "idea" | "planned" | "resolved";
   storyTime?: string;
-  causality: string;
-  outcome: string;
   characterIds: string[];
   plotThreadIds: string[];
   foreshadowingIds: string[];
@@ -174,7 +161,6 @@ export interface StoryScene extends VersionedRecord {
   foreshadowingIds?: string[];
   purpose: string;
   conflict: string;
-  entryState?: string;
   outcome: string;
   wordTarget: number;
   beats?: Array<{ id: string; text: string; order: number }>;
@@ -434,8 +420,8 @@ export interface AgentRun extends VersionedRecord {
 
 export type NovelSkillSource = "builtin" | "user" | "project";
 export type NovelSkillCategory = "ideation" | "character-world" | "long-plan" | "chapter" | "drafting" | "serial" | "review" | "memory";
-export type NovelSkillStage = "foundation" | "planning" | "drafting" | "review" | "revision" | "fact-extraction";
-export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "pacing-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor";
+export type NovelSkillStage = "foundation" | "planning" | "drafting" | "review" | "revision" | "fact-extraction" | "character-enrichment";
+export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "pacing-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher";
 
 export interface NovelSkillManifest extends VersionedRecord {
   skillId: string;
@@ -467,7 +453,7 @@ export interface ProjectSkillBinding extends VersionedRecord {
   config: Record<string, string | number | boolean | string[]>;
 }
 
-export type WorkflowStage = "context" | "blueprint" | "blueprint-approval" | "draft" | "deterministic-check" | "review" | "revision" | "manuscript-approval" | "fact-extraction" | "fact-approval" | "commit";
+export type WorkflowStage = "context" | "blueprint" | "blueprint-approval" | "draft" | "deterministic-check" | "review" | "revision" | "manuscript-approval" | "fact-extraction" | "fact-approval" | "commit" | "character-enrichment";
 export type WorkflowRunStatus = "running" | "waiting-approval" | "paused" | "completed" | "failed" | "cancelled";
 
 export interface WorkflowDefinition extends VersionedRecord {
@@ -502,7 +488,7 @@ export interface WorkflowRun extends VersionedRecord {
 export interface WorkflowArtifact extends VersionedRecord {
   workflowRunId: string;
   stage: WorkflowStage;
-  kind: "blueprint" | "draft" | "review" | "revision" | "fact-delta" | "prompt";
+  kind: "blueprint" | "draft" | "review" | "revision" | "fact-delta" | "prompt" | "character-enrichment";
   title: string;
   contentMarkdown: string;
   structuredData?: Record<string, unknown>;
@@ -522,6 +508,7 @@ export interface QualityIssue {
   description: string;
   excerpt?: string;
   paragraph?: number;
+  revisionRanges?: Array<{ start: number; end: number }>;
   rule: string;
   sourceId?: string;
   suggestion: string;

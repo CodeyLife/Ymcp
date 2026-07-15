@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNovelProject, novelDb, recordBase } from "../db";
-import { BUILTIN_NOVEL_SKILLS, formatSkillPrompt, importNovelSkill, parseNovelSkill, resolveNovelSkills, setProjectSkill } from "../skills";
+import { BUILTIN_NOVEL_SKILLS, compileNovelStagePrompt, formatSkillPrompt, importNovelSkill, parseNovelSkill, resolveNovelSkills, setProjectSkill } from "../skills";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -50,6 +50,40 @@ stages: [drafting, revision]
 });
 
 describe("prose aesthetics skills", () => {
+  it("compiles one neutral drafting contract without story-specific examples", () => {
+    const draftingSkills = BUILTIN_NOVEL_SKILLS.filter((skill) => skill.stages.includes("drafting"));
+
+    const compiled = compileNovelStagePrompt(draftingSkills, "drafting");
+
+    expect(compiled).toContain("普通叙事段落默认包含 2 至 5 句");
+    expect(compiled).toContain("单句叙事段不得连续出现 3 个");
+    expect(compiled).toContain("禁止输出 Markdown 标题、代码围栏或水平分隔线");
+    expect(compiled.match(/留白/g)).toHaveLength(1);
+    expect(compiled).not.toMatch(/冬日荒地|模型遇到人|走进城门的老人|信任加入模型/);
+    expect(JSON.stringify(BUILTIN_NOVEL_SKILLS)).not.toMatch(/冬日荒地|模型遇到人|走进城门的老人|信任加入模型/);
+  });
+
+  it("appends enabled custom skill prompts after the canonical stage contract", () => {
+    const custom = parseNovelSkill(JSON.stringify({
+      skillId: "rain-dialogue",
+      version: "1.0.0",
+      name: "雨夜对白",
+      description: "控制雨夜场景中的对白和感官",
+      locale: "zh-CN",
+      category: "drafting",
+      stages: ["drafting"],
+      prompt: "让雨声影响人物听见、误听和停顿，但不能替代人物行动。",
+    }));
+
+    const compiled = compileNovelStagePrompt([
+      BUILTIN_NOVEL_SKILLS.find((skill) => skill.skillId === "embodied-prose")!,
+      { ...BUILTIN_NOVEL_SKILLS[0], ...custom, id: "custom:rain-dialogue", source: "project", projectId: "project-1", readonly: false },
+    ], "drafting");
+
+    expect(compiled).toContain("## 项目自定义规则");
+    expect(compiled).toContain("让雨声影响人物听见、误听和停顿，但不能替代人物行动。");
+  });
+
   it("includes imagery-aesthetics and prose-discipline in builtin skills", () => {
     const ids = BUILTIN_NOVEL_SKILLS.map((s) => s.skillId);
     expect(ids).toContain("imagery-aesthetics");

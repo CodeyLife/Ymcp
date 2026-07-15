@@ -3,7 +3,7 @@ import { App, Button, Checkbox, Empty, Input, Modal, Progress, Spin, Tag, Toolti
 import { CheckOutlined, CloseOutlined, PauseOutlined, PlayCircleOutlined, PoweroffOutlined, ReloadOutlined, StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import { novelDb } from "./db";
-import { setFactCandidateStatus } from "./facts";
+import { bulkSetFactCandidateStatus, filterAcceptableFactIds, filterSafeAcceptableFactIds, setFactCandidateStatus } from "./facts";
 import { QUALITY_DIMENSION_LABELS } from "./quality";
 import { approveWorkflowStage, BUILTIN_CHAPTER_WORKFLOW, cancelWorkflow, pauseWorkflow, resumeWorkflow, startChapterWorkflow } from "./workflow";
 import type { FactCandidate, ManuscriptDocument, QualityReport, WorkflowArtifact, WorkflowStage } from "./types";
@@ -11,7 +11,7 @@ import { MarkdownContent } from "./AIWorkbench";
 import { prepareManuscriptChanges, updateManuscriptChangeText } from "./manuscript-review";
 
 const STAGE_LABELS: Record<WorkflowStage, string> = {
-  context: "冻结上下文", blueprint: "生成蓝图", "blueprint-approval": "蓝图审批", draft: "正文草稿", "deterministic-check": "规则检查", review: "专业审校", revision: "定向修订", "manuscript-approval": "正文审批", "fact-extraction": "事实提取", "fact-approval": "事实审批", commit: "正式提交",
+  context: "冻结上下文", blueprint: "生成蓝图", "blueprint-approval": "蓝图审批", draft: "正文草稿", "deterministic-check": "规则检查", review: "专业审校", revision: "定向修订", "manuscript-approval": "正文审批", "fact-extraction": "事实提取", "fact-approval": "事实审批", commit: "正式提交", "character-enrichment": "人物完善",
 };
 
 function artifactForStage(run: { currentStage: WorkflowStage; blueprintArtifactId?: string; draftArtifactId?: string }, artifacts: WorkflowArtifact[]) {
@@ -43,6 +43,11 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
   const approvalArtifact = run ? artifactForStage(run, artifacts) : undefined;
   const active = run && !["completed", "cancelled"].includes(run.status);
   const pendingFacts = facts.filter((item) => item.status === "pending").length;
+  const pendingSafeFacts = facts.filter((item) => item.status === "pending" && !item.conflict && item.risk === "safe").length;
+  const pendingAcceptableFacts = facts.filter((item) => item.status === "pending" && !item.conflict).length;
+  const conflictFacts = facts.filter((item) => item.conflict).length;
+  const acceptedFacts = facts.filter((item) => item.status === "accepted").length;
+  const rejectedFacts = facts.filter((item) => item.status === "rejected").length;
   const manuscriptChangeKey = manuscriptChanges.map((change) => `${change.id}:${change.status}`).join("|");
 
   useEffect(() => {
@@ -86,6 +91,28 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
     });
   }
 
+  async function bulkFactAction(action: "accept-safe" | "accept-all" | "reject-all") {
+    if (!run) return;
+    let ids: string[] = [];
+    let success = "";
+    if (action === "accept-safe") {
+      ids = filterSafeAcceptableFactIds(facts);
+      success = `已采纳 ${ids.length} 项安全事实`;
+    } else if (action === "accept-all") {
+      ids = filterAcceptableFactIds(facts);
+      success = `已采纳 ${ids.length} 项可采纳事实（冲突项已跳过）`;
+    } else {
+      ids = facts.filter((item) => item.status === "pending").map((item) => item.id);
+      success = `已排除 ${ids.length} 项待审事实`;
+    }
+    if (!ids.length) {
+      message.info(action === "accept-safe" ? "没有可一键采纳的安全事实" : action === "accept-all" ? "没有可一键采纳的待审事实" : "没有待排除的事实");
+      return;
+    }
+    await bulkSetFactCandidateStatus(ids, action === "reject-all" ? "rejected" : "accepted");
+    message.success(success);
+  }
+
   return <div className="novel-view-content novel-workflow-center">
     <header className="novel-section-title"><div><span>CONTROLLED AGENT PIPELINE</span><h2>章节创作流程</h2><p>每个产物、审校证据和正式变更都沿同一条可恢复链路推进。</p></div>{active && <div className="novel-workflow-controls">{run.status === "paused" || run.status === "failed" ? <Button icon={<PlayCircleOutlined />} onClick={() => void perform(() => resumeWorkflow(run.id), "工作流已恢复")}>恢复</Button> : run.status === "running" ? <Button icon={<PauseOutlined />} onClick={() => void perform(() => pauseWorkflow(run.id))}>暂停</Button> : null}<Button danger icon={<StopOutlined />} onClick={() => void perform(() => cancelWorkflow(run.id))}>取消</Button></div>}</header>
 
@@ -106,7 +133,29 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
             </div>
           </article>)}
         </div>}
-        {run.currentStage === "fact-approval" && <div className="novel-fact-list">{facts.map((fact) => <article key={fact.id} className={fact.status}><div><Tag color={fact.conflict ? "red" : fact.status === "accepted" ? "green" : fact.status === "rejected" ? "default" : fact.risk === "high" ? "orange" : "gold"}>{fact.conflict ? "冲突" : fact.status === "accepted" && fact.decisionSource === "auto-policy" ? "自动采纳" : fact.status}</Tag><Tag color={fact.risk === "high" ? "orange" : "blue"}>{fact.risk === "high" ? "高风险" : "安全更新"}</Tag><strong>{fact.targetTable}.{fact.field}</strong><p>{String(fact.after)}</p><blockquote>{fact.evidence}</blockquote><small>置信度 {Math.round(fact.confidence * 100)}% · {fact.novelty} · {fact.riskReason}</small></div><div><Button type={fact.status === "accepted" ? "primary" : "default"} icon={<CheckOutlined />} disabled={fact.conflict} onClick={() => void setFactCandidateStatus(fact.id, "accepted")}>采纳</Button><Button icon={<CloseOutlined />} onClick={() => void setFactCandidateStatus(fact.id, "rejected")}>排除</Button></div></article>)}</div>}
+        {run.currentStage === "fact-approval" && <>
+          <div className="novel-fact-bulk-bar">
+            <div className="novel-fact-bulk-stats">
+              <span>共 {facts.length} 项</span>
+              <Tag color="gold">待审 {pendingFacts}</Tag>
+              <Tag color="green">已采纳 {acceptedFacts}</Tag>
+              <Tag>已排除 {rejectedFacts}</Tag>
+              {conflictFacts > 0 && <Tag color="red">冲突 {conflictFacts}</Tag>}
+            </div>
+            <div className="novel-fact-bulk-actions">
+              <Tooltip title={pendingSafeFacts > 0 ? `采纳 ${pendingSafeFacts} 项 risk=safe 的非冲突待审事实` : "没有可一键采纳的安全事实"}>
+                <Button icon={<ThunderboltOutlined />} disabled={pendingSafeFacts === 0} loading={busy} onClick={() => void perform(() => bulkFactAction("accept-safe"), undefined)}>一键采纳安全（{pendingSafeFacts}）</Button>
+              </Tooltip>
+              <Tooltip title={pendingAcceptableFacts > 0 ? `采纳 ${pendingAcceptableFacts} 项非冲突待审事实，冲突项保留待人工处理` : "没有可一键采纳的待审事实"}>
+                <Button type="primary" ghost icon={<CheckOutlined />} disabled={pendingAcceptableFacts === 0} loading={busy} onClick={() => void perform(() => bulkFactAction("accept-all"), undefined)}>一键采纳全部可采纳（{pendingAcceptableFacts}）</Button>
+              </Tooltip>
+              <Tooltip title={pendingFacts > 0 ? `排除 ${pendingFacts} 项待审事实（含冲突项）` : "没有待排除的事实"}>
+                <Button danger icon={<CloseOutlined />} disabled={pendingFacts === 0} loading={busy} onClick={() => void perform(() => bulkFactAction("reject-all"), undefined)}>一键排除所有待审（{pendingFacts}）</Button>
+              </Tooltip>
+            </div>
+          </div>
+          <div className="novel-fact-list">{facts.map((fact) => <article key={fact.id} className={fact.status}><div><Tag color={fact.conflict ? "red" : fact.status === "accepted" ? "green" : fact.status === "rejected" ? "default" : fact.risk === "high" ? "orange" : "gold"}>{fact.conflict ? "冲突" : fact.status === "accepted" && fact.decisionSource === "auto-policy" ? "自动采纳" : fact.status}</Tag><Tag color={fact.risk === "high" ? "orange" : "blue"}>{fact.risk === "high" ? "高风险" : "安全更新"}</Tag><strong>{fact.targetTable}.{fact.field}</strong><p>{String(fact.after)}</p><blockquote>{fact.evidence}</blockquote><small>置信度 {Math.round(fact.confidence * 100)}% · {fact.novelty} · {fact.riskReason}</small></div><div><Button type={fact.status === "accepted" ? "primary" : "default"} icon={<CheckOutlined />} disabled={fact.conflict} onClick={() => void setFactCandidateStatus(fact.id, "accepted")}>采纳</Button><Button icon={<CloseOutlined />} onClick={() => void setFactCandidateStatus(fact.id, "rejected")}>排除</Button></div></article>)}</div>
+        </>}
         {run.currentStage !== "fact-approval" && <Input.TextArea rows={3} value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="退回时填写具体修改要求；批准可留空。" />}
         <footer><Button icon={<PoweroffOutlined />} disabled={busy} onClick={() => void perform(() => pauseWorkflow(run.id), "已暂停审核，可在控制区恢复")}>关闭</Button><Button danger icon={<CloseOutlined />} loading={busy} onClick={() => void perform(() => submitApproval(false), "已退回流程")}>{run.currentStage === "fact-approval" ? "全部不提交" : "退回修改"}</Button><Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={(run.currentStage === "fact-approval" && pendingFacts > 0) || (run.currentStage === "manuscript-approval" && manuscriptChanges.length > 0 && selectedManuscriptChanges.length === 0)} onClick={() => void perform(() => submitApproval(true), "审批已提交")}>{run.currentStage === "fact-approval" ? `提交已采纳事实${pendingFacts ? `（尚有 ${pendingFacts} 项未决定）` : ""}` : run.currentStage === "manuscript-approval" ? `采纳所选段落（${selectedManuscriptChanges.length}）` : "批准并继续"}</Button></footer>
       </section>}

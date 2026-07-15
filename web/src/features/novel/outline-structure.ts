@@ -32,8 +32,6 @@ export interface OutlineProposalNode extends OutlineStructureNode {
   summary: string;
   status: "idea" | "planned" | "resolved";
   storyTime?: string;
-  causality: string;
-  outcome: string;
   characterIds: string[];
   plotThreadIds: string[];
   foreshadowingIds: string[];
@@ -170,8 +168,6 @@ function proposalNode(item: ProposalItem): OutlineProposalNode {
     order: numberValue(payload.order, 0),
     status: payload.status === "planned" || payload.status === "resolved" ? payload.status : "idea",
     storyTime: typeof payload.storyTime === "string" ? payload.storyTime : undefined,
-    causality: String(payload.causality || ""),
-    outcome: String(payload.outcome || ""),
     characterIds: stringArray(payload.characterIds),
     plotThreadIds: stringArray(payload.plotThreadIds),
     foreshadowingIds: stringArray(payload.foreshadowingIds),

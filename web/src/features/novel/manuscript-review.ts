@@ -145,7 +145,8 @@ export async function updateManuscriptChangeText(changeId: string, afterText: st
   await novelDb.manuscriptChanges.update(changeId, { afterText, revision: change.revision + 1, updatedAt: Date.now(), updatedBy: "local-user" });
 }
 
-function toHtml(text: string) {
+// Loop 8 修复 #14：导出 toHtml 供 commit-stage 同步 contentHtml
+export function toHtml(text: string) {
   const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return paragraphs(text).map((paragraph) => `<p>${escape(paragraph).replace(/\n/g, "<br>")}</p>`).join("");
 }

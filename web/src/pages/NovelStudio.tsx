@@ -63,6 +63,7 @@ import "@/features/novel/novel.css";
 
 const SkillCenter = lazy(() => import("@/features/novel/SkillCenter"));
 const WorkflowCenter = lazy(() => import("@/features/novel/WorkflowCenter"));
+const FactLedger = lazy(() => import("@/features/novel/FactLedger"));
 const AIWorkbench = lazy(() => import("@/features/novel/AIWorkbench"));
 import { ChatModelSelect } from "@/components/ChatModelSelect";
 
@@ -408,7 +409,7 @@ function ChapterPlanEditor({ document }: { document?: ManuscriptDocument }) {
   };
   const blueprint = document.blueprint;
   return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="chapters" targetId={document.id} taskKeys={["chapter-plan"]} actionLabel="生成章节蓝图" compact /><SectionTitle eyebrow="本章蓝图" title={document.title} description="章节蓝图只约束本章写作，不与故事大纲建立硬关联。" action={<Tag>{DOCUMENT_STATUS_LABEL[document.status]}</Tag>} />
-    <div className="novel-architecture-form"><label>章节标题<Input value={document.title} onChange={(event) => void save({ title: event.target.value })} /></label><label>章节摘要<Input.TextArea rows={3} value={document.summary} onChange={(event) => void save({ summary: event.target.value })} /></label><label>本章目标<Input.TextArea rows={2} value={blueprint.objective} onChange={(event) => void save({ blueprint: { ...blueprint, objective: event.target.value } })} /></label><label>冲突<Input.TextArea rows={2} value={blueprint.conflict} onChange={(event) => void save({ blueprint: { ...blueprint, conflict: event.target.value } })} /></label><label>转折<Input.TextArea rows={2} value={blueprint.turningPoint} onChange={(event) => void save({ blueprint: { ...blueprint, turningPoint: event.target.value } })} /></label><label>章尾钩子<Input.TextArea rows={2} value={blueprint.hook} onChange={(event) => void save({ blueprint: { ...blueprint, hook: event.target.value } })} /></label><label>目标字数<InputNumber min={100} max={50000} value={blueprint.targetWords} onChange={(value) => void save({ blueprint: { ...blueprint, targetWords: value ?? 3000 } })} /></label></div>
+    <div className="novel-architecture-form"><label>章节标题<Input value={document.title} onChange={(event) => void save({ title: event.target.value })} /></label><label>章节摘要<Input.TextArea rows={3} value={document.summary} onChange={(event) => void save({ summary: event.target.value })} /></label><label>本章目标<Input.TextArea rows={2} value={blueprint.objective} onChange={(event) => void save({ blueprint: { ...blueprint, objective: event.target.value } })} /></label><label>冲突<Input.TextArea rows={2} value={blueprint.conflict} onChange={(event) => void save({ blueprint: { ...blueprint, conflict: event.target.value } })} /></label><label>目标字数<InputNumber min={100} max={50000} value={blueprint.targetWords} onChange={(value) => void save({ blueprint: { ...blueprint, targetWords: value ?? 3000 } })} /></label></div>
     <Button icon={<SaveOutlined />} onClick={() => message.success("章节规划实时保存")}>确认规划</Button>
   </div>;
 }
@@ -461,6 +462,6 @@ function LibraryWorkspace({ projectId }: { projectId: string }) {
 }
 
 function ReviewWorkspace({ projectId }: { projectId: string }) {
-  const [mode, setMode] = useState<"analysis" | "threads" | "versions">("analysis");
-  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "analysis", label: "故事诊断" }, { value: "threads", label: "剧情线" }, { value: "versions", label: "版本历史" }]} /></div>{mode !== "versions" && <GenerationComposer projectId={projectId} scope={mode === "threads" ? "threads" : "review"} taskKeys={[mode === "threads" ? "plot-threads" : "review"]} compact />}{mode === "analysis" ? <AnalysisView projectId={projectId} /> : mode === "threads" ? <ContinuityView projectId={projectId} type="threads" /> : <VersionsView projectId={projectId} />}</div>;
+  const [mode, setMode] = useState<"analysis" | "threads" | "versions" | "facts">("analysis");
+  return <div className="novel-consolidated-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "analysis", label: "故事诊断" }, { value: "threads", label: "剧情线" }, { value: "versions", label: "版本历史" }, { value: "facts", label: "事实账本" }]} /></div>{mode !== "versions" && mode !== "facts" && <GenerationComposer projectId={projectId} scope={mode === "threads" ? "threads" : "review"} taskKeys={[mode === "threads" ? "plot-threads" : "review"]} compact />}{mode === "analysis" ? <AnalysisView projectId={projectId} /> : mode === "threads" ? <ContinuityView projectId={projectId} type="threads" /> : mode === "facts" ? <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载事实账本</span></div>}><FactLedger projectId={projectId} /></Suspense> : <VersionsView projectId={projectId} />}</div>;
 }

@@ -17,6 +17,27 @@ function estimateTokens(text: string) {
   return Math.ceil(cjk * 1.1 + (text.length - cjk) / 4);
 }
 
+/**
+ * 检测 summary 是否为 schema 修复日志污染。
+ * LLM 在结构化输出 schema 修复时，可能违反 prompt 指令把修复过程写入 summary 字段，
+ * 导致 DerivedMemory.summary 出现"已将原输出修复为符合给定 Schema 的 JSON..."这类元描述，
+ * 而非真正的故事记忆摘要。
+ */
+const SCHEMA_REPAIR_LOG_PATTERN = /^(已将原输出|原输出包含|原输出|已将)|Schema[\s\S]{0,16}(修复|JSON|字段|校验|映射|移除|超出)|修复为[\s\S]{0,16}Schema/i;
+
+export function isSchemaRepairLogSummary(text: string): boolean {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return false;
+  return SCHEMA_REPAIR_LOG_PATTERN.test(trimmed);
+}
+
+/** 清洗 memory summary：若为 schema 修复日志则回退到 fallback，否则保留原值（空值也回退）。 */
+export function sanitizeMemorySummary(raw: string, fallback: string): string {
+  const trimmed = (raw ?? "").trim();
+  if (isSchemaRepairLogSummary(trimmed)) return fallback;
+  return trimmed || fallback;
+}
+
 function mergeContent(content?: Partial<DerivedMemoryContent>): DerivedMemoryContent {
   return Object.fromEntries(Object.entries(EMPTY_CONTENT).map(([key, value]) => [key, [...(content?.[key as keyof DerivedMemoryContent] ?? value)]])) as unknown as DerivedMemoryContent;
 }

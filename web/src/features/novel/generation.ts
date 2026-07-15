@@ -2,14 +2,16 @@ import Ajv, { type ValidateFunction } from "ajv";
 import type { Table } from "dexie";
 import { callStructuredNovelModel } from "./ai";
 import { compileNovelContext, formatContextPacket } from "./context";
-import { appendOperation, deleteOutlineRealizations, emptyChapterBlueprint, novelDb, recordBase, retireChapterDependencies } from "./db";
+import { appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, deleteOutlineRealizations, emptyChapterBlueprint, novelDb, recordBase, retireChapterDependencies } from "./db";
+import { sanitizeApprovalMetaInPlace } from "./db-schema";
 import { analyzeOutlineProposal } from "./outline-structure";
-import { assertProposalReferences, assertResolvedPayloadReferences, buildProjectReferenceCatalogs, catalogWithResolvedProposalItems, emptyReferenceCatalog } from "./reference-integrity";
-import { formatSkillPrompt, resolveNovelSkills } from "./skills";
+import { assertProposalReferences, assertResolvedPayloadReferences, buildProjectReferenceCatalogs, catalogWithResolvedProposalItems, emptyReferenceCatalog, repairProposalCharacterReferences, repairUnresolvableTempRefs } from "./reference-integrity";
+import { compileNovelStagePrompt, resolveNovelSkills } from "./skills";
 import type {
   AIProposal,
   AgentRun,
   NovelAgentRole,
+  NovelContextPacket,
   NovelGenerationScope,
   NovelGenerationTaskKey,
   NovelSkillStage,
@@ -18,7 +20,9 @@ import type {
   ProposalTargetTable,
   RefinementSnapshot,
   RefinementSnapshotInput,
+  StoryArchitecture,
 } from "./types";
+import { repairDraftStructureOnce } from "./workflow-stages/draft-structure-repair";
 
 export interface GenerationTaskDefinition {
   key: NovelGenerationTaskKey;
@@ -34,7 +38,7 @@ export interface GenerationTaskDefinition {
 const TASKS: GenerationTaskDefinition[] = [
   { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。", refinable: true },
   { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成可支撑数十万字铺陈的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。", refinable: true },
-  { key: "outline", label: "规划故事大纲", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "按幕、序列、事件建立层级故事大纲。每个节点先回答'这一段故事里发生了什么、人物在处境中如何感受与选择、世界因此有何细微不同'，再让因果、转折、伏笔在事件铺陈中自然浮现，不使用章节编号，也不急于把戏剧性要素一次性写尽。", refinable: true },
+  { key: "outline", label: "规划故事大纲", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "按幕、序列、事件建立层级故事大纲。每个节点先回答'这一段故事里发生了什么、人物在处境中如何感受与选择、世界因此有何细微不同'，再让因果、转折、伏笔在事件铺陈中自然浮现，不使用章节编号，也不急于把戏剧性要素一次性写尽。每个节点的 summary 应是一段连贯的叙事规划，让读者能看出这一段故事的节拍：因何情境而起（原因）、被什么打破平衡（触发）、人物面临什么对抗（阻碍）、产生了什么价值转折（直接结果）、以及埋下什么延续到后续的余波（延迟后果）。以散文组织，不要用'原因/触发/阻碍'等标签拆段。", refinable: true },
   { key: "outline-section-update", label: "重写子树", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "重写所选节点及其子树，保持兄弟节点不变。" },
   { key: "outline-field-revise", label: "改写字段", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "改写所选节点的指定字段。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。", refinable: true },
@@ -45,8 +49,8 @@ const TASKS: GenerationTaskDefinition[] = [
   { key: "plot-threads", label: "规划剧情线", scope: "threads", role: "architect", skillStage: "planning", allowedTables: ["plotThreads"], defaultInstruction: "规划主线和支线，明确参与者、当前状态、优先级与下一步推进。", refinable: true },
   { key: "foreshadowing", label: "规划伏笔", scope: "foreshadowing", role: "architect", skillStage: "planning", allowedTables: ["foreshadowing"], defaultInstruction: "规划线索、真相、误导、提醒与回收节点。", refinable: true },
   { key: "story-control", label: "生成剧情控制资料", scope: "review", role: "architect", skillStage: "planning", allowedTables: ["plotThreads", "foreshadowing", "timelineEvents"], defaultInstruction: "根据已批准架构、大纲和资料库生成剧情线、伏笔和时间线控制资料。", refinable: true },
-  { key: "chapter-arrangement", label: "编排章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "根据全书目标字数、架构和故事大纲编排章节，为每章生成标题、顺序、目标、冲突、转折、钩子和目标字数。本任务只生成章节（documents），不生成场景（scenes）；场景规划属于'设计场景'任务，不要在候选项或 summary 中解释这一边界。", refinable: true },
-  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "结合已批准架构、故事大纲和当前写作进度，为本章设计目标、冲突、信息释放、转折、钩子和目标字数。", refinable: true },
+  { key: "chapter-arrangement", label: "编排章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "根据全书目标字数、架构和故事大纲编排章节，为每章生成标题、顺序、目标、冲突、转折和钩子。本任务只生成章节（documents），不生成场景（scenes）；场景规划属于'设计场景'任务，不要在候选项或 summary 中解释这一边界。", refinable: true },
+  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "结合已批准架构、故事大纲和当前写作进度，为本章设计目标、冲突、信息释放、转折和钩子。", refinable: true },
   { key: "scene-design", label: "设计场景", scope: "scenes", role: "architect", skillStage: "planning", allowedTables: ["scenes"], defaultInstruction: "为当前章节规划场景顺序、功能、冲突、结果、角色和行动节拍。", refinable: true },
   { key: "chapter-draft", label: "生成章节正文", scope: "writing", role: "writer", skillStage: "drafting", allowedTables: ["documents"], defaultInstruction: "依据当前章节蓝图和场景计划生成完整正文。" },
   { key: "review", label: "审校并提出修订", scope: "review", role: "quality-editor", skillStage: "review", allowedTables: ["documents"], defaultInstruction: "检查故事与正文的因果、人物、连续性、节奏和文风，并提供可选择采纳的定向修订。" },
@@ -66,12 +70,12 @@ export function tasksForScope(scope: NovelGenerationScope) {
 
 const payloadContract = `字段契约：
 - projects: title, subtitle, premise, genre, audience, themes, sellingPoints, pov, tense, tone, languageStyle, targetWords
-- architectures: framework, status, centralQuestion, centralConflict, synopsis, phases[{id,title,purpose,turningPoint,order,locked}]
-- outlineNodes: parentId(可用 ref:临时ID), kind(act|sequence|event), title, summary, order, status, storyTime, causality, outcome, characterIds, plotThreadIds, foreshadowingIds, tags
-- documents: order, title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,conflict,informationRelease,turningPoint,hook,mustHappen,flexible,forbidden,targetWords}；正文任务可额外给 plainText
-- scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, entryState, outcome, wordTarget, beats[{id,text,order}]
-- entities: kind, name, aliases, summary, description, tags, lockedFacts, attributes；角色需包含 character
-- relations: fromEntityId/toEntityId 可用 ref:临时ID，另含 relationType, publicLabel, privateTruth, bond, history
+- architectures: framework, status, centralQuestion, centralConflict, synopsis, phases[{id,title,purpose,turningPoint,order,locked}]；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔
+- outlineNodes: parentId(可用 ref:临时ID), kind(act|sequence|event), title, summary, order, status, storyTime, characterIds, plotThreadIds, foreshadowingIds, tags
+- documents: order, title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,conflict,informationRelease,mustHappen,flexible,forbidden}；正文任务可额外给 plainText；章节目标字数由系统设置，不得返回 targetWords
+- scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, outcome, wordTarget, beats[{id,text,order}]
+- entities: kind, name, aliases, summary, description, tags, lockedFacts, attributes；角色需包含 character（role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state）
+- relations: fromEntityId/toEntityId 可用 ref:临时ID，另含 relationType, publicLabel, privateTruth, bond
 - plotThreads: kind, title, summary, status, priority, participantIds, progress, nextMove
 - foreshadowing: title, clue, truth, status, urgency, notes
 - timelineEvents: title, storyDate, duration, narrativeOrder, participantIds, causeIds, consequenceIds, description`;
@@ -79,32 +83,69 @@ const payloadContract = `字段契约：
 const stringArraySchema = { type: "array", items: { type: "string" } } as const;
 const characterSchema = {
   type: "object", additionalProperties: false,
-  required: ["role", "appearance", "personality", "desire", "motivation", "weakness", "secret", "abilities", "voice", "arc", "knowledge", "state"],
+  required: ["role", "appearance", "personality", "desire", "motivation", "weakness", "secret", "abilities", "voice", "arc", "state"],
   properties: {
     role: { type: "string" }, appearance: { type: "string" }, personality: { type: "string" }, desire: { type: "string" }, motivation: { type: "string" }, weakness: { type: "string" }, secret: { type: "string" }, abilities: stringArraySchema, voice: { type: "string" }, arc: { type: "string" },
-    knowledge: { type: "object", additionalProperties: false, required: ["known", "suspected", "mistaken", "unknown"], properties: { known: stringArraySchema, suspected: stringArraySchema, mistaken: stringArraySchema, unknown: stringArraySchema } },
-    state: { type: "object", additionalProperties: false, required: ["location", "physical", "emotional", "objective", "inventory", "relationshipNotes"], properties: { location: { type: "string" }, physical: { type: "string" }, emotional: { type: "string" }, objective: { type: "string" }, inventory: stringArraySchema, relationshipNotes: stringArraySchema, lastChangedChapterId: { type: "string" } } },
+    state: { type: "object", additionalProperties: false, required: ["location", "physical", "emotional", "objective", "inventory"], properties: { location: { type: "string" }, physical: { type: "string" }, emotional: { type: "string" }, objective: { type: "string" }, inventory: stringArraySchema, relationshipNotes: stringArraySchema, lastChangedChapterId: { type: "string" } } },
   },
 } as const;
 const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>> = {
   projects: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, subtitle: { type: "string" }, premise: { type: "string" }, genre: stringArraySchema, audience: { type: "string" }, themes: stringArraySchema, sellingPoints: stringArraySchema, pov: { type: "string" }, tense: { type: "string" }, tone: { type: "string" }, languageStyle: { type: "string" }, targetWords: { type: "number", minimum: 1 } } },
   architectures: { type: "object", additionalProperties: false, properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, phases: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string" }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" } } } } } },
-  outlineNodes: { type: "object", additionalProperties: false, properties: { parentId: { type: "string" }, kind: { enum: ["act", "sequence", "event"] }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "resolved"] }, storyTime: { type: "string" }, causality: { type: "string" }, outcome: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, tags: stringArraySchema } },
-  documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, turningPoint: { type: "string" }, hook: { type: "string" }, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
-  scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, entryState: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
+  outlineNodes: { type: "object", additionalProperties: false, properties: { parentId: { type: "string" }, kind: { enum: ["act", "sequence", "event"] }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "resolved"] }, storyTime: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, tags: stringArraySchema } },
+  documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
+  scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
   entities: { type: "object", additionalProperties: false, properties: { kind: { enum: ["character", "location", "organization", "faction", "item", "species", "rule", "ability", "term"] }, name: { type: "string" }, aliases: stringArraySchema, summary: { type: "string" }, description: { type: "string" }, tags: stringArraySchema, lockedFacts: stringArraySchema, attributes: { type: "object" }, character: characterSchema }, allOf: [{ if: { properties: { kind: { const: "character" } }, required: ["kind"] }, then: { required: ["character"] } }] },
-  relations: { type: "object", additionalProperties: false, properties: { fromEntityId: { type: "string" }, toEntityId: { type: "string" }, relationType: { type: "string" }, publicLabel: { type: "string" }, privateTruth: { type: "string" }, bond: { type: "string" }, history: { type: "array", items: { type: "object", additionalProperties: false, required: ["at", "note"], properties: { at: { type: "number" }, chapterId: { type: "string" }, note: { type: "string" } } } } } },
+  relations: { type: "object", additionalProperties: false, properties: { fromEntityId: { type: "string" }, toEntityId: { type: "string" }, relationType: { type: "string" }, publicLabel: { type: "string" }, privateTruth: { type: "string" }, bond: { type: "string" } } },
   plotThreads: { type: "object", additionalProperties: false, properties: { kind: { enum: ["main", "subplot", "romance", "growth", "mystery", "antagonist"] }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["planned", "active", "paused", "resolved", "abandoned"] }, priority: { type: "number", minimum: 0, maximum: 100 }, participantIds: stringArraySchema, startNodeId: { type: "string" }, targetNodeId: { type: "string" }, progress: { type: "number", minimum: 0, maximum: 100 }, nextMove: { type: "string" } } },
   foreshadowing: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, clue: { type: "string" }, truth: { type: "string" }, status: { enum: ["seeded", "reminded", "misdirected", "advanced", "revealed", "resolved", "abandoned"] }, seededNodeId: { type: "string" }, targetNodeId: { type: "string" }, urgency: { type: "number", minimum: 0, maximum: 100 }, notes: { type: "string" } } },
   timelineEvents: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, storyDate: { type: "string" }, duration: { type: "string" }, narrativeOrder: { type: "number" }, locationId: { type: "string" }, participantIds: stringArraySchema, causeIds: stringArraySchema, consequenceIds: stringArraySchema, description: { type: "string" }, parallelGroup: { type: "string" } } },
 };
+
+function modelPayloadSchema(table: ProposalTargetTable) {
+  const schema = TABLE_PAYLOAD_SCHEMAS[table];
+  if (table !== "documents") return schema;
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  const blueprint = properties.blueprint;
+  const blueprintProperties = blueprint.properties as Record<string, unknown>;
+  return {
+    ...schema,
+    properties: {
+      ...properties,
+      blueprint: {
+        ...blueprint,
+        properties: Object.fromEntries(Object.entries(blueprintProperties).filter(([key]) => key !== "targetWords")),
+      },
+    },
+  };
+}
+
+const MODEL_PAYLOAD_SCHEMAS = Object.fromEntries(
+  (Object.keys(TABLE_PAYLOAD_SCHEMAS) as ProposalTargetTable[]).map((table) => [table, modelPayloadSchema(table)]),
+) as Record<ProposalTargetTable, Record<string, unknown>>;
+
+function partialObjectSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const partial = { ...schema };
+  delete partial.required;
+  if (partial.properties && typeof partial.properties === "object" && !Array.isArray(partial.properties)) {
+    partial.properties = Object.fromEntries(Object.entries(partial.properties as Record<string, unknown>).map(([key, value]) => {
+      if (!value || typeof value !== "object" || Array.isArray(value) || (value as Record<string, unknown>).type !== "object") return [key, value];
+      return [key, partialObjectSchema(value as Record<string, unknown>)];
+    }));
+  }
+  return partial;
+}
+
+const UPDATE_MODEL_PAYLOAD_SCHEMAS = Object.fromEntries(
+  (Object.keys(MODEL_PAYLOAD_SCHEMAS) as ProposalTargetTable[]).map((table) => [table, partialObjectSchema(MODEL_PAYLOAD_SCHEMAS[table])]),
+) as Record<ProposalTargetTable, Record<string, unknown>>;
 
 const payloadAjv = new Ajv({ allErrors: true, strict: false });
 const PAYLOAD_VALIDATORS = Object.fromEntries(Object.entries(TABLE_PAYLOAD_SCHEMAS).map(([table, schema]) => [table, payloadAjv.compile(schema)])) as Record<ProposalTargetTable, ValidateFunction>;
 const CREATE_REQUIRED_FIELDS: Record<ProposalTargetTable, string[]> = {
   projects: ["title", "premise"],
   architectures: ["centralQuestion", "centralConflict", "synopsis", "phases"],
-  outlineNodes: ["kind", "title", "summary", "order", "causality", "outcome"],
+  outlineNodes: ["kind", "title", "summary", "order"],
   documents: ["order", "title", "blueprint"],
   scenes: ["chapterId", "title", "order", "purpose", "conflict", "outcome"],
   entities: ["kind", "name", "summary", "description"],
@@ -141,8 +182,8 @@ function proposalSchema(allowedTables: ProposalTargetTable[]) {
             dependencies: { type: "array", items: { type: "string" } },
           },
           allOf: [
-            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table } } }, then: { properties: { payload: TABLE_PAYLOAD_SCHEMAS[table] } } })),
-            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "create" } }, required: ["targetTable", "operation"] }, then: { properties: { payload: { ...TABLE_PAYLOAD_SCHEMAS[table], required: CREATE_REQUIRED_FIELDS[table] } } } })),
+            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table } } }, then: { properties: { payload: MODEL_PAYLOAD_SCHEMAS[table] } } })),
+            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "create" } }, required: ["targetTable", "operation"] }, then: { properties: { payload: { ...MODEL_PAYLOAD_SCHEMAS[table], required: CREATE_REQUIRED_FIELDS[table] } } } })),
             { if: { properties: { operation: { const: "update" } }, required: ["operation"] }, then: { required: ["targetId"], properties: { payload: { type: "object", minProperties: 1 } } } },
           ],
         },
@@ -177,9 +218,8 @@ function refinementProposalSchema(allowedTables: ProposalTargetTable[]) {
             dependencies: { type: "array", items: { type: "string" } },
           },
           allOf: [
-            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table } } }, then: { properties: { payload: TABLE_PAYLOAD_SCHEMAS[table] } } })),
-            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "create" } }, required: ["targetTable", "operation"] }, then: { required: ["payload"], properties: { payload: { ...TABLE_PAYLOAD_SCHEMAS[table], required: CREATE_REQUIRED_FIELDS[table] } } } })),
-            { if: { properties: { operation: { const: "update" } }, required: ["operation"] }, then: { required: ["targetId", "payload"], properties: { payload: { type: "object", minProperties: 1 } } } },
+            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "create" } }, required: ["targetTable", "operation"] }, then: { required: ["payload"], properties: { payload: { ...MODEL_PAYLOAD_SCHEMAS[table], required: CREATE_REQUIRED_FIELDS[table] } } } })),
+            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "update" } }, required: ["targetTable", "operation"] }, then: { required: ["targetId", "payload"], properties: { payload: { ...UPDATE_MODEL_PAYLOAD_SCHEMAS[table], minProperties: 1 } } } })),
             { if: { properties: { operation: { const: "delete" } }, required: ["operation"] }, then: { required: ["targetId"] } },
           ],
         },
@@ -190,8 +230,40 @@ function refinementProposalSchema(allowedTables: ProposalTargetTable[]) {
 
 function proposalMarkdown(title: string, summary: string, items: ProposalItem[]) {
   const operationLabel = { create: "新增", update: "更新", delete: "删除" } as const;
-  return [`# ${title}`, summary, ...items.map((item, index) => `## ${index + 1}. ${item.label}\n\n${item.rationale}\n\n- 操作：${operationLabel[item.operation]}\n- 类型：${item.targetTable}${item.impact?.length ? `\n- 影响：${item.impact.join("；")}` : ""}`)].join("\n\n");
+  return [`# ${title}`, summary, ...items.map((item, index) => `## ${index + 1}. ${item.label}\n\n${item.rationale}\n\n- 操作：${operationLabel[item.operation]}\n- 类型：${item.targetTable}${item.impact?.length ? `\n- 影响：${item.impact.join("；")}` : ""}\n\n### 内容\n${formatProposalPayload(item.targetTable, item.payload)}`)].join("\n\n");
 }
+
+function formatProposalPayload(table: ProposalTargetTable, payload: Record<string, unknown>): string {
+  const fields = PROPOSAL_PREVIEW_FIELDS[table];
+  if (!fields?.length) return Object.entries(payload).map(([k, v]) => `- ${k}：${formatValue(v)}`).join("\n") || "（空）";
+  return fields.map(([field, label]) => {
+    const value = payload[field];
+    if (value === undefined || value === null || value === "") return "";
+    return `**${label}**：${formatValue(value)}`;
+  }).filter(Boolean).join("\n") || "（无关键字段）";
+}
+
+function formatValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.length ? value.map((item) => `- ${formatValue(item)}`).join("\n") : "（空）";
+  if (typeof value === "object" && value !== null) return JSON.stringify(value, null, 2);
+  return String(value ?? "");
+}
+
+// 每类实体在预览中重点展示的字段（payload 键 → 中文标签）
+const PROPOSAL_PREVIEW_FIELDS: Partial<Record<ProposalTargetTable, Array<[string, string]>>> = {
+  projects: [["premise", "前提"], ["genre", "题材"], ["themes", "主题"], ["audience", "受众"], ["pov", "视角"], ["tone", "基调"], ["languageStyle", "语言风格"]],
+  architectures: [["framework", "结构方法"], ["centralQuestion", "核心问题"], ["centralConflict", "核心冲突"], ["synopsis", "梗概"], ["phases", "阶段"]],
+  entities: [["kind", "类型"], ["name", "名称"], ["summary", "摘要"], ["description", "描述"], ["aliases", "别名"], ["tags", "标签"], ["character", "角色设定"]],
+  relations: [["fromEntityId", "主体"], ["toEntityId", "客体"], ["relationType", "关系类型"], ["publicLabel", "公开标签"], ["privateTruth", "隐情"], ["bond", "羁绊"]],
+  outlineNodes: [["kind", "层级"], ["title", "标题"], ["summary", "摘要"], ["status", "状态"], ["storyTime", "故事时间"], ["parentId", "父节点"]],
+  documents: [["title", "标题"], ["summary", "摘要"], ["blueprint", "蓝图"]],
+  plotThreads: [["kind", "类型"], ["title", "标题"], ["summary", "摘要"], ["status", "状态"], ["priority", "优先级"], ["nextMove", "下一步"]],
+  foreshadowing: [["title", "标题"], ["clue", "线索"], ["truth", "真相"], ["status", "状态"], ["urgency", "紧迫度"], ["notes", "备注"]],
+  timelineEvents: [["title", "标题"], ["storyDate", "故事日期"], ["duration", "持续时间"], ["narrativeOrder", "叙事顺序"], ["description", "描述"]],
+  scenes: [["title", "标题"], ["purpose", "目的"], ["conflict", "冲突"], ["outcome", "结果"], ["wordTarget", "目标字数"]],
+};
 
 async function existingInventory(projectId: string, tables: ProposalTargetTable[]) {
   const lines: string[] = [];
@@ -214,11 +286,44 @@ async function projectReferenceCatalog(projectId: string) {
   return buildProjectReferenceCatalogs(entities, threads, clues).get(projectId) ?? emptyReferenceCatalog();
 }
 
+async function projectCharacterNameToIdMap(projectId: string): Promise<Map<string, string>> {
+  const entities = await novelDb.entities.where("projectId").equals(projectId).toArray();
+  const map = new Map<string, string>();
+  for (const entity of entities) {
+    if (entity.kind !== "character" || !entity.name) continue;
+    map.set(entity.name, entity.id);
+    // 同时注册别名（aliases）以提高匹配率
+    if (entity.aliases?.length) {
+      for (const alias of entity.aliases) {
+        if (alias && !map.has(alias)) map.set(alias, entity.id);
+      }
+    }
+  }
+  return map;
+}
+
+// 所有实体（含角色/地点/组织/物品等）的名→ID 映射，用于修复 LLM 凭空发明的 ref:tempId_* 引用
+async function projectEntityNameToIdMap(projectId: string): Promise<Map<string, string>> {
+  const entities = await novelDb.entities.where("projectId").equals(projectId).toArray();
+  const map = new Map<string, string>();
+  for (const entity of entities) {
+    if (!entity.name) continue;
+    map.set(entity.name, entity.id);
+    if (entity.aliases?.length) {
+      for (const alias of entity.aliases) {
+        if (alias && !map.has(alias)) map.set(alias, entity.id);
+      }
+    }
+  }
+  return map;
+}
+
 async function referenceInventory(projectId: string) {
-  const [entities, threads, clues] = await Promise.all([
+  const [entities, threads, clues, outlineNodes] = await Promise.all([
     novelDb.entities.where("projectId").equals(projectId).toArray(),
     novelDb.plotThreads.where("projectId").equals(projectId).toArray(),
     novelDb.foreshadowing.where("projectId").equals(projectId).toArray(),
+    novelDb.outlineNodes.where("projectId").equals(projectId).sortBy("order"),
   ]);
   const characters = entities.filter((item) => item.kind === "character");
   return [
@@ -230,6 +335,8 @@ async function referenceInventory(projectId: string) {
     ...(threads.length ? threads.map((item) => `- id=${item.id} | ${item.title}`) : ["- 暂无，不得填写剧情线 ID"]),
     "伏笔（foreshadowingIds）：",
     ...(clues.length ? clues.map((item) => `- id=${item.id} | ${item.title}`) : ["- 暂无，不得填写伏笔 ID"]),
+    "大纲节点（startNodeId / targetNodeId / seededNodeId）：",
+    ...(outlineNodes.length ? outlineNodes.map((item) => `- id=${item.id} | ${item.kind} | ${item.title}`) : ["- 暂无大纲节点"]),
   ].join("\n");
 }
 
@@ -335,8 +442,6 @@ function formatOutlineNodeDump(node: OutlineNode, indent: number): string {
     `kind=${node.kind}`,
     `title=${node.title}`,
     `summary=${node.summary || "(空)"}`,
-    `causality=${node.causality || "(空)"}`,
-    `outcome=${node.outcome || "(空)"}`,
     `status=${node.status}`,
   ];
   if (node.characterIds.length) fields.push(`characters=[${node.characterIds.join(",")}]`);
@@ -385,6 +490,159 @@ async function attachExpectedRevisions(items: ProposalItem[]) {
   }
 }
 
+function parseProposalItems(data: Record<string, unknown>): ProposalItem[] {
+  const rawItems = Array.isArray(data.items) ? (data.items as Array<Record<string, unknown>>) : [];
+  return rawItems.map((raw) => ({
+    id: crypto.randomUUID(),
+    label: String(raw.label || "未命名候选"),
+    operation: raw.operation === "update" ? "update" : "create",
+    targetTable: raw.targetTable as ProposalTargetTable,
+    targetId: typeof raw.targetId === "string" ? raw.targetId : undefined,
+    tempId: typeof raw.tempId === "string" ? raw.tempId : undefined,
+    status: "pending",
+    payload: sanitizeModelPayload(raw.targetTable as ProposalTargetTable, (raw.payload ?? {}) as Record<string, unknown>),
+    after: sanitizeModelPayload(raw.targetTable as ProposalTargetTable, (raw.payload ?? {}) as Record<string, unknown>),
+    rationale: String(raw.rationale || ""),
+    dependencies: Array.isArray(raw.dependencies) ? raw.dependencies.map(String) : [],
+  }));
+}
+
+function normalizeOutlineItems(items: ProposalItem[]): ProposalItem[] {
+  for (const item of items) {
+    const payload = { ...item.payload };
+    if (typeof payload.parentId === "string" && !payload.parentId.trim()) delete payload.parentId;
+    item.operation = "create";
+    item.targetTable = "outlineNodes";
+    item.targetId = undefined;
+    item.payload = payload;
+    item.after = payload;
+  }
+  return items;
+}
+
+function namespaceTempIds(items: ProposalItem[], prefix: string): ProposalItem[] {
+  const tempIdMap = new Map<string, string>();
+  for (const item of items) {
+    if (item.tempId) {
+      const newTempId = `${prefix}${item.tempId}`;
+      tempIdMap.set(item.tempId, newTempId);
+      item.tempId = newTempId;
+    }
+  }
+  for (const item of items) {
+    if (typeof item.payload.parentId === "string") {
+      const ref = item.payload.parentId.startsWith("ref:") ? item.payload.parentId.slice(4) : item.payload.parentId;
+      const mapped = tempIdMap.get(ref);
+      if (mapped) {
+        item.payload = { ...item.payload, parentId: `ref:${mapped}` };
+        item.after = { ...item.payload };
+      }
+    }
+  }
+  return items;
+}
+
+async function generateOutlineByPhases(params: {
+  projectId: string;
+  model: string;
+  role: NovelAgentRole;
+  skillPrompt?: string;
+  architecture: StoryArchitecture;
+  inventory: string;
+  availableReferences: string;
+  referenceAliases: string;
+  contextPacket: NovelContextPacket;
+  allowedTables: ProposalTargetTable[];
+}): Promise<{ items: ProposalItem[]; summary: string; promptHash: string; usage: { inputTokens: number; outputTokens: number } }> {
+  const characters = (await novelDb.entities.where("projectId").equals(params.projectId).toArray()).filter((e) => e.kind === "character");
+  const characterRoster = characters.length
+    ? `\n# 角色名→ID 映射（事件中出现的角色必须使用以下真实 ID，不得张冠李戴）\n${characters.map((c) => `- ${c.name} → id=${c.id}${c.character?.role ? `（${c.character.role}）` : ""}`).join("\n")}`
+    : "";
+  const formattedContext = formatContextPacket(params.contextPacket);
+  const allItems: ProposalItem[] = [];
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  const promptHashes: string[] = [];
+  const phaseSummaries: string[] = [];
+
+  for (const [phaseIndex, phase] of params.architecture.phases.entries()) {
+    const previousActs = phaseSummaries.length
+      ? `\n# 前情概要（已完成各幕摘要，保持因果连贯）\n${phaseSummaries.map((s, i) => `第${i + 1}幕：${s}`).join("\n")}\n`
+      : "";
+
+    const perActPrompt = `# 任务\n为第 ${phase.order + 1} 幕（共 ${params.architecture.phases.length} 幕）「${phase.title}」生成完整的故事大纲子树：1 个 act + 2-4 个 sequence + 每个 sequence 下 2-4 个 event。\n\n# 本幕信息\n- 目的：${phase.purpose}\n- 转折：${phase.turningPoint}\n${previousActs}${characterRoster}\n\n# 完整大纲结构要求\n1. 生成 1 个 act 节点（本幕），parentId 留空。act 的 title 必须直接使用「${phase.title}」，不得自行添加"第X幕"前缀或修改编号。\n2. 生成 2-4 个 sequence 节点，parentId 用 ref:act 的 tempId。\n3. 每个 sequence 下生成 2-4 个 event 节点，parentId 用 ref:sequence 的 tempId。\n4. order 从 0 开始，同一父节点下不重复。\n5. 事件的 summary 应以散文形式完整交代"缘起→触发→阻碍→直接结果→延后余波"五要素，不使用标签拆段。\n\n# 角色引用规则\n- 事件中出现的角色名，其对应 ID 必须出现在 characterIds 中。\n- 不得将一个角色的 ID 用于另一个角色的事件。\n- 角色未在事件中出现时不要填入 characterIds。\n\n# 允许生成的资料表\n${params.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${params.inventory}\n\n# 可引用对象索引\n${params.availableReferences}\n\n# 已采纳引用别名\n${params.referenceAliases}\n\n# 输出要求\npayload 各字段只写故事内容本身，禁止出现"候选""待审核"等审批元信息。创建的对象使用 tempId 互相引用，格式为 ref:tempId。\n\n# 冻结上下文\n${formattedContext}`;
+
+    let phaseResult = await callStructuredNovelModel<Record<string, unknown>>({
+      model: params.model,
+      temperature: 0.55,
+      role: params.role,
+      skillPrompt: params.skillPrompt,
+      schema: proposalSchema(params.allowedTables),
+      prompt: perActPrompt,
+    });
+    totalInputTokens += phaseResult.usage.inputTokens;
+    totalOutputTokens += phaseResult.usage.outputTokens;
+    promptHashes.push(phaseResult.promptHash);
+
+    let phaseItems = namespaceTempIds(parseProposalItems(phaseResult.data), `p${phaseIndex}_`);
+    normalizeOutlineItems(phaseItems);
+    // 关键修复：每个 phase 的 act order 必须按 phaseIndex 设置，避免合并后所有 act 都在 root 且 order=0 被判为重复
+    const applyActOrder = (items: ProposalItem[]) => {
+      for (const item of items) {
+        if (item.payload.kind === "act") {
+          item.payload = { ...item.payload, order: phaseIndex };
+          item.after = { ...item.payload };
+        }
+      }
+    };
+    applyActOrder(phaseItems);
+
+    // 3 次重试：LLM 在深层级树面前不可靠，单次重试不足以保证完整子树
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const phaseAnalysis = analyzeOutlineProposal(phaseItems);
+      if (phaseAnalysis.issues.length === 0) break;
+      if (attempt === 2) break;
+      const errorFeedback = [...new Set(phaseAnalysis.issues.map((issue) => issue.message))].join("；");
+      phaseResult = await callStructuredNovelModel<Record<string, unknown>>({
+        model: params.model,
+        temperature: attempt === 0 ? 0.3 : 0.6,
+        role: params.role,
+        skillPrompt: params.skillPrompt,
+        schema: proposalSchema(params.allowedTables),
+        prompt: `${perActPrompt}\n\n# 第 ${attempt + 1} 次校验失败\n${errorFeedback}\n\n请重新生成第 ${phase.order + 1} 幕（共 ${params.architecture.phases.length} 幕）的大纲子树，确保：1 个 act（parentId 留空，title 直接使用「${phase.title}」不得加"第X幕"前缀）+ 2-4 个 sequence（parentId=ref:act的tempId）+ 每个 sequence 下 2-4 个 event（parentId=ref:sequence的tempId）。tempId 格式：act_${phaseIndex}、seq_${phaseIndex}_0、evt_${phaseIndex}_0_0 等。`,
+      });
+      totalInputTokens += phaseResult.usage.inputTokens;
+      totalOutputTokens += phaseResult.usage.outputTokens;
+      promptHashes.push(phaseResult.promptHash);
+      phaseItems = namespaceTempIds(parseProposalItems(phaseResult.data), `p${phaseIndex}_`);
+      normalizeOutlineItems(phaseItems);
+      applyActOrder(phaseItems);
+    }
+
+    const actItem = phaseItems.find((item) => item.payload.kind === "act");
+    if (actItem?.payload.summary) phaseSummaries.push(String(actItem.payload.summary));
+    allItems.push(...phaseItems);
+  }
+
+  // 接受部分有效结果：只保留通过结构校验的节点，不因个别幕失败而丢弃整棵大纲
+  const finalAnalysis = analyzeOutlineProposal(allItems, false);
+  const validItems = allItems.filter((item) => {
+    const nodeId = item.tempId?.trim() || item.id;
+    return finalAnalysis.validIds.has(nodeId);
+  });
+  if (validItems.length === 0) {
+    throw new Error(`分段大纲未产出任何有效节点：${[...new Set(finalAnalysis.issues.map((issue) => issue.message))].join("；")}`);
+  }
+  const validActs = validItems.filter((item) => item.payload.kind === "act");
+  const summary = `分段生成 ${params.architecture.phases.length} 幕大纲（成功 ${validActs.length}/${params.architecture.phases.length} 幕，${validItems.length} 节点）：\n${phaseSummaries.map((s, i) => `第${i + 1}幕：${s.slice(0, 100)}`).join("\n")}${finalAnalysis.issues.length ? `\n\n校验提示（已跳过无效节点）：${[...new Set(finalAnalysis.issues.map((issue) => issue.message))].join("；")}` : ""}`;
+  return {
+    items: validItems,
+    summary,
+    promptHash: promptHashes.join("|"),
+    usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+  };
+}
+
 export async function runGenerationTask(params: {
   projectId: string;
   taskKey: NovelGenerationTaskKey;
@@ -407,7 +665,15 @@ export async function runGenerationTask(params: {
   let sectionContextBlock = "";
   if (params.taskKey === "outline") {
     effectiveInstruction = `${params.instruction || task.defaultInstruction}\n\n请输出一棵完整、可独立替换当前内容的故事大纲树。`;
-    sectionContextBlock = `\n# 完整大纲结构要求\n1. 所有候选项必须是 outlineNodes 的 create 操作，不得更新现有节点。\n2. 每个节点提供唯一 tempId。\n3. 幕(kind=act)必须位于根级，不填写 parentId。\n4. 序列(kind=sequence)必须使用 parentId=ref:幕的tempId。\n5. 事件(kind=event)必须使用 parentId=ref:序列的tempId。\n6. 同一父节点下的 order 从 0 开始且不得重复。\n7. 每一幕至少包含一个序列，每个序列至少包含一个事件。\n8. 用户采纳后会整体替换现有大纲，不得把本次结果设计成追加片段。\n`;
+    const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
+    const architectureBlock = architecture?.phases?.length
+      ? `\n# 已批准架构阶段\n大纲必须有 ${architecture.phases.length} 个幕（kind=act），每个幕对应一个架构阶段。每幕至少包含 1 个序列，每个序列至少包含 2 个事件。不得省略任何阶段。\n${architecture.phases.map((p) => `- 第${p.order + 1}幕「${p.title}」：${p.purpose}；本幕转折：${p.turningPoint}`).join("\n")}\n`
+      : "";
+    const characters = (await novelDb.entities.where("projectId").equals(params.projectId).toArray()).filter((e) => e.kind === "character");
+    const characterRoster = characters.length
+      ? `\n# 角色名→ID 映射（事件中出现的角色必须使用以下真实 ID，不得张冠李戴）\n${characters.map((c) => `- ${c.name} → id=${c.id}${c.character?.role ? `（${c.character.role}）` : ""}`).join("\n")}\n`
+      : "";
+    sectionContextBlock = `\n# 完整大纲结构要求\n1. 所有候选项必须是 outlineNodes 的 create 操作，不得更新现有节点。\n2. 每个节点提供唯一 tempId。\n3. 幕(kind=act)必须位于根级，不填写 parentId。\n4. 序列(kind=sequence)必须使用 parentId=ref:幕的tempId。\n5. 事件(kind=event)必须使用 parentId=ref:序列的tempId。\n6. 同一父节点下的 order 从 0 开始且不得重复。\n7. 每一幕至少包含一个序列，每个序列至少包含一个事件。\n8. 用户采纳后会整体替换现有大纲，不得把本次结果设计成追加片段。\n${architectureBlock}${characterRoster}\n# 角色引用规则\n- 事件的 summary 或 title 中出现的角色名，其对应 ID 必须出现在该事件的 characterIds 中。\n- 不得将一个角色的 ID 用于另一个角色的事件（如不得将"剑心"的 ID 用于"沈青衫"的事件）。\n- 角色未在事件中出现时不要填入 characterIds。\n`;
   }
   if (params.taskKey === "outline-section-update" && params.targetId) {
     const allNodes = await novelDb.outlineNodes.where("projectId").equals(params.projectId).toArray();
@@ -427,45 +693,102 @@ export async function runGenerationTask(params: {
     effectiveInstruction = `${params.instruction || task.defaultInstruction}\n\n字段级修订目标：节点"${target.title}" (id=${target.id}, kind=${target.kind})。\n要求改写的字段：${fieldName}\n当前值：${typeof currentValue === "string" ? currentValue : JSON.stringify(currentValue)}`;
     sectionContextBlock = `\n# 当前节点完整内容\n${formatOutlineNodeDump(target, 0)}\n\n# 字段级修订要求\n1. 只返回 1 个 update 操作, targetId 为 ${target.id}。\n2. payload 中只包含要修改的字段 (${fieldName}), 不要包含其他字段。\n3. 保持节点类型、父子关系和 ID 不变。\n`;
   }
+  if (["chapter-arrangement", "chapter-plan"].includes(params.taskKey)) {
+    sectionContextBlock += `\n# 章节字数规则\n每章目标字数由系统统一设置为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字。请按该篇幅规划章节，但不要在 payload 中返回 targetWords。\n`;
+  }
+  if (params.taskKey === "plot-threads") {
+    sectionContextBlock += `\n# 剧情线与大纲关联\n- 每条剧情线的 startNodeId 和 targetNodeId 应引用"可引用对象索引"中的大纲节点真实 ID。\n- startNodeId 标记剧情线起始的大纲事件，targetNodeId 标记剧情线目标达成的大纲事件。\n- 如剧情线贯穿全卷，可只填 startNodeId，targetNodeId 留空。\n`;
+  }
+  if (params.taskKey === "foreshadowing") {
+    sectionContextBlock += `\n# 伏笔与大纲关联\n- 每条伏笔的 seededNodeId 应引用"可引用对象索引"中埋设伏笔的大纲事件真实 ID。\n- targetNodeId 应引用伏笔回收的大纲事件真实 ID。\n- 如回收节点尚未在当前大纲中出现，targetNodeId 可留空。\n`;
+  }
 
   const agent: AgentRun = { ...recordBase(params.projectId), goal: effectiveInstruction, status: "running", model: project.settings.textModel, promptVersion: "novel-structured-v4", contextPacketId: packet.id, role: task.role, skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: task.label, tool: "model.structured", status: "running" }] };
   await novelDb.agentRuns.add(agent);
   try {
-    const result = await callStructuredNovelModel<Record<string, unknown>>({
-      model: project.settings.textModel,
-      temperature: task.role === "writer" ? project.settings.temperature : 0.55,
-      role: task.role,
-      skillPrompt: formatSkillPrompt(skills.skills),
-      schema: proposalSchema(task.allowedTables),
-      prompt: `# 任务\n${effectiveInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n只生成待用户审核的候选项，不得声称已修改项目。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有角色、剧情线和伏笔时，只能复制“可引用对象索引”中的真实 ID，不得把名称、英文别名或规则名当成 ID；没有可用对象时对应数组必须为空。也可使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
-    });
-    const rawItems = Array.isArray(result.data.items) ? result.data.items as Array<Record<string, unknown>> : [];
-    const items: ProposalItem[] = rawItems.map((raw) => ({
-      id: crypto.randomUUID(),
-      label: String(raw.label || "未命名候选"),
-      operation: raw.operation === "update" ? "update" : "create",
-      targetTable: raw.targetTable as ProposalTargetTable,
-      targetId: typeof raw.targetId === "string" ? raw.targetId : undefined,
-      tempId: typeof raw.tempId === "string" ? raw.tempId : undefined,
-      status: "pending",
-      payload: (raw.payload ?? {}) as Record<string, unknown>,
-      after: (raw.payload ?? {}) as Record<string, unknown>,
-      rationale: String(raw.rationale || ""),
-      dependencies: Array.isArray(raw.dependencies) ? raw.dependencies.map(String) : [],
-    }));
+    const skillPrompt = compileNovelStagePrompt(skills.skills, task.skillStage);
+    const basePrompt = `# 任务\n${effectiveInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段（title、summary、description、rationale 等）只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等审批元信息，这些状态由系统管理。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有角色、剧情线和伏笔时，只能复制“可引用对象索引”中的真实 ID，不得把名称、英文别名或规则名当成 ID；没有可用对象时对应数组必须为空。也可使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+    let result: { data: Record<string, unknown>; usage: { inputTokens: number; outputTokens: number }; promptHash: string };
+    let items: ProposalItem[];
     if (params.taskKey === "outline") {
-      for (const item of items) {
-        const payload = { ...item.payload };
-        if (typeof payload.parentId === "string" && !payload.parentId.trim()) delete payload.parentId;
-        item.operation = "create";
-        item.targetTable = "outlineNodes";
-        item.targetId = undefined;
-        item.payload = payload;
-        item.after = payload;
+      const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
+      const runFallbackOutline = async (): Promise<{ result: typeof result; items: ProposalItem[] }> => {
+        const fallbackResult = await callStructuredNovelModel<Record<string, unknown>>({
+          model: project.settings.textModel,
+          temperature: 0.55,
+          role: task.role,
+          skillPrompt,
+          schema: proposalSchema(task.allowedTables),
+          prompt: basePrompt,
+        });
+        let fallbackItems = parseProposalItems(fallbackResult.data);
+        let lastResult = fallbackResult;
+        for (let outlineAttempt = 0; outlineAttempt < 2; outlineAttempt += 1) {
+          normalizeOutlineItems(fallbackItems);
+          const analysis = analyzeOutlineProposal(fallbackItems);
+          if (analysis.issues.length === 0) break;
+          if (outlineAttempt === 1) {
+            throw new Error(`AI 返回的大纲结构无效：${[...new Set(analysis.issues.map((issue) => issue.message))].join("；")}`);
+          }
+          const errorFeedback = [...new Set(analysis.issues.map((issue) => issue.message))].join("；");
+          lastResult = await callStructuredNovelModel<Record<string, unknown>>({
+            model: project.settings.textModel,
+            temperature: 0.3,
+            role: task.role,
+            skillPrompt,
+            schema: proposalSchema(task.allowedTables),
+            prompt: `${basePrompt}\n\n# 上次输出校验失败\n${errorFeedback}\n\n请重新生成完整大纲树，确保：每幕（kind=act）下至少有 1 个序列（kind=sequence），每个序列下至少有 1 个事件（kind=event）。序列的 parentId 用 ref:幕的tempId，事件的 parentId 用 ref:序列的tempId。`,
+          });
+          fallbackItems = parseProposalItems(lastResult.data);
+        }
+        return { result: lastResult, items: fallbackItems };
+      };
+      if (architecture?.phases?.length) {
+        try {
+          const segmented = await generateOutlineByPhases({
+            projectId: params.projectId,
+            model: project.settings.textModel,
+            role: task.role,
+            skillPrompt,
+            architecture,
+            inventory,
+            availableReferences,
+            referenceAliases,
+            contextPacket: packet,
+            allowedTables: task.allowedTables,
+          });
+          items = segmented.items;
+          result = { data: { summary: segmented.summary }, usage: segmented.usage, promptHash: segmented.promptHash };
+        } catch (segmentedError) {
+          // 分段生成失败时回退到单次 LLM 调用，避免整个大纲任务因单幕失败而无法生成
+          const fallback = await runFallbackOutline();
+          result = fallback.result;
+          items = fallback.items;
+        }
+      } else {
+        const fallback = await runFallbackOutline();
+        result = fallback.result;
+        items = fallback.items;
       }
-      const analysis = analyzeOutlineProposal(items);
-      if (analysis.issues.length) {
-        throw new Error(`AI 返回的大纲结构无效：${[...new Set(analysis.issues.map((issue) => issue.message))].join("；")}`);
+    } else {
+      result = await callStructuredNovelModel<Record<string, unknown>>({
+        model: project.settings.textModel,
+        temperature: task.role === "writer" ? project.settings.temperature : 0.55,
+        role: task.role,
+        skillPrompt,
+        schema: proposalSchema(task.allowedTables),
+        prompt: basePrompt,
+        // Loop 7 修复 #11：角色生成需输出 5 个角色完整字段（appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state），180s 默认超时不足
+        timeoutMs: params.taskKey === "characters" ? 300_000 : undefined,
+      });
+      items = parseProposalItems(result.data);
+      if (params.taskKey === "chapter-draft") {
+        for (const item of items) {
+          if (item.targetTable !== "documents" || typeof item.payload.plainText !== "string") continue;
+          const repaired = await repairDraftStructureOnce({ content: item.payload.plainText, model: project.settings.textModel, skillPrompt });
+          item.payload = { ...item.payload, plainText: repaired.content };
+          item.after = { ...item.after, plainText: repaired.content };
+        }
       }
     }
     if (["project-positioning", "architecture", "chapter-plan", "chapter-draft"].includes(params.taskKey)) items.splice(1);
@@ -518,7 +841,7 @@ export async function runGenerationTask(params: {
               targetTable: "outlineNodes",
               targetId: params.targetId,
               status: "pending",
-              payload: { title: firstCreate.payload.title ?? root.title, summary: firstCreate.payload.summary ?? root.summary, causality: firstCreate.payload.causality ?? root.causality, outcome: firstCreate.payload.outcome ?? root.outcome, status: firstCreate.payload.status ?? root.status, characterIds: firstCreate.payload.characterIds ?? root.characterIds, plotThreadIds: firstCreate.payload.plotThreadIds ?? root.plotThreadIds, foreshadowingIds: firstCreate.payload.foreshadowingIds ?? root.foreshadowingIds, storyTime: firstCreate.payload.storyTime ?? root.storyTime, tags: firstCreate.payload.tags ?? root.tags },
+              payload: { title: firstCreate.payload.title ?? root.title, summary: firstCreate.payload.summary ?? root.summary, status: firstCreate.payload.status ?? root.status, characterIds: firstCreate.payload.characterIds ?? root.characterIds, plotThreadIds: firstCreate.payload.plotThreadIds ?? root.plotThreadIds, foreshadowingIds: firstCreate.payload.foreshadowingIds ?? root.foreshadowingIds, storyTime: firstCreate.payload.storyTime ?? root.storyTime, tags: firstCreate.payload.tags ?? root.tags },
               after: {},
               rationale: "根节点重写",
               dependencies: [],
@@ -550,7 +873,16 @@ export async function runGenerationTask(params: {
       }
     }
     if (!items.length) throw new Error("AI 没有返回可审核的候选项");
-    assertProposalReferences(items, await projectReferenceCatalog(params.projectId), acceptedRefs);
+    {
+      const [catalog, nameMap, entityNameMap] = await Promise.all([
+        projectReferenceCatalog(params.projectId),
+        projectCharacterNameToIdMap(params.projectId),
+        projectEntityNameToIdMap(params.projectId),
+      ]);
+      repairProposalCharacterReferences(items, catalog, nameMap);
+      repairUnresolvableTempRefs(items, acceptedRefs, entityNameMap);
+      assertProposalReferences(items, catalog, acceptedRefs);
+    }
     await attachExpectedRevisions(items);
     const summary = String(result.data.summary || task.defaultInstruction);
     const proposal: AIProposal = {
@@ -678,9 +1010,11 @@ export async function runRefinementTask(params: {
       model: project.settings.textModel,
       temperature: 0.35,
       role: task.role,
-      skillPrompt: formatSkillPrompt(skills.skills),
+      skillPrompt: compileNovelStagePrompt(skills.skills, task.skillStage),
       schema: refinementProposalSchema(task.allowedTables),
-      prompt: `# 微调任务\n${instruction}\n\n# 原始结构化数据\n${sourceJson}\n\n${payloadContract}\n\n# 可引用对象索引\n${availableReferences}\n\n# 输出要求\n只返回提示词实际要求发生变化的候选项，未提及的数据必须保持不变。update 和 delete 只能使用原始数据中存在的真实 targetId；create 必须提供 tempId。update 的 payload 只放需要变化的字段，系统会与原数据合并。角色、剧情线和伏笔引用只能使用索引中的真实 ID 或同一候选中的有效 ref:tempId，不得自行发明。delete 不要输出 payload。不得删除 projects 或 architectures。用户本次微调指令授权提出候选变更，但锁定内容仍不可更改。所有结果仍需用户审核后才会写入。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
+      // Loop 7 修复 #11：角色微调也可能涉及多角色完整字段重写
+      timeoutMs: params.taskKey === "characters" ? 300_000 : undefined,
+      prompt: `# 微调任务\n${instruction}\n\n# 原始结构化数据\n${sourceJson}\n\n${payloadContract}\n\n# 可引用对象索引\n${availableReferences}\n\n# 输出要求\n只返回提示词实际要求发生变化的候选项，未提及的数据必须保持不变。update 和 delete 只能使用原始数据中存在的真实 targetId；create 必须提供 tempId。update 的 payload 只放需要变化的字段，系统会与原数据合并。角色、剧情线和伏笔引用只能使用索引中的真实 ID 或同一候选中的有效 ref:tempId，不得自行发明。delete 不要输出 payload。不得删除 projects 或 architectures。用户本次微调指令授权提出候选变更，但锁定内容仍不可更改。审批状态由系统统一管理，payload 各字段只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
     });
     const rawItems = Array.isArray(result.data.items) ? result.data.items as Array<Record<string, unknown>> : [];
     const seenTargets = new Set<string>();
@@ -698,12 +1032,13 @@ export async function runRefinementTask(params: {
         if (seenTargets.has(key)) throw new Error(`AI 对同一对象返回了多项冲突操作：${key}`);
         seenTargets.add(key);
       }
-      const payload = operation === "delete" ? {} : sanitizePayload((raw.payload ?? {}) as Record<string, unknown>);
+      const payload = operation === "delete" ? {} : sanitizeModelPayload(targetTable, (raw.payload ?? {}) as Record<string, unknown>);
       const after = operation === "update" && sourceRecord ? deepMergeRecord(sourceRecord.data, payload) : operation === "create" ? payload : undefined;
       if (after) {
         const validate = CREATE_PAYLOAD_VALIDATORS[targetTable];
         if (!validate(after)) throw new Error(`“${String(raw.label || "未命名候选")}”字段无效：${validate.errors?.map((error) => `${error.instancePath || "root"} ${error.message}`).join("；")}`);
         if (targetTable === "architectures" && sourceRecord) assertLockedArchitecturePreserved(sourceRecord.data, after);
+        if (operation === "update" && sourceRecord && JSON.stringify(stableValue(after)) === JSON.stringify(stableValue(sourceRecord.data))) continue;
       }
       items.push({
         id: crypto.randomUUID(),
@@ -722,8 +1057,17 @@ export async function runRefinementTask(params: {
         impact: operation === "delete" && targetId ? await analyzeDeleteImpact(params.projectId, targetTable, targetId) : undefined,
       });
     }
-    if (!items.length) throw new Error("AI 没有返回可审核的微调项");
-    assertProposalReferences(items, await projectReferenceCatalog(params.projectId), acceptedRefs);
+    if (!items.length) throw new Error("AI 返回的微调结果没有产生实际变化，请换一种更明确的描述后重试");
+    {
+      const [catalog, nameMap, entityNameMap] = await Promise.all([
+        projectReferenceCatalog(params.projectId),
+        projectCharacterNameToIdMap(params.projectId),
+        projectEntityNameToIdMap(params.projectId),
+      ]);
+      repairProposalCharacterReferences(items, catalog, nameMap);
+      repairUnresolvableTempRefs(items, acceptedRefs, entityNameMap);
+      assertProposalReferences(items, catalog, acceptedRefs);
+    }
     const summary = String(result.data.summary || instruction);
     const proposal: AIProposal = {
       ...recordBase(params.projectId),
@@ -797,6 +1141,16 @@ function sanitizePayload(payload: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(payload).filter(([key]) => !protectedFields.has(key)));
 }
 
+function sanitizeModelPayload(table: ProposalTargetTable, payload: Record<string, unknown>) {
+  const sanitized = sanitizePayload(payload);
+  // 剥离 LLM 在内容字段里添加的"候选/待审核"等审批元信息（状态应由系统管理）
+  sanitizeApprovalMetaInPlace(sanitized);
+  if (table !== "documents" || !sanitized.blueprint || typeof sanitized.blueprint !== "object" || Array.isArray(sanitized.blueprint)) return sanitized;
+  const blueprint = { ...sanitized.blueprint as Record<string, unknown> };
+  delete blueprint.targetWords;
+  return { ...sanitized, blueprint };
+}
+
 function textToHtml(text: string) {
   const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return text.split(/\n{2,}/).map((paragraph) => `<p>${escape(paragraph).replace(/\n/g, "<br>")}</p>`).join("");
@@ -811,22 +1165,22 @@ function normalizeDocumentPayload(payload: Record<string, unknown>) {
 export function normalizedCreate(table: ProposalTargetTable, projectId: string, id: string, payload: Record<string, unknown>) {
   const base = { ...recordBase(projectId), id };
   if (table === "architectures") return { ...base, framework: "free", status: "draft", centralQuestion: "", centralConflict: "", synopsis: "", phases: [], ...payload };
-  if (table === "outlineNodes") return { ...base, parentId: undefined, kind: "event", title: "未命名事件", summary: "", order: 0, status: "idea", causality: "", outcome: "", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [], ...payload };
+  if (table === "outlineNodes") return { ...base, parentId: undefined, kind: "event", title: "未命名事件", summary: "", order: 0, status: "idea", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [], ...payload };
   if (table === "documents") {
     const { blueprint, ...rest } = payload;
     return { ...base, order: 0, title: "未命名章节", contentHtml: "", plainText: "", summary: "", status: "outline", wordCount: 0, branch: "main", yjsDocumentId: crypto.randomUUID(), ...rest, blueprint: { ...emptyChapterBlueprint(), ...(blueprint as Record<string, unknown> | undefined) } };
   }
   if (table === "scenes") return { ...base, chapterId: "", title: "未命名场景", order: 0, status: "idea", characterIds: [], plotThreadIds: [], foreshadowingIds: [], purpose: "", conflict: "", outcome: "", wordTarget: 800, beats: [], ...payload };
   if (table === "entities") {
-    const characterDefaults = { role: "", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", knowledge: { known: [], suspected: [], mistaken: [], unknown: [] }, state: { location: "", physical: "", emotional: "", objective: "", inventory: [], relationshipNotes: [] } };
+    const characterDefaults = { role: "", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", state: { location: "", physical: "", emotional: "", objective: "", inventory: [], relationshipNotes: [] } };
     const record = { ...base, kind: "term", name: "未命名资料", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {}, ...payload } as Record<string, unknown>;
     if (record.kind === "character") {
       const character = (payload.character ?? {}) as Record<string, unknown>;
-      record.character = { ...characterDefaults, ...character, knowledge: { ...characterDefaults.knowledge, ...(character.knowledge as Record<string, unknown> | undefined) }, state: { ...characterDefaults.state, ...(character.state as Record<string, unknown> | undefined) } };
+      record.character = { ...characterDefaults, ...character, state: { ...characterDefaults.state, ...(character.state as Record<string, unknown> | undefined) } };
     }
     return record;
   }
-  if (table === "relations") return { ...base, fromEntityId: "", toEntityId: "", relationType: "关联", publicLabel: "", privateTruth: "", bond: "", history: [], ...payload };
+  if (table === "relations") return { ...base, fromEntityId: "", toEntityId: "", relationType: "关联", publicLabel: "", privateTruth: "", bond: "", ...payload };
   if (table === "plotThreads") return { ...base, kind: "subplot", title: "未命名剧情线", summary: "", status: "planned", priority: 50, participantIds: [], progress: 0, nextMove: "", ...payload };
   if (table === "foreshadowing") return { ...base, title: "未命名伏笔", clue: "", truth: "", status: "seeded", urgency: 30, notes: "", ...payload };
   if (table === "timelineEvents") return { ...base, title: "未命名事件", storyDate: "", duration: "", narrativeOrder: 0, participantIds: [], causeIds: [], consequenceIds: [], description: "", ...payload };
@@ -995,9 +1349,15 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     if (analysis.issues.length) throw new Error(`候选大纲无法采纳：${[...new Set(analysis.issues.map((issue) => issue.message))].join("；")}`);
   }
   const acceptedRefs = await acceptedProjectReferences(initialProposal.projectId);
+  const entityNameToIdMap = await projectEntityNameToIdMap(initialProposal.projectId);
+  const needsOutlineBackfill = ["plot-threads", "foreshadowing", "story-control"].includes(initialProposal.taskKey ?? "");
   const tables = fullOutlineReplacement || initialSelected.some((item) => item.operation === "delete")
     ? novelDb.tables
-    : [...new Set(initialSelected.map((item) => novelDb.table(item.targetTable))), novelDb.entities, novelDb.plotThreads, novelDb.foreshadowing, novelDb.operations, novelDb.proposals, novelDb.embeddings];
+    : [...new Set([
+      ...initialSelected.map((item) => novelDb.table(item.targetTable)),
+      novelDb.entities, novelDb.plotThreads, novelDb.foreshadowing, novelDb.operations, novelDb.proposals, novelDb.embeddings,
+      ...(needsOutlineBackfill ? [novelDb.outlineNodes] : []),
+    ])];
   const embeddings: Array<{ table: ProposalTargetTable; id: string; record: Record<string, unknown> }> = [];
   const collaborativeDeletes: Array<{ projectId: string; documentId: string }> = [];
   let appliedCount = 0;
@@ -1026,6 +1386,8 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
       for (const item of selected) if (!conflicts.includes(item.id)) conflicts.push(item.id);
     }
     const applicable = selected.filter((item) => !conflicts.includes(item.id));
+    // 安全网：修复历史提案中可能残留的 ref:tempId_* 引用（问题 #13）
+    repairUnresolvableTempRefs(applicable, refs, entityNameToIdMap);
     const catalog = catalogWithResolvedProposalItems(await projectReferenceCatalog(proposal.projectId), applicable, refs);
     const preparedPayloads = new Map<string, Record<string, unknown>>();
     for (const item of applicable) {
@@ -1100,6 +1462,48 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
         await appendOperation(proposal.projectId, item.targetTable, item.targetId, "update", { value: { before, after: record } });
         await novelDb.embeddings.where("targetId").equals(item.targetId).delete();
         embeddings.push({ table: item.targetTable, id: item.targetId, record });
+      }
+    }
+    if (["plot-threads", "foreshadowing", "story-control"].includes(proposal.taskKey ?? "")) {
+      const acceptedThreads = applicable.filter((item) => item.targetTable === "plotThreads");
+      const acceptedClues = applicable.filter((item) => item.targetTable === "foreshadowing");
+      const outlineBackfill = new Map<string, { plotThreadIds?: string[]; foreshadowingIds?: string[] }>();
+      for (const item of acceptedThreads) {
+        const payload = preparedPayloads.get(item.id);
+        if (!payload) continue;
+        const threadId = item.targetId ?? (item.tempId ? refs.get(item.tempId) : undefined);
+        if (!threadId) continue;
+        for (const nodeField of ["startNodeId", "targetNodeId"]) {
+          const nodeId = payload[nodeField];
+          if (typeof nodeId === "string" && nodeId) {
+            const entry = outlineBackfill.get(nodeId) ?? {};
+            entry.plotThreadIds = [...(entry.plotThreadIds ?? []), threadId];
+            outlineBackfill.set(nodeId, entry);
+          }
+        }
+      }
+      for (const item of acceptedClues) {
+        const payload = preparedPayloads.get(item.id);
+        if (!payload) continue;
+        const clueId = item.targetId ?? (item.tempId ? refs.get(item.tempId) : undefined);
+        if (!clueId) continue;
+        for (const nodeField of ["seededNodeId", "targetNodeId"]) {
+          const nodeId = payload[nodeField];
+          if (typeof nodeId === "string" && nodeId) {
+            const entry = outlineBackfill.get(nodeId) ?? {};
+            entry.foreshadowingIds = [...(entry.foreshadowingIds ?? []), clueId];
+            outlineBackfill.set(nodeId, entry);
+          }
+        }
+      }
+      for (const [nodeId, additions] of outlineBackfill) {
+        const node = await novelDb.outlineNodes.get(nodeId);
+        if (!node) continue;
+        const plotThreadIds = [...new Set([...(node.plotThreadIds ?? []), ...(additions.plotThreadIds ?? [])])];
+        const foreshadowingIds = [...new Set([...(node.foreshadowingIds ?? []), ...(additions.foreshadowingIds ?? [])])];
+        const updated = { ...node, plotThreadIds, foreshadowingIds, revision: node.revision + 1, updatedAt: Date.now(), updatedBy: "local-user" };
+        await novelDb.outlineNodes.put(updated);
+        await appendOperation(proposal.projectId, "outlineNodes", nodeId, "update", { value: { before: node, after: updated } });
       }
     }
     const selectedIds = new Set(selected.map((item) => item.id));

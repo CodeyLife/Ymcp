@@ -86,7 +86,7 @@ describe("context invariants and fact commits", () => {
 
   it("shows a character-held secret as cognition without exposing it as reader-visible fact", async () => {
     const project = await createNovelProject({ title: "角色认知", genre: ["悬疑"], premise: "角色知道的秘密不等于读者已知。" });
-    const character: StoryEntity = { ...recordBase(project.id), kind: "character", name: "陆沉", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {}, character: { role: "主角", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", knowledge: { known: [], suspected: [], mistaken: [], unknown: [] }, state: { location: "", physical: "正常", emotional: "平静", objective: "", inventory: [], relationshipNotes: [] } } };
+    const character: StoryEntity = { ...recordBase(project.id), kind: "character", name: "陆沉", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {}, character: { role: "主角", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", state: { location: "", physical: "正常", emotional: "平静", objective: "", inventory: [], relationshipNotes: [] } } };
     await novelDb.entities.add(character);
     const target = await createChapter(project.id, "第一章");
     await novelDb.documents.update(target.id, { blueprint: { ...target.blueprint, povCharacterId: character.id, characterIds: [character.id] } });
@@ -124,7 +124,6 @@ describe("context invariants and fact commits", () => {
         abilities: [],
         voice: "简短",
         arc: "",
-        knowledge: { known: [], suspected: [], mistaken: [], unknown: [] },
         state: { location: "第十章才抵达的南港", physical: "受伤", emotional: "警惕", objective: "追查", inventory: [], relationshipNotes: [] },
       },
     };

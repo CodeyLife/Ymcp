@@ -69,7 +69,6 @@ const sampleEntity: StoryEntity = {
     abilities: [],
     voice: "说话简短",
     arc: "从相信档案转向相信自己的选择",
-    knowledge: { known: [], suspected: [], mistaken: [], unknown: [] },
     state: { location: "旧档案馆", physical: "正常", emotional: "警惕", objective: "找到缺页", inventory: [], relationshipNotes: [] },
   },
 };

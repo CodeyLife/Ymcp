@@ -1,4 +1,5 @@
-import { get, set, del, delMany, clear, createStore } from "idb-keyval";
+import { get, set, del, delMany, clear } from "idb-keyval";
+import { createRepairingStore } from "./indexedDbStore";
 
 /**
  * IndexedDB 图片存储
@@ -11,7 +12,7 @@ import { get, set, del, delMany, clear, createStore } from "idb-keyval";
  * zustand store 中只保存 imageId 引用，图片本体在此处单独分条存储。
  */
 
-const imageStore = createStore("ymcp-image-db", "images");
+const imageStore = createRepairingStore("ymcp-image-db", "images");
 
 /** 生成 imageId */
 function genId(): string {

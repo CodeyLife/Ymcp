@@ -1,6 +1,6 @@
 import { Input, Tag } from "antd";
 import { AimOutlined, EnvironmentOutlined } from "@ant-design/icons";
-import type { CharacterKnowledge, CharacterState, EntityKind, StoryEntity } from "./types";
+import type { CharacterState, EntityKind, StoryEntity } from "./types";
 
 type CharacterDetails = NonNullable<StoryEntity["character"]>;
 
@@ -10,8 +10,7 @@ export interface CharacterCardData {
   summary?: string;
   description?: string;
   tags?: string[];
-  character?: Partial<Omit<CharacterDetails, "knowledge" | "state">> & {
-    knowledge?: Partial<CharacterKnowledge>;
+  character?: Partial<Omit<CharacterDetails, "state">> & {
     state?: Partial<CharacterState>;
   };
 }
@@ -29,17 +28,21 @@ function valueOrFallback(value: string | undefined, fallback: string) {
 function CharacterField({
   label,
   value,
+  compareValue,
+  comparing,
   editable,
   rows = 2,
   onChange,
 }: {
   label: string;
   value?: string;
+  compareValue?: string;
+  comparing?: boolean;
   editable: boolean;
   rows?: number;
   onChange?: (value: string) => void;
 }) {
-  return <label className="novel-character-card-field">
+  return <label className="novel-character-card-field" data-change-state={comparing ? value === compareValue ? "unchanged" : "changed" : undefined}>
     <span>{label}</span>
     {editable
       ? <Input.TextArea autoSize={{ minRows: rows, maxRows: Math.max(rows + 2, 4) }} value={value ?? ""} onChange={(event) => onChange?.(event.target.value)} />
@@ -52,16 +55,22 @@ export default function CharacterCard({
   mode = "compact",
   editable = false,
   selected = false,
+  compareTo,
   onChange,
 }: {
   entity: CharacterCardData;
   mode?: "rail" | "compact" | "detail";
   editable?: boolean;
   selected?: boolean;
+  compareTo?: CharacterCardData;
   onChange?: (entity: CharacterCardData) => void;
 }) {
   const details = entity.character ?? {};
   const state = details.state ?? {};
+  const compareDetails = compareTo?.character ?? {};
+  const compareState = compareDetails.state ?? {};
+  const comparing = Boolean(compareTo);
+  const changeState = (value: unknown, compareValue: unknown) => comparing ? value === compareValue ? "unchanged" : "changed" : undefined;
   const initial = valueOrFallback(entity.name, "角").slice(0, 1);
   const updateRoot = (patch: Partial<CharacterCardData>) => onChange?.({ ...entity, ...patch });
   const updateDetails = (patch: Partial<CharacterDetails>) => onChange?.({ ...entity, character: { ...details, ...patch } });
@@ -94,7 +103,7 @@ export default function CharacterCard({
   }
 
   return <div className="novel-character-card detail">
-    <header>
+    <header data-change-state={changeState([entity.name, details.role].join("\n"), [compareTo?.name, compareDetails.role].join("\n"))}>
       <span className="novel-character-card-avatar">{initial}</span>
       <div className="novel-character-card-identity">
         {editable
@@ -104,23 +113,23 @@ export default function CharacterCard({
       <Tag>{valueOrFallback(state.emotional, "状态未知")}</Tag>
     </header>
 
-    <CharacterField label="人物摘要" value={entity.summary} editable={editable} rows={2} onChange={(summary) => updateRoot({ summary })} />
+    <CharacterField label="人物摘要" value={entity.summary} compareValue={compareTo?.summary} comparing={comparing} editable={editable} rows={2} onChange={(summary) => updateRoot({ summary })} />
 
     <div className="novel-character-card-state">
-      <label><span>当前位置</span>{editable ? <Input value={state.location ?? ""} onChange={(event) => updateState({ location: event.target.value })} /> : <strong>{valueOrFallback(state.location, "未知")}</strong>}</label>
-      <label><span>当前情绪</span>{editable ? <Input value={state.emotional ?? ""} onChange={(event) => updateState({ emotional: event.target.value })} /> : <strong>{valueOrFallback(state.emotional, "未知")}</strong>}</label>
-      <label><span>当前目标</span>{editable ? <Input value={state.objective ?? ""} onChange={(event) => updateState({ objective: event.target.value })} /> : <strong>{valueOrFallback(state.objective, "未设定")}</strong>}</label>
+      <label data-change-state={changeState(state.location, compareState.location)}><span>当前位置</span>{editable ? <Input value={state.location ?? ""} onChange={(event) => updateState({ location: event.target.value })} /> : <strong>{valueOrFallback(state.location, "未知")}</strong>}</label>
+      <label data-change-state={changeState(state.emotional, compareState.emotional)}><span>当前情绪</span>{editable ? <Input value={state.emotional ?? ""} onChange={(event) => updateState({ emotional: event.target.value })} /> : <strong>{valueOrFallback(state.emotional, "未知")}</strong>}</label>
+      <label data-change-state={changeState(state.objective, compareState.objective)}><span>当前目标</span>{editable ? <Input value={state.objective ?? ""} onChange={(event) => updateState({ objective: event.target.value })} /> : <strong>{valueOrFallback(state.objective, "未设定")}</strong>}</label>
     </div>
 
     <div className="novel-character-card-grid">
-      <CharacterField label="核心欲望" value={details.desire} editable={editable} onChange={(desire) => updateDetails({ desire })} />
-      <CharacterField label="行动动机" value={details.motivation} editable={editable} onChange={(motivation) => updateDetails({ motivation })} />
-      <CharacterField label="性格与行为倾向" value={details.personality} editable={editable} onChange={(personality) => updateDetails({ personality })} />
-      <CharacterField label="弱点与代价" value={details.weakness} editable={editable} onChange={(weakness) => updateDetails({ weakness })} />
-      <CharacterField label="人物秘密" value={details.secret} editable={editable} onChange={(secret) => updateDetails({ secret })} />
-      <CharacterField label="人物弧光" value={details.arc} editable={editable} onChange={(arc) => updateDetails({ arc })} />
-      <CharacterField label="外貌与辨识度" value={details.appearance} editable={editable} onChange={(appearance) => updateDetails({ appearance })} />
-      <CharacterField label="语言与声音" value={details.voice} editable={editable} onChange={(voice) => updateDetails({ voice })} />
+      <CharacterField label="核心欲望" value={details.desire} compareValue={compareDetails.desire} comparing={comparing} editable={editable} onChange={(desire) => updateDetails({ desire })} />
+      <CharacterField label="行动动机" value={details.motivation} compareValue={compareDetails.motivation} comparing={comparing} editable={editable} onChange={(motivation) => updateDetails({ motivation })} />
+      <CharacterField label="性格与行为倾向" value={details.personality} compareValue={compareDetails.personality} comparing={comparing} editable={editable} onChange={(personality) => updateDetails({ personality })} />
+      <CharacterField label="弱点与代价" value={details.weakness} compareValue={compareDetails.weakness} comparing={comparing} editable={editable} onChange={(weakness) => updateDetails({ weakness })} />
+      <CharacterField label="人物秘密" value={details.secret} compareValue={compareDetails.secret} comparing={comparing} editable={editable} onChange={(secret) => updateDetails({ secret })} />
+      <CharacterField label="人物弧光" value={details.arc} compareValue={compareDetails.arc} comparing={comparing} editable={editable} onChange={(arc) => updateDetails({ arc })} />
+      <CharacterField label="外貌与辨识度" value={details.appearance} compareValue={compareDetails.appearance} comparing={comparing} editable={editable} onChange={(appearance) => updateDetails({ appearance })} />
+      <CharacterField label="语言与声音" value={details.voice} compareValue={compareDetails.voice} comparing={comparing} editable={editable} onChange={(voice) => updateDetails({ voice })} />
     </div>
 
     {(entity.tags?.length || details.abilities?.length) ? <footer>

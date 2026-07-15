@@ -1,0 +1,50 @@
+{
+  "id": "68934172-a012-40c0-920f-ec1afa05c36f",
+  "schemaVersion": 6,
+  "revision": 2,
+  "createdAt": 1784078782219,
+  "updatedAt": 1784078804263,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "title": "听雨剑",
+  "subtitle": "一柄锈剑，一段被遗忘的罪，一场向西而行的寻道",
+  "premise": "末法时代，剑修沈青衫醒来时已失去百年记忆，只记得自己曾一剑斩断了某座山。他随身一柄无名锈剑，锈迹剥落处隐隐露出前人姓名。每斩一剑，锈落一分，他便记起一段被自己亲手抹去的旧事——而那些旧事，多是他对不起的人。他一路向西寻道，沿途遇见旧友旧敌，却无人认得他。随着记忆复苏，他逐渐接近那个被岁月掩埋的真相：他曾以一己之力封印天地灵脉，断绝了一个时代的修行路，而锈剑之中封存的，正是他遗失的剑心。",
+  "genre": [
+    "仙侠",
+    "古典奇幻"
+  ],
+  "audience": "喜爱金庸、古龙、烽火戏诸侯风格的成人读者，偏好江湖气、人物群像、古典意境与复杂情感的长篇读者",
+  "themes": [
+    "记忆",
+    "罪赎",
+    "寻道",
+    "失去与重拾",
+    "个人选择与时代因果"
+  ],
+  "sellingPoints": [
+    "以失忆剑修寻找自身罪责为核心驱动力，将修行之路与心灵追问结合",
+    "通过锈剑斩落锈迹逐步揭开旧事，让每一次战斗都成为一次记忆与情感的回返",
+    "融合仙侠世界、江湖人情与时代兴亡，塑造有独立欲望与命运的群像人物",
+    "以古典山河、器物、风雪、旧人旧事承载情绪，强调留白与余韵"
+  ],
+  "pov": "有限第三人称",
+  "tense": "过去时",
+  "tone": "苍凉克制而偶有侠气，清冷底色中保留江湖温度与人物锋芒",
+  "languageStyle": "半文半白，追求中文意境美与古典美学。语言注重意象密度，以山河、器物、风雨、旧梦映照人物心境，通过动作、对白与留白承载情绪，避免直白宣告人物内心",
+  "targetWords": 300000,
+  "dailyGoal": 3000,
+  "status": "planning",
+  "coverColor": "#b5483a",
+  "settings": {
+    "textModel": "auto",
+    "temperature": 0.75,
+    "autoCommitFacts": false,
+    "contextBudget": 24000,
+    "recentChapterCount": 5,
+    "encrypted": false,
+    "contentProfile": "general-serial",
+    "maxAutoRevisions": 2,
+    "qualityThreshold": 3.7,
+    "approvalMode": "blueprint-and-manuscript"
+  }
+}

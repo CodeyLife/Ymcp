@@ -144,7 +144,6 @@ export function WorldviewLibraryPanel({ projectId }: { projectId: string }) {
         publicLabel: "",
         privateTruth: "",
         bond: "",
-        history: [],
       };
       await novelDb.relations.add(relation);
       await appendOperation(projectId, "relations", relation.id, "create", {

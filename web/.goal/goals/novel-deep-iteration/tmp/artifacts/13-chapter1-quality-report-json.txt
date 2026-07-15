@@ -1,0 +1,355 @@
+{
+  "id": "8fcf1150-568a-4e9e-88be-3f8cb4f5005f",
+  "projectId": "23429944-f89e-4a05-9056-f5416ff1dd19",
+  "schemaVersion": 6,
+  "revision": 1,
+  "createdAt": 1784078139031,
+  "updatedAt": 1784078139031,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "workflowRunId": "5d07740f-f82d-48d3-8614-797983375fd5",
+  "artifactId": "artifact:5d07740f-f82d-48d3-8614-797983375fd5:draft:0:draft",
+  "iteration": 0,
+  "scores": {
+    "plot": 3.77,
+    "characterVoice": 3.65,
+    "sceneEmbodiment": 3.77,
+    "dialogue": 3.65,
+    "pacing": 3.1,
+    "specificity": 3.56,
+    "hookPayoff": 3.4,
+    "continuity": 2.88
+  },
+  "weightedScore": 3.47,
+  "blockerCount": 4,
+  "passed": false,
+  "issues": [
+    {
+      "dimension": "continuity",
+      "severity": "blocker",
+      "title": "触发章节禁止事项",
+      "description": "不得揭露沈青衫就是封脉之人。",
+      "excerpt": "不得揭露沈青衫就是封脉之人。",
+      "rule": "chapter-blueprint.forbidden",
+      "suggestion": "移除该情节，或先修改并重新批准章节蓝图。",
+      "id": "a2e46b5b-acb9-41aa-a1cb-57dd8b1df7d8",
+      "deterministic": true
+    },
+    {
+      "dimension": "continuity",
+      "severity": "blocker",
+      "title": "触发章节禁止事项",
+      "description": "不得解释锈剑全部秘密。",
+      "excerpt": "不得解释锈剑全部秘密。",
+      "rule": "chapter-blueprint.forbidden",
+      "suggestion": "移除该情节，或先修改并重新批准章节蓝图。",
+      "id": "1ac2e588-fab9-4808-be97-47a135c5dcec",
+      "deterministic": true
+    },
+    {
+      "dimension": "continuity",
+      "severity": "blocker",
+      "title": "触发章节禁止事项",
+      "description": "不得让阿落直接认出沈青衫身份。",
+      "excerpt": "不得让阿落直接认出沈青衫身份。",
+      "rule": "chapter-blueprint.forbidden",
+      "suggestion": "移除该情节，或先修改并重新批准章节蓝图。",
+      "id": "6b448e56-d5f7-46d8-90a7-df35993aaa9c",
+      "deterministic": true
+    },
+    {
+      "dimension": "continuity",
+      "severity": "blocker",
+      "title": "触发章节禁止事项",
+      "description": "不得让沈青衫立即接受过去的罪责。",
+      "excerpt": "不得让沈青衫立即接受过去的罪责。",
+      "rule": "chapter-blueprint.forbidden",
+      "suggestion": "移除该情节，或先修改并重新批准章节蓝图。",
+      "id": "c1cdaf73-94e3-4319-9bdb-0b901d4ddd1f",
+      "deterministic": true
+    },
+    {
+      "dimension": "specificity",
+      "severity": "warning",
+      "title": "强调词贬值",
+      "description": "“忽然”出现 5 次，超过单章 2 次上限，强调效果贬值。",
+      "rule": "style.emphasis-devaluation",
+      "suggestion": "用具体事件呈现认知转变，或替换为不同表达，删除多余的强调。",
+      "id": "dbd2ec47-3514-4c2f-a98a-4998619538a1",
+      "deterministic": true
+    },
+    {
+      "dimension": "pacing",
+      "severity": "warning",
+      "title": "短句排比过多",
+      "description": "检测到 17 处连续短句排比，超过单章 2 处上限。",
+      "rule": "style.short-sentence-tic",
+      "suggestion": "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。",
+      "id": "64179c0f-ad11-4f33-9395-b287f0c5af7d",
+      "deterministic": true
+    },
+    {
+      "dimension": "specificity",
+      "severity": "warning",
+      "title": "金句收尾过密",
+      "description": "检测到 4 处格言式收尾，超过单章 3 处上限。",
+      "rule": "style.aphorism-density",
+      "suggestion": "将部分金句改为行动或沉默收尾，让行为本身承载主题。",
+      "id": "24fc95eb-ad23-4199-8eac-6c1c1e4ddc99",
+      "deterministic": true
+    },
+    {
+      "dimension": "continuity",
+      "severity": "major",
+      "title": "沈青衫失去修为后的情绪反应不足",
+      "description": "沈青衫对失去修为与过去的情绪反应偏弱，与前文呈现的巨大缺口感和承担一切的状态相比，当前表现更多是冷静接受，缺少面对空白时的压抑或自我防御。",
+      "excerpt": "他尝试感受体内力量，发现只剩微弱残存气息，随后“沈青衫没有失望太久”“只是沉默地将剑收入鞘中”。",
+      "paragraph": 34,
+      "revisionRanges": [
+        {
+          "start": 34,
+          "end": 37
+        }
+      ],
+      "rule": "人物重大经历后的情绪与行为应符合已呈现的人物状态和心理压力。",
+      "suggestion": "补充沈青衫面对力量缺失时的内在反应或防御性行为，使情绪变化与前文状态衔接。",
+      "id": "695926c5-5cca-4704-a8a3-c47adc4fafb0",
+      "deterministic": false
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "warning",
+      "title": "阿落对白的身份声音不足",
+      "description": "阿落部分对白的哲理表达较为直接，削弱了她作为盲眼琴师应有的含蓄感与个人表达特点，部分台词更像主题解释。",
+      "excerpt": "阿落说“看不见路的人，未必比看得见路的人走得差”。",
+      "paragraph": 58,
+      "revisionRanges": [
+        {
+          "start": 58,
+          "end": 63
+        }
+      ],
+      "rule": "角色对白应体现角色身份、经历和独特表达方式，而非只承担主题说明。",
+      "suggestion": "调整阿落对白的表达方式，让情绪和个人经历通过更自然的语言流露。",
+      "id": "43c21132-caa2-4bad-a790-82cc98780147",
+      "deterministic": false
+    },
+    {
+      "dimension": "continuity",
+      "severity": "major",
+      "title": "沈青衫与阿落关系推进过快",
+      "description": "两人初遇后的关系推进略快，沈青衫在缺乏记忆并保持警惕的状态下较快接受阿落同行，缺少从试探到暂时信任的行为过程。",
+      "excerpt": "沈青衫听见陌生脚步后立即警惕并握住剑柄，但随后仅经过简短交谈便进入共处状态。",
+      "paragraph": 46,
+      "revisionRanges": [
+        {
+          "start": 91,
+          "end": 95
+        }
+      ],
+      "rule": "人物关系变化应通过可观察的行为和互动过程逐步建立。",
+      "suggestion": "增加两人从警惕、试探到形成暂时合作的行为过渡。",
+      "id": "114f2a6b-f2fe-43fc-a22f-4b94f64ef4f4",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "warning",
+      "title": "离开山神庙后的环境描写推进不足",
+      "description": "沈青衫在第40-41段已经明确决定离开山神庙并踏上寻找过去的道路，但第42-45段新增的废弃屋舍、断碑观察属于离开后的环境展示，没有进一步推动新的剧情目标或信息。该段与蓝图要求的离开庙宇、进入西行古道一致，但场景功能偏弱，可压缩以保持开篇推进。",
+      "revisionRanges": [
+        {
+          "start": 42,
+          "end": 45
+        }
+      ],
+      "rule": "场景应服务于剧情目标推进、人物变化或关键信息释放。",
+      "suggestion": "压缩环境展示，将篇幅集中于离开山神庙后的新目标、冲突或有效信息。",
+      "id": "fd37b3d2-ddba-4a75-befe-c7e21f391429",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "warning",
+      "title": "初遇场景的未知感减弱",
+      "description": "阿落第一次登场符合蓝图要求，但第50段直接写明阿落早已察觉沈青衫存在且没有表现出来，使她对沈青衫的感知能力提前超过当前身份悬念所需。该信息虽然没有揭露旧日因果，但削弱了初遇中的未知感。",
+      "excerpt": "她没有立刻发现沈青衫。或者说，她早已察觉，却没有表现出来。",
+      "paragraph": 50,
+      "revisionRanges": [
+        {
+          "start": 50,
+          "end": 50
+        }
+      ],
+      "rule": "人物掌握的信息应符合当前叙事阶段，避免过早削弱悬念。",
+      "suggestion": "调整阿落察觉沈青衫的表达方式，保留感知异常但减少明确知晓感。",
+      "id": "50e52ccc-2cb1-4d7e-bf68-3087a0974ba3",
+      "deterministic": false
+    },
+    {
+      "dimension": "pacing",
+      "severity": "warning",
+      "title": "记忆线索释放过快",
+      "description": "第71-75段的琴曲触发记忆片段是章节核心节拍，但记忆内容直接出现关于遗忘原因的完整信息，使失忆原因线索推进较快。当前阶段只需推动沈青衫意识到过去可能与那一剑有关。",
+      "revisionRanges": [
+        {
+          "start": 71,
+          "end": 75
+        }
+      ],
+      "rule": "悬念线索应分阶段释放，避免过早接近解释性信息。",
+      "suggestion": "弱化记忆中的解释性内容，保留与那一剑相关的模糊感受和关键意象。",
+      "id": "36d3bda5-de94-4a4f-927b-a4bc57f01b0f",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "warning",
+      "title": "锈剑名字线索存在重复释放",
+      "description": "第95-98段的锈剑显名与蓝图章尾驱动力一致，但前文第21-22段已经展示剑身存在被遮掩的字迹，第96-98段再次以锈迹剥落、露出名字推进同一线索，形成同章内两次相似的名字显露过程。后一次属于章尾必要推进，应保留并调整前一次信息释放。",
+      "revisionRanges": [
+        {
+          "start": 21,
+          "end": 22
+        }
+      ],
+      "rule": "同一核心线索应避免在短篇幅内重复完成相同层级的信息揭示。",
+      "suggestion": "降低前一次字迹出现时的信息明确程度，使章尾显名承担主要揭示功能。",
+      "id": "adbfd7e3-d3f0-477f-8764-c520ee05cd25",
+      "deterministic": false
+    },
+    {
+      "dimension": "pacing",
+      "severity": "warning",
+      "title": "锈剑线索触发方式重复削弱推进速度",
+      "description": "第46-64段阿落登场并建立同行关系后，第71-86段再次通过琴曲触发沈青衫记忆与锈剑异常，功能上重复了前半章已经完成的“锈剑引发过去线索”。但该重复仍服务于阿落与旧日因果的悬念，没有形成第二套求生、冲突或资源获取流程，不构成中后段重新开场或第二个结尾。",
+      "revisionRanges": [
+        {
+          "start": 71,
+          "end": 86
+        }
+      ],
+      "rule": "检查章节节奏中的重复事件链，后出现的相似推进应避免削弱中段推进。",
+      "suggestion": "可调整后一次触发的功能，使其提供新的推进信息或冲突，而非重复已有线索触发。",
+      "id": "00207cbf-fcf1-45db-be61-002b72866de2",
+      "deterministic": false
+    },
+    {
+      "dimension": "pacing",
+      "severity": "warning",
+      "title": "连续完成多个信息目标后再次使用相似记忆触发",
+      "description": "第13-37段连续完成锈剑出现、异常回应、记忆闪回、确认失忆和修为残缺多个目标，随后第71-86段再次以阿落琴曲触发类似的记忆闪回与不安情绪。后一次触发虽然增加阿落线索，但推进方式与前一次高度相似，削弱章中段推进速度。",
+      "revisionRanges": [
+        {
+          "start": 71,
+          "end": 86
+        }
+      ],
+      "rule": "章节推进应避免同类信息重复触发，影响张弛和阶段回报。",
+      "suggestion": "可区分两次触发的叙事作用，让后一次事件承担不同的信息或冲突功能。",
+      "id": "c2b6a2cf-eda0-498b-99fb-ac6299f2a423",
+      "deterministic": false
+    },
+    {
+      "dimension": "continuity",
+      "severity": "major",
+      "title": "名字来源与失忆状态存在解释缺口",
+      "description": "第65段沈青衫说出“沈青衫”这个名字，并表现为名字从身体深处浮现。蓝图要求沈青衫只记得一剑斩山的画面，且失去百年记忆；正文此前第31-33段明确他没有名字、没有答案。此处未说明名字来源，可能与既定失忆状态产生边界冲突。",
+      "revisionRanges": [
+        {
+          "start": 64,
+          "end": 65
+        }
+      ],
+      "rule": "人物知识边界和既定失忆状态需要保持一致。",
+      "suggestion": "补充名字出现的依据或调整该段表现，避免与此前失忆设定冲突。",
+      "id": "59a07770-0af4-453a-872d-43f89ea7c485",
+      "deterministic": false
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "warning",
+      "title": "阿落感知能力缺少表现依据",
+      "description": "第48-50段阿落虽然设定为盲眼琴师，但她进入山神庙后能判断沈青衫存在，并在第60-63段准确感知锈剑异常。该能力与角色设定中能凭声音辨认天地变化相符，但正文未明确感知依据，容易削弱“盲眼”状态下的信息边界。",
+      "revisionRanges": [
+        {
+          "start": 50,
+          "end": 63
+        }
+      ],
+      "rule": "角色能力表现应符合人物信息边界，并在正文中体现依据。",
+      "suggestion": "增加感知过程或细节，让阿落的信息来源更清晰。",
+      "id": "5638cff3-6032-42ff-8463-2c35ecb91c30",
+      "deterministic": false
+    },
+    {
+      "dimension": "hookPayoff",
+      "severity": "warning",
+      "title": "身份悬念揭示过早",
+      "description": "章节目标要求阿落出现后保留身份悬念，不提前揭露她与沈青衫旧日因果。正文第72-80段通过琴曲、第74段陌生声音以及第80段旧人留下琴曲，已经明确暗示阿落与百年前事件存在直接关联，悬念强度下降。",
+      "revisionRanges": [
+        {
+          "start": 71,
+          "end": 80
+        }
+      ],
+      "rule": "章节悬念应按照承诺节奏逐步兑现，避免过早揭示关键关联。",
+      "suggestion": "可保留线索但降低直接关联的信息量，延后确认。",
+      "id": "6e21b2c2-c150-48ca-bcd8-832a7d127dec",
+      "deterministic": false
+    },
+    {
+      "dimension": "hookPayoff",
+      "severity": "warning",
+      "title": "章尾主题收束削弱具体线索驱动力",
+      "description": "章节章尾驱动力要求沈青衫带着锈剑姓名线索踏上寻找过去的道路。第96-101段完成该目标，但第101段新增“看不见前路的琴师”“埋在旧土里的种子”等总结性收束，使结尾从具体锈剑线索延伸为较完整的主题收束，削弱了未解决悬念的推动感。",
+      "revisionRanges": [
+        {
+          "start": 101,
+          "end": 101
+        }
+      ],
+      "rule": "章尾应强化下一阶段驱动力，避免在悬念未解决时过度总结。",
+      "suggestion": "可减少总结性收束，保留锈剑线索带来的行动动力。",
+      "id": "670b205d-dbfa-4ec2-a95b-09020001e1cf",
+      "deterministic": false
+    },
+    {
+      "dimension": "specificity",
+      "severity": "warning",
+      "title": "解释性总结句重复影响留白",
+      "description": "第69-70段、第81-82段、第85-86段连续使用解释性总结句，重复强调“过去无人提起”“锈剑记得更多”“等待想起”等同类信息。与前文意象表达相比，降低了留白效果。",
+      "revisionRanges": [
+        {
+          "start": 69,
+          "end": 70
+        },
+        {
+          "start": 81,
+          "end": 86
+        }
+      ],
+      "rule": "场景表达应避免重复解释已由意象呈现的信息。",
+      "suggestion": "可删减部分总结句，将信息留给动作、物件或场景细节承载。",
+      "id": "44edba62-c435-48de-b656-5eb84cb7678b",
+      "deterministic": false
+    }
+  ],
+  "metrics": {
+    "characters": 3788,
+    "paragraphs": 101,
+    "dialogueRatio": 0.104,
+    "paragraphVariation": 0.478,
+    "singleSentenceNarrativeRatio": 0.011,
+    "maxConsecutiveSingleSentenceNarrative": 1,
+    "templateHits": 0,
+    "imageryDensity": 117
+  },
+  "reviewerRoles": [
+    "style-reviewer",
+    "character-reviewer",
+    "continuity-reviewer",
+    "plot-reviewer",
+    "pacing-reviewer"
+  ]
+}

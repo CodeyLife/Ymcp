@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createChapter, createNovelProject, novelDb, recordBase } from "../db";
 import { approveWorkflowStage, BUILTIN_CHAPTER_WORKFLOW, shouldAutoRevise } from "../workflow";
+import { asBlueprint, blueprintMarkdown, blueprintSchema } from "../workflow-shared";
 import type { WorkflowRun } from "../types";
 
 beforeEach(async () => {
@@ -10,11 +11,34 @@ beforeEach(async () => {
 });
 
 describe("chapter workflow policy", () => {
+  it("uses the system 3000-word default instead of an LLM blueprint field", () => {
+    const modelBlueprint = {
+      title: "第一章",
+      objective: "找到失踪者",
+      startingState: "雨夜",
+      beats: [{ action: "进入车站", emotion: "警惕", outcome: "发现血迹" }],
+      endingHook: "广播叫出主角名字",
+      characters: [],
+      locations: [],
+      informationRelease: [],
+      mustHappen: [],
+      flexible: [],
+      forbidden: [],
+      targetWords: 9000,
+    };
+
+    expect(blueprintSchema.required).not.toContain("targetWords");
+    expect(blueprintSchema.properties).not.toHaveProperty("targetWords");
+    expect(asBlueprint(modelBlueprint).targetWords).toBe(5000);
+    expect(blueprintMarkdown(modelBlueprint)).toContain("## 目标字数\n5000 字");
+  });
+
   it("has the two mandatory human gates in the canonical order", () => {
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("blueprint-approval")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("draft"));
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("manuscript-approval")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-extraction"));
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-extraction")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-approval"));
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-approval")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("commit"));
+    expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("commit")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("character-enrichment"));
   });
 
   it("stops after the configured limit or when improvement plateaus", () => {

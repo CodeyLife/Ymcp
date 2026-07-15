@@ -12,8 +12,8 @@ beforeEach(async () => {
 });
 
 describe("db-schema constants", () => {
-  it("DB_VERSION is 11", () => {
-    expect(DB_VERSION).toBe(11);
+  it("DB_VERSION is 14", () => {
+    expect(DB_VERSION).toBe(14);
   });
 
   it("RECORD_SCHEMA_VERSION is 6", () => {
@@ -165,7 +165,7 @@ describe("database v9 schema", () => {
     const character = { ...recordBase(project.id), id: "import-character", kind: "character", name: "导入角色", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {} };
     const thread = { ...recordBase(project.id), id: "import-thread", kind: "main", title: "导入主线", summary: "", status: "planned", priority: 50, participantIds: [character.id, "missing-entity"], progress: 0, nextMove: "" };
     const clue = { ...recordBase(project.id), id: "import-clue", title: "导入伏笔", clue: "", truth: "", status: "seeded", urgency: 50, notes: "" };
-    const outline = { ...recordBase(project.id), id: "import-outline", kind: "event", title: "导入事件", summary: "", order: 0, status: "planned", causality: "", outcome: "", characterIds: [character.id, "missing-character"], plotThreadIds: [thread.id, "missing-thread"], foreshadowingIds: [clue.id, "human_rule_foreshadowing"], tension: 70, emotion: 60, information: 50, tags: [] };
+    const outline = { ...recordBase(project.id), id: "import-outline", kind: "event", title: "导入事件", summary: "", order: 0, status: "planned", characterIds: [character.id, "missing-character"], plotThreadIds: [thread.id, "missing-thread"], foreshadowingIds: [clue.id, "human_rule_foreshadowing"], tension: 70, emotion: 60, information: 50, tags: [] };
     const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 8 }, project, entities: [character], plotThreads: [thread], foreshadowing: [clue], outlineNodes: [outline] }) } as File;
 
     await importNovel(file);
@@ -454,8 +454,6 @@ describe("database v9 schema", () => {
       summary: "",
       order: 0,
       status: "planned",
-      causality: "",
-      outcome: "",
       characterIds: [],
       plotThreadIds: [],
       foreshadowingIds: [],
@@ -469,8 +467,6 @@ describe("database v9 schema", () => {
       summary: "",
       order: 1,
       status: "resolved",
-      causality: "",
-      outcome: "",
       characterIds: [],
       plotThreadIds: [],
       foreshadowingIds: [],

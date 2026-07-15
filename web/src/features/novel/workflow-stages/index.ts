@@ -1,6 +1,7 @@
 import { registerApprovalHandler, registerStageHandler } from "../workflow-stages";
 import { blueprintStageHandler } from "./blueprint-stage";
 import { blueprintApprovalHandler } from "./blueprint-approval";
+import { characterEnrichmentStageHandler } from "./character-enrichment-stage";
 import { commitStageHandler } from "./commit-stage";
 import { contextStageHandler } from "./context-stage";
 import { deterministicCheckStageHandler } from "./deterministic-check-stage";
@@ -25,6 +26,7 @@ export function registerAllHandlers(): void {
   registerStageHandler(revisionStageHandler);
   registerStageHandler(factExtractionStageHandler);
   registerStageHandler(commitStageHandler);
+  registerStageHandler(characterEnrichmentStageHandler);
 
   // 审批类 stage（approveWorkflowStage 调度）
   registerApprovalHandler(blueprintApprovalHandler);

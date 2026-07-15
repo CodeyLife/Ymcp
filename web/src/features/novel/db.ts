@@ -37,7 +37,7 @@ import type {
   WorkflowRun,
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
-import { cleanupReferenceIntegrity, migrateLegacyProposal, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES } from "./db-schema";
+import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateOutlineBeatFields, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -118,6 +118,9 @@ export class NovelDatabase extends Dexie {
     this.version(9).stores(V9_STORES);
     this.version(10).stores(V10_STORES);
     this.version(11).stores(V11_STORES).upgrade(cleanupReferenceIntegrity);
+    this.version(12).stores(V12_STORES).upgrade(migrateOutlineBeatFields);
+    this.version(13).stores(V13_STORES).upgrade(cleanupPollutedMemorySummaries);
+    this.version(14).stores(V14_STORES).upgrade(cleanupApprovalMetaPollution);
   }
 }
 
@@ -507,7 +510,7 @@ export async function addEntity(projectId: string, kind: StoryEntity["kind"], na
     tags: [],
     lockedFacts: [],
     attributes: {},
-    ...(kind === "character" ? { character: { role: "配角", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", knowledge: { known: [], suspected: [], mistaken: [], unknown: [] }, state: { location: "", physical: "正常", emotional: "平静", objective: "", inventory: [], relationshipNotes: [] } } } : {}),
+    ...(kind === "character" ? { character: { role: "配角", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", state: { location: "", physical: "正常", emotional: "平静", objective: "", inventory: [], relationshipNotes: [] } } } : {}),
   };
   await novelDb.transaction("rw", novelDb.entities, novelDb.operations, async () => {
     await novelDb.entities.add(entity);
@@ -540,7 +543,7 @@ function triggerEntityEmbedding(entity: StoryEntity): void {
 }
 
 export async function addOutlineNode(projectId: string, parentId: string | undefined, kind: OutlineNode["kind"], title: string, order: number) {
-  const node: OutlineNode = { ...recordBase(projectId), parentId, kind, title, summary: "", order, status: "idea", causality: "", outcome: "", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [] };
+  const node: OutlineNode = { ...recordBase(projectId), parentId, kind, title, summary: "", order, status: "idea", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [] };
   await novelDb.outlineNodes.add(node);
   await appendOperation(projectId, "outlineNodes", node.id, "create", { title: { before: null, after: title } });
   // 异步触发 embedding 更新
@@ -573,8 +576,10 @@ export async function deleteOutlineBranch(projectId: string, nodeId: string) {
   return removed;
 }
 
-export function emptyChapterBlueprint(targetWords = 3000) {
-  return { objective: "", locationIds: [], characterIds: [], conflict: "", informationRelease: [], turningPoint: "", hook: "", mustHappen: [], flexible: [], forbidden: [], targetWords };
+export const DEFAULT_CHAPTER_TARGET_WORDS = 5000;
+
+export function emptyChapterBlueprint(targetWords = DEFAULT_CHAPTER_TARGET_WORDS) {
+  return { objective: "", locationIds: [], characterIds: [], conflict: "", informationRelease: [], mustHappen: [], flexible: [], forbidden: [], targetWords };
 }
 
 export async function createChapter(projectId: string, title?: string) {

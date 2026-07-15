@@ -44,8 +44,7 @@ function ProposalNodeRow({
         <Tag color={KIND_COLOR[node.kind]}>{KIND_LABEL[node.kind]}</Tag>
         <div className="novel-outline-proposal-copy">
           <strong>{node.title}</strong>
-          <p>{node.summary || "尚未填写概要"}</p>
-          {(node.causality || node.outcome) && <div className="novel-outline-proposal-causality"><span><i>因为</i>{node.causality || "待补充"}</span><span><i>导致</i>{node.outcome || "待补充"}</span></div>}
+          <p className="novel-outline-proposal-summary">{node.summary || "尚未填写概要"}</p>
           {refs.length > 0 && <div className="novel-outline-proposal-refs">{refs.slice(0, 6).map((label, index) => <Tag key={`${label}-${index}`}>{label}</Tag>)}{refs.length > 6 && <small>+{refs.length - 6}</small>}</div>}
         </div>
         <small className="novel-outline-proposal-order">{String(node.order + 1).padStart(2, "0")}</small>
@@ -135,9 +134,9 @@ export default function OutlineProposalReview({
 
   function discard(regenerate = false) {
     modal.confirm({
-      title: regenerate ? "放弃当前候选并重新生成？" : "放弃当前候选大纲？",
+      title: regenerate ? "放弃当前候选并重新生成？" : "关闭当前候选大纲？",
       content: "正式大纲不会发生变化。",
-      okText: regenerate ? "重新生成" : "放弃候选",
+      okText: regenerate ? "重新生成" : "关闭",
       okButtonProps: { danger: !regenerate },
       onOk: async () => {
         await rejectProposal(proposal.id);
@@ -159,7 +158,7 @@ export default function OutlineProposalReview({
         {analysis.roots.map((root) => <ProposalNodeRow key={root.id} node={root} nodes={analysis.nodes} selected={selected} onToggle={toggleNode} entities={entities} threads={threads} clues={clues} />)}
       </div>
       <footer className="novel-outline-review-footer">
-        <div><Button danger icon={<CloseOutlined />} disabled={busy} onClick={() => discard(false)}>放弃候选</Button><Button icon={<ReloadOutlined />} disabled={busy} onClick={() => discard(true)}>退回并重新生成</Button></div>
+        <div><Button icon={<CloseOutlined />} disabled={busy} onClick={() => discard(false)}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy} onClick={() => discard(true)}>退回并重新生成</Button></div>
         <Button type="primary" size="large" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.size || uniqueErrors.length > 0} onClick={() => void apply()}>采纳完整大纲</Button>
       </footer>
     </section>

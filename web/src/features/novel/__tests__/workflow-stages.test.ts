@@ -3,7 +3,7 @@ import "../workflow"; // 触发 handler 注册（副作用：import "./workflow-
 import { APPROVAL_HANDLERS, STAGE_HANDLERS } from "../workflow-stages";
 
 describe("workflow stage handler registry", () => {
-  it("registers all 8 execution stage handlers", () => {
+  it("registers all 9 execution stage handlers", () => {
     const expectedStages = [
       "context",
       "blueprint",
@@ -13,12 +13,13 @@ describe("workflow stage handler registry", () => {
       "revision",
       "fact-extraction",
       "commit",
+      "character-enrichment",
     ] as const;
     for (const stage of expectedStages) {
       expect(STAGE_HANDLERS.has(stage)).toBe(true);
       expect(STAGE_HANDLERS.get(stage)?.stage).toBe(stage);
     }
-    expect(STAGE_HANDLERS.size).toBeGreaterThanOrEqual(8);
+    expect(STAGE_HANDLERS.size).toBeGreaterThanOrEqual(9);
   });
 
   it("registers all 3 approval stage handlers", () => {

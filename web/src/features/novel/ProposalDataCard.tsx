@@ -4,7 +4,7 @@ const FIELD_LABELS: Record<string, string> = {
   kind: "类型", title: "标题", name: "名称", summary: "摘要", description: "说明",
   order: "顺序", status: "状态", centralQuestion: "核心命题", centralConflict: "核心冲突",
   phases: "结构阶段",
-  theme: "主题", genre: "题材", tone: "基调", causality: "因果", outcome: "结果",
+  theme: "主题", genre: "题材", tone: "基调", outcome: "结果",
   objective: "目标", conflict: "冲突", turningPoint: "转折", hook: "钩子",
   targetWords: "目标字数", informationRelease: "信息释放", mustHappen: "必须发生",
   flexible: "可调整", forbidden: "禁止事项", characterIds: "关联角色", locationIds: "关联地点",
@@ -22,16 +22,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function FriendlyValue({ value, editable, onChange, depth = 0 }: { value: unknown; editable: boolean; onChange: (value: unknown) => void; depth?: number }) {
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((item, index) => valuesEqual(item, right[index]));
+  if (isRecord(left) && isRecord(right)) {
+    const keys = Object.keys(left);
+    return keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key) && valuesEqual(left[key], right[key]));
+  }
+  return false;
+}
+
+function FriendlyValue({ value, compareValue, comparing = false, editable, onChange, depth = 0 }: { value: unknown; compareValue?: unknown; comparing?: boolean; editable: boolean; onChange: (value: unknown) => void; depth?: number }) {
   if (Array.isArray(value)) {
     const stringList = value.every((item) => typeof item === "string");
     if (stringList) return editable
       ? <Select mode="tags" value={value.map(String)} onChange={onChange} open={false} tokenSeparators={[",", "，"]} placeholder="暂无内容" />
       : <div className="novel-data-tags">{value.length ? value.map((item, index) => <span key={`${String(item)}-${index}`}>{String(item)}</span>) : <em>暂无内容</em>}</div>;
-    return <div className="novel-data-list">{value.map((item, index) => <section key={index}><header>第 {index + 1} 项</header><FriendlyValue value={item} editable={editable} depth={depth + 1} onChange={(next) => onChange(value.map((current, itemIndex) => itemIndex === index ? next : current))} /></section>)}</div>;
+    return <div className="novel-data-list">{value.map((item, index) => <section key={index}><header>第 {index + 1} 项</header><FriendlyValue value={item} compareValue={Array.isArray(compareValue) ? compareValue[index] : undefined} comparing={comparing} editable={editable} depth={depth + 1} onChange={(next) => onChange(value.map((current, itemIndex) => itemIndex === index ? next : current))} /></section>)}</div>;
   }
   if (isRecord(value)) {
-    return <div className={`novel-data-object depth-${Math.min(depth, 2)}`}>{Object.entries(value).map(([key, item]) => <div key={key} className={`novel-data-field${isRecord(item) || Array.isArray(item) && item.some(isRecord) ? " wide" : ""}`}><span>{fieldLabel(key)}</span><FriendlyValue value={item} editable={editable} depth={depth + 1} onChange={(next) => onChange({ ...value, [key]: next })} /></div>)}</div>;
+    return <div className={`novel-data-object depth-${Math.min(depth, 2)}`}>{Object.entries(value).map(([key, item]) => {
+      const compared = isRecord(compareValue) ? compareValue[key] : undefined;
+      return <div key={key} data-change-state={comparing ? valuesEqual(item, compared) ? "unchanged" : "changed" : undefined} className={`novel-data-field${isRecord(item) || Array.isArray(item) && item.some(isRecord) ? " wide" : ""}`}><span>{fieldLabel(key)}</span><FriendlyValue value={item} compareValue={compared} comparing={comparing} editable={editable} depth={depth + 1} onChange={(next) => onChange({ ...value, [key]: next })} /></div>;
+    })}</div>;
   }
   if (typeof value === "boolean") return editable ? <Switch checked={value} onChange={onChange} /> : <strong>{value ? "是" : "否"}</strong>;
   if (typeof value === "number") return editable ? <InputNumber value={value} onChange={(next) => onChange(next ?? 0)} /> : <strong>{value}</strong>;
@@ -44,6 +57,6 @@ function FriendlyValue({ value, editable, onChange, depth = 0 }: { value: unknow
   return <p>{value == null || value === "" ? "尚未设定" : String(value)}</p>;
 }
 
-export default function ProposalDataCard({ value, editable = false, onChange }: { value: Record<string, unknown>; editable?: boolean; onChange?: (value: Record<string, unknown>) => void }) {
-  return <div className="novel-proposal-data-card"><FriendlyValue value={value} editable={editable} onChange={(next) => { if (isRecord(next)) onChange?.(next); }} /></div>;
+export default function ProposalDataCard({ value, compareTo, editable = false, onChange }: { value: Record<string, unknown>; compareTo?: Record<string, unknown>; editable?: boolean; onChange?: (value: Record<string, unknown>) => void }) {
+  return <div className="novel-proposal-data-card"><FriendlyValue value={value} compareValue={compareTo} comparing={Boolean(compareTo)} editable={editable} onChange={(next) => { if (isRecord(next)) onChange?.(next); }} /></div>;
 }

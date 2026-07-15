@@ -1,4 +1,5 @@
-import { get, set, createStore } from "idb-keyval";
+import { get, set } from "idb-keyval";
+import { createRepairingStore } from "./indexedDbStore";
 
 /**
  * 超分模型缓存层
@@ -8,7 +9,7 @@ import { get, set, createStore } from "idb-keyval";
  * 支持多源 fallback，适配国内网络环境。
  */
 
-const modelStore = createStore("ymcp-model-db", "models");
+const modelStore = createRepairingStore("ymcp-model-db", "models");
 
 const MODEL_KEY = "realesrgan-x4plus";
 const MODEL_VERSION_KEY = "realesrgan-x4plus-version";

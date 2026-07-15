@@ -15,7 +15,7 @@ function item(id: string, tempId: string, kind: OutlineNode["kind"], parentId?: 
     operation: "create",
     targetTable: "outlineNodes",
     status: "pending",
-    payload: { kind, title: tempId, summary: "概要", causality: "原因", outcome: "结果", order, ...(parentId ? { parentId } : {}) },
+    payload: { kind, title: tempId, summary: "概要", order, ...(parentId ? { parentId } : {}) },
     rationale: "测试",
     dependencies: [],
   };
