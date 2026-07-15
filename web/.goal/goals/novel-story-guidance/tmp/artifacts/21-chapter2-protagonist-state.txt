@@ -1,6 +1,0 @@
-角色：沈默川（主角）
-state: {"location":"","physical":"","emotional":"在保存他人存在与维持自身记忆之间挣扎。","objective":"追查城市名字消失事件的真相。","inventory":["无人借阅的旧登记册"],"relationshipNotes":[],"lastChangedChapterId":""}
-
-knowledge: {"known":["自己能够记住被遗忘名字。"],"suspected":["自己与名字消失机制存在未知关联。"],"mistaken":["认为保存所有人的名字就能拯救他们。"],"unknown":["过去接触名字消失机制的完整经历。"]}
-
-lockedFacts: ["拥有记住被遗忘名字的能力。","每保存一个名字会失去一段自身记忆。","与名字消失机制存在未知关联。"]

@@ -93,15 +93,11 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   for (const forbidden of params.blueprint?.forbidden ?? []) {
     if (forbidden && containsMeaning(text, forbidden)) issues.push(issue({ dimension: "continuity", severity: "blocker", title: "触发章节禁止事项", description: forbidden, excerpt: forbidden, rule: "chapter-blueprint.forbidden", suggestion: "移除该情节，或先修改并重新批准章节蓝图。" }));
   }
-  for (const required of params.blueprint?.mustHappen ?? []) {
-    // R4: containsMeaning bigram 匹配对含标点的复合要求（如"听潮阁屠门夜必须呈现，但不提前揭示幕后真相"）
-    // 有高误报率（措辞不同即判漏）。降级为 major 而非 blocker：
-    // - blockerCount 只反映真实阻断（forbidden 触发等），使 qualityReport.passed 可信
-    // - revision-stage 仍特判过滤 deterministic mustHappen，不影响 LLM 修订
-    // - LLM reviewer (plot-reviewer) 独立检查节拍是否遗漏，可标 major/blocker
-    if (required && !containsMeaning(text, required)) issues.push(issue({ dimension: "plot", severity: "major", title: "遗漏必须发生的节拍", description: required, rule: "chapter-blueprint.mustHappen", suggestion: "补写能明确落实该节拍的行动与结果。" }));
-  }
-  if (totalChars < 300) issues.push(issue({ dimension: "plot", severity: "major", title: "正文过短", description: "当前文本不足以形成完整章节推进。", rule: "chapter.minimum-substance", suggestion: "依据蓝图补齐场景行动、反应与结果。" }));
+  // mustHappen 节拍检查已移除：containsMeaning bigram 匹配对文学化措辞（同义词/改写）误报率过高。
+  // 第3章 E2E 验证：5 个 mustHappen major issue 全部为误报（节拍已在文中落地，仅措辞不同）。
+  // LLM plot-reviewer 独立检查节拍遗漏，比确定性 bigram 匹配更准确，且能识别文学化表达。
+  // forbidden 检查保留（blocker 级，forbidden 触发是真实阻断）。
+  if (totalChars < 300) issues.push(issue({ dimension: "plot", severity: "major", title: "正文过短", description: "当前文本不足以形成完整章节体验。", rule: "chapter.minimum-substance", suggestion: "依据本章主导功能，补足场景、人物体验、关系过程或必要行动。" }));
   if (blocks.length >= 6 && paragraphVariation < 0.18) issues.push(issue({ dimension: "pacing", severity: "warning", title: "段落节奏过于均匀", description: "段落长度变化很小，可能产生模型化节奏。", rule: "style.paragraph-variation", suggestion: "按动作速度和情绪停顿重新划分段落，而非机械打散。" }));
   if (totalChars > 0 && templateHits / totalChars * 1000 > 2) issues.push(issue({ dimension: "specificity", severity: "warning", title: "模板化表达偏多", description: `检测到 ${templateHits} 处常见模板表达。`, rule: "style.template-density", suggestion: "结合人物身体状态、环境和具体目标替换重复动作。" }));
   const openings = blocks.map((block) => block.slice(0, 8));
@@ -112,8 +108,6 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       break;
     }
   }
-  const ending = blocks.at(-1) ?? "";
-  if (ending && ending.length < 12) issues.push(issue({ dimension: "hookPayoff", severity: "warning", title: "章尾驱动力较弱", description: "最后一段过短且缺少可识别的决定、代价或认知变化。", excerpt: ending, paragraph: blocks.length, rule: "serial.ending-drive", suggestion: "让结尾留下新的行动方向、代价、危险或认知缺口。" }));
 
   for (const word of EMPHASIS_WORDS) {
     const hits = countOccurrences(text, word);
@@ -265,5 +259,5 @@ export async function saveQualityReport(params: {
 }
 
 export const QUALITY_DIMENSION_LABELS: Record<QualityDimension, string> = {
-  plot: "剧情推进", characterVoice: "人物声音", sceneEmbodiment: "场景具象", dialogue: "对白", pacing: "节奏", specificity: "语言具体性", hookPayoff: "钩子与回报", continuity: "连续性",
+  plot: "叙事组织", characterVoice: "人物声音", sceneEmbodiment: "场景具象", dialogue: "对白", pacing: "节奏", specificity: "语言具体性", hookPayoff: "悬念与余韵", continuity: "连续性",
 };

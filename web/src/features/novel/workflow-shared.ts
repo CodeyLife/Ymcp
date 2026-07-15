@@ -49,7 +49,7 @@ export const blueprintSchema = {
   required: ["title", "objective", "startingState", "beats", "endingHook", "characters", "locations", "informationRelease", "mustHappen", "flexible", "forbidden"],
   properties: {
     title: { type: "string" }, objective: { type: "string" }, startingState: { type: "string" },
-    beats: { type: "array", minItems: 4, maxItems: 10, items: { type: "object", additionalProperties: false, required: ["action", "emotion", "outcome"], properties: { action: { type: "string" }, emotion: { type: "string" }, outcome: { type: "string" } } } },
+    beats: { type: "array", minItems: 2, maxItems: 8, items: { type: "object", additionalProperties: false, required: ["action", "emotion", "outcome"], properties: { action: { type: "string" }, emotion: { type: "string" }, outcome: { type: "string" } } } },
     endingHook: { type: "string" }, characters: { type: "array", items: { type: "string" } }, locations: { type: "array", items: { type: "string" } },
     informationRelease: { type: "array", items: { type: "string" } }, mustHappen: { type: "array", items: { type: "string" } }, flexible: { type: "array", items: { type: "string" } }, forbidden: { type: "array", items: { type: "string" } },
   },
@@ -62,7 +62,7 @@ export const reviewerSchema = {
   properties: {
     scores: { type: "object", additionalProperties: false, properties: Object.fromEntries(qualityDimensions.map((item) => [item, { type: "number", minimum: 0, maximum: 5 }])) },
     issues: { type: "array", items: { type: "object", additionalProperties: false, required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion"], properties: {
-      dimension: { enum: qualityDimensions }, severity: { enum: ["blocker", "major", "warning"] }, title: { type: "string" }, description: { type: "string" }, excerpt: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, revisionRanges: { type: "array", items: { type: "object", additionalProperties: false, required: ["start", "end"], properties: { start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 } } } }, rule: { type: "string" }, sourceId: { type: "string" }, suggestion: { type: "string" },
+      dimension: { enum: qualityDimensions }, severity: { enum: ["blocker", "major", "warning"] }, title: { type: "string" }, description: { type: "string" }, excerpt: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, revisionRanges: { type: "array", items: { type: "object", additionalProperties: false, required: ["start", "end"], properties: { start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 } } } }, rule: { type: "string" }, sourceId: { type: "string" }, suggestion: { type: "string" }, rewriteExample: { type: "string" },
     } } },
   },
 };

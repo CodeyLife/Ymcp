@@ -1,7 +1,0 @@
-期望事实关键词：沈默, 周迟, 林见夏, 记忆, 名字
-找到：沈默, 林见夏, 记忆, 名字
-覆盖率：4/5
-
-Packet 来源类型：instruction, skill, document, style, entity, thread, foreshadowing, architecture, outline
-Packet 来源数量：31
-Packet token 估计：7954

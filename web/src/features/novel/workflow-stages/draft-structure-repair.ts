@@ -140,24 +140,29 @@ function mergeFragmentedParagraphs(text: string): string {
 /**
  * 检测并截断"第二个结尾"重复。
  *
- * LLM 在长文本生成末尾系统性重述前文场景，形成"第二个结尾"：
- * 在章尾驱动力（短段序列）形成后，又展开 3+ 个长叙事段重新推进事件链。
+ * LLM 在长文本生成末尾系统性重述前文场景，形成"第二个结尾"。两种检测模式：
  *
- * 检测模式（从末尾向前扫描）：
- * 1. 找到最后一个长段（≥100 字符，非对白）的位置 longSeqEnd
- * 2. 从 longSeqEnd 向前找到连续长段序列起始位置 longSeqStart
- * 3. 长段序列长度 ≥3 且总字符数 ≥300
- * 4. 长段序列与前文同长度窗口的二元组相似度至少为 55%
+ * 模式一（长段序列）：在章尾驱动力（短段序列）形成后，又展开 3+ 个长叙事段重新推进事件链。
+ * 检测：从末尾向前扫描，找到连续长段序列（≥100 字符/段，≥3 段，总 ≥300 字符），
+ * 与前文同长度窗口的二元组相似度 ≥0.55 则截断。
  *
- * 截断策略：只删除已确认重复的尾部长段序列及其后的尾声。
+ * 模式二（短段序列，R8+R14）：章尾以 4+ 短段（<100 字符）重述已解决的主题。
+ * R8 仅检测纯短叙事段；R14 扩展到包含短对白段的混合序列——第二个结尾常含
+ * "原来线索在这里。"等短对白，打断纯叙事序列导致 R8 漏检。
+ * 检测：保留前 2 个短段，从第 3 个开始逐段检查与前文整体的二元组相似度，
+ * ≥0.15 且 tail ≥3 段则截断。
+ *
+ * 截断策略：只删除已确认重复的尾部序列。
  */
 export function truncateTrailingSecondEnding(text: string): { truncated: boolean; content: string; removedChars: number } {
   const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (paragraphs.length < 8) return { truncated: false, content: text, removedChars: 0 };
 
   const isLong = (p: string) => !isDialogueParagraph(p) && p.length >= 100;
+  // R14：短段序列检测扩展到包含短对白段——第二个结尾常含"原来线索在这里。"等短对白
+  const isShortAny = (p: string) => !isFormattingLine(p) && p.length < 100;
 
-  // 从末尾向前扫描，找到最后一个长段
+  // ===== 模式一：长段序列第二个结尾 =====
   let longSeqEnd = -1;
   for (let i = paragraphs.length - 1; i >= 0; i--) {
     if (isLong(paragraphs[i])) {
@@ -165,195 +170,70 @@ export function truncateTrailingSecondEnding(text: string): { truncated: boolean
       break;
     }
   }
-  if (longSeqEnd === -1) return { truncated: false, content: text, removedChars: 0 };
 
-  // 从 longSeqEnd 向前扫描，找到连续长段序列起始位置
-  let longSeqStart = longSeqEnd;
-  for (let i = longSeqEnd - 1; i >= 0; i--) {
-    if (isLong(paragraphs[i])) {
-      longSeqStart = i;
-    } else {
-      break;
-    }
-  }
-
-  const longSeqLength = longSeqEnd - longSeqStart + 1;
-  if (longSeqLength < 3) return { truncated: false, content: text, removedChars: 0 };
-
-  // 长段序列总字符数
-  const longSeqChars = paragraphs.slice(longSeqStart, longSeqEnd + 1).reduce((sum, p) => sum + p.length, 0);
-  if (longSeqChars < 300) return { truncated: false, content: text, removedChars: 0 };
-
-  const trailingText = normalizedParagraph(paragraphs.slice(longSeqStart, longSeqEnd + 1).join(""));
-  let repeated = false;
-  for (let start = 0; start + longSeqLength <= longSeqStart; start += 1) {
-    const earlierText = normalizedParagraph(paragraphs.slice(start, start + longSeqLength).join(""));
-    if (earlierText.length >= 80 && bigramSimilarity(earlierText, trailingText) >= 0.55) {
-      repeated = true;
-      break;
-    }
-  }
-  if (!repeated) return { truncated: false, content: text, removedChars: 0 };
-
-  const totalChars = paragraphs.reduce((sum, p) => sum + p.length, 0);
-  const surviving = paragraphs.slice(0, longSeqStart);
-  const removedChars = totalChars - surviving.reduce((sum, p) => sum + p.length, 0);
-  return {
-    truncated: true,
-    content: surviving.join("\n\n"),
-    removedChars,
-  };
-}
-
-/**
- * 确定性删除作者式心理结论句。
- *
- * LLM 系统性在行动之后插入替读者总结人物认知或章节意义的句子，
- * 如"她第一次知道，离开一座山门，不一定需要有人赶"。
- * 这类句子打破有限第三人称视角，把"成长"直接宣告给读者，
- * 是中文小说 AI 味最典型的表现之一。
- *
- * 检测模式（仅在非对白叙事段中匹配）：
- * - "她第一次知道/明白/意识到/看清/感到/懂得……"
- * - "她忽然/突然/终于/这才 懂得/明白/看清/意识到/知道……"
- * - "这意味着/这说明/这代表着……"
- * - "也就是说/换句话说/归根结底/说到底……"
- * - "她知道，……若/如果/一旦/只要……"（替读者解释动机）
- *
- * 修复策略：删除匹配的整句（含句末标点）。若段落删除后为空，移除该段。
- * 只删除明确匹配的句子，不改动其他内容。
- */
-const INTERPRETIVE_SENTENCE_PATTERNS: RegExp[] = [
-  /(?:他|她)(?:第一次)(?:知道|明白|意识到|看清|感到|懂得|领悟|觉得|发现)/,
-  /(?:他|她)(?:忽然|突然|终于|这才|这才)(?:懂得|明白|看清|意识到|知道|领悟)/,
-  /这(?:意味着|说明|代表着)/,
-  /(?:也就是说|换句话说|归根结底|说到底)[，：]/,
-  /(?:他|她)知道，.{0,24}(?:若|如果|一旦|只要|不然|否则)/,
-];
-
-function splitSentences(paragraph: string): string[] {
-  // 按中文句末标点切分，保留标点
-  const parts = paragraph.split(/(?<=[。！？])/).map((s) => s.trim()).filter(Boolean);
-  return parts;
-}
-
-function isInterpretiveSentence(sentence: string): boolean {
-  return INTERPRETIVE_SENTENCE_PATTERNS.some((pattern) => pattern.test(sentence));
-}
-
-export function repairInterpretiveSummaries(text: string): { repaired: boolean; content: string; removedCount: number } {
-  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  if (paragraphs.length === 0) return { repaired: false, content: text, removedCount: 0 };
-
-  let removedCount = 0;
-  const repaired: string[] = [];
-
-  for (const para of paragraphs) {
-    // 跳过对白段（含引号的段落）——对白中的总结性表达由审校处理，不在此确定性删除
-    if (isDialogueParagraph(para)) {
-      repaired.push(para);
-      continue;
-    }
-
-    const sentences = splitSentences(para);
-    if (sentences.length <= 1) {
-      // 单句段：若匹配则删除整段，否则保留
-      if (sentences.length === 1 && isInterpretiveSentence(sentences[0])) {
-        removedCount += 1;
-        // 跳过该段（不 push）
+  if (longSeqEnd !== -1) {
+    let longSeqStart = longSeqEnd;
+    for (let i = longSeqEnd - 1; i >= 0; i--) {
+      if (isLong(paragraphs[i])) {
+        longSeqStart = i;
       } else {
-        repaired.push(para);
+        break;
       }
-      continue;
     }
 
-    // 多句段：删除匹配的句子，保留其余
-    const kept = sentences.filter((s) => {
-      if (isInterpretiveSentence(s)) {
-        removedCount += 1;
-        return false;
+    const longSeqLength = longSeqEnd - longSeqStart + 1;
+    if (longSeqLength >= 3) {
+      const longSeqChars = paragraphs.slice(longSeqStart, longSeqEnd + 1).reduce((sum, p) => sum + p.length, 0);
+      if (longSeqChars >= 300) {
+        const trailingText = normalizedParagraph(paragraphs.slice(longSeqStart, longSeqEnd + 1).join(""));
+        for (let start = 0; start + longSeqLength <= longSeqStart; start += 1) {
+          const earlierText = normalizedParagraph(paragraphs.slice(start, start + longSeqLength).join(""));
+          if (earlierText.length >= 80 && bigramSimilarity(earlierText, trailingText) >= 0.55) {
+            const totalChars = paragraphs.reduce((sum, p) => sum + p.length, 0);
+            const surviving = paragraphs.slice(0, longSeqStart);
+            const removedChars = totalChars - surviving.reduce((sum, p) => sum + p.length, 0);
+            return { truncated: true, content: surviving.join("\n\n"), removedChars };
+          }
+        }
       }
-      return true;
-    });
-
-    if (kept.length === 0) {
-      // 整段都被删除——跳过
-      continue;
-    }
-    if (kept.length === sentences.length) {
-      // 没有删除——保留原段（避免不必要的拼接变化）
-      repaired.push(para);
-    } else {
-      repaired.push(kept.join(""));
     }
   }
 
-  if (removedCount === 0) return { repaired: false, content: text, removedCount: 0 };
-  return { repaired: true, content: repaired.join("\n\n"), removedCount };
-}
-
-/**
- * 确定性修复强调词贬值。
- *
- * LLM 系统性过度使用"忽然/突然/终于"等强调词，全章超过 2 次后强调效果贬值。
- * 当 revision-stage 把 style.emphasis-devaluation warning 升级为 major 送 LLM 修订后，
- * LLM 仍可能不彻底执行删除指令。
- *
- * 修复策略：对每个强调词，保留前 2 次出现，从第 3 次开始删除。
- * - "忽然，" → 删除"忽然，"（连同逗号）
- * - "忽然" → 只删除"忽然"两字（保持句意通顺）
- * 只处理非对白段（对白中的强调词可能是人物语气，不删除）。
- */
-const EMPHASIS_WORDS = ["忽然", "突然", "终于"];
-const EMPHASIS_MAX = 2;
-
-export function repairEmphasisDevaluation(text: string): { repaired: boolean; content: string; removedCount: number } {
-  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  if (paragraphs.length === 0) return { repaired: false, content: text, removedCount: 0 };
-
-  const globalCount: Record<string, number> = {};
-  for (const word of EMPHASIS_WORDS) globalCount[word] = 0;
-
-  let removedCount = 0;
-  const repaired = paragraphs.map((para) => {
-    // 对白段：强调词计入全局限额但不在对白中删除（人物语气保留）
-    if (isDialogueParagraph(para)) {
-      for (const word of EMPHASIS_WORDS) {
-        let pos = 0;
-        while (true) {
-          pos = para.indexOf(word, pos);
-          if (pos === -1) break;
-          globalCount[word] += 1;
-          pos += word.length;
-        }
-      }
-      return para;
+  // ===== 模式二：短段序列第二个结尾（R8+R14） =====
+  // R8：纯短叙事段序列；R14：扩展到包含短对白段的混合序列
+  // 第二个结尾常含"原来线索在这里。"等短对白，打断纯叙事序列导致 R8 漏检
+  let shortSeqStart = paragraphs.length;
+  for (let i = paragraphs.length - 1; i >= 0; i--) {
+    if (isShortAny(paragraphs[i])) {
+      shortSeqStart = i;
+    } else {
+      break;
     }
+  }
 
-    let result = para;
-    for (const word of EMPHASIS_WORDS) {
-      let pos = 0;
-      while (true) {
-        pos = result.indexOf(word, pos);
-        if (pos === -1) break;
-        globalCount[word] += 1;
-        if (globalCount[word] > EMPHASIS_MAX) {
-          // 检查后面是否紧跟逗号
-          const afterComma = result[pos + word.length] === "，";
-          const removeLen = afterComma ? word.length + 1 : word.length;
-          result = result.slice(0, pos) + result.slice(pos + removeLen);
-          removedCount += 1;
-          // 不移动 pos，因为删除后新内容在原位置
-        } else {
-          pos += word.length;
-        }
+  const shortSeqLength = paragraphs.length - shortSeqStart;
+  if (shortSeqLength >= 4 && shortSeqStart >= 4) {
+    // 与前文整体比较（而非同长度窗口）——短段 bigram 较少，整体比较更稳定
+    const earlierCombined = normalizedParagraph(paragraphs.slice(0, shortSeqStart + 2).join(""));
+    for (let splitOffset = 2; splitOffset < shortSeqLength; splitOffset++) {
+      const splitAt = shortSeqStart + splitOffset;
+      const tailParas = paragraphs.slice(splitAt);
+      const tailText = normalizedParagraph(tailParas.join(""));
+      if (tailText.length < 40) continue;
+
+      const similarity = bigramSimilarity(earlierCombined, tailText);
+
+      // 短段 containment 阈值 0.15（短段 bigram 少，天然偏低）；要求 tail ≥3 段确认是"第二个结尾"而非单次引用
+      if (similarity >= 0.15 && tailParas.length >= 3) {
+        const totalChars = paragraphs.reduce((sum, p) => sum + p.length, 0);
+        const surviving = paragraphs.slice(0, splitAt);
+        const removedChars = totalChars - surviving.reduce((sum, p) => sum + p.length, 0);
+        return { truncated: true, content: surviving.join("\n\n"), removedChars };
       }
     }
-    return result;
-  });
+  }
 
-  if (removedCount === 0) return { repaired: false, content: text, removedCount: 0 };
-  return { repaired: true, content: repaired.join("\n\n"), removedCount };
+  return { truncated: false, content: text, removedChars: 0 };
 }
 
 export async function repairDraftStructureOnce(params: {
@@ -366,19 +246,6 @@ export async function repairDraftStructureOnce(params: {
   // #18 标点断裂修复：对白结束后多余句号（。"。 → 。"）
   // 尽早修复，避免影响后续段落切分与重复检测
   workingContent = repairPunctuationBreaks(workingContent);
-
-  // 确定性删除作者式心理结论句：在段落合并之前删除"她第一次知道..."等范式
-  // 这类句子打破有限第三人称，是 AI 味最典型的表现
-  const summaryResult = repairInterpretiveSummaries(workingContent);
-  if (summaryResult.repaired) {
-    workingContent = summaryResult.content;
-  }
-
-  // 确定性修复强调词贬值：LLM 修订不彻底时，兜底删除超限的"忽然/突然/终于"
-  const emphasisResult = repairEmphasisDevaluation(workingContent);
-  if (emphasisResult.repaired) {
-    workingContent = emphasisResult.content;
-  }
 
   // 确定性去重：在格式修复之前，先移除 LLM 常见的"末尾重述前文"重复段落
   const dedupReport = analyzeDraftStructure(workingContent);

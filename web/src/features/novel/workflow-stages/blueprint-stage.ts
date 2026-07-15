@@ -1,7 +1,7 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
 import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb } from "../db";
-import { formatSkillPrompt, resolveNovelSkills } from "../skills";
+import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { blueprintMarkdown, blueprintSchema } from "../workflow-shared";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
@@ -25,9 +25,9 @@ export const blueprintStageHandler: StageHandler = {
       model: project.settings.textModel,
       temperature: 0.55,
       role: "architect",
-      skillPrompt: formatSkillPrompt(skills.skills),
+      skillPrompt: compileNovelStagePrompt(skills.skills, "planning"),
       schema: blueprintSchema,
-      prompt: `为“${document.title}”生成章节蓝图。章节目标字数由系统设置为 ${document.blueprint.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，你只需按该篇幅规划，不要生成字数。\n\n当前章节要求：${document.blueprint.objective || "尚未规划，请结合全书架构与故事大纲设计"}\n故事大纲的每个节点 summary 已包含'原因→触发→阻碍→直接结果→延迟后果'的叙事节拍，请在生成蓝图时从中提取：阻碍→conflict（章节冲突），直接结果→turningPoint（价值转折点），延迟后果→mustHappen（本章需落实的节拍）。\n\n蓝图质量门槛：上一节拍的 outcome 必须触发下一节拍的 action；至少一次由视角人物主动选择造成可见代价；每次信息释放都要改变人物选择；对手或阻力方必须保留自己的目标并作出反制。不要把若干气氛场面或线索发现并列成任务清单。\n${feedback ? `\n用户退回意见：${feedback.contentMarkdown}` : ""}\n\n冻结上下文：\n${formatContextPacket(packet)}`,
+      prompt: `为“${document.title}”生成章节蓝图。章节目标字数由系统设置为 ${document.blueprint.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，你只需按该篇幅规划，不要生成字数。\n\n当前章节要求：${document.blueprint.objective || "尚未规划，请结合全书架构、故事大纲与当前长线位置设计"}\n\n先选择本章唯一的主导叙事功能：建立故事背景与日常秩序、深化人物内心与关系、积累情绪和压力、埋设或提醒线索、承担行动推进、消化既有后果，或兑现阶段节点。不要默认选择行动推进或阶段兑现；相邻章节应有张弛和功能差异。\n\n大纲是跨章节分配材料的上限，不是本章待办清单。只把本章确实到达兑现窗口、删去就会破坏连续性的内容写入 mustHappen；把尚需铺垫的秘密、关系跃迁、重大转折、伏笔回收和后续节点写入 forbidden。informationRelease 允许为空，也允许只让人物误读或局部感知。endingHook 可以是情感余韵、关系张力、未完成动作、意象变化或安静的认知缺口，不必制造突发危险。\n\n使用 2 至 8 个必要节拍。相邻节拍保持时间、注意力或因果连续，但不是每个节拍都必须改变局势。允许用完整节拍承载环境与社会背景、人物独处、生活过程、回忆触发、关系相处、情感发酵和文学意象；这些内容应深化读者体验，而不是重复已知信息。对手只有实际在场或施加影响时才需要反制。禁止为凑结构强造选择、代价、转折或钩子。\n${feedback ? `\n用户退回意见：${feedback.contentMarkdown}` : ""}\n\n冻结上下文：\n${formatContextPacket(packet)}`,
     });
     const targetWords = document.blueprint.targetWords || DEFAULT_CHAPTER_TARGET_WORDS;
     const structuredData = { ...result.data, targetWords };

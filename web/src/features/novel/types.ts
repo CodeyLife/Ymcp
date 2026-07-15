@@ -661,6 +661,7 @@ export interface QualityIssue {
   rule: string;
   sourceId?: string;
   suggestion: string;
+  rewriteExample?: string;
   deterministic: boolean;
 }
 

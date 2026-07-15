@@ -50,6 +50,18 @@ stages: [drafting, revision]
 });
 
 describe("prose aesthetics skills", () => {
+  it("compiles planning rules that preserve long-form narrative room", () => {
+    const planningSkills = BUILTIN_NOVEL_SKILLS.filter((skill) => skill.stages.includes("planning"));
+
+    const compiled = compileNovelStagePrompt(planningSkills, "planning");
+
+    expect(compiled).toContain("大纲用于分配跨章节材料");
+    expect(compiled).toContain("背景建立、人物相处、内心发展、情感积累");
+    expect(compiled).toContain("使用 2 至 8 个必要节拍");
+    expect(compiled).toContain("informationRelease 可以为空");
+    expect(compiled).not.toContain("每章至少埋一个");
+  });
+
   it("compiles one neutral drafting contract without story-specific examples", () => {
     const draftingSkills = BUILTIN_NOVEL_SKILLS.filter((skill) => skill.stages.includes("drafting"));
 
@@ -57,9 +69,10 @@ describe("prose aesthetics skills", () => {
 
     expect(compiled).toContain("普通叙事段落默认包含 2 至 5 句");
     expect(compiled).toContain("单句叙事段不得连续出现 3 个");
-    expect(compiled).toContain("人物欲望、选择与代价");
-    expect(compiled).toContain("蓝图是因果材料，不是逐项扩写清单");
-    expect(compiled).toContain("信息发现只有迫使新选择时才算推进");
+    expect(compiled).toContain("本章主导叙事功能");
+    expect(compiled).toContain("不得为完成目标提前消费后续大纲节点");
+    expect(compiled).toContain("铺陈、相处、蓄势或余波章节");
+    expect(compiled).toContain("背景、回忆、生活过程和意象");
     expect(compiled).toContain("不再补写解释性心理总结");
     expect(compiled).toContain("禁止输出 Markdown 标题、代码围栏或水平分隔线");
     expect(compiled.match(/留白/g)).toHaveLength(1);

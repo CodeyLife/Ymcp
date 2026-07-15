@@ -72,7 +72,10 @@ describe("phase plot design", () => {
     expect(generated.items.filter((item) => item.targetTable === "documents")).toHaveLength(2);
     expect(generated.items.find((item) => item.targetTable === "outlineNodes")?.payload).toMatchObject({ phaseId: phase.id, order: 0 });
     expect(generated.items.filter((item) => item.targetTable === "documents").map((item) => item.payload.order)).toEqual([0, 1]);
-    expect(vi.mocked(callStructuredNovelModel).mock.calls.at(-1)?.[0].prompt).toContain("不得把章节再拆成事件");
+    const modelRequest = vi.mocked(callStructuredNovelModel).mock.calls.at(-1)?.[0];
+    expect(modelRequest?.prompt).toContain("不得把后续节点提前压入当前章节");
+    expect(modelRequest?.prompt).not.toContain("每章至少埋一个");
+    expect(modelRequest?.skillPrompt).toContain("大纲用于分配跨章节材料");
 
     await expect(applyProposalItems(generated.id, [generated.items[0].id])).rejects.toThrow(/整体采纳/);
     await applyProposalItems(generated.id, generated.items.map((item) => item.id));

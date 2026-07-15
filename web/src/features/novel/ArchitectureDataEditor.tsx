@@ -29,12 +29,14 @@ export default function ArchitectureDataEditor({
   onChange,
   readOnly = false,
   preview = false,
+  showPhases = true,
 }: {
   value: ArchitectureEditableData;
   compareTo?: ArchitectureEditableData;
   onChange?: (next: ArchitectureEditableData) => void;
   readOnly?: boolean;
   preview?: boolean;
+  showPhases?: boolean;
 }) {
   const comparing = Boolean(compareTo);
   const changeState = (current: unknown, compared: unknown) => comparing ? current === compared ? "unchanged" : "changed" : undefined;
@@ -51,7 +53,7 @@ export default function ArchitectureDataEditor({
       <label className="novel-architecture-core-field" data-change-state={changeState(value.centralConflict, compareTo?.centralConflict)}><span>核心冲突</span><Input.TextArea readOnly={readOnly} rows={3} placeholder="推动主角持续行动的主要矛盾" value={value.centralConflict} onChange={(event) => update({ centralConflict: event.target.value })} /></label>
       <label className="wide" data-change-state={changeState(value.synopsis, compareTo?.synopsis)}><span>全书梗概</span><Input.TextArea readOnly={readOnly} rows={6} placeholder="用一段连续叙述概括起因、升级、转折与结局" value={value.synopsis} onChange={(event) => update({ synopsis: event.target.value })} /></label>
     </div>
-    <section className="novel-architecture-beats"><header><div><h3>幕（宏观阶段）</h3><span>{value.phases.length} 幕</span></div>{!readOnly && <Button className="novel-architecture-add" icon={<PlusOutlined />} onClick={() => update({ phases: [...value.phases, { id: crypto.randomUUID(), title: `第 ${value.phases.length + 1} 幕`, purpose: "", turningPoint: "", order: value.phases.length, locked: false }] })}>添加幕</Button>}</header>
+    {showPhases && <section className="novel-architecture-beats"><header><div><h3>幕（宏观阶段）</h3><span>{value.phases.length} 幕</span></div>{!readOnly && <Button className="novel-architecture-add" icon={<PlusOutlined />} onClick={() => update({ phases: [...value.phases, { id: crypto.randomUUID(), title: `第 ${value.phases.length + 1} 幕`, purpose: "", turningPoint: "", order: value.phases.length, locked: false }] })}>添加幕</Button>}</header>
       <div className="novel-architecture-phase-list">
         {value.phases.map((phase, index) => {
           const comparedPhase = compareTo?.phases.find((item) => item.id === phase.id);
@@ -59,6 +61,6 @@ export default function ArchitectureDataEditor({
           return <motion.article data-change-state={comparing ? phaseChanged ? "changed" : "unchanged" : undefined} layout={!readOnly} initial={preview ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .28, delay: preview ? 0 : Math.min(index * .04, .2) }} key={phase.id}><div className="novel-phase-index"><span>幕</span><strong>{String(index + 1).padStart(2, "0")}</strong></div><div className="novel-phase-fields"><label className="novel-phase-title" data-change-state={changeState(phase.title, comparedPhase?.title)}><span>幕标题</span><Input readOnly={readOnly} value={phase.title} onChange={(event) => updatePhase(phase.id, { title: event.target.value })} /></label><label data-change-state={changeState(phase.purpose, comparedPhase?.purpose)}><span>叙事使命</span><Input.TextArea readOnly={readOnly} rows={2} placeholder="本幕必须完成的叙事使命" value={phase.purpose} onChange={(event) => updatePhase(phase.id, { purpose: event.target.value })} /></label><label data-change-state={changeState(phase.turningPoint, comparedPhase?.turningPoint)}><span>不可逆转折</span><Input.TextArea readOnly={readOnly} rows={2} placeholder="结束时改变故事方向的决定性变化" value={phase.turningPoint} onChange={(event) => updatePhase(phase.id, { turningPoint: event.target.value })} /></label></div>{!readOnly && <Tooltip title="删除幕"><Button className="novel-phase-delete" danger type="text" aria-label={`删除${phase.title || `第 ${index + 1} 幕`}`} icon={<DeleteOutlined />} onClick={() => update({ phases: value.phases.filter((item) => item.id !== phase.id).map((item, order) => ({ ...item, order })) })} /></Tooltip>}</motion.article>;
         })}
       </div>
-    </section>
+    </section>}
   </div>;
 }

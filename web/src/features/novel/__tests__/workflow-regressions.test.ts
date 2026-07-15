@@ -96,8 +96,11 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "draft", stageIndex: 3, revisionIteration: 0, contextPacketId: context.id, blueprintArtifactId: "blueprint-draft-repair", factCandidateIds: [], startedAt: Date.now() };
     const blueprint = artifact(run, { id: "blueprint-draft-repair", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "目标：进入废弃驿站。", structuredData: { title: "第一章", objective: "进入驿站", startingState: "官道", beats: [], endingHook: "门后有脚步", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
     const invalid = ["以下是正文：", "风停了。", "他抬起头。", "远处有人走来。"].join("\n\n");
+    // 全文修订模式：draft 生成后 workflow 继续到 review→revision，因正文 <300 字触发
+    // chapter.minimum-substance (major)，revision 阶段会再次调用 streamNovelModel
     vi.mocked(streamNovelModel)
-      .mockResolvedValueOnce({ content: invalid, promptHash: "draft-invalid" });
+      .mockResolvedValueOnce({ content: invalid, promptHash: "draft-invalid" })
+      .mockResolvedValueOnce({ content: "风停了。他抬起头。远处有人走来。", promptHash: "revision-short" });
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.add(blueprint);
@@ -105,9 +108,9 @@ describe("chapter workflow regressions", () => {
     await advanceChapterWorkflow(run.id);
 
     const draft = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "draft").first();
-    // 改进后：repairDraftStructureOnce 确定性合并+移除格式标记，不调用 LLM 修复
-    // streamNovelModel 只被调用 1 次（draft 生成），repair 是确定性的
-    expect(streamNovelModel).toHaveBeenCalledTimes(1);
+    // repairDraftStructureOnce 确定性合并+移除格式标记，不调用 LLM 修复
+    // streamNovelModel 被调用 2 次：1=draft 生成，2=revision 全文修订（chapter.minimum-substance 触发）
+    expect(streamNovelModel).toHaveBeenCalledTimes(2);
     // "以下是正文："被移除，3 个短叙事段合并为 1 段
     expect(draft?.contentMarkdown).toBe("风停了。他抬起头。远处有人走来。");
   });
@@ -121,8 +124,11 @@ describe("chapter workflow regressions", () => {
     const blueprint = artifact(run, { id: "blueprint-format-revision", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图", structuredData: { title: "第一章", objective: "守住屋门", startingState: "屋内", beats: [], endingHook: "门外来人", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
     const report: QualityReport = { ...recordBase(project.id), id: "report-format-revision", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 2, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, weightedScore: 3.5, blockerCount: 0, passed: false, issues: [{ id: "revise-range", dimension: "plot", severity: "major", title: "动作结果不清", description: "补足人物应对结果。", revisionRanges: [{ start: 1, end: 2 }], rule: "plot.action-result", suggestion: "在原范围内补足结果。", deterministic: false }], metrics: {}, reviewerRoles: [] };
     const invalid = ["以下是修订后的正文：", "风停了。", "灯暗了。", "脚步来到门外。"].join("\n\n");
+    // 全文修订模式：revision 生成后 workflow 继续到 review→revision，因正文 <300 字触发
+    // chapter.minimum-substance (major)，revision 阶段会再次调用 streamNovelModel
     vi.mocked(streamNovelModel)
-      .mockResolvedValueOnce({ content: invalid, promptHash: "revision-invalid" });
+      .mockResolvedValueOnce({ content: invalid, promptHash: "revision-invalid" })
+      .mockResolvedValueOnce({ content: "风停了。灯暗了。脚步来到门外。", promptHash: "revision-short" });
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
@@ -131,9 +137,9 @@ describe("chapter workflow regressions", () => {
     await advanceChapterWorkflow(run.id);
 
     const revision = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "revision").first();
-    // 改进后：repairDraftStructureOnce 确定性移除"以下是修订后的正文："并合并短段
-    // streamNovelModel 只被调用 1 次（revision 生成），repair 是确定性的
-    expect(streamNovelModel).toHaveBeenCalledTimes(1);
+    // repairDraftStructureOnce 确定性移除"以下是修订后的正文："并合并短段
+    // streamNovelModel 被调用 2 次：1=revision 生成，2=revision 全文修订（chapter.minimum-substance 触发）
+    expect(streamNovelModel).toHaveBeenCalledTimes(2);
     expect(revision?.contentMarkdown).toBe("风停了。灯暗了。脚步来到门外。");
   });
 
@@ -244,25 +250,58 @@ describe("chapter workflow regressions", () => {
     expect(streamNovelModel).not.toHaveBeenCalled();
   });
 
-  it("never degrades to a whole-chapter rewrite when a major issue cannot be located", async () => {
-    const project = await createNovelProject({ title: "安全降级", genre: ["悬疑"], premise: "无法定位段落时保留原文。" });
+  it("triggers full-text revision for major issues without paragraph location", async () => {
+    const project = await createNovelProject({ title: "全文修订", genre: ["悬疑"], premise: "无法定位段落时仍进行全文修订。" });
     const document = await createChapter(project.id, "第一章");
     const context = packet(project.id);
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft", blueprintArtifactId: "blueprint", qualityReportId: "report", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft", stage: "draft", kind: "draft", title: "正文", contentMarkdown: "第一段。\n\n第二段。" });
     const blueprint = artifact(run, { id: "blueprint", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
     const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, pacing: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "major", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    // 全文修订模式：major 问题即使无法定位到具体段落，也触发 LLM 全文修订
+    vi.mocked(streamNovelModel).mockResolvedValue({ content: "第一段修订内容。\n\n第二段修订内容。", promptHash: "revision" });
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
     await novelDb.qualityReports.add(report);
+
     const waiting = await advanceChapterWorkflow(run.id);
 
-    expect(streamNovelModel).not.toHaveBeenCalled();
+    // 全文修订模式：streamNovelModel 被调用（major 问题触发 LLM 全文修订）
+    expect(streamNovelModel).toHaveBeenCalled();
     expect(waiting).toMatchObject({ status: "waiting-approval", currentStage: "manuscript-approval" });
-    const unchanged = await novelDb.workflowArtifacts.get(waiting.draftArtifactId!);
-    expect(unchanged?.contentMarkdown).toBe(draft.contentMarkdown);
-    expect((await novelDb.proposals.where("projectId").equals(project.id).and((item) => item.targetId === run.id).first())?.title).toContain("无法安全定位");
+    // 修订产物存在
+    const revisions = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "revision").toArray();
+    expect(revisions.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to deterministic deletion when revision output is too similar to original (R10)", async () => {
+    const project = await createNovelProject({ title: "相似度回退", genre: ["悬疑"], premise: "LLM 返回与原文实质相同时回退到确定性删除。" });
+    const document = await createChapter(project.id, "第一章");
+    const context = packet(project.id);
+    const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-similar", blueprintArtifactId: "blueprint-similar", qualityReportId: "report-similar", factCandidateIds: [], startedAt: Date.now() };
+    // 使用足够长的段落避免碎片化合并干扰断言
+    const draftContent = "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。\n\n佩剑客从佛像旁走出，衣着整洁，剑穗随步轻摆。那是她曾见过的样式。听潮阁已灭，所以才要寻。他递茶试探，言语温雅却句句指向旧事。\n\n她抬手一挥，桌上的寒灯翻倒。灯油洒在地面，火光被夜风卷起。佩剑客人退了一步。沈雁声借这一瞬掠向侧墙，剑锋擦过她的袖口。";
+    const draft = artifact(run, { id: "draft-similar", stage: "draft", kind: "draft", title: "正文", contentMarkdown: draftContent });
+    const blueprint = artifact(run, { id: "blueprint-similar", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
+    const report: QualityReport = { ...recordBase(project.id), id: "report-similar", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, pacing: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-similar", dimension: "plot", severity: "major", title: "心理判断句", description: "需要修订", revisionRanges: [{ start: 1, end: 1 }], rule: "style.test", suggestion: "改写第一段", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    // Mock LLM 返回与原文完全相同的内容（相似度 = 1.0 > 0.92）
+    vi.mocked(streamNovelModel).mockResolvedValue({ content: draftContent, promptHash: "no-change" });
+    await novelDb.contextPackets.add(context);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
+    await novelDb.qualityReports.add(report);
+
+    const waiting = await advanceChapterWorkflow(run.id);
+
+    // R10: similarity > 0.92 触发回退——major issue 对应段落被确定性删除
+    expect(streamNovelModel).toHaveBeenCalled();
+    expect(waiting).toMatchObject({ status: "waiting-approval", currentStage: "manuscript-approval" });
+    const revision = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "revision").first();
+    // 第一段（含"门人录"）应被删除
+    expect(revision?.contentMarkdown).not.toContain("门人录");
+    // 后续段落保留
+    expect(revision?.contentMarkdown).toContain("佩剑客从佛像旁走出");
   });
 
   it("restores the previous draft when a revision scores lower", async () => {

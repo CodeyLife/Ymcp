@@ -71,7 +71,7 @@ const chapterBlueprintSchema = {
   required: ["title", "objective", "startingState", "beats", "endingHook", "mustHappen", "forbidden"],
   properties: {
     title: { type: "string" }, objective: { type: "string" }, startingState: { type: "string" },
-    beats: { type: "array", minItems: 4, items: { type: "object", required: ["action", "emotion", "outcome"], properties: { action: { type: "string" }, emotion: { type: "string" }, outcome: { type: "string" } } } },
+    beats: { type: "array", minItems: 2, maxItems: 8, items: { type: "object", required: ["action", "emotion", "outcome"], properties: { action: { type: "string" }, emotion: { type: "string" }, outcome: { type: "string" } } } },
     endingHook: { type: "string" }, mustHappen: { type: "array", items: { type: "string" } }, forbidden: { type: "array", items: { type: "string" } },
   },
 };
@@ -85,10 +85,10 @@ export const BUILTIN_NOVEL_SKILLS: NovelSkillManifest[] = [
   builtin({ skillId: "hierarchical-outline", name: "分层剧情控制", description: "按幕、剧情段和章节逐级组织长篇规划。", category: "long-plan", stages: ["planning"], prompt: "长篇是循序渐进的铺陈，不是主题宣告。全书架构中的宏观阶段就是幕，不得重复创建另一份幕数据。每幕拆成若干剧情段，每个剧情段直接组织正式章节；章节标题、摘要和蓝图必须足以进入后续写作流程，不再设置独立事件层。每个下层内容必须服务至少一个上层目标，转折、伏笔和悬念应作为布局埋设，不作为口号宣告。" }),
   builtin({ skillId: "causal-thread-weaving", name: "因果与剧情线编织", description: "避免事件清单和支线失踪。", category: "long-plan", stages: ["planning", "review"], prompt: "每个重要事件标注原因、触发条件、阻碍、直接结果和延迟后果。主线与支线通过共同人物、资源、秘密或选择相互改变，不能仅轮流出现。" }),
   builtin({ skillId: "foreshadowing-ledger", name: "伏笔账本", description: "规划埋设、提醒、误导、揭示和回收。", category: "long-plan", stages: ["planning", "review", "fact-extraction"], prompt: "伏笔必须记录读者可见线索、角色可知范围、预期误读、提醒频率、揭示条件和回收影响。揭示前不得让角色无来源地知道真相。" }),
-  builtin({ skillId: "chapter-blueprint", name: "章节蓝图", description: "先产出可审批、可执行的章节节拍。", category: "chapter", stages: ["planning"], requires: ["story-facts-invariant"], outputSchema: chapterBlueprintSchema, priority: 200, prompt: "章节蓝图必须包含具体目标、精确起点、4至10个行动节拍、每个节拍的情绪反应与结果、信息释放、转折、章尾钩子、必须发生与禁止事项。节拍必须形成因果链：上一节拍的结果触发下一行动；至少一次由视角人物主动选择造成可见代价；信息释放必须改变人物选择；对手或阻力方要保留自己的目标并作出反制。禁止把互不相干的场面并列成清单。节拍要足够具体但不代写正文。" }),
-  builtin({ skillId: "scene-action-reaction", name: "行动与反应场景", description: "用目标、冲突、结果和反应、两难、决定形成推进。", category: "chapter", stages: ["planning", "drafting", "review"], prompt: "行动场景围绕目标、阻碍和不可逆结果展开；重大结果后安排必要的情绪反应、选择权衡和新决定。呼吸段必须改变理解或决定，不能停滞。" }),
+  builtin({ skillId: "chapter-blueprint", name: "章节蓝图", description: "先产出可审批、可执行且保留长篇余量的章节节拍。", category: "chapter", stages: ["planning"], requires: ["story-facts-invariant"], outputSchema: chapterBlueprintSchema, priority: 200, prompt: "先确定本章唯一的主导叙事功能：建立世界与常态、深化人物与关系、积累情绪与压力、埋设或提醒线索、承担行动转折、呈现后果与余波，或阶段兑现。章节蓝图包含精确起点、2至8个必要节拍、每个节拍的行动或观察、人物反应与局部结果，以及必须发生与禁止事项。目标描述本章探索和积累的方向，不等于必须解决的问题；informationRelease 可以为空，endingHook 可以是未说出口的情感、关系张力、意象余韵或尚未行动的决定，不必制造突发危险。只有属于本章兑现窗口的变化才能写入 mustHappen；后续大纲节点、秘密真相、关系跃迁和伏笔回收应进入 forbidden，防止提前消费。节拍保持相邻因果，但允许背景铺陈、生活过程、内心游移、关系相处和情感余波占据篇幅。禁止把大纲节点压缩成当章任务清单，也禁止为凑节拍强造转折。" }),
+  builtin({ skillId: "scene-action-reaction", name: "行动与反应场景", description: "在行动、反应和叙事停留之间形成呼吸。", category: "chapter", stages: ["planning", "drafting", "review"], prompt: "行动场景围绕当下欲望与具体阻力展开；重大结果后给人物足够空间感受、误解、回避、回忆、权衡或暂不决定。呼吸段可以建立故事背景、日常秩序、人物内心、关系质地、情感余波或文学意象，不必立即改变局势；它只需深化读者对人物和世界的体验，并避免重复已经明确的信息。" }),
   builtin({ skillId: "embodied-prose", name: "具象场景正文", description: "用行动、感官和选择承载情绪与信息。", category: "drafting", stages: ["drafting", "revision"], prompt: "正文优先呈现人物正在做什么、注意到什么、误读什么和选择什么。抽象总结要落回可观察行动、具体感官、环境阻力或有代价的对白。认知变化必须由前文可见信息触发；观察不足时，人物判断应保持试探性并允许出错。" }),
-  builtin({ skillId: "serial-rhythm", name: "通用连载节奏", description: "控制章节承诺、推进、阶段回报和下一章驱动力。", category: "serial", stages: ["planning", "drafting", "review"], prompt: "每章开头尽快建立当章问题，中段至少发生一次局势变化，结尾产生新的决定、代价、危险或认知缺口。回报必须来自此前阻力和人物行动。全章只保留一个开场和一个结尾；后半章必须升级或转向，不得用另一组事件重复已经完成的推进。" }),
+  builtin({ skillId: "serial-rhythm", name: "通用连载节奏", description: "控制长篇中的蓄势、停留、推进、余波和阶段回报。", category: "serial", stages: ["planning", "drafting", "review"], prompt: "章节不必都完成局势转折。根据长线位置，让不同章节分别承担建立常态、人物相处、背景展开、压力累积、行动推进、后果消化或阶段回报；连续章节在功能和强度上形成呼吸。安静章节仍应有视角人物的注意力、欲望或情感暗流，但不得为了显得有用而强造危险、秘密揭晓、关系跃迁或章尾反转。回报必须来自足够铺垫，重大大纲节点只在批准的兑现窗口发生。全章只保留一个开场和一个结尾，不用第二组事件重复推进。" }),
   builtin({ skillId: "continuity-audit", name: "连续性审校", description: "检查时间、空间、知识、物品、规则和因果。", category: "review", stages: ["review"], requires: ["story-facts-invariant"], priority: 180, prompt: "逐段核对人物位置与移动、故事时间、环境、角色知识、重要物品归属、世界规则和前因后果。只报告有上下文证据的矛盾，并引用冲突来源。" }),
   builtin({ skillId: "style-specificity-audit", name: "文风与具体性审校", description: "检查视角、语言具体性、重复和模板化表达。", category: "review", stages: ["review"], prompt: "检查叙述距离、视角稳定、句段节奏、抽象情绪、重复意象和模板化动作。高频词统计只形成警告；必须结合人物声音和项目风格判断，不能机械判错。\n\n【强调词贬值】统计“第一次”“突然”“忽然”“终于”“竟然”等强调词的频次。单章同一强调词出现超过 2 次即判定为贬值，须替换或删除。特别注意“第一次+动词”结构（第一次意识到/发现/明白/感到）的堆叠。\n\n【短句tic】检测连续 3 个以上独立名词或短语成段排比的句式（如“速度。力量。肌肉变化。呼吸节奏。”）。单章此类排比不超过 2 处，且每处必须服务明确的节奏目的（如极度紧张或决断瞬间），不可作为常规叙述手段。\n\n【金句收尾密度】检测以格言式、总结式、哲理式句子结尾的段落。单章超过 3 处即判定为“金句过密”，须将部分金句改为行动或沉默。\n\n【人物语言越界】检查配角对白是否超出其身份认知。底层人物（兵卒、农人、流民）不可说出哲学总结或抽象道理。若发现配角台词像“作者传声筒”，须改为符合其身份的朴素表达，或用行动代替说教。" }),
   builtin({ skillId: "plot-pacing-audit", name: "剧情与节奏审校", description: "验证节拍落实、局势变化、钩子和回报。", category: "review", stages: ["review"], prompt: "比较蓝图与正文，检查必须节拍、人物选择、因果推进、场景功能、信息释放、张弛变化和章尾驱动力。区分结构阻断与审美建议。" }),
@@ -231,8 +231,20 @@ function customSkillBlock(skills: NovelSkillManifest[]) {
 
 export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: NovelSkillStage) {
   const sections: string[] = [];
+  if (stage === "planning") {
+    sections.push("## 长篇规划契约\n大纲用于分配跨章节材料，不是要求尽快完成的任务表。先确定当前层级与本章主导叙事功能，再决定哪些内容只铺垫、哪些继续延迟、哪些已经到达兑现窗口。背景建立、人物相处、内心发展、情感积累、生活过程和意象生长都可以成为正式章节功能，不得默认每章都需要冲突升级、秘密揭晓、关系跃迁或强钩子。");
+    if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
+      sections.push("## 事实与兑现边界\n严格遵守已批准事实、人物知识边界和锁定规则。把尚未到达揭示条件的秘密、伏笔回收、重大转折和关系变化保留在后续，不因当前章节提及相关材料就提前完成。");
+    }
+    if (skills.some((skill) => skill.skillId === "chapter-blueprint")) {
+      sections.push("## 章节蓝图\n为章节选择一个主导功能，使用 2 至 8 个必要节拍。objective 描述探索或积累方向，不等于必须解决的问题；informationRelease 可以为空；mustHappen 只容纳本章已经批准兑现的内容；forbidden 应保护尚需铺垫的后续材料。endingHook 可以是情感余韵、关系张力、未完成动作、意象变化或认知缺口，不必是突发危险。");
+    }
+    sections.push("## 规划质量\n相邻章节需要功能与强度差异。行动和回报应来自足够积累；铺陈章的质量取决于世界、人物、关系或情感是否变得更具体，而不是主线移动了多少。禁止为满足结构模板强造选择、代价、反制、转折和伏笔。");
+    return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
+  }
+
   if (stage === "drafting") {
-    sections.push("## 正文创作契约\n按以下优先级写作：事实与知识边界 → 人物欲望、选择与代价 → 场景行动和因果 → 语言质感。蓝图是因果材料，不是逐项扩写清单；形式规则与文采不得压过人物选择。");
+    sections.push("## 正文创作契约\n按以下优先级写作：事实、知识边界与兑现边界 → 本章主导叙事功能 → 人物当下体验与关系 → 场景因果 → 语言质感。蓝图规定本章可以触碰的材料，不是必须全部结算的清单；不得为完成目标提前消费后续大纲节点。");
     if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
       sections.push("## 事实边界\n严格遵守已批准蓝图、正式事实、锁定规则和人物知识边界；信息不足时保持不确定，不得补造既定事实。");
     }
@@ -240,7 +252,7 @@ export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: Nov
       sections.push("## 人物与声音\n人物的行动、对白和判断必须符合其身份、欲望、认知与当下处境。用具体反应呈现感受，让不同人物在用词、直接程度和回避方式上可辨认。");
     }
     if (hasAnySkill(skills, DRAFTING_PROGRESS_SKILLS)) {
-      sections.push("## 章节推进\n依照蓝图完成目标、阻碍、结果和章尾驱动力。每个场景都要由人物行动引发阻力，再通过选择改变局势、关系或认知并产生代价；信息发现只有迫使新选择时才算推进。同一事件链只推进一次，全章只保留一个开场和一个结尾。");
+      sections.push("## 章节节奏与长篇余量\n先服从本章主导叙事功能。行动章节可以改变局势；铺陈、相处、蓄势或余波章节可以主要深化世界、人物内心、关系和情感，不强求不可逆结果。背景、回忆、生活过程和意象只要改变读者对当下的理解或感受，就具有叙事价值。信息可以被感知、误读或暂时搁置，不必当章转化为决定。只落实蓝图明确列入 mustHappen 的内容，秘密真相、关系跃迁、伏笔回收和后续节点未经许可不得提前兑现。全章只保留一个开场和一个结尾。");
     }
     if (hasAnySkill(skills, DRAFTING_PROSE_SKILLS)) {
       sections.push("## 文风与段落\n以行动、感官、环境和对白承载情绪；动作或对白已经传达含义后立即留白，不再补写解释性心理总结。核心意象只在状态或含义变化时重现，不连续用同一物件替人物说理。普通叙事段落默认包含 2 至 5 句；不要每句话或每轮对白都另起空行，单句叙事段不得连续出现 3 个。长短句随动作速度自然变化。");
@@ -253,7 +265,7 @@ export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: Nov
   }
 
   if (stage === "review") {
-    sections.push("## 审校契约\n只报告有正文证据且属于当前角色职责的问题。形式完整不等于可生产：持续按蓝图逐项交差、解释人物心理、用对白传递作者结论、依赖线索而非选择推进、反复用同一意象说理、通用细节和匀速段落都属于机械化风险。检查事实与人物知识边界、人物声音与能动性、蓝图因果、场景具象、对白潜台词、节奏波峰、段落碎片、重复事件链和第二个结尾。结构问题只把实际需要修改的段落写入 revisionRanges。");
+    sections.push("## 审校契约\n只报告有正文证据且属于当前角色职责的问题。先判断本章主导功能，不得把安静、铺陈、内省、关系相处或留白结尾本身判为节奏问题。检查正文是否提前兑现后续节点，或为了逐项完成蓝图而压缩背景、内心、情感和关系过程。机械化风险包括事件报表、解释人物心理、用对白传递作者结论、通用细节、匀速段落、重复事件链和第二个结尾；真正的问题是内容重复或体验没有深化，不是主线没有明显前进。结构问题只把实际需要修改的段落写入 revisionRanges。");
     return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
   }
 

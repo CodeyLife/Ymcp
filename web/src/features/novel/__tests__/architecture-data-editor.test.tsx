@@ -31,6 +31,13 @@ describe("architecture data editor", () => {
     expect(html).not.toContain("删除缺口出现");
   });
 
+  it("can omit phases when the planning workspace renders them inline", () => {
+    const html = renderToStaticMarkup(<ArchitectureDataEditor value={architecture} showPhases={false} onChange={() => undefined} />);
+    expect(html).toContain("全书梗概");
+    expect(html).not.toContain("宏观阶段");
+    expect(html).not.toContain("缺口出现");
+  });
+
   it("marks unchanged architecture fields and changed phase fields in comparison mode", () => {
     const compared: ArchitectureEditableData = {
       ...architecture,

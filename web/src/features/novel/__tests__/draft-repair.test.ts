@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../ai", () => ({ streamNovelModel: vi.fn() }));
 
 import { streamNovelModel } from "../ai";
-import { repairDraftStructureOnce, repairEmphasisDevaluation, repairInterpretiveSummaries, repairPunctuationBreaks, truncateTrailingSecondEnding } from "../workflow-stages/draft-structure-repair";
+import { repairDraftStructureOnce, repairPunctuationBreaks, truncateTrailingSecondEnding } from "../workflow-stages/draft-structure-repair";
 
 beforeEach(() => {
   vi.mocked(streamNovelModel).mockReset();
@@ -65,6 +65,73 @@ describe("draft structure repair", () => {
     expect(streamNovelModel).not.toHaveBeenCalled();
     expect(result.repaired).toBe(true);
     expect(result.content).toBe([...progression, ...filler].join("\n\n"));
+  });
+
+  it("truncates a short-paragraph second ending that repeats earlier themes (R8)", () => {
+    // 早期长段（≥100 字符）：建立并重复 寒灯/断穗/门人录/夜雾/佩剑客/她没有回头/转身/走入 主题
+    const early = [
+      "寒灯挂在庙檐下，火苗被风吹得摇晃，时明时暗。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。断穗的编法她曾见过，那是指尖能记住的旧事，不会轻易忘记。",
+      "佩剑客从佛像旁走出，衣着整洁，剑穗随步轻摆，穗子的编法让她多看一眼。那是她曾见过的样式。听潮阁已灭，所以才要寻。他递茶试探，言语温雅却句句指向旧事。她没有回头，也没有坐下。只是看着茶面，等他先开口。",
+      "他的声音依旧温和，可庙门已经被他身后的位置封住。沈雁声看了一眼门外，夜雾正在压低。她明白，继续留下只会让更多东西被看见。她已经露了痕迹，下一刻便要做出选择。剑未出鞘，她已经感到了杀意，只是还不确定来人究竟想要什么。",
+      "她抬手一挥，桌上的寒灯翻倒，灯油洒在地面，火光被夜风卷起。佩剑客人退了一步。她转身掠向侧墙，剑锋擦过她的袖口。她走入夜雾，身影很快被江风吞没。庙外雾已经漫过荒草，她踏入雾中，不再停留。地上落下一截断穗，那是从她身上落下的。",
+    ];
+    // 高潮收束（2 个短段，<100 字符）
+    const climax = [
+      "她没有回头。庙外雾已经漫过荒草。",
+      "佩剑客追到门前。地上留下一截断穗。",
+    ];
+    // 第二个结尾（4 个短段，重复 断穗/寒灯/门人录/夜雾/她没有回头/转身/走入 主题）
+    const secondEnding = [
+      "佩剑客拾起断穗。穗尾旧线已经发白。",
+      "寒灯重新燃起。火苗比先前更低。",
+      "门人录还在。断穗已经不在。她没有回头。",
+      "她转身走入夜雾。朝另一个方向行去。",
+    ];
+    const content = [...early, ...climax, ...secondEnding].join("\n\n");
+
+    const result = truncateTrailingSecondEnding(content);
+
+    expect(result.truncated).toBe(true);
+    expect(result.content).toBe([...early, ...climax].join("\n\n"));
+  });
+
+  it("does not truncate a short-paragraph ending when themes are not repeated", () => {
+    const early = Array.from({ length: 5 }, (_, index) =>
+      `第${index + 1}段长叙事文本展开新的场景和行动，人物面对不同处境作出各自的选择。`.repeat(2));
+    const ending = [
+      "雨停了。她收起伞。",
+      "远处传来钟声。",
+      "她转身离开。",
+      "门在身后合上。",
+    ];
+    const content = [...early, ...ending].join("\n\n");
+
+    const result = truncateTrailingSecondEnding(content);
+
+    expect(result.truncated).toBe(false);
+    expect(result.content).toBe(content);
+  });
+
+  it("truncates a mixed narrative+dialogue second ending that repeats earlier themes (R14)", () => {
+    // R14：第二个结尾包含短对白段（如"原来线索在这里。"），打断纯短叙事序列导致 R8 漏检
+    const early = [
+      "寒灯挂在庙檐下，火苗被风吹得摇晃，时明时暗。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。断穗的编法她曾见过，那是指尖能记住的旧事，不会轻易忘记。寒灯的火苗映着她的剑，像在等一个了结。",
+      "佩剑客沿着渡口一路查访，把旧事的边角从人嘴里慢慢捞出来。他带着一张被水浸过的旧纸，纸上只剩几道淡墨，却足以让他辨认出断穗的回环扣编法。门人录的旧债在他心中压着，寒灯的光映在剑鞘上，像在等一个了结。断穗的回环扣编法他认得，那是旧日门人录的记号。",
+      "夜雾从江面漫过来，盖住了石阶和荒草。沈雁声在废庙中等着，寒灯的火苗缩成细线，又顽强撑住。她知道佩剑客会来，断穗的线索已经留下了，门人录的旧事终究要面对。她没有回头，转身走入夜雾。寒灯的火苗映着她的剑。",
+      "废庙的寒灯仍亮着，灯油是新添的，铜片被擦亮了一圈。佩剑客推门进来，目光扫过残墙和神像，落在那盏寒灯上。他取出门人录的旧纸，把断穗压在纸面边缘。寒灯的火苗映着他的剑，淡墨被灯火照出几道模糊的痕。门人录的旧债又回来了。",
+    ];
+    const climax = ["她没有回头。庙外雾已经漫过荒草。", "佩剑客追到门前。地上留下一截断穗。"];
+    const secondEnding = [
+      "寒灯仍亮着。废庙中，佩剑客拾起断穗。青黑色。",
+      "他将断穗放在掌心。门人录的旧债又回来了。",
+      "淡墨被灯火照出几道模糊的痕。寒灯的火苗映着他的剑。",
+      "“原来线索在这里。”",
+      "寒灯的火苗映着他的剑。他带走了一件从门人录落下的信物。",
+    ];
+    const content = [...early, ...climax, ...secondEnding].join("\n\n");
+    const result = truncateTrailingSecondEnding(content);
+    expect(result.truncated).toBe(true);
+    expect(result.content).toBe([...early, ...climax].join("\n\n"));
   });
 
   it("preserves a legitimate long scene after a short transition", () => {
@@ -145,172 +212,5 @@ describe("draft structure repair", () => {
     expect(result.content).toContain("\u201D阿落忽然开口");
   });
 
-  it("removes author-style interpretive summary sentences from narrative paragraphs", () => {
-    const content = [
-      "她没有回头。寒露落在发间。",
-      "她第一次知道，离开一座山门，不一定需要有人赶。有时候，是自己先转身。",
-      "她沿着后山旧路奔去，脚踝隐隐作痛。",
-    ].join("\n\n");
-
-    const result = repairInterpretiveSummaries(content);
-
-    expect(result.repaired).toBe(true);
-    expect(result.removedCount).toBe(1);
-    expect(result.content).toContain("她没有回头。寒露落在发间。");
-    expect(result.content).toContain("她沿着后山旧路奔去");
-    expect(result.content).not.toContain("她第一次知道");
-  });
-
-  it("removes interpretive sentences within multi-sentence paragraphs without dropping other content", () => {
-    const content = [
-      "她推开暗门。里面没有尸体。也没有打斗痕迹。这意味着有人提前来过，而且知道要找什么。她将铜扣放回原处。",
-    ].join("\n\n");
-
-    const result = repairInterpretiveSummaries(content);
-
-    expect(result.repaired).toBe(true);
-    expect(result.content).toContain("她推开暗门。里面没有尸体。也没有打斗痕迹。");
-    expect(result.content).toContain("她将铜扣放回原处。");
-    expect(result.content).not.toContain("这意味着");
-  });
-
-  it("preserves dialogue paragraphs containing interpretive-looking phrases", () => {
-    const content = [
-      "\u201C她第一次知道这件事的时候，也是在这个渡口。\u201D老人缓缓开口。",
-      "她沿着后山旧路奔去。",
-    ].join("\n\n");
-
-    const result = repairInterpretiveSummaries(content);
-
-    expect(result.repaired).toBe(false);
-    expect(result.content).toBe(content);
-  });
-
-  it("does not remove concrete action without explanatory conclusions", () => {
-    const content = "她咬住牙，沿着后山旧路奔去。身后传来一声闷响。她没有回头。";
-
-    const result = repairInterpretiveSummaries(content);
-
-    expect(result.repaired).toBe(false);
-    expect(result.content).toBe(content);
-  });
-
-  it("removes she-knows-if motivational explanation patterns", () => {
-    const content = [
-      "一路上，她没有喊人，也没有再去看那些倒下的身影。",
-      "不是不想看，而是她知道，若现在停下来，脚就再也迈不出去。",
-      "她转身往正阁走。",
-    ].join("\n\n");
-
-    const result = repairInterpretiveSummaries(content);
-
-    expect(result.repaired).toBe(true);
-    expect(result.content).toContain("一路上，她没有喊人");
-    expect(result.content).toContain("她转身往正阁走。");
-    expect(result.content).not.toContain("她知道，若现在停下来");
-  });
-
-  it("removes 'she first felt' interpretive sentences (D1 觉得 extension)", () => {
-    const content = [
-      "她没有回头。寒露落在发间。",
-      "她第一次觉得，这卷薄薄的册子，比一柄剑还重。",
-      "她转身往正阁走。",
-    ].join("\n\n");
-
-    const result = repairInterpretiveSummaries(content);
-
-    expect(result.repaired).toBe(true);
-    expect(result.removedCount).toBe(1);
-    expect(result.content).toContain("她没有回头。寒露落在发间。");
-    expect(result.content).toContain("她转身往正阁走。");
-    expect(result.content).not.toContain("她第一次觉得");
-  });
-
-  it("removes excess emphasis words beyond 2 occurrences", () => {
-    const content = [
-      "院外忽然有人奔来，脚步乱得不像听潮阁弟子。",
-      "藏书楼方向，火光忽然窜起。那不是普通失火。",
-      "直到天将亮时，江面忽然起了大雾。",
-      "忽然，一盏灯出现在雾里。很小。",
-    ].join("\n\n");
-
-    const result = repairEmphasisDevaluation(content);
-
-    expect(result.repaired).toBe(true);
-    expect(result.removedCount).toBe(2);
-    // 前两次保留
-    expect(result.content).toContain("院外忽然有人奔来");
-    expect(result.content).toContain("火光忽然窜起");
-    // 第三次及以后删除
-    expect(result.content).not.toContain("江面忽然起了大雾");
-    expect(result.content).toContain("江面起了大雾");
-    // "忽然，"连同逗号删除
-    expect(result.content).not.toContain("忽然，一盏灯");
-    expect(result.content).toContain("一盏灯出现在雾里");
-  });
-
-  it("preserves emphasis words within 2 occurrences", () => {
-    const content = [
-      "院外忽然有人奔来。",
-      "火光忽然窜起。",
-    ].join("\n\n");
-
-    const result = repairEmphasisDevaluation(content);
-
-    expect(result.repaired).toBe(false);
-    expect(result.content).toBe(content);
-  });
-
-  it("does not remove emphasis words from dialogue paragraphs", () => {
-    const content = [
-      "\u201C他忽然回头看了我一眼。\u201D老人缓缓开口。",
-      "\u201C忽然就下雨了。\u201D",
-      "\u201C忽然就不见了。\u201D",
-      "\u201C忽然又出现了。\u201D",
-    ].join("\n\n");
-
-    const result = repairEmphasisDevaluation(content);
-
-    // 全部在对白段中：虽计入全局计数但无法删除（人物语气保留）
-    expect(result.repaired).toBe(false);
-    expect(result.content).toBe(content);
-  });
-
-  it("counts dialogue emphasis words toward the global limit (D5)", () => {
-    // 对白段 1 个"忽然" + 叙事段 2 个"忽然" = 3 次，超限
-    // 对白中的保留，第 3 次叙事段中的删除
-    const content = [
-      "\u201C他忽然回头看了我一眼。\u201D老人缓缓开口。",
-      "院外忽然有人奔来，脚步乱得不像听潮阁弟子。",
-      "火光忽然窜起。那不是普通失火。",
-    ].join("\n\n");
-
-    const result = repairEmphasisDevaluation(content);
-
-    expect(result.repaired).toBe(true);
-    expect(result.removedCount).toBe(1);
-    // 对白中的保留
-    expect(result.content).toContain("他忽然回头看了我一眼");
-    // 第 1 个叙事段保留
-    expect(result.content).toContain("院外忽然有人奔来");
-    // 第 2 个叙事段超限删除
-    expect(result.content).not.toContain("火光忽然窜起");
-    expect(result.content).toContain("火光窜起");
-  });
-
-  it("removes 'she first discovered' interpretive sentences (D4 发现 extension)", () => {
-    const content = [
-      "她没有回头。寒露落在发间。",
-      "这一夜，她第一次发现自己学了十六年的剑，不是为了站在父亲身后。",
-      "她沿着后山旧路奔去，脚踝隐隐作痛。",
-    ].join("\n\n");
-
-    const result = repairInterpretiveSummaries(content);
-
-    expect(result.repaired).toBe(true);
-    expect(result.removedCount).toBe(1);
-    expect(result.content).toContain("她没有回头。寒露落在发间。");
-    expect(result.content).toContain("她沿着后山旧路奔去");
-    expect(result.content).not.toContain("她第一次发现");
-  });
 });
+

@@ -1,7 +1,5 @@
 import { streamNovelModel } from "../ai";
-import { formatContextPacket } from "../context";
 import { novelDb } from "../db";
-import { novelMemoryService } from "../memory-service";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { asBlueprint } from "../workflow-shared";
 import type { QualityIssue } from "../types";
@@ -19,6 +17,25 @@ function normalizeText(text: string): string {
 function tokenize(text: string): string[] {
   return Array.from(text.replace(/\s+/g, "")).filter((ch) => ch.trim());
 }
+
+// R10 修复：post-revision 相似度检查——检测 LLM 是否返回了与原文实质相同的内容
+// 使用字符二元组 Jaccard 相似度，O(n+m) 复杂度
+function computeTextSimilarity(a: string, b: string): number {
+  const normA = normalizeText(a);
+  const normB = normalizeText(b);
+  if (normA.length === 0 && normB.length === 0) return 1;
+  if (normA.length === 0 || normB.length === 0) return 0;
+  const bigramsA = new Set<string>();
+  for (let i = 0; i < normA.length - 1; i += 1) bigramsA.add(normA.slice(i, i + 2));
+  const bigramsB = new Set<string>();
+  for (let i = 0; i < normB.length - 1; i += 1) bigramsB.add(normB.slice(i, i + 2));
+  let intersection = 0;
+  for (const bg of bigramsA) if (bigramsB.has(bg)) intersection += 1;
+  const union = bigramsA.size + bigramsB.size - intersection;
+  return union === 0 ? 1 : intersection / union;
+}
+
+const REVISION_SIMILARITY_THRESHOLD = 0.92;
 
 export function findIssueParagraph(issue: QualityIssue, paragraphs: string[]): number {
   if (typeof issue.paragraph === "number" && issue.paragraph >= 1 && issue.paragraph <= paragraphs.length) {
@@ -106,25 +123,6 @@ export function isRevisionRefusal(text: string): boolean {
   return rejectsRevision || (requestsUnlock && compact.includes("需要先确认")) || lengthExceeded || requestsChunking;
 }
 
-function formatParagraphSelection(indices: number[]): string {
-  if (indices.length === 0) return "";
-  const ranges: string[] = [];
-  let start = indices[0] + 1;
-  let end = start;
-  for (const index of indices.slice(1)) {
-    const paragraph = index + 1;
-    if (paragraph === end + 1) {
-      end = paragraph;
-      continue;
-    }
-    ranges.push(start === end ? `${start}` : `${start}—${end}`);
-    start = paragraph;
-    end = paragraph;
-  }
-  ranges.push(start === end ? `${start}` : `${start}—${end}`);
-  return ranges.join("、");
-}
-
 // R1: 风格类 warning 升级为 major——这些规则虽定为 warning，但直接造成"AI 味"，
 // 若不送修订则永远残留。升级为 major 后进入 blockerAndMajor 列表，LLM 会收到并修订。
 const STYLE_RULES_TO_PROMOTE = new Set([
@@ -136,19 +134,16 @@ const STYLE_RULES_TO_PROMOTE = new Set([
   "style.aphorism-density",
 ]);
 
-// R6: 按规则追加可执行修订指令——避免 LLM 收到含糊建议只做"润色"而不真正删除问题句
-const ACTIONABLE_INSTRUCTIONS: Record<string, string> = {
-  "style.short-sentence-tic": "可执行：将连续短句排比融入完整句式（2-5句/段），全章仅保留1-2处决断瞬间短句，删除多余的单句成段",
-  "style.interpretive-summary-density": "可执行：删除'她第一次知道/她明白/她意识到/她忽然懂得/这意味着'等解释性总结句，不替换，直接删除让行动自己说话",
-  "style.emotion-direct": "可执行：删除'他很悲伤/她很愤怒/心如刀割'等情绪直说，用反常动作、环境意象或没说完的话承载",
-  "style.emphasis-devaluation": "可执行：删除多余的'忽然/突然/终于/竟然'，每词全章最多保留2次，其余替换为具体事件或删除",
-  "style.template-density": "可执行：替换'眼中闪过/嘴角微扬/若有所思'等模板表达为只能属于该人物的细节",
-  "style.aphorism-density": "可执行：将'不是…而是…/也许…就是…'等格言式收尾改为行动或沉默收尾",
-};
+// R12/R13: LLM reviewer 生成的 warning 常带自定义 rule 文本（非预定义 rule 名），
+// 无法通过 STYLE_RULES_TO_PROMOTE 精确匹配。用关键词匹配识别意象机械重复（R12）
+// 和对白功能同质化/节奏同构（R13），升级为 major 确保进入修订列表。
+const PROMOTABLE_WARNING_PATTERNS = /意象.{0,6}(重复|功能|机械|再现)|对白.{0,6}(功能|同质|试探.{0,4}重复)|试探.{0,6}(直接|确认式|偏向)|节奏.{0,6}(均匀|同构|平直|同质)|功能重复|同一.{0,4}(功能|说明|象征)/;
 
-function actionableInstruction(rule?: string): string {
-  if (!rule) return "";
-  return ACTIONABLE_INSTRUCTIONS[rule] ?? "";
+function shouldPromoteWarning(item: QualityIssue): boolean {
+  if (item.severity !== "warning") return false;
+  if (item.rule && STYLE_RULES_TO_PROMOTE.has(item.rule)) return true;
+  const text = `${item.title} ${item.description}`;
+  return PROMOTABLE_WARNING_PATTERNS.test(text);
 }
 
 export const revisionStageHandler: StageHandler = {
@@ -168,10 +163,9 @@ export const revisionStageHandler: StageHandler = {
     let workingText = draft.contentMarkdown;
     let paragraphs = splitParagraphs(workingText);
     const revisableIssues = report.issues
-      .filter((item) => !(item.deterministic && item.rule === "chapter-blueprint.mustHappen"))
       .map((item) => {
-        // R1: 风格类 warning 升级为 major，使其进入修订列表
-        if (item.severity === "warning" && item.rule && STYLE_RULES_TO_PROMOTE.has(item.rule)) {
+        // R1+R12+R13: 风格类 warning 升级为 major，使其进入修订列表
+        if (shouldPromoteWarning(item)) {
           return { ...item, severity: "major" as const };
         }
         return item;
@@ -201,21 +195,14 @@ export const revisionStageHandler: StageHandler = {
       }
     }
 
-    const blockerAndMajor = remainingIssues.filter((item) => item.severity === "blocker" || item.severity === "major").slice(0, 8);
+    // R12/R13 修复：上限从 8 提升到 12——promoted warnings 增加了修订列表条目数，
+    // 8 条上限会截断意象重复/对白同质化类 issue，导致它们仍不被修订
+    const blockerAndMajor = remainingIssues.filter((item) => item.severity === "blocker" || item.severity === "major").slice(0, 12);
     // Loop 6 修复 #10：skillPrompt 提前定义，供 Path A/B/拒绝路径调用 repairDraftStructureOnce
     const skillPrompt = compileNovelStagePrompt(skills.skills, "revision");
 
-    const issueParagraphs = new Set<number>();
-    const issueTargets = new Map<string, number[]>();
-    for (const issue of blockerAndMajor) {
-      const targets = collectRevisionParagraphs(issue, paragraphs);
-      issueTargets.set(issue.id, targets);
-      for (const index of targets) issueParagraphs.add(index);
-    }
-
-    // 如果删除了重复段但没有其他需要 LLM 修订的段落，直接保存删除后的正文
-    // Loop 6 修复 #10：Path A 也必须经过 repairDraftStructureOnce，确保截断第二个结尾、strip 格式标记
-    if (redundantIssues.length > 0 && issueParagraphs.size === 0) {
+    // 如果删除了重复段但没有其他需要 LLM 修订的问题，直接保存删除后的正文
+    if (redundantIssues.length > 0 && blockerAndMajor.length === 0) {
       const repairedText = await repairDraftStructureOnce({ content: workingText, model: project.settings.textModel, skillPrompt });
       const nextIteration = run.revisionIteration + 1;
       const artifact = await ctx.saveArtifact({ ...run, revisionIteration: nextIteration }, {
@@ -234,8 +221,8 @@ export const revisionStageHandler: StageHandler = {
       return { run: nextRun };
     }
 
-    // Loop 6 修复 #10：Path B 也必须经过 repairDraftStructureOnce，确保截断第二个结尾、strip 格式标记
-    if (issueParagraphs.size === 0) {
+    // 没有需要 LLM 修订的问题，直接保留原文
+    if (blockerAndMajor.length === 0) {
       const repairedDraft = await repairDraftStructureOnce({ content: draft.contentMarkdown, model: project.settings.textModel, skillPrompt });
       const nextIteration = run.revisionIteration + 1;
       const artifact = await ctx.saveArtifact({ ...run, revisionIteration: nextIteration }, {
@@ -250,74 +237,64 @@ export const revisionStageHandler: StageHandler = {
         skillRefs: [],
         contextPacketId: run.contextPacketId,
       });
-      await ctx.createApprovalProposal(run, artifact, "workflow-manuscript", blockerAndMajor.length
-        ? "重大质量问题无法安全定位到具体段落，已保留原文并转交人工审阅"
-        : "没有可安全自动修订的重大问题，已保留原文并转交人工审阅");
+      await ctx.createApprovalProposal(run, artifact, "workflow-manuscript", "没有可安全自动修订的重大问题，已保留原文并转交人工审阅");
       const nextRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", { draftArtifactId: artifact.id, revisionIteration: nextIteration });
       return { run: nextRun, continueLoop: false };
     }
 
     const mustHappenBlock = blueprintData?.mustHappen?.length
-      ? `\n\n## 必须落实的节拍（硬约束，不可省略）\n${blueprintData.mustHappen.map((item) => `- ${item}`).join("\n")}\n修订后正文必须让以下每个节拍在文中以具体行动和可识别结果呈现。`
+      ? `\n\n## 本章已批准的兑现项（硬约束，不可省略）\n${blueprintData.mustHappen.map((item) => `- ${item}`).join("\n")}\n修订后正文必须保留这些兑现项，但不得由此扩写或提前完成未列入此处的后续大纲节点。`
       : "";
     const forbiddenBlock = blueprintData?.forbidden?.length
       ? `\n\n## 禁止事项（硬约束，不可触犯）\n${blueprintData.forbidden.map((item) => `- ${item}`).join("\n")}`
       : "";
 
-    const numberedText = paragraphs.map((p, i) => {
-      const needsRevision = issueParagraphs.has(i);
-      const marker = needsRevision ? `【第${i + 1}段·需修订】` : `【第${i + 1}段·保留】`;
-      return `${marker}\n${p}`;
+    // R10 修复：指令式 issue 列表——每个 major+ 问题必须有明确修订指令
+    // 有 rewriteExample 的用"参考改写示例修订"，无 rewriteExample 的用"必须删除或重写对应段落"
+    const issueList = blockerAndMajor.map((item, index) => {
+      const excerptInfo = item.excerpt ? `（原文："${item.excerpt.slice(0, 60)}${item.excerpt.length > 60 ? "..." : ""}"）` : "";
+      const ranges = item.revisionRanges?.length
+        ? `（段落 ${item.revisionRanges.map((r) => `${r.start}-${r.end}`).join(", ")}）`
+        : (typeof item.paragraph === "number" ? `（段落 ${item.paragraph}）` : "");
+      const rewriteBlock = item.rewriteExample
+        ? `\n  【改写示例——必须参考】\n  ${item.rewriteExample.split("\n").map((line) => `  ${line}`).join("\n")}`
+        : `\n  【无改写示例——你必须根据建议自行改写，不得保留原文】`;
+      return `${index + 1}. [${item.severity}] ${item.title}${excerptInfo}${ranges}\n  问题：${item.description}\n  修订指令：${item.suggestion}${rewriteBlock}`;
     }).join("\n\n");
-
-    const issueList = blockerAndMajor.map((item) => {
-      const targets = formatParagraphSelection(issueTargets.get(item.id) ?? []);
-      const paraInfo = targets ? `（可修改第${targets}段）` : item.excerpt ? `（涉及："${item.excerpt.slice(0, 30)}..."）` : "";
-      const instruction = actionableInstruction(item.rule);
-      return `- [${item.severity}] ${item.title}${paraInfo}：${item.description}；建议：${item.suggestion}${instruction ? `\n  ${instruction}` : ""}`;
-    }).join("\n");
-
-    const preserveList = paragraphs.map((_, i) => i + 1).filter((i) => !issueParagraphs.has(i - 1)).join("、");
-    const preserveInstruction = preserveList
-      ? `- 标注为「保留」的段落（第${preserveList}段）必须原样输出，不改一字`
-      : "- 每个段落都有明确的问题定位，只能按各段对应问题进行定向修改";
-
-    const packet = run.conversationThreadId
-      ? await novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "revision", role: "revision-editor", instruction: "依据质量报告定向修订当前章节", workflowRunId: run.id, skillStage: "revision" })
-      : await novelDb.contextPackets.get(run.contextPacketId!);
-    if (!packet) throw new Error("修订上下文不存在");
 
     const { agent } = await ctx.createAgentRecord({
       run,
       role: "revision-editor",
-      goal: `定向修订 ${blockerAndMajor.length} 个问题（保留 ${paragraphs.length - issueParagraphs.size} 段不变）`,
+      goal: `全文修订 ${blockerAndMajor.length} 个问题`,
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
     });
+
+    // R10 修复：移除上下文包——减少 prompt 体积，释放模型输出预算
+    // 修订阶段只需正文 + issue 列表 + 蓝图约束，不需要完整上下文包
     const generated = await streamNovelModel({
       model: project.settings.textModel,
       temperature: 0.3,
       role: "revision-editor",
       skillPrompt,
       maxTokens: 8192,
-      prompt: `定向修订以下章节正文。只修改标注为「需修订」的段落，标注为「保留」的段落必须原样输出，不得改动任何文字。${mustHappenBlock}${forbiddenBlock}
+      prompt: `对以下章节正文进行全文修订。你必须逐条处理下方列出的每个问题，每个问题都必须在输出中得到具体修订——不得跳过、不得保留原文不变。${mustHappenBlock}${forbiddenBlock}
 
-## 需要处理的问题
+## 必须处理的问题（共 ${blockerAndMajor.length} 个，每个都必须修订）
 ${issueList}
 
-## 原文（带段落标注）
-${numberedText}
+## 原文
+${workingText}
 
-## 修订要求
-${preserveInstruction}
-- 标注为「需修订」的段落，根据对应问题进行修改
-- 可以删除、合并或重写标注为「需修订」的段落，也可以在这些段落相邻位置插入必要的新段落
-- “需修订”表示允许修改的边界，不要求为了改动而改动；只做解决问题所必需的调整
-- 不要输出段落标注标记（【第N段·xxx】），只输出正文
-- 保持第三人称限知视角和已有文风
-${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.contentMarkdown}` : ""}
-
-## 修订上下文
-${formatContextPacket(packet)}`,
+## 修订要求（硬约束）
+1. 上述每个问题都必须在输出中得到具体处理。有改写示例的必须参考改写示例进行修订；无改写示例的必须根据建议自行改写。
+2. 把"替读者下结论"（如"她知道/她明白/她也知道"等心理判断句）改为"让行动、感官、对白或环境承载含义"。
+3. 把"模板化表达"替换为只能属于该人物的细节。
+4. 把"短句排比"融入完整句式（2-5句/段），仅在决断瞬间保留短句。
+5. 保留原文的核心情节、人物关系和关键意象，不得偏离原意。
+6. 保持第三人称限知视角和已有文风。
+7. 只输出修订后的连续正文，不要解释，不要输出标题或标记。
+8. 输出必须与原文有实质差异——如果某个问题涉及"第二个结尾"或"重复收束"，必须删除对应段落而非改写。
+${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.contentMarkdown}` : ""}`,
     });
     if (isRevisionRefusal(generated.content)) {
       // LLM 拒绝修订（长度超限/请求分段/约束冲突）——回退到 draft 原文，转交人工审阅
@@ -337,12 +314,48 @@ ${formatContextPacket(packet)}`,
         parentArtifactId: draft.id,
         model: project.settings.textModel,
         skillRefs: [],
-        contextPacketId: packet.id,
+        contextPacketId: run.contextPacketId ?? undefined,
       });
       await ctx.createApprovalProposal(run, fallbackArtifact, "workflow-manuscript",
         "修订模型拒绝任务（输出长度超限或请求分段发送），已保留原文草稿转交人工审阅；建议人工拆分章节、调整蓝图节拍或缩短目标字数");
       const refusalRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", { draftArtifactId: fallbackArtifact.id, revisionIteration: refusalIteration });
       return { run: refusalRun, continueLoop: false };
+    }
+    // R10 修复：post-revision 相似度检查——检测 LLM 是否返回了与原文实质相同的内容
+    // 如果相似度 > 0.92，说明 LLM 没有进行有效修订，回退到确定性删除 + 原文
+    const similarity = computeTextSimilarity(workingText, generated.content);
+    if (similarity > REVISION_SIMILARITY_THRESHOLD) {
+      await ctx.failAgent(agent, new Error(`修订输出与原文相似度 ${similarity.toFixed(3)} > ${REVISION_SIMILARITY_THRESHOLD}，LLM 未进行有效修订`));
+      // 回退策略：在已删除重复段的基础上，额外删除 major+ issue 对应的段落，保留剩余原文
+      const extraDeleteSet = new Set<number>();
+      const currentParagraphs = splitParagraphs(workingText);
+      for (const issue of blockerAndMajor) {
+        const targets = collectRevisionParagraphs(issue, currentParagraphs);
+        for (const index of targets) extraDeleteSet.add(index);
+      }
+      let fallbackText = workingText;
+      if (extraDeleteSet.size > 0 && extraDeleteSet.size < currentParagraphs.length) {
+        const surviving = currentParagraphs.filter((_, index) => !extraDeleteSet.has(index));
+        fallbackText = surviving.join("\n\n");
+      }
+      const fallbackRepaired = await repairDraftStructureOnce({ content: fallbackText, model: project.settings.textModel, skillPrompt });
+      const fallbackIteration = run.revisionIteration + 1;
+      const fallbackArtifact = await ctx.saveArtifact({ ...run, revisionIteration: fallbackIteration }, {
+        projectId: run.projectId,
+        workflowRunId: run.id,
+        stage: "revision",
+        kind: "revision",
+        title: `${document.title}相似度回退 ${fallbackIteration}`,
+        contentMarkdown: fallbackRepaired.content,
+        parentArtifactId: draft.id,
+        model: project.settings.textModel,
+        skillRefs: [],
+        contextPacketId: run.contextPacketId ?? undefined,
+      });
+      await ctx.createApprovalProposal(run, fallbackArtifact, "workflow-manuscript",
+        `LLM 修订输出与原文相似度过高（${similarity.toFixed(3)}），已回退到确定性删除并转交人工审阅`);
+      const fallbackRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", { draftArtifactId: fallbackArtifact.id, revisionIteration: fallbackIteration });
+      return { run: fallbackRun, continueLoop: false };
     }
     let repaired;
     try {
@@ -364,10 +377,10 @@ ${formatContextPacket(packet)}`,
       parentArtifactId: draft.id,
       model: project.settings.textModel,
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
-      contextPacketId: packet.id,
+      contextPacketId: run.contextPacketId ?? undefined,
     });
     await ctx.finishAgent(agent, { ...result, artifactId: artifact.id });
-    const nextRun = await ctx.transition(run, "deterministic-check", "running", { draftArtifactId: artifact.id, revisionIteration: nextIteration, contextPacketId: packet.id });
+    const nextRun = await ctx.transition(run, "deterministic-check", "running", { draftArtifactId: artifact.id, revisionIteration: nextIteration });
     return { run: nextRun };
   },
 };

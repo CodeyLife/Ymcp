@@ -11,13 +11,16 @@ describe("production prose prompts", () => {
       forbidden: ["解释幕后真相"],
     });
 
-    expect(prompt.indexOf("事实、人物知识边界")).toBeLessThan(prompt.indexOf("视角人物为一个当下欲望"));
-    expect(prompt.indexOf("视角人物为一个当下欲望")).toBeLessThan(prompt.indexOf("意象、辞藻和句式装饰"));
-    expect(prompt).toContain("蓝图是因果材料，不是待逐项复述的清单");
-    expect(prompt).toContain("信息发现只有迫使人物选择或承担后果时才算推进");
+    expect(prompt.indexOf("事实、人物知识边界")).toBeLessThan(prompt.indexOf("本章主导叙事功能与兑现边界"));
+    expect(prompt.indexOf("本章主导叙事功能与兑现边界")).toBeLessThan(prompt.indexOf("意象、辞藻和句式装饰"));
+    expect(prompt).toContain("蓝图规定本章可用的材料与边界");
+    expect(prompt).toContain("主线可以暂不前进");
+    expect(prompt).toContain("人物内心可以充分展开");
+    expect(prompt).toContain("不强制设置明显波峰");
+    expect(prompt).toContain("情感余韵");
     expect(prompt).toContain("不要替人物总结“这意味着什么”");
-    expect(prompt).toContain("不相容的当下目的");
-    expect(prompt).toContain("稳定的交锋策略");
+    expect(prompt).toContain("试探、陪伴、闲谈、礼俗或共同劳动");
+    expect(prompt).toContain("普通交流也能积累关系和人物质地");
     expect(prompt).toContain("不要每句话或每轮对白都另起空行");
     expect(prompt).toContain("主角拒绝交易");
     expect(prompt).toContain("解释幕后真相");
@@ -42,8 +45,9 @@ describe("production prose prompts", () => {
     expect(stylePrompt).toContain("形式完整、情节都写到了，不等于 4 分以上");
     expect(stylePrompt).toContain("解释性心理总结");
     expect(stylePrompt).toContain("意象替人物说理");
-    expect(plotPrompt).toContain("蓝图是否被熔成因果链，而不是逐项交差");
-    expect(plotPrompt).toContain("人物行动是否制造不可逆结果和长线余波");
+    expect(plotPrompt).toContain("是否把大纲压缩成当章任务清单");
+    expect(plotPrompt).toContain("铺陈和余波章不要求不可逆结果");
+    expect(plotPrompt).toContain("背景展开、人物内省、情感抒发、文学意象和日常过程可以是章节主体");
     expect(plotPrompt).toContain("revisionRanges");
   });
 });

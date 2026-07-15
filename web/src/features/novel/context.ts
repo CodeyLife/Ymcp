@@ -18,16 +18,6 @@ const ROLE_SOURCE_KINDS: Partial<Record<NovelAgentRole, Set<ContextSource["kind"
   "character-enricher": new Set(["instruction", "document", "entity", "fact", "knowledge", "creative-brief", "skill"]),
 };
 
-/**
- * 按 taskKey 排除与任务焦点无关的 skill。
- * TODO P2: 后续可改为在 generation task 定义中声明 excludedSkills 字段，由 task 自治声明，
- * 而非在此硬编码映射表。
- */
-const TASK_SKILL_EXCLUSIONS: Record<string, Set<string>> = {
-  // 世界观完善任务聚焦地点/组织/规则/物品/物种/能力/术语，人物塑造技能与此无关
-  worldview: new Set(["classic-character-ensemble", "character-desire-engine"]),
-};
-
 function estimateTokens(text: string) {
   const cjk = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
   return Math.ceil(cjk * 1.1 + (text.length - cjk) / 4);
@@ -225,12 +215,8 @@ export async function compileNovelContext(params: {
     for (const memory of conversationMemories) push(source({ kind: "conversation-memory", id: memory.id, title: memory.title, content: memory.content, weight: 78 + memory.confidence * 12, layer: params.retrievalSourceIds?.includes(memory.id) ? "working" : "retrieval", reason: "作者对话中提炼并仍然有效的偏好", priorityClass: "working", authority: "author", evidenceRefs: memory.sourceMessageIds }));
   }
   if (architecture) push(source({ kind: "architecture", id: architecture.id, title: architecture.status === "approved" ? "已批准全书架构（创作契约，不是已发生事实）" : "全书架构草案", content: [`结构方法：${architecture.framework}`, `核心问题：${architecture.centralQuestion}`, `核心冲突：${architecture.centralConflict}`, `全书梗概：${architecture.synopsis}`, `结构阶段：\n${normalizeArchitecturePhases(architecture.phases).map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`).join("\n")}`].join("\n"), weight: architecture.status === "approved" ? 96 : 72, layer: architecture.status === "approved" ? "mandatory" : "working", pinned: architecture.status === "approved", reason: architecture.status === "approved" ? "作者批准的未来创作契约" : "尚未批准的工作规划", priorityClass: architecture.status === "approved" ? "invariant" : "working" }));
-  for (const skill of resolvedSkills) {
-    if (TASK_SKILL_EXCLUSIONS[task]?.has(skill.skillId)) continue;
-    const item = source({ kind: "skill", id: `skill:${skill.id}`, title: `创作技能：${skill.name}`, content: skill.prompt, weight: 82 + Math.min(18, skill.priority / 50), layer: "mandatory", pinned: true, reason: `${stage} 阶段启用 · ${skill.source}`, priorityClass: "invariant" });
-    item.skillId = skill.skillId;
-    push(item);
-  }
+  // Skill 内容由独立的 stage prompt 编译器注入。上下文只保留 skillRefs，避免同一规则
+  // 以原始 Skill 和阶段契约两种版本重复出现，造成约束冲突与提示词过载。
   if (target) push(source({ kind: "document", id: target.id, title: `当前章节：${target.title}`, content: chapterPlanningText(target), weight: 98, layer: "mandatory", pinned: true, reason: "当前章节标题、摘要、蓝图与正文", priorityClass: "working" }));
 
   for (const entity of entities) {

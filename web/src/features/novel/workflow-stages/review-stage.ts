@@ -83,6 +83,12 @@ export const reviewStageHandler: StageHandler = {
         }],
       } satisfies ReviewerFinding;
     });
+    // R11 修复：检查 major+ issue 的 rewriteExample 覆盖率，记录警告供调试
+    const majorIssues = reviewers.flatMap((r) => r.issues).filter((i) => i.severity === "major" || i.severity === "blocker");
+    const missingRewrite = majorIssues.filter((i) => !i.rewriteExample?.trim());
+    if (missingRewrite.length > 0) {
+      console.warn(`[review-stage] ${missingRewrite.length}/${majorIssues.length} major+ issues missing rewriteExample (prompt requires it for major+)`);
+    }
     const report = await saveQualityReport({
       projectId: run.projectId,
       workflowRunId: run.id,
