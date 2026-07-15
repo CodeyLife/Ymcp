@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Dexie from "dexie";
 import "./setup";
 import { createNovelProject, getCanvasLayout, novelDb, recordBase, saveCanvasLayout, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V16_STORES } from "../db-schema";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V16_STORES, V17_STORES } from "../db-schema";
 import { exportNovel, importNovel, verifyProjectArchive } from "../export";
 
 beforeEach(async () => {
@@ -12,12 +12,12 @@ beforeEach(async () => {
 });
 
 describe("db-schema constants", () => {
-  it("DB_VERSION is 16", () => {
-    expect(DB_VERSION).toBe(16);
+  it("DB_VERSION is 17", () => {
+    expect(DB_VERSION).toBe(17);
   });
 
-  it("RECORD_SCHEMA_VERSION is 6", () => {
-    expect(RECORD_SCHEMA_VERSION).toBe(6);
+  it("RECORD_SCHEMA_VERSION is 7", () => {
+    expect(RECORD_SCHEMA_VERSION).toBe(7);
   });
 
   it("keeps the v4 schema for migration and removes project generation runs in v5", () => {
@@ -76,6 +76,38 @@ describe("db-schema constants", () => {
     expect(V16_STORES.conversationThreads).toContain("[projectId+targetId]");
     expect(V16_STORES.memoryJobs).toContain("[status+availableAt]");
   });
+
+  it("V17_STORES replaces outline status indexing with kind indexing", () => {
+    expect(V17_STORES.outlineNodes).toContain("[projectId+kind]");
+    expect(V17_STORES.outlineNodes).not.toContain("status");
+  });
+});
+
+describe("database v17 outline migration", () => {
+  it("removes retired outline fields and preserves story time in the timeline", async () => {
+    novelDb.close();
+    await novelDb.delete();
+    const legacy = new Dexie(novelDb.name);
+    legacy.version(16).stores(V16_STORES);
+    await legacy.open();
+    await legacy.table("outlineNodes").bulkPut([
+      { id: "legacy-act", projectId: "p17", schemaVersion: 6, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test", kind: "act", title: "旧幕", summary: "旧幕概要", order: 0, status: "planned", storyTime: "第一天", tags: ["旧标签"], characterIds: ["should-drop"], plotThreadIds: ["should-drop"], foreshadowingIds: ["should-drop"] },
+      { id: "legacy-event", projectId: "p17", schemaVersion: 6, revision: 1, createdAt: 2, updatedAt: 2, createdBy: "test", updatedBy: "test", parentId: "legacy-sequence", kind: "event", title: "旧事件", summary: "旧事件概要", order: 0, status: "resolved", storyTime: "第二天", tags: ["线索"], characterIds: ["character-1"], plotThreadIds: ["thread-1"], foreshadowingIds: ["clue-1"] },
+    ]);
+    legacy.close();
+
+    await novelDb.open();
+
+    const act = await novelDb.outlineNodes.get("legacy-act") as unknown as Record<string, unknown>;
+    expect(act).not.toHaveProperty("status");
+    expect(act).not.toHaveProperty("storyTime");
+    expect(act).not.toHaveProperty("tags");
+    expect(act).not.toHaveProperty("characterIds");
+    const event = await novelDb.outlineNodes.get("legacy-event");
+    expect(event?.kind === "event" ? event.characterIds : []).toEqual(["character-1"]);
+    expect(await novelDb.timelineEvents.get("outline-time:legacy-act")).toMatchObject({ storyDate: "第一天", title: "大纲时间：旧幕" });
+    expect(await novelDb.timelineEvents.get("outline-time:legacy-event")).toMatchObject({ storyDate: "第二天", participantIds: ["character-1"] });
+  });
 });
 
 describe("database v9 schema", () => {
@@ -94,7 +126,7 @@ describe("database v9 schema", () => {
 
   it("rejects project imports older than v4", async () => {
     const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 3 }, project: { id: "legacy" } }) } as File;
-    await expect(importNovel(file)).rejects.toThrow(/v4-v11/);
+    await expect(importNovel(file)).rejects.toThrow(/v4-v12/);
   });
 
   it("imports v4 backups without retired run data or proposal links", async () => {
@@ -305,7 +337,7 @@ describe("database v9 schema", () => {
       await exportNovel(project.id, "json");
       expect(exportedBlob).toBeDefined();
       const backup = JSON.parse(await exportedBlob!.text()) as Record<string, unknown> & { manifest: { schemaVersion: number } };
-      expect(backup.manifest.schemaVersion).toBe(11);
+      expect(backup.manifest.schemaVersion).toBe(12);
       expect(backup).toHaveProperty("factAssertions");
       expect(backup).toHaveProperty("knowledgeAssertions");
       expect(backup).toHaveProperty("narrativeUnits");
@@ -450,40 +482,36 @@ describe("database v9 schema", () => {
     expect(characters[0].name).toBe("Hero");
   });
 
-  it("supports composite index [projectId+status] on outlineNodes", async () => {
+  it("supports composite index [projectId+kind] on outlineNodes", async () => {
     await novelDb.outlineNodes.put({
       ...recordBase("p1"),
       parentId: undefined,
-      kind: "event",
+      kind: "event" as const,
       title: "Event 1",
       summary: "",
       order: 0,
-      status: "planned",
       characterIds: [],
       plotThreadIds: [],
       foreshadowingIds: [],
-      tags: [],
-    });
+    } as never);
     await novelDb.outlineNodes.put({
       ...recordBase("p1"),
       parentId: undefined,
-      kind: "event",
+      kind: "event" as const,
       title: "Event 2",
       summary: "",
       order: 1,
-      status: "resolved",
       characterIds: [],
       plotThreadIds: [],
       foreshadowingIds: [],
-      tags: [],
-    });
+    } as never);
 
     const planned = await novelDb.outlineNodes
-      .where("[projectId+status]")
-      .equals(["p1", "planned"])
+      .where("[projectId+kind]")
+      .equals(["p1", "event"])
       .toArray();
-    expect(planned).toHaveLength(1);
-    expect(planned[0].title).toBe("Event 1");
+    expect(planned).toHaveLength(2);
+    expect(planned.map((item) => item.title)).toEqual(expect.arrayContaining(["Event 1", "Event 2"]));
   });
 
   it("recordBase writes RECORD_SCHEMA_VERSION", () => {

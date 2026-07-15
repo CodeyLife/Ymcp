@@ -175,7 +175,7 @@
 .novel-scene-beats > div { display: grid; grid-template-columns: 24px minmax(0, 1fr) 32px; align-items: center; gap: 7px; padding: 5px 0; }
 .novel-scene-beats i { color: #64686c; font: normal 9px var(--font-mono); text-align: center; }
 .novel-story-matrix { min-width: 960px; border: 1px solid #303236; }
-.novel-story-matrix > div { display: grid; grid-template-columns: minmax(150px, 1.2fr) repeat(3, minmax(130px, 1fr)) minmax(100px, .7fr) minmax(120px, .8fr); min-height: 58px; border-top: 1px solid #292c2e; }
+.novel-story-matrix > div { display: grid; grid-template-columns: minmax(150px, 1.2fr) repeat(3, minmax(130px, 1fr)) minmax(120px, .8fr); min-height: 58px; border-top: 1px solid #292c2e; }
 .novel-story-matrix > div:first-child { border-top: 0; }
 .novel-story-matrix .head { min-height: 38px; background: #191b1d; color: #73777b; font: 9px var(--font-mono); }
 .novel-story-matrix > div > span { min-width: 0; padding: 9px; border-right: 1px solid #292c2e; overflow: hidden; }
@@ -339,7 +339,7 @@
 .novel-outline-doc { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px 32px; }
 .novel-outline-block { border: 1px solid #2c2e30; border-left-width: 2px; background: #17191b; padding: 0; }
 .novel-outline-block:hover { border-color: #3a3d40; }
-.novel-outline-block-header { display: grid; grid-template-columns: 24px auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 10px 12px; }
+.novel-outline-block-header { display: grid; grid-template-columns: 24px auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; }
 .novel-outline-collapse { width: 22px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: #6f7378; cursor: pointer; border-radius: 4px; }
 .novel-outline-collapse:hover { background: #232628; color: #b7b8ba; }
 .novel-outline-kind { margin: 0; font-size: 10px; line-height: 16px; padding: 0 6px; }
@@ -402,6 +402,8 @@
 .novel-outline-proposal-node-main > .ant-checkbox-wrapper { margin-top: 2px; }
 .novel-outline-proposal-node-main > .ant-tag { min-width: 38px; margin: 0; text-align: center; }
 .novel-outline-proposal-copy { min-width: 0; }
+.novel-outline-review-tree > .novel-outline-proposal-node > .novel-outline-proposal-copy { padding: 14px 12px; border-bottom: 1px solid #2d312e; }
+.novel-outline-review-tree > .novel-outline-proposal-node > .novel-outline-proposal-copy > .ant-tag { margin-bottom: 8px; }
 .novel-outline-proposal-copy > strong { display: block; color: #e1e3dd; font: 520 16px Georgia, "Noto Serif SC", serif; }
 .novel-outline-proposal-copy > p { margin: 5px 0 0; color: #a5aaa4; font-size: 12px; line-height: 1.6; }
 .novel-outline-proposal-summary { white-space: pre-wrap; }

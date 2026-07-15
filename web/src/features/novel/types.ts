@@ -132,19 +132,30 @@ export interface StoryArchitecture extends VersionedRecord {
   phases: ArchitecturePhase[];
 }
 
-export interface OutlineNode extends VersionedRecord {
+interface OutlineNodeBase extends VersionedRecord {
   parentId?: string;
   kind: OutlineKind;
   title: string;
   summary: string;
   order: number;
-  status: "idea" | "planned" | "resolved";
-  storyTime?: string;
+}
+
+export interface OutlineActNode extends OutlineNodeBase {
+  kind: "act";
+}
+
+export interface OutlineSequenceNode extends OutlineNodeBase {
+  kind: "sequence";
+}
+
+export interface OutlineEventNode extends OutlineNodeBase {
+  kind: "event";
   characterIds: string[];
   plotThreadIds: string[];
   foreshadowingIds: string[];
-  tags: string[];
 }
+
+export type OutlineNode = OutlineActNode | OutlineSequenceNode | OutlineEventNode;
 
 export interface StoryScene extends VersionedRecord {
   chapterId: string;
@@ -267,9 +278,32 @@ export interface StorySnapshot extends VersionedRecord {
   sourceDocumentId?: string;
 }
 
+export const CONTEXT_SOURCE_KINDS = [
+  "instruction",
+  "architecture",
+  "document",
+  "entity",
+  "relation",
+  "outline",
+  "scene",
+  "thread",
+  "foreshadowing",
+  "snapshot",
+  "style",
+  "skill",
+  "taste",
+  "fact",
+  "knowledge",
+  "memory",
+  "conversation-memory",
+  "creative-brief",
+] as const;
+
+export type ContextSourceKind = (typeof CONTEXT_SOURCE_KINDS)[number];
+
 export interface ContextSource {
   id: string;
-  kind: "instruction" | "architecture" | "document" | "entity" | "relation" | "outline" | "scene" | "thread" | "foreshadowing" | "snapshot" | "style" | "skill" | "taste" | "fact" | "knowledge" | "memory" | "conversation-memory" | "creative-brief";
+  kind: ContextSourceKind;
   title: string;
   content: string;
   weight: number;
@@ -399,11 +433,13 @@ export interface NovelRetrievalRound {
 }
 
 export interface NovelRetrievalRun extends VersionedRecord {
-  threadId: string;
+  threadId?: string;
   messageId?: string;
-  targetDocumentId: string;
+  targetKind?: "document" | "outline-act" | "project";
+  targetId?: string;
+  targetDocumentId?: string;
   informationView: "author" | "reader" | "character";
-  purpose: "conversation" | "workflow-stage";
+  purpose: "conversation" | "workflow-stage" | "task-evidence";
   factCutoffOrder?: number;
   consumer?: { workflowRunId?: string; stage?: WorkflowStage; role?: NovelAgentRole };
   queries: string[];
@@ -468,12 +504,13 @@ export interface ProposalItem {
   acceptedFields?: string[];
 }
 
-export type NovelGenerationScope = "architecture" | "outline" | "chapters" | "scenes" | "bible" | "characters" | "relations" | "timeline" | "worldview" | "foreshadowing" | "threads" | "review" | "writing";
+export type NovelGenerationScope = "architecture" | "outline" | "plot-design" | "chapters" | "scenes" | "bible" | "characters" | "relations" | "timeline" | "worldview" | "foreshadowing" | "threads" | "review" | "writing";
 
 export type NovelGenerationTaskKey =
   | "project-positioning"
   | "architecture"
   | "outline"
+  | "plot-design"
   | "outline-section-update"
   | "outline-field-revise"
   | "story-bible"
@@ -506,7 +543,7 @@ export interface AIProposal extends VersionedRecord {
   artifactId?: string;
   generationMode?: "generate" | "refine";
   sourceFingerprint?: string;
-  outlineGenerationMode?: "full-replace" | "act-append";
+  outlineGenerationMode?: "full-replace" | "act-append" | "plot-segment-append";
   architecturePhaseId?: string;
   architecturePhaseOrder?: number;
 }

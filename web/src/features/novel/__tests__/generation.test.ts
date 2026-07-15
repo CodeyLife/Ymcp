@@ -11,7 +11,7 @@ vi.mock("../ai", () => ({
 }));
 
 import { callStructuredNovelModel, streamNovelModel } from "../ai";
-import { applyProposalItems, buildRefinementSnapshot, fingerprintRefinementSnapshot, getGenerationTask, runGenerationTask, runRefinementTask, tasksForScope, updateProposalItemPayload } from "../generation";
+import { applyProposalItems, buildRefinementSnapshot, createNextOutlineAct, fingerprintRefinementSnapshot, getGenerationTask, runGenerationTask, runPlotDesignTask, runRefinementTask, tasksForScope, updateProposalItemPayload } from "../generation";
 import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, novelDb, recordBase, saveApprovedDocumentRevision, saveStoryArchitecture } from "../db";
 import { createChapterMemory, linkOutlineRealization } from "../memory";
 import type { AIProposal, StoryEntity, WorkflowRun } from "../types";
@@ -56,6 +56,136 @@ async function addArchitecture(projectId: string, phaseCount = 3) {
     phases: Array.from({ length: phaseCount }, (_, order) => ({ id: `phase-${order}`, title: `阶段${order + 1}`, purpose: `推进阶段${order + 1}`, turningPoint: `转折${order + 1}`, order, locked: false })),
   });
 }
+
+function evidenceReady(creativeGaps: string[] = []) {
+  return { data: { state: "ready", requests: [], missingFacts: [], creativeGaps }, usage: { inputTokens: 3, outputTokens: 3 }, promptHash: "evidence-ready" };
+}
+
+function plotDesignResponse(actId: string, sequenceOrder = 0) {
+  return {
+    data: { summary: "新的剧情段", items: [
+      { label: "城门下的选择", operation: "create", targetTable: "outlineNodes", tempId: "segment", payload: { parentId: actId, kind: "sequence", title: "城门下的选择", summary: "主角来到陌生城门，试图以正常方式获得落脚之处，却因身份文书被拒。面对守卫的冷漠与商队的暗示，他意识到这里的秩序并不公平，最终决定冒险借用规则漏洞进入城市。", order: sequenceOrder }, rationale: "承接当前幕" },
+      { label: "请求入城", operation: "create", targetTable: "outlineNodes", tempId: "event-1", payload: { parentId: "ref:segment", kind: "event", title: "请求入城", summary: "主角向守门人递交文书，希望在天黑前进入城市寻找住处。", order: 0, characterIds: [], plotThreadIds: [], foreshadowingIds: [] }, rationale: "建立目标" },
+      { label: "选择冒险", operation: "create", targetTable: "outlineNodes", tempId: "event-2", payload: { parentId: "ref:segment", kind: "event", title: "选择冒险", summary: "正常通道被拒后，主角发现商队的漏洞，决定承担风险混入城中。", order: 1, characterIds: [], plotThreadIds: [], foreshadowingIds: [] }, rationale: "改变局面" },
+    ] },
+    usage: { inputTokens: 10, outputTokens: 10 },
+    promptHash: "plot-design",
+  };
+}
+
+describe("incremental plot design", () => {
+  it("creates the next act deterministically without calling the model", async () => {
+    const project = await createNovelProject({ title: "建幕", genre: ["悬疑"], premise: "每一幕由作者决定何时开始。" });
+    await addArchitecture(project.id, 2);
+
+    const act = await createNextOutlineAct(project.id);
+
+    expect(callStructuredNovelModel).not.toHaveBeenCalled();
+    expect(act).toMatchObject({ kind: "act", title: "阶段1", order: 0 });
+    expect(act.summary).toContain("推进阶段1");
+    expect(await novelDb.outlineNodes.where("projectId").equals(project.id).count()).toBe(1);
+  });
+
+  it("uses evidence completion before generating one plot segment with atomic events", async () => {
+    const project = await createNovelProject({ title: "逐段规划", genre: ["悬疑"], premise: "每次只向前推进一小段。" });
+    await addArchitecture(project.id, 1);
+    const act = await createNextOutlineAct(project.id);
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce({ data: { state: "need-more", requests: [{ query: "主角此前是否来过这座城", sourceKinds: ["fact", "memory"], reason: "避免重复经历" }], missingFacts: [], creativeGaps: [] }, usage: { inputTokens: 2, outputTokens: 2 }, promptHash: "evidence-more" } as never)
+      .mockResolvedValueOnce(evidenceReady(["城门阻碍可以自由设计"]) as never)
+      .mockResolvedValueOnce(plotDesignResponse(act.id) as never);
+
+    const { proposal: generated } = await runPlotDesignTask({ projectId: project.id, instruction: "让主角第一次碰到这里的规则" });
+
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(3);
+    expect(generated).toMatchObject({ taskKey: "plot-design", targetId: act.id, outlineGenerationMode: "plot-segment-append", status: "pending" });
+    expect(generated.items.filter((item) => item.payload.kind === "sequence")).toHaveLength(1);
+    expect(generated.items.filter((item) => item.payload.kind === "event")).toHaveLength(2);
+    const retrieval = await novelDb.retrievalRuns.where("projectId").equals(project.id).and((run) => run.purpose === "task-evidence").first();
+    expect(retrieval?.rounds).toHaveLength(2);
+    await expect(applyProposalItems(generated.id, [generated.items[0].id])).rejects.toThrow(/整体采纳/);
+
+    await applyProposalItems(generated.id, generated.items.map((item) => item.id));
+    const stored = await novelDb.outlineNodes.where("projectId").equals(project.id).toArray();
+    expect(stored.filter((node) => node.kind === "sequence" && node.parentId === act.id)).toHaveLength(1);
+    expect(stored.filter((node) => node.kind === "event")).toHaveLength(2);
+  });
+
+  it("accepts project context source kinds in evidence follow-up requests", async () => {
+    const project = await createNovelProject({ title: "证据来源", genre: ["悬疑"], premise: "证据请求不能因合法来源类型而中断。" });
+    await addArchitecture(project.id, 1);
+    const act = await createNextOutlineAct(project.id);
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(evidenceReady() as never)
+      .mockResolvedValueOnce(plotDesignResponse(act.id) as never);
+
+    await runPlotDesignTask({ projectId: project.id });
+
+    const evidenceSchema = vi.mocked(callStructuredNovelModel).mock.calls[0]?.[0].schema;
+    const validate = new Ajv({ allErrors: true, strict: false }).compile(evidenceSchema);
+    const response = {
+      state: "need-more",
+      requests: [
+        { query: "查找人物资料", sourceKinds: ["entity"], reason: "确认人物状态" },
+        { query: "查找场景依据", sourceKinds: ["outline", "document", "scene"], reason: "确认地点连续性" },
+      ],
+      missingFacts: [],
+      creativeGaps: [],
+    };
+
+    expect(validate(response), JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it("lets plot design construct details when canonical project data is absent", async () => {
+    const project = await createNovelProject({ title: "事实缺口", genre: ["悬疑"], premise: "既有事实不可编造。" });
+    const act = await addOutlineNode(project.id, undefined, "act", "第一幕", 0);
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce({ data: { state: "blocked", requests: [], missingFacts: ["主角当前所在地点"], creativeGaps: [] }, usage: { inputTokens: 1, outputTokens: 1 }, promptHash: "blocked" } as never)
+      .mockResolvedValueOnce(plotDesignResponse(act.id) as never);
+
+    const { proposal: generated } = await runPlotDesignTask({ projectId: project.id });
+
+    expect(generated.taskKey).toBe("plot-design");
+    expect(vi.mocked(callStructuredNovelModel).mock.calls[1]?.[0].prompt).toContain("主角当前所在地点");
+    expect(act.kind).toBe("act");
+  });
+
+  it("treats exploratory questions about undesigned story details as creative gaps", async () => {
+    const project = await createNovelProject({ title: "第一章续写", genre: ["武侠"], premise: "沈砚刚刚踏入江湖。" });
+    await addArchitecture(project.id, 2);
+    const act = await createNextOutlineAct(project.id);
+    const exploratoryGaps = [
+      "沈砚在进入江湖初识阶段之前，是否正式经历了因战乱和饥荒迁徙的流民求生阶段。",
+      "大晟王朝当前时期是否存在明确的战乱、饥荒背景，以及底层民众困苦的社会状态。",
+      "沈砚在江湖初识阶段具体接触过哪些门派、商路、散修或地方势力，以及相关关系状态。",
+      "沈砚解决的江湖纷争具体事件、涉及人物、损失对象和被毁掉的守护意义。",
+    ];
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce({ data: { state: "blocked", requests: [], missingFacts: exploratoryGaps, creativeGaps: [] }, usage: { inputTokens: 2, outputTokens: 2 }, promptHash: "exploratory-gaps" } as never)
+      .mockResolvedValueOnce(plotDesignResponse(act.id) as never);
+
+    const { proposal: generated } = await runPlotDesignTask({ projectId: project.id });
+
+    expect(generated.taskKey).toBe("plot-design");
+    const plotPrompt = vi.mocked(callStructuredNovelModel).mock.calls[1]?.[0].prompt ?? "";
+    for (const gap of exploratoryGaps) expect(plotPrompt).toContain(gap);
+  });
+
+  it("includes the approved architecture in the first evidence assessment", async () => {
+    const project = await createNovelProject({ title: "架构证据", genre: ["武侠"], premise: "架构必须参与证据判断。" });
+    await addArchitecture(project.id, 1);
+    const act = await createNextOutlineAct(project.id);
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(evidenceReady() as never)
+      .mockResolvedValueOnce(plotDesignResponse(act.id) as never);
+
+    await runPlotDesignTask({ projectId: project.id });
+
+    const evidencePrompt = vi.mocked(callStructuredNovelModel).mock.calls[0]?.[0].prompt ?? "";
+    expect(evidencePrompt).toContain("阶段1");
+    expect(evidencePrompt).toContain("推进阶段1");
+  });
+});
 
 describe("generation task ownership", () => {
   it("compiles and repairs chapter-draft plainText before creating a proposal", async () => {
@@ -247,7 +377,8 @@ describe("structured refinement", () => {
     await novelDb.entities.bulkAdd([entity, other]);
     await novelDb.relations.add({ ...recordBase(project.id), fromEntityId: entity.id, toEntityId: other.id, relationType: "同伴", publicLabel: "同伴", privateTruth: "旧识", bond: "" });
     const node = await addOutlineNode(project.id, undefined, "event", "相遇", 0);
-    await novelDb.outlineNodes.update(node.id, { characterIds: [entity.id, other.id] });
+    if (node.kind !== "event") throw new Error("测试事件创建失败");
+    await novelDb.outlineNodes.put({ ...node, characterIds: [entity.id, other.id] } as never);
     const thread = { ...recordBase(project.id), kind: "main" as const, title: "主线", summary: "", status: "active" as const, priority: 90, participantIds: [entity.id, other.id], progress: 10, nextMove: "继续" };
     await novelDb.plotThreads.add(thread);
     const event = { ...recordBase(project.id), title: "昨日", storyDate: "第一天", duration: "1小时", narrativeOrder: 0, participantIds: [entity.id, other.id], causeIds: [], consequenceIds: [], description: "" };
@@ -259,7 +390,8 @@ describe("structured refinement", () => {
     await applyProposalItems(draft.id, ["delete-entity"]);
     expect(await novelDb.entities.get(entity.id)).toBeUndefined();
     expect(await novelDb.relations.where("projectId").equals(project.id).count()).toBe(0);
-    expect((await novelDb.outlineNodes.get(node.id))?.characterIds).toEqual([other.id]);
+    const storedOutline = await novelDb.outlineNodes.get(node.id);
+    expect(storedOutline?.kind === "event" ? storedOutline.characterIds : []).toEqual([other.id]);
     expect((await novelDb.plotThreads.get(thread.id))?.participantIds).toEqual([other.id]);
     expect((await novelDb.timelineEvents.get(event.id))?.participantIds).toEqual([other.id]);
   });

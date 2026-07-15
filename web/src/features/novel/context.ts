@@ -240,7 +240,7 @@ export async function compileNovelContext(params: {
     push(source({ kind: "relation", id: relation.id, title: `${from} → ${to}`, content, weight: (task === "worldview" ? 70 : 48) + relevance(terms, `${from} ${to}`), layer: relationLayer, reason: task === "worldview" ? "已有实体关系，生成新设定时参考" : "关系人物与当前任务相关" }));
   }
   if (mode === "author") {
-    for (const node of outline.filter((item) => item.status !== "resolved").slice(0, 60)) push(source({ kind: "outline", id: node.id, title: `${node.kind}：${node.title}`, content: node.summary, weight: 55 + relevance(terms, `${node.title} ${node.summary}`) + (vectorScoreMap.get(node.id) ?? 0) * 40, layer: "retrieval", reason: "作者视角中的未来创作契约", priorityClass: "working" }));
+    for (const node of outline.slice(0, 60)) push(source({ kind: "outline", id: node.id, title: `${node.kind}：${node.title}`, content: node.summary, weight: 55 + relevance(terms, `${node.title} ${node.summary}`) + (vectorScoreMap.get(node.id) ?? 0) * 40, layer: "retrieval", reason: "作者视角中的未来创作契约", priorityClass: "working" }));
   }
   for (const scene of scenes.filter((item) => !target || item.chapterId === target.id)) {
     const characterNames = scene.characterIds.map((id) => entities.find((item) => item.id === id)?.name).filter(Boolean).join("、");

@@ -30,12 +30,9 @@ export interface OutlineStructureAnalysis<T extends OutlineStructureNode> {
 export interface OutlineProposalNode extends OutlineStructureNode {
   proposalItemId: string;
   summary: string;
-  status: "idea" | "planned" | "resolved";
-  storyTime?: string;
   characterIds: string[];
   plotThreadIds: string[];
   foreshadowingIds: string[];
-  tags: string[];
   rationale: string;
 }
 
@@ -81,12 +78,12 @@ export function analyzeOutlineStructure<T extends OutlineStructureNode>(nodes: T
     } else if (node.kind !== "act") {
       const parent = node.parentId ? nodeMap.get(node.parentId) : undefined;
       if (!node.parentId || !parent) {
-        issue = { nodeId: node.id, code: "missing-parent", message: `${node.kind === "sequence" ? "序列" : "事件"}缺少有效父节点` };
+        issue = { nodeId: node.id, code: "missing-parent", message: `${node.kind === "sequence" ? "剧情段" : "事件"}缺少有效父节点` };
       } else if (parent.kind !== EXPECTED_PARENT_KIND[node.kind]) {
         issue = {
           nodeId: node.id,
           code: "wrong-parent-kind",
-          message: node.kind === "sequence" ? "序列必须归属于幕" : "事件必须归属于序列",
+          message: node.kind === "sequence" ? "剧情段必须归属于幕" : "事件必须归属于剧情段",
         };
       }
     }
@@ -166,12 +163,9 @@ function proposalNode(item: ProposalItem): OutlineProposalNode {
     title: String(payload.title || item.label || "未命名节点"),
     summary: String(payload.summary || ""),
     order: numberValue(payload.order, 0),
-    status: payload.status === "planned" || payload.status === "resolved" ? payload.status : "idea",
-    storyTime: typeof payload.storyTime === "string" ? payload.storyTime : undefined,
-    characterIds: stringArray(payload.characterIds),
-    plotThreadIds: stringArray(payload.plotThreadIds),
-    foreshadowingIds: stringArray(payload.foreshadowingIds),
-    tags: stringArray(payload.tags),
+    characterIds: payload.kind === "event" ? stringArray(payload.characterIds) : [],
+    plotThreadIds: payload.kind === "event" ? stringArray(payload.plotThreadIds) : [],
+    foreshadowingIds: payload.kind === "event" ? stringArray(payload.foreshadowingIds) : [],
     rationale: item.rationale,
     proposalItemId: item.id,
   };
@@ -205,10 +199,10 @@ export function analyzeOutlineProposal(items: ProposalItem[], requireComplete = 
     }
     for (const node of analysis.validNodes) {
       if (node.kind === "act" && !childKinds.get(node.id)?.has("sequence")) {
-        issues.push({ nodeId: node.id, code: "missing-child", message: `幕“${node.title}”至少需要一个序列` });
+        issues.push({ nodeId: node.id, code: "missing-child", message: `幕“${node.title}”至少需要一个剧情段` });
       }
       if (node.kind === "sequence" && !childKinds.get(node.id)?.has("event")) {
-        issues.push({ nodeId: node.id, code: "missing-child", message: `序列“${node.title}”至少需要一个事件` });
+        issues.push({ nodeId: node.id, code: "missing-child", message: `剧情段“${node.title}”至少需要一个事件` });
       }
     }
   }

@@ -44,7 +44,7 @@ import type {
   WorkflowRun,
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
-import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES } from "./db-schema";
+import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -136,6 +136,7 @@ export class NovelDatabase extends Dexie {
     this.version(14).stores(V14_STORES).upgrade(cleanupApprovalMetaPollution);
     this.version(15).stores(V15_STORES);
     this.version(16).stores(V16_STORES).upgrade(migrateNovelMemoryReliability);
+    this.version(17).stores(V17_STORES).upgrade(migrateOutlineNodeModel);
   }
 }
 
@@ -570,7 +571,15 @@ function triggerEntityEmbedding(entity: StoryEntity): void {
 }
 
 export async function addOutlineNode(projectId: string, parentId: string | undefined, kind: OutlineNode["kind"], title: string, order: number) {
-  const node: OutlineNode = { ...recordBase(projectId), parentId, kind, title, summary: "", order, status: "idea", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [] };
+  const node = {
+    ...recordBase(projectId),
+    parentId,
+    kind,
+    title,
+    summary: "",
+    order,
+    ...(kind === "event" ? { characterIds: [], plotThreadIds: [], foreshadowingIds: [] } : {}),
+  } as OutlineNode;
   await novelDb.outlineNodes.add(node);
   await appendOperation(projectId, "outlineNodes", node.id, "create", { title: { before: null, after: title } });
   // 异步触发 embedding 更新

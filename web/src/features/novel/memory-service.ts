@@ -3,6 +3,7 @@ import { compileNovelContext } from "./context";
 import { invalidateRevisionDependents, novelDb, recordBase } from "./db";
 import { splitSemanticUnits, upsertEmbedding, vectorSearch } from "./retrieval";
 import { rankLexicalUnits } from "./retrieval-evaluation";
+import { CONTEXT_SOURCE_KINDS } from "./types";
 import type {
   ConversationMemory,
   CreativeBrief,
@@ -25,7 +26,7 @@ const MAX_SELECTED_HITS = 20;
 const RRF_K = 60;
 
 type RetrievalCandidate = Omit<NovelRetrievalHit, "fusedScore" | "round" | "lexicalRank" | "vectorRank" | "entityRank"> & {
-  targetTable?: "entities" | "outlineNodes" | "documents" | "plotThreads" | "foreshadowing" | "factAssertions" | "derivedMemories" | "conversationMemories";
+  targetTable?: "architectures" | "entities" | "relations" | "outlineNodes" | "documents" | "plotThreads" | "foreshadowing" | "factAssertions" | "derivedMemories" | "conversationMemories";
   targetId?: string;
   targetChunkIndex?: number;
   aliases: string[];
@@ -129,11 +130,13 @@ function exactEntityRank(query: string, candidate: RetrievalCandidate) {
   return index >= 0 ? index + 1 : undefined;
 }
 
-async function buildCandidates(params: { projectId: string; targetDocumentId: string; informationView: "author" | "reader" | "character"; factCutoffOrder?: number; threadId?: string; characterId?: string }) {
+async function buildCandidates(params: { projectId: string; targetDocumentId?: string; informationView: "author" | "reader" | "character"; factCutoffOrder?: number; threadId?: string; characterId?: string }) {
   const { projectId, targetDocumentId, informationView } = params;
-  const [target, entities, outline, documents, threads, clues, facts, knowledge, memories, conversationMemories] = await Promise.all([
-    novelDb.documents.get(targetDocumentId),
+  const [target, architecture, entities, relations, outline, documents, threads, clues, facts, knowledge, memories, conversationMemories] = await Promise.all([
+    targetDocumentId ? novelDb.documents.get(targetDocumentId) : Promise.resolve(undefined),
+    novelDb.architectures.where("projectId").equals(projectId).first(),
     novelDb.entities.where("projectId").equals(projectId).toArray(),
+    novelDb.relations.where("projectId").equals(projectId).toArray(),
     novelDb.outlineNodes.where("projectId").equals(projectId).toArray(),
     novelDb.documents.where("projectId").equals(projectId).toArray(),
     novelDb.plotThreads.where("projectId").equals(projectId).toArray(),
@@ -145,13 +148,33 @@ async function buildCandidates(params: { projectId: string; targetDocumentId: st
     novelDb.derivedMemories.where("projectId").equals(projectId).and((item) => item.status === "active" || item.status === "cold").toArray(),
     novelDb.conversationMemories.where("projectId").equals(projectId).and((item) => item.status === "active" && (
       item.scope === "project"
-      || (item.scope === "target" && item.targetId === targetDocumentId)
+       || (item.scope === "target" && Boolean(targetDocumentId) && item.targetId === targetDocumentId)
       || (item.scope === "task" && (item.scopeKey === `task:chapter-workflow:${targetDocumentId}` || item.scopeKey === `thread:${params.threadId}`))
     )).toArray(),
   ]);
-  if (!target) throw new Error("目标章节不存在");
-  const cutoff = params.factCutoffOrder ?? target.order - 1;
+  if (targetDocumentId && !target) throw new Error("目标章节不存在");
+  const cutoff = params.factCutoffOrder ?? (target ? target.order - 1 : Number.POSITIVE_INFINITY);
   const candidates: RetrievalCandidate[] = [];
+  if (informationView === "author" && architecture) {
+    const phases = [...architecture.phases].sort((a, b) => a.order - b.order);
+    candidates.push({
+      sourceId: architecture.id,
+      targetTable: "architectures",
+      targetId: architecture.id,
+      kind: "architecture",
+      title: architecture.status === "approved" ? "已批准全书架构" : "全书架构草案",
+      content: [
+        `核心问题：${architecture.centralQuestion}`,
+        `核心冲突：${architecture.centralConflict}`,
+        `全书梗概：${architecture.synopsis}`,
+        ...phases.map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`),
+      ].join("\n"),
+      reason: "全书架构定义当前剧情阶段和未来创作方向",
+      authority: architecture.status === "approved" ? "approved" : "working",
+      evidenceRefs: [architecture.id],
+      aliases: [architecture.centralQuestion, architecture.centralConflict, ...phases.map((phase) => phase.title)],
+    });
+  }
   for (const entity of entities) {
     const content = informationView === "author"
       ? [entity.summary, entity.description, ...entity.lockedFacts, entity.character ? JSON.stringify(entity.character) : ""].filter(Boolean).join("\n")
@@ -159,7 +182,26 @@ async function buildCandidates(params: { projectId: string; targetDocumentId: st
     candidates.push({ sourceId: entity.id, targetTable: "entities", targetId: entity.id, kind: "entity", title: `${entity.kind}：${entity.name}`, content, reason: "项目实体与当前问题相关", authority: entity.lockedFacts.length ? "approved" : "working", evidenceRefs: [entity.id], aliases: [entity.name, ...entity.aliases] });
   }
   if (informationView === "author") {
-    for (const node of outline) candidates.push({ sourceId: node.id, targetTable: "outlineNodes", targetId: node.id, kind: "outline", title: `${node.kind}：${node.title}`, content: node.summary, reason: "作者视角中的创作契约", authority: "working", evidenceRefs: [node.id], aliases: [node.title, ...node.tags] });
+    const entityNames = new Map(entities.map((entity) => [entity.id, entity.name]));
+    for (const relation of relations) {
+      const from = entityNames.get(relation.fromEntityId) ?? "未知实体";
+      const to = entityNames.get(relation.toEntityId) ?? "未知实体";
+      candidates.push({
+        sourceId: relation.id,
+        targetTable: "relations",
+        targetId: relation.id,
+        kind: "relation",
+        title: `${from} → ${to}`,
+        content: `${relation.relationType}\n表面：${relation.publicLabel}\n真相：${relation.privateTruth}\n纽带：${relation.bond}`,
+        reason: "已有对象关系约束后续剧情互动",
+        authority: "working",
+        evidenceRefs: [relation.id],
+        aliases: [from, to, relation.relationType, relation.publicLabel],
+      });
+    }
+  }
+  if (informationView === "author") {
+    for (const node of outline) candidates.push({ sourceId: node.id, targetTable: "outlineNodes", targetId: node.id, kind: "outline", title: `${node.kind}：${node.title}`, content: node.summary, reason: "作者视角中的创作契约", authority: "working", evidenceRefs: [node.id], aliases: [node.title] });
   }
   for (const document of documents.filter((item) => item.id !== targetDocumentId && item.order <= cutoff && (params.factCutoffOrder === undefined || Boolean(item.approvedRevisionId)))) {
     const units = splitSemanticUnits([document.title, document.summary, document.plainText].filter(Boolean).join("\n"));
@@ -201,7 +243,7 @@ async function buildCandidates(params: { projectId: string; targetDocumentId: st
   return candidates.filter((candidate) => candidate.content.trim());
 }
 
-async function hybridRetrieve(params: { projectId: string; targetDocumentId: string; informationView: "author" | "reader" | "character"; query: string; round: number; excludedIds: Set<string>; factCutoffOrder?: number; threadId?: string; characterId?: string; allowedKinds?: Set<NovelRetrievalHit["kind"]> }) {
+async function hybridRetrieve(params: { projectId: string; targetDocumentId?: string; informationView: "author" | "reader" | "character"; query: string; round: number; excludedIds: Set<string>; factCutoffOrder?: number; threadId?: string; characterId?: string; allowedKinds?: Set<NovelRetrievalHit["kind"]> }) {
   const candidates = (await buildCandidates(params)).filter((candidate) => !params.excludedIds.has(candidate.sourceId) && (!params.allowedKinds || params.allowedKinds.has(candidate.kind)));
   if (!candidates.length) return [];
   const lexicalRanks = new Map(rankLexicalUnits(params.query, candidates.map((candidate) => ({ id: candidate.sourceId, title: candidate.title, content: candidate.content, aliases: candidate.aliases }))).map((id, index) => [id, index + 1]));
@@ -217,6 +259,112 @@ async function hybridRetrieve(params: { projectId: string; targetDocumentId: str
     return { ...candidate, lexicalRank, vectorRank, entityRank, fusedScore, round: params.round } satisfies NovelRetrievalHit & { aliases: string[] };
   }).filter((item) => item.fusedScore > 0).sort((a, b) => b.fusedScore - a.fusedScore).slice(0, HITS_PER_ROUND);
   return scored.map(({ aliases: _aliases, targetTable: _targetTable, targetId: _targetId, targetChunkIndex: _targetChunkIndex, ...hit }) => hit);
+}
+
+interface TaskEvidenceAssessment extends Record<string, unknown> {
+  state: "ready" | "need-more" | "blocked";
+  requests: Array<{ query: string; sourceKinds: NovelRetrievalHit["kind"][]; reason: string }>;
+  missingFacts: string[];
+  creativeGaps: string[];
+}
+
+const TASK_EVIDENCE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["state", "requests", "missingFacts", "creativeGaps"],
+  properties: {
+    state: { enum: ["ready", "need-more", "blocked"] },
+    requests: { type: "array", maxItems: 3, items: { type: "object", additionalProperties: false, required: ["query", "sourceKinds", "reason"], properties: { query: { type: "string" }, sourceKinds: { type: "array", items: { enum: CONTEXT_SOURCE_KINDS } }, reason: { type: "string" } } } },
+    missingFacts: { type: "array", items: { type: "string" } },
+    creativeGaps: { type: "array", items: { type: "string" } },
+  },
+} as const;
+
+export interface TaskEvidenceResult {
+  run: NovelRetrievalRun;
+  selectedHits: NovelRetrievalHit[];
+  missingFacts: string[];
+  creativeGaps: string[];
+}
+
+export async function resolveTaskEvidence(params: {
+  projectId: string;
+  target: { kind: "document" | "outline-act" | "project"; id?: string };
+  task: string;
+  query: string;
+  model: string;
+  role: NovelAgentRole;
+  allowedSourceKinds?: NovelRetrievalHit["kind"][];
+  gapPolicy?: "strict" | "creative-by-default";
+  maxRounds?: number;
+  signal?: AbortSignal;
+}): Promise<TaskEvidenceResult> {
+  const run: NovelRetrievalRun = {
+    ...recordBase(params.projectId),
+    targetKind: params.target.kind,
+    targetId: params.target.id,
+    targetDocumentId: params.target.kind === "document" ? params.target.id : undefined,
+    informationView: "author",
+    purpose: "task-evidence",
+    consumer: { role: params.role },
+    queries: [],
+    rounds: [],
+    hits: [],
+    selectedSourceIds: [],
+    pinnedSourceIds: [],
+    excludedSourceIds: [],
+    status: "running",
+  };
+  await novelDb.retrievalRuns.add(run);
+  const hitMap = new Map<string, NovelRetrievalHit>();
+  const rounds: NovelRetrievalRound[] = [];
+  let queries = [params.query.trim() || params.task];
+  let assessment: TaskEvidenceAssessment = { state: "need-more", requests: [], missingFacts: [], creativeGaps: [] };
+  const maxRounds = Math.max(1, Math.min(params.maxRounds ?? MAX_SEARCH_ROUNDS, MAX_SEARCH_ROUNDS));
+  const allowedKinds = params.allowedSourceKinds?.length ? new Set(params.allowedSourceKinds) : undefined;
+  const requestableKinds = params.allowedSourceKinds?.length ? params.allowedSourceKinds : CONTEXT_SOURCE_KINDS;
+  const creativeByDefault = params.gapPolicy === "creative-by-default";
+  let roundKinds = allowedKinds;
+  try {
+    for (let round = 1; round <= maxRounds && queries.length; round += 1) {
+      const query = uniqueStrings(queries).join("；");
+      const hits = await hybridRetrieve({ projectId: params.projectId, targetDocumentId: params.target.kind === "document" ? params.target.id : undefined, informationView: "author", query, round, excludedIds: new Set(), allowedKinds: roundKinds });
+      const previousHitCount = hitMap.size;
+      for (const hit of hits) if (!hitMap.has(hit.sourceId)) hitMap.set(hit.sourceId, hit);
+      const selected = [...hitMap.values()].sort((a, b) => b.fusedScore - a.fusedScore).slice(0, MAX_SELECTED_HITS);
+      const rawAssessment = (await callStructuredNovelModel<TaskEvidenceAssessment>({
+        model: params.model,
+        temperature: 0.1,
+        role: params.role,
+        schema: TASK_EVIDENCE_SCHEMA,
+        signal: params.signal,
+        prompt: `你正在为“${params.task}”检查项目证据是否充分。只能根据当前证据判断：已存在的正式事实、连续性状态或作者约束缺失时，写入 missingFacts；尚未设计、可以在本次任务中新建的内容写入 creativeGaps。需要继续检索时 state=need-more，并用 requests 返回精确查询。sourceKinds 只能使用以下规范值：${requestableKinds.join("、")}。${creativeByDefault ? "这是小说构造任务：检索不到的背景、经历、关系和事件细节都属于可设计空白，不得因此 blocked；只需避免与累计证据冲突。" : "事实缺口在检索耗尽后必须 state=blocked，禁止用创作填补。"}\n\n任务查询：\n${params.query || "根据现有上下文自然续写"}\n\n累计证据：\n${formatEvidence(selected) || "没有命中资料"}`,
+      })).data;
+      assessment = creativeByDefault
+        ? {
+            ...rawAssessment,
+            state: rawAssessment.state === "blocked" ? "ready" : rawAssessment.state,
+            missingFacts: [],
+            creativeGaps: uniqueStrings([...rawAssessment.creativeGaps, ...rawAssessment.missingFacts]),
+          }
+        : rawAssessment;
+      rounds.push({ index: round, query, hitIds: hits.map((hit) => hit.sourceId), selectedIds: selected.map((hit) => hit.sourceId), enoughEvidence: assessment.state === "ready" });
+      if (assessment.state === "ready" || assessment.state === "blocked" || !assessment.requests.length) break;
+      if (round > 1 && hitMap.size === previousHitCount) break;
+      queries = assessment.requests.map((request) => request.query);
+      const requestedKinds = new Set(assessment.requests.flatMap((request) => request.sourceKinds));
+      roundKinds = requestedKinds.size
+        ? new Set([...requestedKinds].filter((kind) => !allowedKinds || allowedKinds.has(kind)))
+        : allowedKinds;
+    }
+    const selectedHits = [...hitMap.values()].sort((a, b) => b.fusedScore - a.fusedScore).slice(0, MAX_SELECTED_HITS);
+    const completed = { ...run, queries: rounds.map((round) => round.query), rounds, hits: [...hitMap.values()], selectedSourceIds: selectedHits.map((hit) => hit.sourceId), status: "completed" as const, revision: run.revision + 1, updatedAt: Date.now() };
+    await novelDb.retrievalRuns.put(completed);
+    return { run: completed, selectedHits, missingFacts: uniqueStrings(assessment.missingFacts), creativeGaps: uniqueStrings(assessment.creativeGaps) };
+  } catch (error) {
+    await novelDb.retrievalRuns.update(run.id, { status: "failed", error: error instanceof Error ? error.message : String(error), rounds, hits: [...hitMap.values()], revision: run.revision + 1, updatedAt: Date.now() });
+    throw error;
+  }
 }
 
 function formatEvidence(hits: NovelRetrievalHit[]) {

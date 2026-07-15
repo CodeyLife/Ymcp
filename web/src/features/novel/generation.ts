@@ -2,9 +2,10 @@ import Ajv, { type ValidateFunction } from "ajv";
 import type { Table } from "dexie";
 import { callStructuredNovelModel } from "./ai";
 import { compileNovelContext, formatContextPacket } from "./context";
-import { appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, deleteOutlineRealizations, emptyChapterBlueprint, normalizeArchitecturePayload, normalizeArchitecturePhases, novelDb, recordBase, retireChapterDependencies } from "./db";
+import { addOutlineNode, appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, deleteOutlineRealizations, emptyChapterBlueprint, normalizeArchitecturePayload, normalizeArchitecturePhases, novelDb, recordBase, retireChapterDependencies } from "./db";
 import { sanitizeApprovalMetaInPlace } from "./db-schema";
 import { analyzeOutlineProposal } from "./outline-structure";
+import { resolveTaskEvidence } from "./memory-service";
 import { assertProposalReferences, assertResolvedPayloadReferences, buildProjectReferenceCatalogs, catalogWithResolvedProposalItems, emptyReferenceCatalog, repairProposalCharacterReferences, repairUnresolvableTempRefs } from "./reference-integrity";
 import { compileNovelStagePrompt, resolveNovelSkills } from "./skills";
 import type {
@@ -37,7 +38,8 @@ export interface GenerationTaskDefinition {
 const TASKS: GenerationTaskDefinition[] = [
   { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。", refinable: true },
   { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成可支撑数十万字铺陈的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。", refinable: true },
-  { key: "outline", label: "规划故事大纲", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "按幕、序列、事件建立层级故事大纲。每个节点先回答'这一段故事里发生了什么、人物在处境中如何感受与选择、世界因此有何细微不同'，再让因果、转折、伏笔在事件铺陈中自然浮现，不使用章节编号，也不急于把戏剧性要素一次性写尽。每个节点的 summary 应是一段连贯的叙事规划，让读者能看出这一段故事的节拍：因何情境而起（原因）、被什么打破平衡（触发）、人物面临什么对抗（阻碍）、产生了什么价值转折（直接结果）、以及埋下什么延续到后续的余波（延迟后果）。以散文组织，不要用'原因/触发/阻碍'等标签拆段。", refinable: true },
+  { key: "outline", label: "规划故事大纲", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "按幕、剧情段、事件建立层级故事大纲。", refinable: true },
+  { key: "plot-design", label: "剧情设计", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "entities", "relations", "plotThreads", "foreshadowing"], defaultInstruction: "承接最新幕已有内容，规划下一小段剧情。", refinable: true },
   { key: "outline-section-update", label: "重写子树", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "重写所选节点及其子树，保持兄弟节点不变。" },
   { key: "outline-field-revise", label: "改写字段", scope: "outline", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes"], defaultInstruction: "改写所选节点的指定字段。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。", refinable: true },
@@ -70,7 +72,7 @@ export function tasksForScope(scope: NovelGenerationScope) {
 const payloadContract = `字段契约：
 - projects: title, subtitle, premise, genre, audience, themes, sellingPoints, pov, tense, tone, languageStyle, targetWords
 - architectures: framework, status, centralQuestion, centralConflict, synopsis, phases[{id,title,purpose,turningPoint,order,locked}]；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔
-- outlineNodes: parentId(可用 ref:临时ID), kind(act|sequence|event), title, summary, order, status, storyTime, characterIds, plotThreadIds, foreshadowingIds, tags
+- outlineNodes: parentId(可用 ref:临时ID), kind(act|sequence|event), title, summary, order；只有 event 可以包含 characterIds、plotThreadIds、foreshadowingIds
 - documents: order, title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,conflict,informationRelease,mustHappen,flexible,forbidden}；正文任务可额外给 plainText；章节目标字数由系统设置，不得返回 targetWords
 - scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, outcome, wordTarget, beats[{id,text,order}]
 - entities: kind, name, aliases, summary, description, tags, lockedFacts, attributes；角色需包含 character（role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state）
@@ -91,7 +93,7 @@ const characterSchema = {
 const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>> = {
   projects: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, subtitle: { type: "string" }, premise: { type: "string" }, genre: stringArraySchema, audience: { type: "string" }, themes: stringArraySchema, sellingPoints: stringArraySchema, pov: { type: "string" }, tense: { type: "string" }, tone: { type: "string" }, languageStyle: { type: "string" }, targetWords: { type: "number", minimum: 1 } } },
   architectures: { type: "object", additionalProperties: false, properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, phases: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string" }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" } } } } } },
-  outlineNodes: { type: "object", additionalProperties: false, properties: { parentId: { type: "string" }, kind: { enum: ["act", "sequence", "event"] }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "resolved"] }, storyTime: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, tags: stringArraySchema } },
+  outlineNodes: { type: "object", additionalProperties: false, properties: { parentId: { type: "string" }, kind: { enum: ["act", "sequence", "event"] }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema }, allOf: [{ if: { properties: { kind: { const: "event" } }, required: ["kind"] }, then: { required: ["characterIds", "plotThreadIds", "foreshadowingIds"] } }] },
   documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
   scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
   entities: { type: "object", additionalProperties: false, properties: { kind: { enum: ["character", "location", "organization", "faction", "item", "species", "rule", "ability", "term"] }, name: { type: "string" }, aliases: stringArraySchema, summary: { type: "string" }, description: { type: "string" }, tags: stringArraySchema, lockedFacts: stringArraySchema, attributes: { type: "object" }, character: characterSchema }, allOf: [{ if: { properties: { kind: { const: "character" } }, required: ["kind"] }, then: { required: ["character"] } }] },
@@ -262,7 +264,7 @@ const PROPOSAL_PREVIEW_FIELDS: Partial<Record<ProposalTargetTable, Array<[string
   architectures: [["framework", "结构方法"], ["centralQuestion", "核心问题"], ["centralConflict", "核心冲突"], ["synopsis", "梗概"], ["phases", "阶段"]],
   entities: [["kind", "类型"], ["name", "名称"], ["summary", "摘要"], ["description", "描述"], ["aliases", "别名"], ["tags", "标签"], ["character", "角色设定"]],
   relations: [["fromEntityId", "主体"], ["toEntityId", "客体"], ["relationType", "关系类型"], ["publicLabel", "公开标签"], ["privateTruth", "隐情"], ["bond", "羁绊"]],
-  outlineNodes: [["kind", "层级"], ["title", "标题"], ["summary", "摘要"], ["status", "状态"], ["storyTime", "故事时间"], ["parentId", "父节点"]],
+  outlineNodes: [["kind", "层级"], ["title", "标题"], ["summary", "摘要"], ["parentId", "父节点"]],
   documents: [["title", "标题"], ["summary", "摘要"], ["blueprint", "蓝图"]],
   plotThreads: [["kind", "类型"], ["title", "标题"], ["summary", "摘要"], ["status", "状态"], ["priority", "优先级"], ["nextMove", "下一步"]],
   foreshadowing: [["title", "标题"], ["clue", "线索"], ["truth", "真相"], ["status", "状态"], ["urgency", "紧迫度"], ["notes", "备注"]],
@@ -442,10 +444,9 @@ function formatOutlineNodeDump(node: OutlineNode, indent: number): string {
     `kind=${node.kind}`,
     `title=${node.title}`,
     `summary=${node.summary || "(空)"}`,
-    `status=${node.status}`,
   ];
-  if (node.characterIds.length) fields.push(`characters=[${node.characterIds.join(",")}]`);
-  if (node.plotThreadIds.length) fields.push(`threads=[${node.plotThreadIds.join(",")}]`);
+  if (node.kind === "event" && node.characterIds.length) fields.push(`characters=[${node.characterIds.join(",")}]`);
+  if (node.kind === "event" && node.plotThreadIds.length) fields.push(`threads=[${node.plotThreadIds.join(",")}]`);
   return `${pad}- id=${node.id}\n${pad}  ${fields.join("\n" + pad + "  ")}`;
 }
 
@@ -663,6 +664,146 @@ async function generateSingleOutlineAct(params: {
   throw new Error("AI 未生成有效的单幕候选");
 }
 
+function latestOutlineAct(nodes: OutlineNode[]) {
+  return nodes.filter((node) => node.kind === "act" && !node.parentId).sort((left, right) => right.order - left.order)[0];
+}
+
+function plotDesignContext(nodes: OutlineNode[], act: OutlineNode) {
+  const sequences = nodes.filter((node) => node.kind === "sequence" && node.parentId === act.id).sort((left, right) => left.order - right.order);
+  const recentSequences = sequences.slice(-2);
+  const recentIds = new Set(recentSequences.map((node) => node.id));
+  const recentEvents = nodes.filter((node) => node.kind === "event" && node.parentId && recentIds.has(node.parentId)).sort((left, right) => left.order - right.order);
+  const earlierActs = nodes.filter((node) => node.kind === "act" && !node.parentId && node.order < act.order).sort((left, right) => left.order - right.order);
+  return [
+    `当前幕：${act.title}\n${act.summary || "暂无幕概要"}`,
+    `当前幕已有剧情段：\n${sequences.map((node, index) => `${index + 1}. ${node.title}：${node.summary}`).join("\n") || "暂无"}`,
+    `最近两个剧情段的事件：\n${recentEvents.map((node) => `- ${node.title}：${node.summary}`).join("\n") || "暂无"}`,
+    `更早幕概要：\n${earlierActs.map((node) => `- ${node.title}：${node.summary}`).join("\n") || "暂无"}`,
+  ].join("\n\n");
+}
+
+function validatePlotDesignItems(items: ProposalItem[], actId: string, sequenceOrder: number) {
+  if (items.some((item) => item.operation !== "create")) throw new Error("剧情设计只能创建新资料，不能更新已有资料");
+  const outlineItems = items.filter((item) => item.targetTable === "outlineNodes");
+  const sequences = outlineItems.filter((item) => item.payload.kind === "sequence");
+  const events = outlineItems.filter((item) => item.payload.kind === "event");
+  if (outlineItems.some((item) => item.payload.kind === "act")) throw new Error("剧情设计不得创建新的幕");
+  if (sequences.length !== 1) throw new Error(`剧情设计必须且只能创建 1 个剧情段，当前为 ${sequences.length} 个`);
+  if (events.length < 2 || events.length > 4) throw new Error(`剧情设计必须创建 2-4 个原子事件，当前为 ${events.length} 个`);
+  const sequence = sequences[0];
+  if (!sequence.tempId) throw new Error("剧情段缺少 tempId");
+  if (sequence.payload.parentId !== actId) throw new Error("剧情段必须追加到当前最新幕");
+  if (Number(sequence.payload.order) !== sequenceOrder) throw new Error(`剧情段顺序应为 ${sequenceOrder}`);
+  const expectedParent = `ref:${sequence.tempId}`;
+  const eventOrders = new Set<number>();
+  for (const event of events) {
+    if (event.payload.parentId !== expectedParent) throw new Error("事件必须归属于本次新建的剧情段");
+    const order = Number(event.payload.order);
+    if (!Number.isInteger(order) || order < 0 || eventOrders.has(order)) throw new Error("事件顺序必须从 0 开始且不能重复");
+    eventOrders.add(order);
+    if (String(event.payload.summary ?? "").length > 120) throw new Error(`事件“${event.label}”概要超过 120 字`);
+  }
+  if ([...eventOrders].sort((a, b) => a - b).some((order, index) => order !== index)) throw new Error("事件顺序必须连续并从 0 开始");
+  const sequenceLength = String(sequence.payload.summary ?? "").length;
+  if (sequenceLength > 300) throw new Error("剧情段概要超过 300 字");
+  return { sequence, events };
+}
+
+export async function createNextOutlineAct(projectId: string) {
+  const pending = await novelDb.proposals.where("projectId").equals(projectId).and((proposal) => proposal.status === "pending" && proposal.taskKey === "plot-design").first();
+  if (pending) throw new Error("请先处理待审核的剧情设计");
+  const target = await resolveNextOutlineActTarget(projectId);
+  const title = target.title?.trim() || `第${target.order + 1}幕`;
+  const node = await addOutlineNode(projectId, undefined, "act", title, target.order);
+  const summary = target.phaseId
+    ? [target.purpose, target.turningPoint ? `阶段转折：${target.turningPoint}` : ""].filter(Boolean).join("\n")
+    : "";
+  if (!summary) return node;
+  const updated = { ...node, summary, revision: node.revision + 1, updatedAt: Date.now() };
+  await novelDb.outlineNodes.put(updated);
+  await appendOperation(projectId, "outlineNodes", node.id, "update", { value: { before: node, after: updated } });
+  return updated;
+}
+
+export async function runPlotDesignTask(params: { projectId: string; instruction?: string; signal?: AbortSignal }) {
+  const project = await novelDb.projects.get(params.projectId);
+  if (!project) throw new Error("项目不存在");
+  const pending = await novelDb.proposals.where("projectId").equals(params.projectId).and((proposal) => proposal.status === "pending" && proposal.taskKey === "plot-design").first();
+  if (pending) return { proposal: pending, packet: await novelDb.contextPackets.get(pending.contextPacketId), agent: pending.agentRunId ? await novelDb.agentRuns.get(pending.agentRunId) : undefined };
+  const nodes = await novelDb.outlineNodes.where("projectId").equals(params.projectId).toArray();
+  const act = latestOutlineAct(nodes);
+  if (!act) throw new Error("请先创建一幕");
+  const existingSequences = nodes.filter((node) => node.kind === "sequence" && node.parentId === act.id);
+  const sequenceOrder = existingSequences.reduce((max, node) => Math.max(max, node.order), -1) + 1;
+  const instruction = params.instruction?.trim() || "根据当前幕已有剧情自然续写下一小段剧情";
+  const evidence = await resolveTaskEvidence({
+    projectId: params.projectId,
+    target: { kind: "outline-act", id: act.id },
+    task: "剧情设计",
+    query: `${instruction}\n${act.title}\n${act.summary}`,
+    model: project.settings.textModel,
+    role: "architect",
+    allowedSourceKinds: ["architecture", "document", "entity", "relation", "outline", "thread", "foreshadowing", "fact", "memory", "conversation-memory"],
+    gapPolicy: "creative-by-default",
+    signal: params.signal,
+  });
+  const skills = await resolveNovelSkills({ projectId: params.projectId, stage: "planning" });
+  if (skills.conflicts.length) throw new Error(`Skill 冲突：${skills.conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")}`);
+  const packet = await compileNovelContext({
+    projectId: params.projectId,
+    task: "plot-design",
+    instruction,
+    stage: "planning",
+    resolvedSkills: skills.skills,
+    retrievalRunId: evidence.run.id,
+    retrievalSourceIds: evidence.run.selectedSourceIds,
+    retrievalHits: evidence.selectedHits,
+    consumer: { role: "architect" },
+  });
+  const task = getGenerationTask("plot-design");
+  const inventory = await existingInventory(params.projectId, task.allowedTables);
+  const availableReferences = await referenceInventory(params.projectId);
+  const acceptedRefs = await acceptedProjectReferences(params.projectId);
+  const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
+  const agent: AgentRun = { ...recordBase(params.projectId), goal: instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-plot-design-v1", contextPacketId: packet.id, role: "architect", skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: "剧情设计", tool: "model.structured", status: "running" }] };
+  await novelDb.agentRuns.add(agent);
+  const basePrompt = `# 任务\n向最新幕“${act.title}”末尾追加一小段剧情。\n\n# 作者要求\n${instruction}\n\n# 当前大纲上下文\n${plotDesignContext(nodes, act)}\n\n# 结构要求\n1. 只创建 1 个 sequence（界面称“剧情段”），parentId 必须为 ${act.id}，order 必须为 ${sequenceOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾和结束时的局面变化。\n3. 在该剧情段下创建 2-4 个 event，parentId 必须使用 ref:剧情段tempId，order 从 0 连续排列。\n4. 每个事件只描述一个动作、发现、决定或直接后果；summary 使用 30-80 字，禁止把单个事件写成完整小故事。\n5. 不得创建 act，不得重复已有事件，不得提前写完整个架构阶段。\n6. 只有 event 可以填写 characterIds、plotThreadIds、foreshadowingIds；sequence 不得填写这些字段。\n7. 可以按需创建 entities、relations、plotThreads、foreshadowing，但只能 create，不得 update 已有资料；临时路人无需建档。\n8. 不得创建架构、章节、场景或时间线事件。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。新对象使用 tempId，并以 ref:tempId 建立依赖。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+  try {
+    const skillPrompt = compileNovelStagePrompt(skills.skills, "planning");
+    let lastError = "";
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await callStructuredNovelModel<Record<string, unknown>>({ model: project.settings.textModel, temperature: attempt ? 0.3 : 0.55, role: "architect", skillPrompt, schema: proposalSchema(task.allowedTables), prompt: attempt ? `${basePrompt}\n\n# 上次结构校验失败\n${lastError}\n请只修复结构和长度问题。` : basePrompt, signal: params.signal, maxTokens: 8192 });
+      const items = namespaceTempIds(parseProposalItems(result.data), `plot_${sequenceOrder}_`);
+      try {
+        validatePlotDesignItems(items, act.id, sequenceOrder);
+        const catalog = await projectReferenceCatalog(params.projectId);
+        repairProposalCharacterReferences(items, catalog, await projectCharacterNameToIdMap(params.projectId));
+        repairUnresolvableTempRefs(items, acceptedRefs, await projectEntityNameToIdMap(params.projectId));
+        assertProposalReferences(items, catalog, acceptedRefs);
+        const proposal: AIProposal = { ...recordBase(params.projectId), title: "剧情设计", operation: "structured:plot-design", taskKey: "plot-design", scope: "plot-design", targetId: act.id, status: "pending", previewMarkdown: proposalMarkdown("剧情设计", String(result.data.summary || "新的剧情段"), items), patches: [], items, contextPacketId: packet.id, agentRunId: agent.id, model: project.settings.textModel, outlineGenerationMode: "plot-segment-append" };
+        agent.status = "completed";
+        agent.finishedAt = Date.now();
+        agent.promptHash = result.promptHash;
+        agent.usage = result.usage;
+        agent.steps[0].status = "completed";
+        agent.steps[0].output = `${items.length} 个候选项`;
+        await novelDb.transaction("rw", novelDb.proposals, novelDb.agentRuns, async () => { await novelDb.proposals.add(proposal); await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() }); });
+        return { proposal, packet, agent };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    throw new Error(`AI 返回的剧情段结构无效：${lastError}`);
+  } catch (error) {
+    agent.status = "failed";
+    agent.finishedAt = Date.now();
+    agent.steps[0].status = "failed";
+    agent.steps[0].error = error instanceof Error ? error.message : String(error);
+    await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
+    throw error;
+  }
+}
+
 export async function runGenerationTask(params: {
   projectId: string;
   taskKey: NovelGenerationTaskKey;
@@ -819,7 +960,7 @@ export async function runGenerationTask(params: {
               targetTable: "outlineNodes",
               targetId: params.targetId,
               status: "pending",
-              payload: { title: firstCreate.payload.title ?? root.title, summary: firstCreate.payload.summary ?? root.summary, status: firstCreate.payload.status ?? root.status, characterIds: firstCreate.payload.characterIds ?? root.characterIds, plotThreadIds: firstCreate.payload.plotThreadIds ?? root.plotThreadIds, foreshadowingIds: firstCreate.payload.foreshadowingIds ?? root.foreshadowingIds, storyTime: firstCreate.payload.storyTime ?? root.storyTime, tags: firstCreate.payload.tags ?? root.tags },
+              payload: { title: firstCreate.payload.title ?? root.title, summary: firstCreate.payload.summary ?? root.summary },
               after: {},
               rationale: "根节点重写",
               dependencies: [],
@@ -922,7 +1063,7 @@ async function analyzeDeleteImpact(projectId: string, table: ProposalTargetTable
   if (table === "entities") {
     const [relations, outlines, scenes, threads, timeline] = await Promise.all([
       novelDb.relations.where("projectId").equals(projectId).filter((item) => item.fromEntityId === targetId || item.toEntityId === targetId).count(),
-      novelDb.outlineNodes.where("projectId").equals(projectId).filter((item) => item.characterIds.includes(targetId)).count(),
+      novelDb.outlineNodes.where("projectId").equals(projectId).filter((item) => item.kind === "event" && item.characterIds.includes(targetId)).count(),
       novelDb.scenes.where("projectId").equals(projectId).filter((item) => item.characterIds.includes(targetId) || item.povCharacterId === targetId || item.locationId === targetId).count(),
       novelDb.plotThreads.where("projectId").equals(projectId).filter((item) => item.participantIds.includes(targetId)).count(),
       novelDb.timelineEvents.where("projectId").equals(projectId).filter((item) => item.participantIds.includes(targetId) || item.locationId === targetId).count(),
@@ -933,14 +1074,14 @@ async function analyzeDeleteImpact(projectId: string, table: ProposalTargetTable
   }
   if (table === "plotThreads") {
     const [outlines, scenes] = await Promise.all([
-      novelDb.outlineNodes.where("projectId").equals(projectId).filter((item) => item.plotThreadIds?.includes(targetId) ?? false).count(),
+      novelDb.outlineNodes.where("projectId").equals(projectId).filter((item) => item.kind === "event" && item.plotThreadIds.includes(targetId)).count(),
       novelDb.scenes.where("projectId").equals(projectId).filter((item) => item.plotThreadIds?.includes(targetId) ?? false).count(),
     ]);
     if (outlines + scenes) impact.push(`解除 ${outlines + scenes} 处剧情线引用`);
   }
   if (table === "foreshadowing") {
     const [outlines, scenes] = await Promise.all([
-      novelDb.outlineNodes.where("projectId").equals(projectId).filter((item) => item.foreshadowingIds?.includes(targetId) ?? false).count(),
+      novelDb.outlineNodes.where("projectId").equals(projectId).filter((item) => item.kind === "event" && item.foreshadowingIds.includes(targetId)).count(),
       novelDb.scenes.where("projectId").equals(projectId).filter((item) => item.foreshadowingIds?.includes(targetId) ?? false).count(),
     ]);
     if (outlines + scenes) impact.push(`解除 ${outlines + scenes} 处伏笔引用`);
@@ -1126,6 +1267,21 @@ function sanitizeModelPayload(table: ProposalTargetTable, payload: Record<string
   // 剥离 LLM 在内容字段里添加的"候选/待审核"等审批元信息（状态应由系统管理）
   sanitizeApprovalMetaInPlace(sanitized);
   if (table === "architectures") return normalizeArchitecturePayload(sanitized);
+  if (table === "outlineNodes") {
+    delete sanitized.status;
+    delete sanitized.storyTime;
+    delete sanitized.tags;
+    if (sanitized.kind === "event") {
+      if (!Array.isArray(sanitized.characterIds)) sanitized.characterIds = [];
+      if (!Array.isArray(sanitized.plotThreadIds)) sanitized.plotThreadIds = [];
+      if (!Array.isArray(sanitized.foreshadowingIds)) sanitized.foreshadowingIds = [];
+    } else {
+      delete sanitized.characterIds;
+      delete sanitized.plotThreadIds;
+      delete sanitized.foreshadowingIds;
+    }
+    return sanitized;
+  }
   if (table !== "documents" || !sanitized.blueprint || typeof sanitized.blueprint !== "object" || Array.isArray(sanitized.blueprint)) return sanitized;
   const blueprint = { ...sanitized.blueprint as Record<string, unknown> };
   delete blueprint.targetWords;
@@ -1146,7 +1302,14 @@ function normalizeDocumentPayload(payload: Record<string, unknown>) {
 export function normalizedCreate(table: ProposalTargetTable, projectId: string, id: string, payload: Record<string, unknown>) {
   const base = { ...recordBase(projectId), id };
   if (table === "architectures") return normalizeArchitecturePayload({ ...base, framework: "free", status: "draft", centralQuestion: "", centralConflict: "", synopsis: "", phases: [], ...payload });
-  if (table === "outlineNodes") return { ...base, parentId: undefined, kind: "event", title: "未命名事件", summary: "", order: 0, status: "idea", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [], ...payload };
+  if (table === "outlineNodes") {
+    const record = { ...base, parentId: undefined, kind: "event", title: "未命名事件", summary: "", order: 0, ...payload } as Record<string, unknown>;
+    if (record.kind === "event") return { ...record, characterIds: Array.isArray(record.characterIds) ? record.characterIds : [], plotThreadIds: Array.isArray(record.plotThreadIds) ? record.plotThreadIds : [], foreshadowingIds: Array.isArray(record.foreshadowingIds) ? record.foreshadowingIds : [] };
+    delete record.characterIds;
+    delete record.plotThreadIds;
+    delete record.foreshadowingIds;
+    return record;
+  }
   if (table === "documents") {
     const { blueprint, ...rest } = payload;
     return { ...base, order: 0, title: "未命名章节", contentHtml: "", plainText: "", summary: "", status: "outline", wordCount: 0, branch: "main", yjsDocumentId: crypto.randomUUID(), ...rest, blueprint: { ...emptyChapterBlueprint(), ...(blueprint as Record<string, unknown> | undefined) } };
@@ -1288,8 +1451,8 @@ async function applyDeleteCandidate(params: {
       await novelDb.relations.delete(relation.id);
       await appendOperation(projectId, "relations", relation.id, "delete", { value: { before: relation, after: null } });
     }
-    const outlines = await novelDb.outlineNodes.where("projectId").equals(projectId).filter((node) => node.characterIds.includes(targetId)).toArray();
-    for (const node of outlines) await putCascadeUpdate("outlineNodes", projectId, node as unknown as Record<string, unknown>, { characterIds: withoutId(node.characterIds, targetId) });
+    const outlines = await novelDb.outlineNodes.where("projectId").equals(projectId).filter((node) => node.kind === "event" && node.characterIds.includes(targetId)).toArray();
+    for (const node of outlines) if (node.kind === "event") await putCascadeUpdate("outlineNodes", projectId, node as unknown as Record<string, unknown>, { characterIds: withoutId(node.characterIds, targetId) });
     const scenes = await novelDb.scenes.where("projectId").equals(projectId).filter((scene) => scene.characterIds.includes(targetId) || scene.povCharacterId === targetId || scene.locationId === targetId).toArray();
     for (const scene of scenes) await putCascadeUpdate("scenes", projectId, scene as unknown as Record<string, unknown>, { characterIds: withoutId(scene.characterIds, targetId), ...(scene.povCharacterId === targetId ? { povCharacterId: undefined } : {}), ...(scene.locationId === targetId ? { locationId: undefined } : {}) });
     const documents = await novelDb.documents.where("projectId").equals(projectId).filter((document) => document.blueprint.characterIds.includes(targetId) || document.blueprint.locationIds.includes(targetId) || document.blueprint.povCharacterId === targetId).toArray();
@@ -1299,13 +1462,13 @@ async function applyDeleteCandidate(params: {
     const events = await novelDb.timelineEvents.where("projectId").equals(projectId).filter((event) => event.participantIds.includes(targetId) || event.locationId === targetId).toArray();
     for (const event of events) await putCascadeUpdate("timelineEvents", projectId, event as unknown as Record<string, unknown>, { participantIds: withoutId(event.participantIds, targetId), ...(event.locationId === targetId ? { locationId: undefined } : {}) });
   } else if (item.targetTable === "plotThreads") {
-    const outlines = await novelDb.outlineNodes.where("projectId").equals(projectId).filter((node) => node.plotThreadIds.includes(targetId)).toArray();
-    for (const node of outlines) await putCascadeUpdate("outlineNodes", projectId, node as unknown as Record<string, unknown>, { plotThreadIds: withoutId(node.plotThreadIds, targetId) });
+    const outlines = await novelDb.outlineNodes.where("projectId").equals(projectId).filter((node) => node.kind === "event" && node.plotThreadIds.includes(targetId)).toArray();
+    for (const node of outlines) if (node.kind === "event") await putCascadeUpdate("outlineNodes", projectId, node as unknown as Record<string, unknown>, { plotThreadIds: withoutId(node.plotThreadIds, targetId) });
     const scenes = await novelDb.scenes.where("projectId").equals(projectId).filter((scene) => scene.plotThreadIds?.includes(targetId) ?? false).toArray();
     for (const scene of scenes) await putCascadeUpdate("scenes", projectId, scene as unknown as Record<string, unknown>, { plotThreadIds: withoutId(scene.plotThreadIds, targetId) });
   } else if (item.targetTable === "foreshadowing") {
-    const outlines = await novelDb.outlineNodes.where("projectId").equals(projectId).filter((node) => node.foreshadowingIds.includes(targetId)).toArray();
-    for (const node of outlines) await putCascadeUpdate("outlineNodes", projectId, node as unknown as Record<string, unknown>, { foreshadowingIds: withoutId(node.foreshadowingIds, targetId) });
+    const outlines = await novelDb.outlineNodes.where("projectId").equals(projectId).filter((node) => node.kind === "event" && node.foreshadowingIds.includes(targetId)).toArray();
+    for (const node of outlines) if (node.kind === "event") await putCascadeUpdate("outlineNodes", projectId, node as unknown as Record<string, unknown>, { foreshadowingIds: withoutId(node.foreshadowingIds, targetId) });
     const scenes = await novelDb.scenes.where("projectId").equals(projectId).filter((scene) => scene.foreshadowingIds?.includes(targetId) ?? false).toArray();
     for (const scene of scenes) await putCascadeUpdate("scenes", projectId, scene as unknown as Record<string, unknown>, { foreshadowingIds: withoutId(scene.foreshadowingIds, targetId) });
   } else if (item.targetTable === "timelineEvents") {
@@ -1324,6 +1487,13 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
   if (initialProposal.sourceFingerprint && options?.sourceFingerprint && initialProposal.sourceFingerprint !== options.sourceFingerprint) throw new Error("原数据已在微调后发生变化，请退回候选并重新微调");
   const initialSelected = initialProposal.items.filter((item) => selectedItemIds.includes(item.id) && (item.operation !== "update" || options?.selectedFields?.[item.id] === undefined || options.selectedFields[item.id].length > 0));
   if (!initialSelected.length) throw new Error("请至少选择一个候选项");
+  const appendPlotSegment = initialProposal.taskKey === "plot-design" && initialProposal.outlineGenerationMode === "plot-segment-append";
+  if (appendPlotSegment) {
+    if (initialSelected.length !== initialProposal.items.length) throw new Error("剧情设计必须整体采纳");
+    if (!initialProposal.targetId) throw new Error("剧情设计缺少目标幕");
+    const sequence = initialSelected.find((item) => item.targetTable === "outlineNodes" && item.payload.kind === "sequence");
+    validatePlotDesignItems(initialSelected, initialProposal.targetId, Number(sequence?.payload.order));
+  }
   const appendSingleOutlineAct = initialProposal.taskKey === "outline" && initialProposal.outlineGenerationMode === "act-append";
   const fullOutlineReplacement = initialProposal.taskKey === "outline" && !appendSingleOutlineAct;
   if (appendSingleOutlineAct) {
@@ -1339,7 +1509,7 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
   }
   const acceptedRefs = await acceptedProjectReferences(initialProposal.projectId);
   const entityNameToIdMap = await projectEntityNameToIdMap(initialProposal.projectId);
-  const needsOutlineBackfill = ["plot-threads", "foreshadowing", "story-control"].includes(initialProposal.taskKey ?? "");
+  const needsOutlineBackfill = ["plot-design", "plot-threads", "foreshadowing", "story-control"].includes(initialProposal.taskKey ?? "");
   const tables = fullOutlineReplacement || initialSelected.some((item) => item.operation === "delete")
     ? novelDb.tables
     : [...new Set([
@@ -1355,7 +1525,14 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     const proposal = await novelDb.proposals.get(proposalId);
     if (!proposal || proposal.status !== "pending") throw new Error("提案已由其他操作处理");
     const selected = proposal.items.filter((item) => selectedItemIds.includes(item.id) && (item.operation !== "update" || options?.selectedFields?.[item.id] === undefined || options.selectedFields[item.id].length > 0));
-    if (proposal.taskKey === "outline" && proposal.outlineGenerationMode === "act-append") {
+    if (proposal.taskKey === "plot-design" && proposal.outlineGenerationMode === "plot-segment-append") {
+      if (!proposal.targetId || selected.length !== proposal.items.length) throw new Error("剧情设计必须整体采纳");
+      const allNodes = await novelDb.outlineNodes.where("projectId").equals(proposal.projectId).toArray();
+      const latest = latestOutlineAct(allNodes);
+      if (!latest || latest.id !== proposal.targetId) throw new Error("最新幕已发生变化，请退回后重新生成剧情设计");
+      const nextOrder = allNodes.filter((node) => node.kind === "sequence" && node.parentId === latest.id).reduce((max, node) => Math.max(max, node.order), -1) + 1;
+      validatePlotDesignItems(selected, latest.id, nextOrder);
+    } else if (proposal.taskKey === "outline" && proposal.outlineGenerationMode === "act-append") {
       const { order } = validateSingleOutlineAct(selected, proposal.architecturePhaseOrder);
       const occupied = await novelDb.outlineNodes.where("projectId").equals(proposal.projectId).and((node) => node.kind === "act" && !node.parentId && node.order === order).first();
       if (occupied) throw new Error(`第 ${order + 1} 幕已存在，请退回候选后重写该幕或生成下一幕`);
@@ -1385,7 +1562,8 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     const preparedPayloads = new Map<string, Record<string, unknown>>();
     for (const item of applicable) {
       if (item.operation === "delete") continue;
-      const resolved = sanitizePayload(resolveReferences(item.after ?? item.payload, refs) as Record<string, unknown>);
+      const rawResolved = sanitizePayload(resolveReferences(item.after ?? item.payload, refs) as Record<string, unknown>);
+      const resolved = item.targetTable === "outlineNodes" ? sanitizeModelPayload("outlineNodes", rawResolved) : rawResolved;
       const acceptedFields = item.operation === "update" ? options?.selectedFields?.[item.id] : undefined;
       const filtered = acceptedFields ? Object.fromEntries(Object.entries(resolved).filter(([key]) => acceptedFields.includes(key))) : resolved;
       const validate = item.operation === "create" ? CREATE_PAYLOAD_VALIDATORS[item.targetTable] : PAYLOAD_VALIDATORS[item.targetTable];
@@ -1457,7 +1635,7 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
         embeddings.push({ table: item.targetTable, id: item.targetId, record });
       }
     }
-    if (["plot-threads", "foreshadowing", "story-control"].includes(proposal.taskKey ?? "")) {
+    if (["plot-design", "plot-threads", "foreshadowing", "story-control"].includes(proposal.taskKey ?? "")) {
       const acceptedThreads = applicable.filter((item) => item.targetTable === "plotThreads");
       const acceptedClues = applicable.filter((item) => item.targetTable === "foreshadowing");
       const outlineBackfill = new Map<string, { plotThreadIds?: string[]; foreshadowingIds?: string[] }>();
@@ -1491,7 +1669,7 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
       }
       for (const [nodeId, additions] of outlineBackfill) {
         const node = await novelDb.outlineNodes.get(nodeId);
-        if (!node) continue;
+        if (!node || node.kind !== "event") continue;
         const plotThreadIds = [...new Set([...(node.plotThreadIds ?? []), ...(additions.plotThreadIds ?? [])])];
         const foreshadowingIds = [...new Set([...(node.foreshadowingIds ?? []), ...(additions.foreshadowingIds ?? [])])];
         const updated = { ...node, plotThreadIds, foreshadowingIds, revision: node.revision + 1, updatedAt: Date.now(), updatedBy: "local-user" };

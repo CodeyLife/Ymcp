@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Checkbox, Tag } from "antd";
 import { CheckCircleOutlined, CloseOutlined, ReloadOutlined } from "@ant-design/icons";
 
-import { applyProposalItems, rejectProposal } from "./generation";
+import { applyProposalItems, rejectProposal, updateProposalItemPayload } from "./generation";
 import { analyzeOutlineProposal, type OutlineProposalNode } from "./outline-structure";
 import type { AIProposal, Foreshadowing, PlotThread, StoryEntity } from "./types";
+import ProposalDataCard from "./ProposalDataCard";
 
-const KIND_LABEL = { act: "幕", sequence: "序列", event: "事件" } as const;
+const KIND_LABEL = { act: "幕", sequence: "剧情段", event: "事件" } as const;
 const KIND_COLOR = { act: "#a65c51", sequence: "#537e68", event: "#487a91" } as const;
 
 function referenceLabels(ids: string[], values: Array<{ id: string; label: string }>) {
@@ -71,6 +72,7 @@ export default function OutlineProposalReview({
 }) {
   const { message, modal } = App.useApp();
   const isActAppend = proposal.outlineGenerationMode === "act-append";
+  const isPlotDesign = proposal.outlineGenerationMode === "plot-segment-append";
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const analysis = useMemo(() => analyzeOutlineProposal(proposal.items), [proposal.items]);
@@ -124,8 +126,9 @@ export default function OutlineProposalReview({
     if (selectedErrors.length) return;
     setBusy(true);
     try {
-      const result = await applyProposalItems(proposal.id, [...selected]);
-      message.success(isActAppend ? `第 ${(proposal.architecturePhaseOrder ?? 0) + 1} 幕已追加，共写入 ${result.applied} 个节点` : `故事大纲已替换，共写入 ${result.applied} 个节点`);
+      const itemIds = isPlotDesign ? proposal.items.map((item) => item.id) : [...selected];
+      const result = await applyProposalItems(proposal.id, itemIds);
+      message.success(isPlotDesign ? `剧情段已追加，共写入 ${result.applied} 项内容` : isActAppend ? `第 ${(proposal.architecturePhaseOrder ?? 0) + 1} 幕已追加，共写入 ${result.applied} 个节点` : `故事大纲已替换，共写入 ${result.applied} 个节点`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : "采纳失败");
     } finally {
@@ -135,7 +138,7 @@ export default function OutlineProposalReview({
 
   function discard(regenerate = false) {
     modal.confirm({
-      title: regenerate ? "放弃当前候选并重新生成？" : isActAppend ? "关闭当前单幕候选？" : "关闭当前候选大纲？",
+      title: regenerate ? "放弃当前候选并重新生成？" : isPlotDesign ? "关闭当前剧情设计？" : isActAppend ? "关闭当前单幕候选？" : "关闭当前候选大纲？",
       content: "正式大纲不会发生变化。",
       okText: regenerate ? "重新生成" : "关闭",
       okButtonProps: { danger: !regenerate },
@@ -147,30 +150,31 @@ export default function OutlineProposalReview({
   }
 
   const selectedRootActs = selectedAnalysis.roots.filter((node) => node.kind === "act");
-  const selectedErrors = [
-    ...selectedAnalysis.issues.map((issue) => issue.message),
-    ...(isActAppend && selectedRootActs.length !== 1 ? [`单幕候选必须保留 1 个根级幕，当前为 ${selectedRootActs.length} 个`] : []),
-    ...(isActAppend && selectedRootActs[0] && proposal.architecturePhaseOrder !== undefined && selectedRootActs[0].order !== proposal.architecturePhaseOrder
-      ? [`候选根幕顺序应为第 ${proposal.architecturePhaseOrder + 1} 幕`]
-      : []),
-  ];
+  const selectedErrors = isPlotDesign ? [] : [
+      ...selectedAnalysis.issues.map((issue) => issue.message),
+      ...(isActAppend && selectedRootActs.length !== 1 ? [`单幕候选必须保留 1 个根级幕，当前为 ${selectedRootActs.length} 个`] : []),
+      ...(isActAppend && selectedRootActs[0] && proposal.architecturePhaseOrder !== undefined && selectedRootActs[0].order !== proposal.architecturePhaseOrder
+        ? [`候选根幕顺序应为第 ${proposal.architecturePhaseOrder + 1} 幕`]
+        : []),
+    ];
   const uniqueErrors = [...new Set(selectedErrors)];
   return (
     <section className="novel-outline-review-mode" aria-label="故事大纲审核">
       <header className="novel-outline-review-header">
-        <div><span>OUTLINE REVIEW</span><h2>{isActAppend ? `审核第 ${(proposal.architecturePhaseOrder ?? 0) + 1} 幕` : "审核完整大纲"}</h2><p>{isActAppend ? "本次候选只包含一个完整幕。采纳后追加到现有大纲，已有幕保持不变。" : "候选内容按真实层级呈现。取消某个幕或序列时，其下级节点会一并取消。"}</p></div>
+        <div><span>OUTLINE REVIEW</span><h2>{isPlotDesign ? "审核剧情设计" : isActAppend ? `审核第 ${(proposal.architecturePhaseOrder ?? 0) + 1} 幕` : "审核完整大纲"}</h2><p>{isPlotDesign ? "本次剧情段、原子事件及必要的新资料将作为一个整体追加。可在采纳前直接编辑字段。" : isActAppend ? "本次候选只包含一个完整幕。采纳后追加到现有大纲，已有幕保持不变。" : "候选内容按真实层级呈现。取消某个幕或剧情段时，其下级节点会一并取消。"}</p></div>
         <Tag color="gold">{selected.size} / {proposal.items.length} 个节点</Tag>
       </header>
-      {isActAppend
+      {isPlotDesign
+        ? <Alert type="info" showIcon message="整体采纳" description="为保持事件因果和新资料引用完整，本提案不支持逐项取消。" />
+        : isActAppend
         ? <Alert type="info" showIcon message={`采纳后追加第 ${(proposal.architecturePhaseOrder ?? 0) + 1} 幕`} description="现有大纲节点、章节落实关系、剧情线和伏笔引用均不会被删除。" />
         : replacingCount > 0 && <Alert type="warning" showIcon message={`采纳后将整体替换当前 ${replacingCount} 个大纲节点`} description="章节正文不会受到影响；剧情线和伏笔中指向旧大纲节点的定位会被清除。" />}
       {uniqueErrors.length > 0 && <Alert type="error" showIcon message={isActAppend ? "当前选择无法形成完整单幕" : "当前选择无法形成完整大纲"} description={uniqueErrors.join("；")} />}
-      <div className="novel-outline-review-tree">
-        {analysis.roots.map((root) => <ProposalNodeRow key={root.id} node={root} nodes={analysis.nodes} selected={selected} onToggle={toggleNode} entities={entities} threads={threads} clues={clues} />)}
-      </div>
+      {isPlotDesign ? <div className="novel-outline-review-tree">{proposal.items.map((item) => <article className="novel-outline-proposal-node selected" key={item.id}><div className="novel-outline-proposal-copy"><Tag color={item.targetTable === "outlineNodes" ? "blue" : "green"}>{item.targetTable === "outlineNodes" ? item.payload.kind === "sequence" ? "剧情段" : "事件" : "配套资料"}</Tag><strong>{item.label}</strong><ProposalDataCard value={item.payload} editable onChange={(payload) => void updateProposalItemPayload(proposal.id, item.id, payload)} /></div></article>)}</div>
+        : <div className="novel-outline-review-tree">{analysis.roots.map((root) => <ProposalNodeRow key={root.id} node={root} nodes={analysis.nodes} selected={selected} onToggle={toggleNode} entities={entities} threads={threads} clues={clues} />)}</div>}
       <footer className="novel-outline-review-footer">
         <div><Button icon={<CloseOutlined />} disabled={busy} onClick={() => discard(false)}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy} onClick={() => discard(true)}>退回并重新生成</Button></div>
-        <Button type="primary" size="large" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.size || uniqueErrors.length > 0} onClick={() => void apply()}>{isActAppend ? "追加这一幕" : "采纳完整大纲"}</Button>
+        <Button type="primary" size="large" icon={<CheckCircleOutlined />} loading={busy} disabled={(!isPlotDesign && !selected.size) || uniqueErrors.length > 0} onClick={() => void apply()}>{isPlotDesign ? "采纳剧情段" : isActAppend ? "追加这一幕" : "采纳完整大纲"}</Button>
       </footer>
     </section>
   );

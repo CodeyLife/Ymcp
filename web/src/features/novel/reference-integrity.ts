@@ -79,9 +79,18 @@ export function sanitizeReferenceRecordInPlace(
     delete record.tension;
     delete record.emotion;
     delete record.information;
-    if ("characterIds" in record) record.characterIds = uniqueValidIds(record.characterIds, catalog.characterIds, preserveTemporaryRefs);
-    if ("plotThreadIds" in record) record.plotThreadIds = uniqueValidIds(record.plotThreadIds, catalog.plotThreadIds, preserveTemporaryRefs);
-    if ("foreshadowingIds" in record) record.foreshadowingIds = uniqueValidIds(record.foreshadowingIds, catalog.foreshadowingIds, preserveTemporaryRefs);
+    delete record.status;
+    delete record.storyTime;
+    delete record.tags;
+    if (record.kind === "event" || !record.kind) {
+      if ("characterIds" in record) record.characterIds = uniqueValidIds(record.characterIds, catalog.characterIds, preserveTemporaryRefs);
+      if ("plotThreadIds" in record) record.plotThreadIds = uniqueValidIds(record.plotThreadIds, catalog.plotThreadIds, preserveTemporaryRefs);
+      if ("foreshadowingIds" in record) record.foreshadowingIds = uniqueValidIds(record.foreshadowingIds, catalog.foreshadowingIds, preserveTemporaryRefs);
+    } else {
+      delete record.characterIds;
+      delete record.plotThreadIds;
+      delete record.foreshadowingIds;
+    }
   }
   if (table === "scenes") {
     if ("characterIds" in record) record.characterIds = uniqueValidIds(record.characterIds, catalog.characterIds, preserveTemporaryRefs);

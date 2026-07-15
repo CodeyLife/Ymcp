@@ -16,7 +16,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { AnimatePresence, motion } from "motion/react";
 
 import { addOutlineNode, appendOperation, deleteOutlineBranch, normalizeArchitecturePhases, novelDb } from "./db";
-import { applyProposalItems, rejectProposal, runGenerationTask } from "./generation";
+import { applyProposalItems, createNextOutlineAct, rejectProposal, runGenerationTask, runPlotDesignTask } from "./generation";
 import OutlineProposalReview from "./OutlineProposalReview";
 import { analyzeOutlineStructure, type OutlineStructureIssue } from "./outline-structure";
 import type { AIProposal, Foreshadowing, OutlineKind, OutlineNode, PlotThread, StoryEntity } from "./types";
@@ -24,27 +24,20 @@ import type { AIProposal, Foreshadowing, OutlineKind, OutlineNode, PlotThread, S
 const FIELD_OPTIONS = [
   { value: "title", label: "标题" },
   { value: "summary", label: "概要" },
-  { value: "causality", label: "因为(因果)" },
-  { value: "outcome", label: "导致(结果)" },
 ];
 
-const KIND_LABEL: Record<OutlineKind, string> = { act: "幕", sequence: "序列", event: "事件" };
+const KIND_LABEL: Record<OutlineKind, string> = { act: "幕", sequence: "剧情段", event: "事件" };
 const KIND_COLOR: Record<OutlineKind, string> = { act: "#722ed1", sequence: "#1677ff", event: "#13c2c2" };
 const KIND_DEPTH: Record<OutlineKind, number> = { act: 0, sequence: 1, event: 2 };
 const KIND_CHILD: Record<OutlineKind, OutlineKind | null> = { act: "sequence", sequence: "event", event: null };
-const STATUS_OPTIONS = [
-  { value: "idea", label: "构思" },
-  { value: "planned", label: "已规划" },
-  { value: "resolved", label: "已完成" },
-];
-
 function nextTitle(kind: OutlineKind, count: number): string {
   if (kind === "act") return `第${count + 1}幕`;
-  if (kind === "sequence") return `序列 ${count + 1}`;
+  if (kind === "sequence") return `剧情段 ${count + 1}`;
   return `事件 ${count + 1}`;
 }
 
 function compactReferenceLabels(node: OutlineNode, entities: StoryEntity[], threads: PlotThread[], clues: Foreshadowing[]) {
+  if (node.kind !== "event") return [];
   const entityMap = new Map(entities.map((item) => [item.id, item.name]));
   const threadMap = new Map(threads.map((item) => [item.id, item.title]));
   const clueMap = new Map(clues.map((item) => [item.id, item.title]));
@@ -208,13 +201,6 @@ function OutlineNodeBlock({
           placeholder="节点标题"
           onCommit={(value) => void update({ title: value })}
         />
-        <Select
-          size="small"
-          value={node.status}
-          options={STATUS_OPTIONS}
-          onChange={(status) => void update({ status })}
-          style={{ minWidth: 96 }}
-        />
         <Dropdown menu={{ items: menuItems, onClick: onMenuClick }} trigger={["click"]}>
           <Button type="text" size="small" icon={<CaretDownOutlined />} aria-label="节点操作" />
         </Dropdown>
@@ -292,7 +278,7 @@ function OutlineNodeBlock({
               placeholder="这一节点发生什么"
               onCommit={(value) => void update({ summary: value })}
             />
-            <div className="novel-outline-refs">
+            {node.kind === "event" && <div className="novel-outline-refs">
               <Select
                 mode="multiple"
                 placeholder="关联角色"
@@ -317,12 +303,7 @@ function OutlineNodeBlock({
                 options={clues.map((item) => ({ value: item.id, label: item.title }))}
                 onChange={(foreshadowingIds) => void update({ foreshadowingIds })}
               />
-              <Input
-                placeholder="故事时间"
-                value={node.storyTime ?? ""}
-                onChange={(event) => void update({ storyTime: event.target.value })}
-              />
-            </div>
+            </div>}
           </motion.div>
         )}
       </AnimatePresence>
@@ -382,7 +363,7 @@ function RecoveryNodeRow({
         <Button size="small" onClick={() => onRepair(node, undefined)}>设为根幕</Button>
       ) : (
         <div className="novel-outline-recovery-parent">
-          <Select size="small" value={parentId} placeholder={node.kind === "sequence" ? "选择所属幕" : "选择所属序列"} options={candidates.map((item) => ({ value: item.id, label: item.title }))} onChange={setParentId} />
+          <Select size="small" value={parentId} placeholder={node.kind === "sequence" ? "选择所属幕" : "选择所属剧情段"} options={candidates.map((item) => ({ value: item.id, label: item.title }))} onChange={setParentId} />
           <Button size="small" disabled={!parentId} onClick={() => onRepair(node, parentId)}>归入</Button>
         </div>
       )}
@@ -427,7 +408,7 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
   const architecture = useLiveQuery(() => novelDb.architectures.where("projectId").equals(projectId).first(), [projectId]);
   const fullProposal = useLiveQuery(async () => {
     const all = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
-    return all.find((item) => item.status === "pending" && item.taskKey === "outline" && !item.targetId) ?? null;
+    return all.find((item) => item.status === "pending" && item.taskKey === "plot-design") ?? null;
   }, [projectId], null);
   const sectionProposals = useLiveQuery(async () => {
     const all = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
@@ -451,7 +432,7 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
   const [fieldReviseInstruction, setFieldReviseInstruction] = useState("");
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generationBusy, setGenerationBusy] = useState(false);
-  const [generationInstruction, setGenerationInstruction] = useState("为下一幕规划完整的序列与事件。先铺陈人物处境、世态背景与情感底色，让因果、转折与伏笔在事件流中自然浮现。");
+  const [generationInstruction, setGenerationInstruction] = useState("");
   const generationAbortRef = useRef<AbortController | null>(null);
   const knownNodeIds = useRef<Set<string>>(new Set());
   const structure = useMemo(() => analyzeOutlineStructure(nodes), [nodes]);
@@ -470,6 +451,8 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
   }, [architecture?.phases, roots]);
   const allArchitecturePhasesGenerated = Boolean(architecture?.phases.length) && !nextActTarget;
   const nextActLabel = nextActTarget?.title ? `第 ${nextActTarget.order + 1} 幕「${nextActTarget.title}」` : `第 ${(nextActTarget?.order ?? 0) + 1} 幕`;
+  const latestAct = roots[roots.length - 1];
+  const latestActHasSegments = Boolean(latestAct && nodes.some((node) => node.kind === "sequence" && node.parentId === latestAct.id));
 
   useEffect(() => {
     const known = knownNodeIds.current;
@@ -489,15 +472,6 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
 
   const expandAll = useCallback(() => setCollapsedIds(new Set()), []);
   const collapseAll = useCallback(() => setCollapsedIds(new Set(nodes.map((item) => item.id))), [nodes]);
-
-  const addRoot = useCallback(
-    async (kind: OutlineKind) => {
-      const siblings = roots.filter((item) => item.kind === kind);
-      await addOutlineNode(projectId, undefined, kind, nextTitle(kind, siblings.length), siblings.length);
-      message.success(`已添加${KIND_LABEL[kind]}`);
-    },
-    [projectId, roots, message],
-  );
 
   const onAddChild = useCallback(
     async (parent: OutlineNode, childKind: OutlineKind) => {
@@ -569,21 +543,38 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
     message.success("同级节点顺序已重新编号");
   }, [projectId, validNodes, message]);
 
-  const executeNextActGeneration = useCallback(async () => {
+  const executePlotDesign = useCallback(async () => {
     const controller = new AbortController();
     generationAbortRef.current = controller;
     setGenerationBusy(true);
     try {
-      await runGenerationTask({ projectId, taskKey: "outline", instruction: generationInstruction.trim(), signal: controller.signal });
+      await runPlotDesignTask({ projectId, instruction: generationInstruction.trim(), signal: controller.signal });
       setGenerateOpen(false);
-      message.success(`${nextActLabel}候选已生成，请审核后追加`);
+      message.success("剧情段候选已生成，请审核后追加");
     } catch (error) {
-      if (!controller.signal.aborted) message.error(error instanceof Error ? error.message : "单幕生成失败");
+      if (!controller.signal.aborted) message.error(error instanceof Error ? error.message : "剧情设计失败");
     } finally {
       if (generationAbortRef.current === controller) generationAbortRef.current = null;
       setGenerationBusy(false);
     }
-  }, [projectId, generationInstruction, message, nextActLabel]);
+  }, [projectId, generationInstruction, message]);
+
+  const createAct = useCallback(async () => {
+    try {
+      const act = await createNextOutlineAct(projectId);
+      message.success(`已创建“${act.title}”`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "创建下一幕失败");
+    }
+  }, [projectId, message]);
+
+  const requestCreateAct = useCallback(() => {
+    if (latestAct && !latestActHasSegments) {
+      modal.confirm({ title: `“${latestAct.title}”还没有剧情段`, content: "仍要创建下一幕吗？", okText: "继续创建", onOk: createAct });
+      return;
+    }
+    void createAct();
+  }, [latestAct, latestActHasSegments, modal, createAct]);
 
   const closeGenerationModal = useCallback(() => {
     generationAbortRef.current?.abort();
@@ -682,16 +673,16 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
 
   const generationModal = (
     <Modal
-      title={`生成${nextActLabel}`}
+      title={`剧情设计 · ${latestAct?.title ?? "尚未创建幕"}`}
       open={generateOpen}
       onCancel={closeGenerationModal}
       confirmLoading={generationBusy}
-      okText="生成这一幕"
+      okText="生成候选"
       cancelText="取消"
-      onOk={() => void executeNextActGeneration()}
+      onOk={() => void executePlotDesign()}
     >
-      <Alert type="info" showIcon message={`本次只生成${nextActLabel}`} description="生成结果先进入审核；采纳后只追加这一幕，不会修改或删除已有大纲。" />
-      <Input.TextArea className="novel-outline-generation-instruction" autoSize={{ minRows: 4, maxRows: 9 }} value={generationInstruction} onChange={(event) => setGenerationInstruction(event.target.value)} placeholder="描述故事脉络、人物处境、世态背景与情感走向，可附关键转折但不必写尽" />
+      <Alert type="info" showIcon message="向最新幕追加一个剧情段" description="每次生成 1 个剧情段和 2-4 个原子事件；留空时会根据项目记忆和当前大纲自然承接。" />
+      <Input.TextArea className="novel-outline-generation-instruction" autoSize={{ minRows: 4, maxRows: 9 }} value={generationInstruction} onChange={(event) => setGenerationInstruction(event.target.value)} placeholder="可选：指定接下来发生什么、必须出现什么或需要避免什么" />
     </Modal>
   );
 
@@ -708,7 +699,7 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
         <div>
           <span>STORY OUTLINE</span>
           <h2>故事大纲</h2>
-          <p>按幕、序列和事件铺陈故事——人物处境、世态人情、情感底色先行, 因果与转折在事件流中自然浮现。整棵大纲以文档形式同屏呈现, 直接在节点上内联编辑。这里不创建章节, 也不持有正文。</p>
+          <p>按幕、剧情段和事件逐步铺陈故事。幕承接架构阶段，剧情设计每次只向最新幕追加一小段内容；这里不创建章节，也不持有正文。</p>
         </div>
         <div className="novel-outline-header-actions">
           {roots.length > 0 && (
@@ -717,8 +708,8 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
               <Button size="small" onClick={collapseAll}>折叠全部</Button>
             </>
           )}
-          <Button icon={<PlusOutlined />} onClick={() => void addRoot("act")}>添加幕</Button>
-          <Tooltip title={allArchitecturePhasesGenerated ? "全部架构阶段均已生成，请重写已有幕或先扩展全书架构" : `生成${nextActLabel}`}><span><Button type="primary" icon={<ThunderboltOutlined />} disabled={allArchitecturePhasesGenerated} onClick={() => setGenerateOpen(true)}>生成下一幕</Button></span></Tooltip>
+          <Tooltip title={allArchitecturePhasesGenerated ? "全部架构阶段均已创建，请先扩展全书架构" : `创建${nextActLabel}`}><span><Button icon={<PlusOutlined />} disabled={allArchitecturePhasesGenerated} onClick={requestCreateAct}>创建下一幕</Button></span></Tooltip>
+          <Tooltip title={latestAct ? `向“${latestAct.title}”追加剧情段` : "请先创建一幕"}><span><Button type="primary" icon={<ThunderboltOutlined />} disabled={!latestAct} onClick={() => setGenerateOpen(true)}>剧情设计</Button></span></Tooltip>
         </div>
       </header>
 
@@ -738,8 +729,8 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
             description={
               <>
                 <strong>尚无故事大纲</strong>
-                <span>先添加一幕手动规划，或生成下一幕的完整序列与事件结构。</span>
-                <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setGenerateOpen(true)}>生成下一幕</Button>
+                <span>先根据全书架构创建一幕，再逐段进行剧情设计。</span>
+                <Button type="primary" icon={<PlusOutlined />} disabled={allArchitecturePhasesGenerated} onClick={requestCreateAct}>创建下一幕</Button>
               </>
             }
           />

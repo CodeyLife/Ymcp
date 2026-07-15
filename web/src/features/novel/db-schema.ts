@@ -2,13 +2,13 @@
 import type { Transaction } from "dexie";
 import { buildProjectReferenceCatalogs, emptyReferenceCatalog, sanitizeProposalReferencesInPlace, sanitizeReferenceRecordInPlace } from "./reference-integrity";
 
-export const DB_VERSION = 16;
+export const DB_VERSION = 17;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
  * 与 DB_VERSION 解耦：记录版本跟踪单条数据的字段语义，数据库版本跟踪表结构。
  */
-export const RECORD_SCHEMA_VERSION = 6;
+export const RECORD_SCHEMA_VERSION = 7;
 
 export const V4_STORES: Record<string, string> = {
   projects: "id, updatedAt, status, *genre",
@@ -103,6 +103,85 @@ export const V15_STORES: Record<string, string | null> = {
 export const V16_STORES: Record<string, string | null> = {
   ...V15_STORES,
 };
+
+export const V17_STORES: Record<string, string | null> = {
+  ...V16_STORES,
+  outlineNodes: "id, projectId, parentId, kind, order, [projectId+kind]",
+  retrievalRuns: "id, projectId, threadId, messageId, targetKind, targetId, targetDocumentId, purpose, status, createdAt, [threadId+createdAt], [projectId+purpose]",
+};
+
+function cleanOutlineRecord(record: Record<string, unknown>) {
+  const kind = record.kind;
+  delete record.status;
+  delete record.storyTime;
+  delete record.tags;
+  if (kind === "event") {
+    if (!Array.isArray(record.characterIds)) record.characterIds = [];
+    if (!Array.isArray(record.plotThreadIds)) record.plotThreadIds = [];
+    if (!Array.isArray(record.foreshadowingIds)) record.foreshadowingIds = [];
+  } else {
+    delete record.characterIds;
+    delete record.plotThreadIds;
+    delete record.foreshadowingIds;
+  }
+  record.schemaVersion = RECORD_SCHEMA_VERSION;
+  return record;
+}
+
+function migratedTimelineEvent(record: Record<string, unknown>) {
+  const storyTime = typeof record.storyTime === "string" ? record.storyTime.trim() : "";
+  if (!storyTime) return undefined;
+  const now = Date.now();
+  return {
+    id: `outline-time:${String(record.id)}`,
+    projectId: String(record.projectId ?? ""),
+    schemaVersion: RECORD_SCHEMA_VERSION,
+    revision: 1,
+    createdAt: Number(record.createdAt ?? now),
+    updatedAt: now,
+    createdBy: String(record.createdBy ?? "migration-v17"),
+    updatedBy: "migration-v17",
+    title: `大纲时间：${String(record.title ?? "未命名节点")}`,
+    storyDate: storyTime,
+    duration: "",
+    narrativeOrder: Number(record.order ?? 0),
+    participantIds: record.kind === "event" && Array.isArray(record.characterIds) ? [...record.characterIds] : [],
+    causeIds: [],
+    consequenceIds: [],
+    description: ["由旧大纲节点迁移。", String(record.summary ?? "")].filter(Boolean).join("\n"),
+  };
+}
+
+function cleanOutlineProposal(proposal: Record<string, unknown>) {
+  if (!Array.isArray(proposal.items)) return;
+  for (const entry of proposal.items) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    if (item.targetTable !== "outlineNodes") continue;
+    for (const key of ["payload", "before", "after"] as const) {
+      const value = item[key];
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const record = value as Record<string, unknown>;
+      delete record.status;
+      delete record.storyTime;
+      delete record.tags;
+      if (record.kind && record.kind !== "event") {
+        delete record.characterIds;
+        delete record.plotThreadIds;
+        delete record.foreshadowingIds;
+      }
+    }
+  }
+}
+
+/** V17: simplify outline nodes and preserve legacy story times in the timeline. */
+export async function migrateOutlineNodeModel(transaction: Transaction) {
+  const nodes = await transaction.table("outlineNodes").toArray() as Record<string, unknown>[];
+  const timelineEvents = nodes.map(migratedTimelineEvent).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  if (nodes.length) await transaction.table("outlineNodes").bulkPut(nodes.map((record) => cleanOutlineRecord(record)));
+  if (timelineEvents.length) await transaction.table("timelineEvents").bulkPut(timelineEvents);
+  await transaction.table("proposals").toCollection().modify((proposal: Record<string, unknown>) => cleanOutlineProposal(proposal));
+}
 
 export async function migrateNovelMemoryReliability(transaction: Transaction) {
   await transaction.table("conversationMemories").toCollection().modify((memory: Record<string, unknown>) => {
