@@ -1,0 +1,457 @@
+{
+  "id": "bc6d17bd-d1b1-4df3-bd1e-c87cd8b16b69",
+  "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+  "schemaVersion": 8,
+  "revision": 1,
+  "createdAt": 1784107816957,
+  "updatedAt": 1784107816957,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "workflowRunId": "cdf5f1cc-f2ee-4bc7-a845-09d42f79940f",
+  "artifactId": "artifact:cdf5f1cc-f2ee-4bc7-a845-09d42f79940f:draft:0:draft",
+  "iteration": 0,
+  "scores": {
+    "plot": 3.81,
+    "characterVoice": 3.94,
+    "sceneEmbodiment": 3.92,
+    "dialogue": 3.92,
+    "pacing": 3.4,
+    "specificity": 3.9,
+    "hookPayoff": 3.94,
+    "continuity": 3.94
+  },
+  "weightedScore": 3.83,
+  "blockerCount": 0,
+  "passed": true,
+  "issues": [
+    {
+      "dimension": "plot",
+      "severity": "major",
+      "title": "遗漏必须发生的节拍",
+      "description": "沈雁声必须在陌生小镇以新身份出现并完成第一次江湖行走。",
+      "rule": "chapter-blueprint.mustHappen",
+      "suggestion": "补写能明确落实该节拍的行动与结果。",
+      "id": "bc8fe6a5-2fc1-424e-8a8b-f3c1bf152ba1",
+      "deterministic": true
+    },
+    {
+      "dimension": "plot",
+      "severity": "major",
+      "title": "遗漏必须发生的节拍",
+      "description": "听潮阁覆灭的消息必须在镇上传播，形成外部压力。",
+      "rule": "chapter-blueprint.mustHappen",
+      "suggestion": "补写能明确落实该节拍的行动与结果。",
+      "id": "808e0e19-ae0a-4fdd-9127-cdf29f18ab83",
+      "deterministic": true
+    },
+    {
+      "dimension": "plot",
+      "severity": "major",
+      "title": "遗漏必须发生的节拍",
+      "description": "有人寻找听潮阁幸存者，并对沈雁声形成实际威胁。",
+      "rule": "chapter-blueprint.mustHappen",
+      "suggestion": "补写能明确落实该节拍的行动与结果。",
+      "id": "ead65652-0295-4394-9768-3ddc17cdc8f6",
+      "deterministic": true
+    },
+    {
+      "dimension": "plot",
+      "severity": "major",
+      "title": "遗漏必须发生的节拍",
+      "description": "沈雁声必须面对门人录第一页陆无名名字带来的追问。",
+      "rule": "chapter-blueprint.mustHappen",
+      "suggestion": "补写能明确落实该节拍的行动与结果。",
+      "id": "bb1fe1fd-57fb-4b5f-b848-706aee8291d6",
+      "deterministic": true
+    },
+    {
+      "dimension": "plot",
+      "severity": "major",
+      "title": "遗漏必须发生的节拍",
+      "description": "门人录的作用必须从死亡记录推进为旧债线索记录。",
+      "rule": "chapter-blueprint.mustHappen",
+      "suggestion": "补写能明确落实该节拍的行动与结果。",
+      "id": "0341e4aa-62d9-463c-aba2-c50a4b2d9913",
+      "deterministic": true
+    },
+    {
+      "dimension": "plot",
+      "severity": "major",
+      "title": "遗漏必须发生的节拍",
+      "description": "沈雁声必须因主动选择隐姓埋名付出可见代价：暂时失去以真实身份追查真相的便利。",
+      "rule": "chapter-blueprint.mustHappen",
+      "suggestion": "补写能明确落实该节拍的行动与结果。",
+      "id": "eab8f245-92d0-46c9-bf16-8ad68bc854b3",
+      "deterministic": true
+    },
+    {
+      "dimension": "specificity",
+      "severity": "warning",
+      "title": "强调词贬值",
+      "description": "“忽然”出现 3 次，超过单章 2 次上限，强调效果贬值。",
+      "rule": "style.emphasis-devaluation",
+      "suggestion": "用具体事件呈现认知转变，或替换为不同表达，删除多余的强调。",
+      "id": "798505e4-f9a2-4b71-a6c3-4c4507f83980",
+      "deterministic": true
+    },
+    {
+      "dimension": "pacing",
+      "severity": "warning",
+      "title": "短句排比过多",
+      "description": "检测到 17 处连续短句排比，超过单章 2 处上限。",
+      "rule": "style.short-sentence-tic",
+      "suggestion": "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。",
+      "id": "5620ce79-a9d0-421b-8e6d-7fc4a86e6374",
+      "deterministic": true
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "warning",
+      "title": "叙述直接总结人物身份与目的",
+      "description": "叙述直接替读者总结身份转变和行动目的。沈雁声已经通过失去玉佩、隐藏门人录、探听消息等动作呈现处境，额外解释降低了有限视角的含蓄感。",
+      "excerpt": "“掌门之女的身份随着那场火一起埋在了雾岸。”；“她需要吃饭。也需要知道镇上还有多少人在找她。”",
+      "revisionRanges": [
+        {
+          "start": 5,
+          "end": 5
+        },
+        {
+          "start": 53,
+          "end": 54
+        }
+      ],
+      "rule": "避免用叙述直接解释人物状态，应优先通过角色可感知的行动、物件和选择呈现。",
+      "suggestion": "减少身份和目的的直接概括，保留沈雁声通过行为体现处境的信息。",
+      "id": "a17e066f-af24-4a71-8505-9b3a6478ae1e",
+      "deterministic": false
+    },
+    {
+      "dimension": "specificity",
+      "severity": "warning",
+      "title": "核心意象重复承担主题说明功能",
+      "description": "雾、血、寒、旧物等核心意象符合项目气质，但多个节点反复用相同意象提示过去未散、旧债将起，部分位置从氛围变成主题提示。",
+      "excerpt": "“寒灯挂在破檐下”“陆无名三个字静静躺在第一页”“血水浸坏留下的痕迹”；“雾里空无一人”“身后的雾慢慢合拢”。",
+      "revisionRanges": [
+        {
+          "start": 145,
+          "end": 148
+        },
+        {
+          "start": 156,
+          "end": 162
+        }
+      ],
+      "rule": "同一意象不应反复承担解释主题的功能，应保持场景功能和叙事推进价值。",
+      "suggestion": "保留必要氛围描写，减少重复意象对人物处境的提示。",
+      "id": "3eb8d55e-f2b6-4a48-9ef2-b8f19ce9576e",
+      "deterministic": false
+    },
+    {
+      "dimension": "dialogue",
+      "severity": "warning",
+      "title": "对白承担观点总结功能",
+      "description": "对白承担了作者对江湖处境和人物选择的总结功能，潜台词不足。灰衣男人应更多通过试探行为暴露目的，老板娘的关照可更多依靠动作呈现。",
+      "excerpt": "灰衣男人通过“外人一进来，大家都看得出来”“突然来了这么多人，总有人想知道他们为何而来”完成信息说明。",
+      "revisionRanges": [
+        {
+          "start": 61,
+          "end": 70
+        },
+        {
+          "start": 135,
+          "end": 140
+        }
+      ],
+      "rule": "对白应避免直接表达作者结论，应通过人物目的、试探和潜台词推进。",
+      "suggestion": "减少主题化对白，让人物通过行动和隐含信息完成交流。",
+      "id": "60d251ae-b457-44d0-b537-bbb6dfa386e1",
+      "deterministic": false
+    },
+    {
+      "dimension": "sceneEmbodiment",
+      "severity": "warning",
+      "title": "场景细节较为通用",
+      "description": "场景功能明确，但细节较为可替换，没有充分体现雾江小镇的独特生活痕迹。",
+      "excerpt": "“渡口、茶棚、酒肆挤在一条青石街上。”；“柴房不大，靠墙放着几捆干柴，角落里有一张旧木榻。”",
+      "revisionRanges": [
+        {
+          "start": 11,
+          "end": 11
+        },
+        {
+          "start": 35,
+          "end": 35
+        }
+      ],
+      "rule": "场景描写需要提供不可替换的具体物件和环境信息。",
+      "suggestion": "增加与渡河、听潮阁传闻或江上生计相关的具体物件。",
+      "id": "b1cb1afa-78eb-4746-ad41-44b8a1d284a1",
+      "deterministic": false
+    },
+    {
+      "dimension": "pacing",
+      "severity": "warning",
+      "title": "情报推进段落节奏匀速",
+      "description": "该段持续承担发现威胁功能，节奏由多个类似的信息确认组成，缺少人物选择造成的波峰。",
+      "excerpt": "买药、老人询问、后巷偷听、灰衣男人出现连续完成情报推进。",
+      "revisionRanges": [
+        {
+          "start": 95,
+          "end": 113
+        }
+      ],
+      "rule": "推进事件应包含角色主动选择和局势变化，避免仅依靠信息累积推动。",
+      "suggestion": "让沈雁声通过主动试探或误导改变局势，而非主要依靠旁听获得推进。",
+      "id": "b2123318-e61c-4149-bd77-fdd345d4213f",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "warning",
+      "title": "人物推进依赖外部线索触发",
+      "description": "沈雁声有生存欲望和复查门人录的动机，但多数关键推进由外部消息触发，主动目标表达偏弱。",
+      "excerpt": "“又有人来了。”“听潮阁的人。”",
+      "paragraph": 48,
+      "revisionRanges": [
+        {
+          "start": 48,
+          "end": 54
+        }
+      ],
+      "rule": "人物推进应由角色选择造成局势变化，而非主要依赖外部线索推动。",
+      "suggestion": "增加沈雁声主动调查风险、设计身份掩护或选择获取信息的行为，使情节变化来源于她的行动。",
+      "id": "07766025-0f22-4057-89e2-a7f50ea30c53",
+      "deterministic": false
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "major",
+      "title": "角色能动性不足",
+      "description": "沈雁声虽然选择不拔剑、离开小镇并继续追查，但门人录线索和追查压力主要由他人投放，缺少用行动换取信息的过程。",
+      "excerpt": "“镇外石桥旁却多了一件东西。一枚旧铜牌……”",
+      "paragraph": 156,
+      "revisionRanges": [
+        {
+          "start": 70,
+          "end": 90
+        },
+        {
+          "start": 154,
+          "end": 160
+        }
+      ],
+      "rule": "角色应通过选择、试探、交换或承担风险推动线索发展。",
+      "suggestion": "增加沈雁声主动试探、误导或交换信息的行为，让线索出现与她的选择形成因果。",
+      "id": "9c51ba84-e20d-4c9e-b7bc-4212953b1912",
+      "deterministic": false
+    },
+    {
+      "dimension": "dialogue",
+      "severity": "warning",
+      "title": "对白偏向信息确认",
+      "description": "沈雁声对白整体符合冷静短句设定，但部分对白主要承担信息确认功能，缺少角色防御和试探方式。",
+      "excerpt": "“你知道？”“知道一点。”“说说。”“姑娘想听什么？”“听潮阁。”",
+      "paragraph": 71,
+      "revisionRanges": [
+        {
+          "start": 71,
+          "end": 82
+        }
+      ],
+      "rule": "对白应体现角色关系、策略和潜台词，而不仅是传递信息。",
+      "suggestion": "增加反问、试探、遗漏信息等表达方式，体现沈雁声善观察和善伪装的声音特点。",
+      "id": "d4fb71b7-75d4-48f9-a0e1-1331b3e72fbd",
+      "deterministic": false
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "warning",
+      "title": "配角关系张力不足",
+      "description": "灰衣男人主要承担制造危险和提示线索的功能，缺少与沈雁声关系中的独立欲望和拉扯。",
+      "excerpt": "“若只是路过，就别管那本册子。”",
+      "paragraph": 88,
+      "revisionRanges": [
+        {
+          "start": 61,
+          "end": 91
+        }
+      ],
+      "rule": "关系行为应体现角色之间的目标冲突，而非单向服务剧情。",
+      "suggestion": "补充灰衣男人关注册子的原因或个人诉求，使其与沈雁声形成更具体的关系压力。",
+      "id": "a20bd0bf-5aea-48fb-b106-0cdc4b3602c4",
+      "deterministic": false
+    },
+    {
+      "dimension": "continuity",
+      "severity": "warning",
+      "title": "改名选择的心理代价不足",
+      "description": "沈雁声从真实身份转为假名的情绪落点存在，但选择失去真实身份便利的代价呈现不足。",
+      "excerpt": "“沈……青。名字出口时，她自己都觉得陌生。”",
+      "paragraph": 29,
+      "revisionRanges": [
+        {
+          "start": 28,
+          "end": 34
+        }
+      ],
+      "rule": "重要身份选择需要体现持续的情绪影响和人物代价。",
+      "suggestion": "强化改名时的心理取舍，使隐姓埋名成为具有代价的主动选择。",
+      "id": "a322f054-ab94-427d-a77d-aa0cfa27258b",
+      "deterministic": false
+    },
+    {
+      "dimension": "continuity",
+      "severity": "warning",
+      "title": "敌方目标转换缺少中间动机",
+      "description": "追查门人录的敌方目标与本章灰衣男人的行为基本一致，但后半段出现画像寻找受伤女子后，敌方从追查门人录转为直接确认沈雁声身份，目标转换缺少中间动机。",
+      "excerpt": "第109-113段：“最近有没有一个受伤的女子住进来。”“灰衣男人从袖中取出一张画像。”；第70段则只明确镇上有人“找幸存者下落”。",
+      "revisionRanges": [
+        {
+          "start": 109,
+          "end": 113
+        }
+      ],
+      "rule": "检查人物行动目标是否符合已确认信息链，避免未铺垫的目标变化。",
+      "suggestion": "在相关段落中补足敌方从追查门人录到寻找受伤女子之间的关联。",
+      "id": "e12c316c-d84c-42d6-ba6d-f4585c30c33e",
+      "deterministic": false
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "warning",
+      "title": "陆无名线索确认过程略显顺滑",
+      "description": "沈雁声判断灰衣男人危险并主动停止追问符合人物设定，但她从“陆无名”到“陆师叔”的记忆连接略显顺滑，缺少她如何确认这个名字属于同一人的过程。",
+      "excerpt": "第145-151段：“她想起听潮阁里那个名字。有人曾提过。很久以前……只记得有人说过一句。‘陆师叔脾气怪，不喜欢欠人情。’”",
+      "revisionRanges": [
+        {
+          "start": 145,
+          "end": 151
+        }
+      ],
+      "rule": "检查角色掌握的信息来源与认知过程是否符合既定知识边界。",
+      "suggestion": "增加沈雁声确认陆无名身份关联的过程，使线索接受更自然。",
+      "id": "747353b7-e577-42b2-af61-4be895b8de64",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "warning",
+      "title": "离开小镇的因果连接可加强",
+      "description": "沈雁声决定离开小镇的直接原因成立，但她获得“不能继续住下去”的依据主要来自窗边划痕和灰衣男人追问，两个压力来源之间可以增加关联，使选择更具因果闭合。",
+      "excerpt": "第93-95段：“她发现窗边多了一道划痕。不是刀……不能再住下去。”；第127-130段灰衣男人询问住处。",
+      "revisionRanges": [
+        {
+          "start": 93,
+          "end": 95
+        }
+      ],
+      "rule": "检查关键选择是否由场景中已发生事件充分推动。",
+      "suggestion": "强化窗边划痕与灰衣男人出现之间的联系，使沈雁声离开的决定更有依据。",
+      "id": "56885cd8-9b5c-492a-9534-408ef9e9c1ab",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "major",
+      "title": "同一追查压力重复演绎",
+      "description": "酒肆试探已经完成敌方发现沈雁声异常、确认门人录存在风险的功能，后续巷中灰衣男人再次询问受伤女子、展示画像、逼迫离开，形成重复事件链，而非新的因果升级。",
+      "excerpt": "第109-130段：同一灰衣男人再次询问‘最近有没有一个受伤的女子住进来’，展示画像，并以‘姑娘最好别让它变得有关系’施压。",
+      "revisionRanges": [
+        {
+          "start": 93,
+          "end": 130
+        }
+      ],
+      "rule": "结构问题只保留实际需要修改的段落，重复事件链需要通过新的因果后果推进。",
+      "suggestion": "保留一次敌方主动性即可。后续追查应产生新的不可逆后果，例如灰衣男人发现某个门人录痕迹、逼迫沈雁声放弃柴房、或让老板娘受到牵连，而不是再次确认她是否为幸存者。",
+      "id": "a0c117f0-92ae-48d8-ac22-46993250aa1d",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "warning",
+      "title": "门人录线索推进偏被动",
+      "description": "门人录从死亡记录转为旧债线索的推进主要依靠发现和回忆，沈雁声虽然产生疑问，但主动调查行为较弱，导致线索功能变化偏像物件升级。",
+      "excerpt": "第156-160段：章尾线索直接出现‘陆无’铜牌和留言，新的信息主要由外部投递进入。",
+      "revisionRanges": [
+        {
+          "start": 145,
+          "end": 160
+        }
+      ],
+      "rule": "线索应通过人物选择推动关系变化，而不是只依赖信息揭示。",
+      "suggestion": "可以让沈雁声主动做一次有代价的判断，例如选择是否追查陆无名、是否冒险取走铜牌、是否放弃安全路线，让线索改变她的行动。",
+      "id": "5f6a99c6-7148-4c17-ac22-cfa0f9acdc67",
+      "deterministic": false
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "warning",
+      "title": "隐姓埋名的主动代价不足",
+      "description": "沈雁声隐姓埋名的选择成立，但选择过程更多表现为环境压力下的默认反应，主动承担代价的瞬间不足。",
+      "excerpt": "第29-34段：她取名‘沈青’，但主要呈现名字陌生感，没有展示她明确放弃真实身份带来的损失。",
+      "revisionRanges": [
+        {
+          "start": 132,
+          "end": 140
+        }
+      ],
+      "rule": "人物选择需要体现行动动机和代价，避免只呈现结果。",
+      "suggestion": "增加一次明确选择，例如她本可借老板娘帮助寻找听潮阁旧人，却为了保护门人录主动断掉这条线，使隐姓埋名成为行动选择。",
+      "id": "7174797a-6428-4bba-84a9-2538f9e5549d",
+      "deterministic": false
+    },
+    {
+      "dimension": "pacing",
+      "severity": "warning",
+      "title": "重复推进削弱紧迫感",
+      "description": "第70-90段中，灰衣男人已经通过询问幸存者下落、询问沈雁声为何想听听潮阁、提及那本册子完成了对门人录和身份风险的试探。第107-130段再次由同一灰衣男人出现，通过画像、询问住处和姓氏进一步确认身份，功能上重复前一场的暴露压力。",
+      "revisionRanges": [
+        {
+          "start": 107,
+          "end": 130
+        }
+      ],
+      "rule": "避免同一风险在短距离内重复证明，应让后续推进带来新的压力变化或信息升级。",
+      "suggestion": "可调整第107-130段，使灰衣男人的出现承担更高层级的冲突或新信息，而不是再次完成身份试探。",
+      "excerpt": "第107-130段再次由同一灰衣男人出现，通过画像、询问住处和姓氏进一步确认身份。",
+      "id": "5c6068f1-9029-4030-8c8a-60cfa6daff04",
+      "deterministic": false
+    },
+    {
+      "dimension": "hookPayoff",
+      "severity": "warning",
+      "title": "章尾信息叠加削弱悬念停留",
+      "description": "第145-153段完成门人录、陆无名和哑渡物件之间的关联推进后，情绪已经达到章节内部回收点。第154-160段再加入马蹄声、离开、铜牌、留言线索，虽然提供章尾钩子，但信息连续叠加，削弱了陆无名名字带来的悬念停留。",
+      "revisionRanges": [
+        {
+          "start": 154,
+          "end": 160
+        }
+      ],
+      "rule": "章尾钩子应强化已有悬念或形成明确升级，避免多个新信息同时抢占注意力。",
+      "suggestion": "可调整第154-160段的信息释放顺序，让门人录、陆无名相关悬念获得更充分的余震后再引入新线索。",
+      "excerpt": "第154-160段再加入马蹄声、离开、铜牌、留言线索，信息连续叠加。",
+      "id": "2fb1165c-8ff8-47bd-9a23-35ae67dcd09f",
+      "deterministic": false
+    }
+  ],
+  "metrics": {
+    "characters": 3638,
+    "paragraphs": 162,
+    "dialogueRatio": 0.268,
+    "paragraphVariation": 0.707,
+    "singleSentenceNarrativeRatio": 0.104,
+    "maxConsecutiveSingleSentenceNarrative": 1,
+    "templateHits": 0,
+    "imageryDensity": 54,
+    "interpretiveSummaryHits": 0
+  },
+  "reviewerRoles": [
+    "style-reviewer",
+    "character-reviewer",
+    "continuity-reviewer",
+    "plot-reviewer",
+    "pacing-reviewer"
+  ]
+}

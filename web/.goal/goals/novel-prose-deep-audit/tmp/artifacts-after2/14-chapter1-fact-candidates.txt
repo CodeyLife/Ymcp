@@ -1,0 +1,538 @@
+[
+  {
+    "id": "47dbd3ca-68af-44f0-a457-38c16defca60",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718654,
+    "updatedAt": 1784107718654,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.state.objective",
+    "subject": {
+      "kind": "entity",
+      "id": "c489c2fa-aa2a-4bc9-8cff-0f6c94503abc"
+    },
+    "predicate": "accepted",
+    "object": {
+      "kind": "string",
+      "value": "沈雁声的旧事并渡河"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "摆渡老人接受条件并让沈雁声渡河。",
+    "knowledgeDeltas": [],
+    "after": "为沈雁声提供渡河机会",
+    "evidence": "“老人许久没有动作。然后，他抬起竹篙，在水面轻轻敲了三下……渡船靠岸。”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "4a3c6168-3f67-4095-baee-cd8fb3a2ad89",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718654,
+    "updatedAt": 1784107718654,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.state",
+    "subject": {
+      "kind": "entity",
+      "id": "c489c2fa-aa2a-4bc9-8cff-0f6c94503abc"
+    },
+    "predicate": "appeared_as",
+    "object": {
+      "kind": "string",
+      "value": "披旧蓑衣的哑巴摆渡老人"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "摆渡老人登场时身穿旧蓑衣，携带竹篙和木牌。",
+    "knowledgeDeltas": [],
+    "after": {
+      "location": "江边渡口",
+      "physical": "",
+      "emotional": "",
+      "objective": "摆渡",
+      "inventory": [
+        "竹篙",
+        "木牌"
+      ],
+      "relationshipNotes": []
+    },
+    "evidence": "“一个披旧蓑衣的老人坐在船头，手边放着一根磨得发亮的竹篙。”“他听不见，也说不了话。”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "6077d167-4e83-4e8d-9dcb-9fa389c71cf0",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718654,
+    "updatedAt": 1784107718654,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "relations",
+    "field": "record",
+    "subject": {
+      "kind": "relation",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "met",
+    "object": {
+      "kind": "entity-ref",
+      "value": "c489c2fa-aa2a-4bc9-8cff-0f6c94503abc"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声在江边遇见哑巴摆渡老人。",
+    "knowledgeDeltas": [],
+    "after": {
+      "fromEntityId": "a6fa0852-0828-40ff-a253-f29cec8a9f37",
+      "toEntityId": "c489c2fa-aa2a-4bc9-8cff-0f6c94503abc",
+      "relationType": "encounter",
+      "bond": "初次相遇，尚未建立信任但因渡河条件产生短暂联系",
+      "publicLabel": "渡河者与摆渡老人",
+      "privateTruth": ""
+    },
+    "evidence": "“一个披旧蓑衣的老人坐在船头……他听不见，也说不了话。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "88f17e70-244e-4b10-b9d7-20e4327838b5",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718653,
+    "updatedAt": 1784107718653,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.state.inventory",
+    "subject": {
+      "kind": "entity",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "escaped_with",
+    "object": {
+      "kind": "string",
+      "value": "门人录"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声逃离过程中携带门人录。",
+    "knowledgeDeltas": [],
+    "after": [
+      "门人录"
+    ],
+    "evidence": "“沈雁声把门人录从断裂的木匣里抽出来时”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "ac988f3e-22fc-45d6-8f57-bbf521f44894",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718653,
+    "updatedAt": 1784107718653,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.state.physical",
+    "subject": {
+      "kind": "entity",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "was_injured",
+    "object": {
+      "kind": "string",
+      "value": "剑伤、背后灼热木屑划伤等多处伤势"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声逃亡时身负剑伤及灼热木屑造成的划伤。",
+    "knowledgeDeltas": [],
+    "after": "带伤逃亡，存在剑伤及灼伤划伤",
+    "evidence": "“袖口被剑伤割开的口子不断往下滴血”以及“背后被灼热的木屑划开一道口子”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "cc5fd5eb-8e78-4fc4-8aa0-146287e595f8",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718654,
+    "updatedAt": 1784107718654,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.state.location",
+    "subject": {
+      "kind": "entity",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "entered",
+    "object": {
+      "kind": "string",
+      "value": "江上大雾"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声进入江上雾境。",
+    "knowledgeDeltas": [],
+    "after": "江上雾境中",
+    "evidence": "“大雾从江心升起”“她没有停”“江雾越来越浓”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "d28abe8b-661c-4267-bba8-4b52e4eac056",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718653,
+    "updatedAt": 1784107718653,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.summary",
+    "subject": {
+      "kind": "entity",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "belongs_to",
+    "object": {
+      "kind": "string",
+      "value": "听潮阁"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "timeless",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声与听潮阁存在身份关联，被称为掌门之女。",
+    "knowledgeDeltas": [],
+    "after": "听潮阁掌门之女，在听潮阁覆灭后携门人录逃亡",
+    "evidence": "“掌门之女”“听潮阁弟子的衣袍被血浸透”“沈雁声第一次从别人嘴里听见这个称呼。不是沈姑娘，不是掌门之女。”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "d8bf667c-5249-4973-8bcd-c174047c1daa",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718654,
+    "updatedAt": 1784107718654,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "plotThreads",
+    "field": "record",
+    "subject": {
+      "kind": "thread",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "offered",
+    "object": {
+      "kind": "string",
+      "value": "一桩旧事"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声以一桩未公开内容的旧事作为渡河条件。",
+    "knowledgeDeltas": [],
+    "after": {
+      "fact": "沈雁声以未具体透露内容的一桩旧事作为渡河条件"
+    },
+    "evidence": "“随后，他拿起一块木牌，在上面慢慢写下两个字。旧事。”“我说一件。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "daa6dfe6-a9d8-4c4a-97d3-b00561c312c6",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718654,
+    "updatedAt": 1784107718654,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.state.location",
+    "subject": {
+      "kind": "entity",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "crossed",
+    "object": {
+      "kind": "string",
+      "value": "江面"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声渡过江面抵达陌生土地。",
+    "knowledgeDeltas": [],
+    "after": "已抵达江对岸陌生土地",
+    "evidence": "“渡船靠岸。”“她踏上陌生的土地。”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "dcf28dcd-86b9-46c8-b7bf-f5ecedce69ec",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718653,
+    "updatedAt": 1784107718653,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "plotThreads",
+    "field": "record",
+    "subject": {
+      "kind": "thread",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "was_pursued_for",
+    "object": {
+      "kind": "string",
+      "value": "门人录"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "追兵行动显示其主要目标包含沈雁声携带的门人录。",
+    "knowledgeDeltas": [],
+    "after": {
+      "fact": "追兵主要目标为沈雁声携带的门人录而非单纯取沈雁声性命"
+    },
+    "evidence": "“黑衣人没有追着她的命门下手，几次明明可以封住她的退路，却都先去截她怀里的门人录。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "e7e92651-d6c5-4576-87f0-f97a8281a08a",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718654,
+    "updatedAt": 1784107718654,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "foreshadowing",
+    "field": "record",
+    "subject": {
+      "kind": "foreshadowing",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "found",
+    "object": {
+      "kind": "string",
+      "value": "门人录第一页出现新鲜墨迹名字的一角"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声发现门人录第一页血迹下露出一个新鲜墨迹的名字。",
+    "knowledgeDeltas": [],
+    "after": {
+      "clue": "门人录第一页血迹下露出一个未完整显现的新名字",
+      "knownBy": [
+        "沈雁声"
+      ],
+      "possibleMisinterpretation": "读者可能认为该名字与屠门真相或门人录秘密有关",
+      "reminderFrequency": "首次出现",
+      "revealCondition": "后续明确揭示该名字身份与意义",
+      "impact": "可能影响沈雁声追查听潮阁覆灭与守护门人录的选择"
+    },
+    "evidence": "“第一页的血迹下，有一个名字露出半角。她的手停在那里。墨迹很新。”",
+    "confidence": 1,
+    "novelty": "new",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  },
+  {
+    "id": "ffda877f-6a22-4a9c-b374-2ad5ed782930",
+    "projectId": "018ddb26-65db-45e1-974c-6c9dcef7e20a",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784107718653,
+    "updatedAt": 1784107718653,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "workflowRunId": "cdecee1a-e668-4d87-95a7-1d30c0cf7b6c",
+    "sourceArtifactId": "artifact:cdecee1a-e668-4d87-95a7-1d30c0cf7b6c:draft:0:draft",
+    "sourceRevisionId": "592aa279-6a0e-4e2d-a7fc-a421a7b69bbf",
+    "targetTable": "entities",
+    "field": "character.state.objective",
+    "subject": {
+      "kind": "entity",
+      "id": "a6fa0852-0828-40ff-a253-f29cec8a9f37"
+    },
+    "predicate": "chose_to_protect",
+    "object": {
+      "kind": "string",
+      "value": "门人录"
+    },
+    "polarity": "affirmed",
+    "truthStatus": "objective",
+    "timeMode": "point",
+    "revealedAt": {
+      "chapterId": "7101a237-5680-4acc-be8e-f9bb54c5a515",
+      "narrativeOrder": 0,
+      "precision": "exact"
+    },
+    "humanReadable": "沈雁声选择携带并保护门人录。",
+    "knowledgeDeltas": [],
+    "after": "携带门人录逃离并保全其中记录",
+    "evidence": "“她可以离开……可她看见了封皮上那道血痕……她把卷册从木梁下拖出来”以及“她没有放手。”",
+    "confidence": 1,
+    "novelty": "update",
+    "conflict": false,
+    "risk": "high",
+    "riskReason": "新对象或无法定位的事实必须人工确认",
+    "status": "pending"
+  }
+]

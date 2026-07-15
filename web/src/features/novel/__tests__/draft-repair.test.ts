@@ -271,7 +271,46 @@ describe("draft structure repair", () => {
 
     const result = repairEmphasisDevaluation(content);
 
+    // 全部在对白段中：虽计入全局计数但无法删除（人物语气保留）
     expect(result.repaired).toBe(false);
     expect(result.content).toBe(content);
+  });
+
+  it("counts dialogue emphasis words toward the global limit (D5)", () => {
+    // 对白段 1 个"忽然" + 叙事段 2 个"忽然" = 3 次，超限
+    // 对白中的保留，第 3 次叙事段中的删除
+    const content = [
+      "\u201C他忽然回头看了我一眼。\u201D老人缓缓开口。",
+      "院外忽然有人奔来，脚步乱得不像听潮阁弟子。",
+      "火光忽然窜起。那不是普通失火。",
+    ].join("\n\n");
+
+    const result = repairEmphasisDevaluation(content);
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCount).toBe(1);
+    // 对白中的保留
+    expect(result.content).toContain("他忽然回头看了我一眼");
+    // 第 1 个叙事段保留
+    expect(result.content).toContain("院外忽然有人奔来");
+    // 第 2 个叙事段超限删除
+    expect(result.content).not.toContain("火光忽然窜起");
+    expect(result.content).toContain("火光窜起");
+  });
+
+  it("removes 'she first discovered' interpretive sentences (D4 发现 extension)", () => {
+    const content = [
+      "她没有回头。寒露落在发间。",
+      "这一夜，她第一次发现自己学了十六年的剑，不是为了站在父亲身后。",
+      "她沿着后山旧路奔去，脚踝隐隐作痛。",
+    ].join("\n\n");
+
+    const result = repairInterpretiveSummaries(content);
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCount).toBe(1);
+    expect(result.content).toContain("她没有回头。寒露落在发间。");
+    expect(result.content).toContain("她沿着后山旧路奔去");
+    expect(result.content).not.toContain("她第一次发现");
   });
 });

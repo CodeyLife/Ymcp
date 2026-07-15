@@ -224,7 +224,7 @@ export function truncateTrailingSecondEnding(text: string): { truncated: boolean
  * 只删除明确匹配的句子，不改动其他内容。
  */
 const INTERPRETIVE_SENTENCE_PATTERNS: RegExp[] = [
-  /(?:他|她)(?:第一次)(?:知道|明白|意识到|看清|感到|懂得|领悟|觉得)/,
+  /(?:他|她)(?:第一次)(?:知道|明白|意识到|看清|感到|懂得|领悟|觉得|发现)/,
   /(?:他|她)(?:忽然|突然|终于|这才|这才)(?:懂得|明白|看清|意识到|知道|领悟)/,
   /这(?:意味着|说明|代表着)/,
   /(?:也就是说|换句话说|归根结底|说到底)[，：]/,
@@ -316,8 +316,19 @@ export function repairEmphasisDevaluation(text: string): { repaired: boolean; co
 
   let removedCount = 0;
   const repaired = paragraphs.map((para) => {
-    // 跳过对白段
-    if (isDialogueParagraph(para)) return para;
+    // 对白段：强调词计入全局限额但不在对白中删除（人物语气保留）
+    if (isDialogueParagraph(para)) {
+      for (const word of EMPHASIS_WORDS) {
+        let pos = 0;
+        while (true) {
+          pos = para.indexOf(word, pos);
+          if (pos === -1) break;
+          globalCount[word] += 1;
+          pos += word.length;
+        }
+      }
+      return para;
+    }
 
     let result = para;
     for (const word of EMPHASIS_WORDS) {
