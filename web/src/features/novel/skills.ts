@@ -85,7 +85,7 @@ export const BUILTIN_NOVEL_SKILLS: NovelSkillManifest[] = [
   builtin({ skillId: "hierarchical-outline", name: "分层剧情控制", description: "从全书阶段到幕、序列和故事事件逐级分解。", category: "long-plan", stages: ["planning"], prompt: "长篇是循序渐进的铺陈，不是主题宣告。先经营人物处境、世态背景与情感底色，让上层叙事承诺与阶段变化在事件铺陈中自然显现，而非在梗概首句直白写出。大纲只表达故事因果，不绑定章节；每个下层节点必须服务至少一个上层目标。戏剧性要素（转折、伏笔、悬念）应作为布局埋设，不作为口号宣告。" }),
   builtin({ skillId: "causal-thread-weaving", name: "因果与剧情线编织", description: "避免事件清单和支线失踪。", category: "long-plan", stages: ["planning", "review"], prompt: "每个重要事件标注原因、触发条件、阻碍、直接结果和延迟后果。主线与支线通过共同人物、资源、秘密或选择相互改变，不能仅轮流出现。" }),
   builtin({ skillId: "foreshadowing-ledger", name: "伏笔账本", description: "规划埋设、提醒、误导、揭示和回收。", category: "long-plan", stages: ["planning", "review", "fact-extraction"], prompt: "伏笔必须记录读者可见线索、角色可知范围、预期误读、提醒频率、揭示条件和回收影响。揭示前不得让角色无来源地知道真相。" }),
-  builtin({ skillId: "chapter-blueprint", name: "章节蓝图", description: "先产出可审批、可执行的章节节拍。", category: "chapter", stages: ["planning"], requires: ["story-facts-invariant"], outputSchema: chapterBlueprintSchema, priority: 200, prompt: "章节蓝图必须包含具体目标、精确起点、4至10个行动节拍、每个节拍的情绪反应与结果、信息释放、转折、章尾钩子、必须发生与禁止事项。节拍要足够具体但不代写正文。" }),
+  builtin({ skillId: "chapter-blueprint", name: "章节蓝图", description: "先产出可审批、可执行的章节节拍。", category: "chapter", stages: ["planning"], requires: ["story-facts-invariant"], outputSchema: chapterBlueprintSchema, priority: 200, prompt: "章节蓝图必须包含具体目标、精确起点、4至10个行动节拍、每个节拍的情绪反应与结果、信息释放、转折、章尾钩子、必须发生与禁止事项。节拍必须形成因果链：上一节拍的结果触发下一行动；至少一次由视角人物主动选择造成可见代价；信息释放必须改变人物选择；对手或阻力方要保留自己的目标并作出反制。禁止把互不相干的场面并列成清单。节拍要足够具体但不代写正文。" }),
   builtin({ skillId: "scene-action-reaction", name: "行动与反应场景", description: "用目标、冲突、结果和反应、两难、决定形成推进。", category: "chapter", stages: ["planning", "drafting", "review"], prompt: "行动场景围绕目标、阻碍和不可逆结果展开；重大结果后安排必要的情绪反应、选择权衡和新决定。呼吸段必须改变理解或决定，不能停滞。" }),
   builtin({ skillId: "embodied-prose", name: "具象场景正文", description: "用行动、感官和选择承载情绪与信息。", category: "drafting", stages: ["drafting", "revision"], prompt: "正文优先呈现人物正在做什么、注意到什么、误读什么和选择什么。抽象总结要落回可观察行动、具体感官、环境阻力或有代价的对白。认知变化必须由前文可见信息触发；观察不足时，人物判断应保持试探性并允许出错。" }),
   builtin({ skillId: "serial-rhythm", name: "通用连载节奏", description: "控制章节承诺、推进、阶段回报和下一章驱动力。", category: "serial", stages: ["planning", "drafting", "review"], prompt: "每章开头尽快建立当章问题，中段至少发生一次局势变化，结尾产生新的决定、代价、危险或认知缺口。回报必须来自此前阻力和人物行动。全章只保留一个开场和一个结尾；后半章必须升级或转向，不得用另一组事件重复已经完成的推进。" }),
@@ -232,6 +232,7 @@ function customSkillBlock(skills: NovelSkillManifest[]) {
 export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: NovelSkillStage) {
   const sections: string[] = [];
   if (stage === "drafting") {
+    sections.push("## 正文创作契约\n按以下优先级写作：事实与知识边界 → 人物欲望、选择与代价 → 场景行动和因果 → 语言质感。蓝图是因果材料，不是逐项扩写清单；形式规则与文采不得压过人物选择。");
     if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
       sections.push("## 事实边界\n严格遵守已批准蓝图、正式事实、锁定规则和人物知识边界；信息不足时保持不确定，不得补造既定事实。");
     }
@@ -239,10 +240,10 @@ export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: Nov
       sections.push("## 人物与声音\n人物的行动、对白和判断必须符合其身份、欲望、认知与当下处境。用具体反应呈现感受，让不同人物在用词、直接程度和回避方式上可辨认。");
     }
     if (hasAnySkill(skills, DRAFTING_PROGRESS_SKILLS)) {
-      sections.push("## 章节推进\n依照蓝图完成目标、阻碍、结果和章尾驱动力。每个场景都要改变局势、理解或决定；同一事件链只推进一次，全章只保留一个开场和一个结尾，不得用复写情节凑篇幅。");
+      sections.push("## 章节推进\n依照蓝图完成目标、阻碍、结果和章尾驱动力。每个场景都要由人物行动引发阻力，再通过选择改变局势、关系或认知并产生代价；信息发现只有迫使新选择时才算推进。同一事件链只推进一次，全章只保留一个开场和一个结尾。");
     }
     if (hasAnySkill(skills, DRAFTING_PROSE_SKILLS)) {
-      sections.push("## 文风与段落\n以行动、感官、环境和对白承载情绪，必要处使用一次克制的留白。选择少量符合项目主题的核心意象，只在推动场景或表现人物变化时使用。普通叙事段落默认包含 2 至 5 句；对白、明确转折或强冲击可以单句成段，但单句叙事段不得连续出现 3 个，且不得超过全部叙事段的 30%。长短句随动作速度自然变化，不机械拆句。");
+      sections.push("## 文风与段落\n以行动、感官、环境和对白承载情绪；动作或对白已经传达含义后立即留白，不再补写解释性心理总结。核心意象只在状态或含义变化时重现，不连续用同一物件替人物说理。普通叙事段落默认包含 2 至 5 句；不要每句话或每轮对白都另起空行，单句叙事段不得连续出现 3 个。长短句随动作速度自然变化。");
     }
     if (skills.some((skill) => skill.skillId === "romance-arc-design")) {
       sections.push("## 感情线\n感情变化必须由共同经历、人物选择和现实代价推动，保持双向吸引与阶段变化。关键情绪通过人物当下的行动、对白和未完成的表达呈现，不用模板化甜虐桥段替代主线因果。");
@@ -252,7 +253,7 @@ export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: Nov
   }
 
   if (stage === "review") {
-    sections.push("## 审校契约\n只报告有正文证据且属于当前角色职责的问题。检查事实与人物知识边界、人物声音、蓝图落实、段落碎片、回复包装、重新开场、重复事件链和第二个结尾。结构问题只把后出现且实际需要修改的段落写入 revisionRanges；仅用于对照的早期段落不得列入修改范围。");
+    sections.push("## 审校契约\n只报告有正文证据且属于当前角色职责的问题。形式完整不等于可生产：持续按蓝图逐项交差、解释人物心理、用对白传递作者结论、依赖线索而非选择推进、反复用同一意象说理、通用细节和匀速段落都属于机械化风险。检查事实与人物知识边界、人物声音与能动性、蓝图因果、场景具象、对白潜台词、节奏波峰、段落碎片、重复事件链和第二个结尾。结构问题只把实际需要修改的段落写入 revisionRanges。");
     return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
   }
 

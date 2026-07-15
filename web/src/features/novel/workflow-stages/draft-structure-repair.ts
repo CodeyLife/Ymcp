@@ -1,5 +1,5 @@
 import { streamNovelModel } from "../ai";
-import { analyzeDraftStructure, bigramSimilarity, normalizedParagraph, type DraftStructureIssue, type DraftStructureReport } from "../draft-structure";
+import { analyzeDraftStructure, bigramSimilarity, isDialogueOnlyParagraph, normalizedParagraph, type DraftStructureIssue, type DraftStructureReport } from "../draft-structure";
 
 export interface DraftStructureRepairResult {
   content: string;
@@ -67,7 +67,7 @@ export function repairPunctuationBreaks(text: string): string {
 
 // 判断是否为对白段（包含中文引号）
 function isDialogueParagraph(text: string): boolean {
-  return /["""「」『』]/.test(text);
+  return /[“”"「」『』]/.test(text);
 }
 
 // 判断是否为短叙事段（非对白，非格式标记，≤1 个句号/问号/感叹号，<120 字符）
@@ -117,7 +117,24 @@ function mergeFragmentedParagraphs(text: string): string {
   }
   if (buffer) merged.push(buffer);
 
-  return merged.join("\n\n");
+  const stitched: string[] = [];
+  for (let index = 0; index < merged.length; index += 1) {
+    const current = merged[index];
+    const next = merged[index + 1];
+    if (next && isShortNarrativeParagraph(current) && isDialogueOnlyParagraph(next)) {
+      stitched.push(`${current}${next}`);
+      index += 1;
+      continue;
+    }
+    if (next && isDialogueOnlyParagraph(current) && isShortNarrativeParagraph(next)) {
+      stitched.push(`${current}${next}`);
+      index += 1;
+      continue;
+    }
+    stitched.push(current);
+  }
+
+  return stitched.join("\n\n");
 }
 
 /**

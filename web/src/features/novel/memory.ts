@@ -1,5 +1,6 @@
 import { invalidateRevisionDependents, novelDb, recordBase } from "./db";
 import type { DerivedMemory, DerivedMemoryContent, NarrativeUnit, NarrativeUnitKind, OutlineRealization } from "./types";
+import { scheduleMemoryJob } from "./memory-service";
 
 const EMPTY_CONTENT: DerivedMemoryContent = {
   sceneOutcomes: [],
@@ -134,6 +135,7 @@ export async function createChapterMemory(params: { projectId: string; documentI
     await novelDb.derivedMemories.add(memory);
   });
   if (previous.length) await invalidateMemoryAncestors(params.projectId, previous.map((item) => item.id));
+  await scheduleMemoryJob({ projectId: params.projectId, jobType: "embedding", idempotencyKey: `embedding:derivedMemories:${memory.id}:${memory.revision}`, payload: { targetTable: "derivedMemories", targetId: memory.id, content: `${memory.summary}\n${Object.values(memory.content).flat().join("\n")}` } });
   return memory;
 }
 
@@ -181,5 +183,6 @@ export async function consolidateDerivedMemory(params: { projectId: string; leve
     await novelDb.derivedMemories.add(memory);
   });
   if (!issues.length && existing.length) await invalidateMemoryAncestors(params.projectId, existing.map((item) => item.id));
+  if (!issues.length) await scheduleMemoryJob({ projectId: params.projectId, jobType: "embedding", idempotencyKey: `embedding:derivedMemories:${memory.id}:${memory.revision}`, payload: { targetTable: "derivedMemories", targetId: memory.id, content: `${memory.summary}\n${Object.values(memory.content).flat().join("\n")}` } });
   return memory;
 }

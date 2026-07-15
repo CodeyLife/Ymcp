@@ -35,6 +35,22 @@ describe("novel AI HTTP handling", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty("response_format");
   });
 
+  it("passes the structured output token limit to the chat completion request", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(sse('{"value":"ok"}'));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callStructuredNovelModel<{ value: string }>({
+      model: "test",
+      temperature: 0,
+      role: "architect",
+      prompt: "generate",
+      schema: { type: "object", required: ["value"], properties: { value: { type: "string" } } },
+      maxTokens: 8192,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ max_tokens: 8192 });
+  });
+
   it("retries a JSON 429 response", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()

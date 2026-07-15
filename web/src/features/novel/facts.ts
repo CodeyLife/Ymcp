@@ -270,8 +270,7 @@ export function filterSafeAcceptableFactIds(facts: FactCandidate[]): string[] {
   return facts.filter((item) => item.status === "pending" && !item.conflict && item.risk === "safe").map((item) => item.id);
 }
 
-export async function autoAcceptSafeFactCandidates(candidates: FactCandidate[], enabled: boolean) {
-  if (!enabled) return [];
+export async function autoAcceptSafeFactCandidates(candidates: FactCandidate[]) {
   const safe = candidates.filter((candidate) => candidate.status === "pending" && candidate.risk === "safe" && !candidate.conflict);
   const now = Date.now();
   await novelDb.factCandidates.bulkPut(safe.map((candidate) => ({

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Alert, App, Button, Dropdown, Empty, Input, Modal, Select, Tag } from "antd";
+import { Alert, App, Button, Dropdown, Empty, Input, Modal, Select, Tag, Tooltip } from "antd";
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -15,7 +15,7 @@ import {
 import { useLiveQuery } from "dexie-react-hooks";
 import { AnimatePresence, motion } from "motion/react";
 
-import { addOutlineNode, appendOperation, deleteOutlineBranch, novelDb } from "./db";
+import { addOutlineNode, appendOperation, deleteOutlineBranch, normalizeArchitecturePhases, novelDb } from "./db";
 import { applyProposalItems, rejectProposal, runGenerationTask } from "./generation";
 import OutlineProposalReview from "./OutlineProposalReview";
 import { analyzeOutlineStructure, type OutlineStructureIssue } from "./outline-structure";
@@ -424,6 +424,7 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
   const entities = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const threads = useLiveQuery(() => novelDb.plotThreads.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const clues = useLiveQuery(() => novelDb.foreshadowing.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
+  const architecture = useLiveQuery(() => novelDb.architectures.where("projectId").equals(projectId).first(), [projectId]);
   const fullProposal = useLiveQuery(async () => {
     const all = await novelDb.proposals.where("projectId").equals(projectId).reverse().sortBy("createdAt");
     return all.find((item) => item.status === "pending" && item.taskKey === "outline" && !item.targetId) ?? null;
@@ -450,11 +451,25 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
   const [fieldReviseInstruction, setFieldReviseInstruction] = useState("");
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generationBusy, setGenerationBusy] = useState(false);
-  const [generationInstruction, setGenerationInstruction] = useState("按幕、序列、事件建立完整故事大纲。先铺陈人物处境、世态背景与情感底色，让因果、转折与伏笔在事件流中自然浮现，不急于一次性写尽戏剧性。");
+  const [generationInstruction, setGenerationInstruction] = useState("为下一幕规划完整的序列与事件。先铺陈人物处境、世态背景与情感底色，让因果、转折与伏笔在事件流中自然浮现。");
+  const generationAbortRef = useRef<AbortController | null>(null);
   const knownNodeIds = useRef<Set<string>>(new Set());
   const structure = useMemo(() => analyzeOutlineStructure(nodes), [nodes]);
   const roots = structure.roots;
   const validNodes = structure.validNodes;
+  const nextActTarget = useMemo(() => {
+    const occupiedOrders = new Set(roots.filter((node) => node.kind === "act").map((node) => node.order));
+    const phases = normalizeArchitecturePhases(architecture?.phases ?? []);
+    if (phases.length) {
+      const phase = phases.find((item) => !occupiedOrders.has(item.order));
+      return phase ? { order: phase.order, title: phase.title, phaseCount: phases.length } : null;
+    }
+    let order = 0;
+    while (occupiedOrders.has(order)) order += 1;
+    return { order, phaseCount: 0 };
+  }, [architecture?.phases, roots]);
+  const allArchitecturePhasesGenerated = Boolean(architecture?.phases.length) && !nextActTarget;
+  const nextActLabel = nextActTarget?.title ? `第 ${nextActTarget.order + 1} 幕「${nextActTarget.title}」` : `第 ${(nextActTarget?.order ?? 0) + 1} 幕`;
 
   useEffect(() => {
     const known = knownNodeIds.current;
@@ -554,18 +569,26 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
     message.success("同级节点顺序已重新编号");
   }, [projectId, validNodes, message]);
 
-  const executeFullGeneration = useCallback(async () => {
+  const executeNextActGeneration = useCallback(async () => {
+    const controller = new AbortController();
+    generationAbortRef.current = controller;
     setGenerationBusy(true);
     try {
-      await runGenerationTask({ projectId, taskKey: "outline", instruction: generationInstruction.trim() });
+      await runGenerationTask({ projectId, taskKey: "outline", instruction: generationInstruction.trim(), signal: controller.signal });
       setGenerateOpen(false);
-      message.success("完整大纲候选已生成，请审核层级后采纳");
+      message.success(`${nextActLabel}候选已生成，请审核后追加`);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "故事大纲生成失败");
+      if (!controller.signal.aborted) message.error(error instanceof Error ? error.message : "单幕生成失败");
     } finally {
+      if (generationAbortRef.current === controller) generationAbortRef.current = null;
       setGenerationBusy(false);
     }
-  }, [projectId, generationInstruction, message]);
+  }, [projectId, generationInstruction, message, nextActLabel]);
+
+  const closeGenerationModal = useCallback(() => {
+    generationAbortRef.current?.abort();
+    setGenerateOpen(false);
+  }, []);
 
   const onRewriteSubtree = useCallback((node: OutlineNode) => {
     setRewriteTarget(node);
@@ -659,15 +682,15 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
 
   const generationModal = (
     <Modal
-      title={nodes.length ? "重新生成完整大纲" : "生成完整故事大纲"}
+      title={`生成${nextActLabel}`}
       open={generateOpen}
-      onCancel={() => setGenerateOpen(false)}
+      onCancel={closeGenerationModal}
       confirmLoading={generationBusy}
-      okText={nodes.length ? "生成替换方案" : "开始生成"}
+      okText="生成这一幕"
       cancelText="取消"
-      onOk={() => void executeFullGeneration()}
+      onOk={() => void executeNextActGeneration()}
     >
-      {nodes.length > 0 && <Alert type="warning" showIcon message="本次结果将作为完整替换方案审核" description="生成不会立即修改正式数据；只有采纳后才会整体替换当前大纲。" />}
+      <Alert type="info" showIcon message={`本次只生成${nextActLabel}`} description="生成结果先进入审核；采纳后只追加这一幕，不会修改或删除已有大纲。" />
       <Input.TextArea className="novel-outline-generation-instruction" autoSize={{ minRows: 4, maxRows: 9 }} value={generationInstruction} onChange={(event) => setGenerationInstruction(event.target.value)} placeholder="描述故事脉络、人物处境、世态背景与情感走向，可附关键转折但不必写尽" />
     </Modal>
   );
@@ -695,7 +718,7 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
             </>
           )}
           <Button icon={<PlusOutlined />} onClick={() => void addRoot("act")}>添加幕</Button>
-          <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setGenerateOpen(true)}>{nodes.length ? "重新生成" : "生成故事大纲"}</Button>
+          <Tooltip title={allArchitecturePhasesGenerated ? "全部架构阶段均已生成，请重写已有幕或先扩展全书架构" : `生成${nextActLabel}`}><span><Button type="primary" icon={<ThunderboltOutlined />} disabled={allArchitecturePhasesGenerated} onClick={() => setGenerateOpen(true)}>生成下一幕</Button></span></Tooltip>
         </div>
       </header>
 
@@ -715,8 +738,8 @@ export default function OutlineDocView({ projectId }: { projectId: string }) {
             description={
               <>
                 <strong>尚无故事大纲</strong>
-                <span>先添加一幕手动规划，或生成一份完整的幕、序列、事件结构。</span>
-                <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setGenerateOpen(true)}>生成故事大纲</Button>
+                <span>先添加一幕手动规划，或生成下一幕的完整序列与事件结构。</span>
+                <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setGenerateOpen(true)}>生成下一幕</Button>
               </>
             }
           />

@@ -3,6 +3,29 @@ import { RECORD_SCHEMA_VERSION } from "./db-schema";
 import { cosineSimilarity, getEmbeddingProvider } from "./embedding";
 import type { NovelEmbedding } from "./types";
 
+const DEFAULT_SEMANTIC_UNIT_CHARS = 1800;
+
+export function splitSemanticUnits(text: string, maxChars = DEFAULT_SEMANTIC_UNIT_CHARS): string[] {
+  const paragraphs = text.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
+  if (!paragraphs.length) return [];
+  const units: string[] = [];
+  let current = "";
+  for (const paragraph of paragraphs) {
+    if (!current) {
+      current = paragraph;
+      continue;
+    }
+    if (current.length + 2 + paragraph.length <= maxChars) {
+      current += `\n\n${paragraph}`;
+      continue;
+    }
+    units.push(current);
+    current = paragraph;
+  }
+  if (current) units.push(current);
+  return units;
+}
+
 /**
  * FNV-1a 32 位内容哈希。
  * 与 context.ts source() 中的哈希算法一致，用于判断内容是否变化、决定是否需要重新生成 embedding。
@@ -18,7 +41,7 @@ export function contentHash(text: string): string {
 /**
  * 为指定目标生成或更新 embedding。
  * - 通过 contentHash 判断内容是否变化，未变化则跳过，避免重复 API 调用
- * - 整文生成（chunkIndex 为 undefined），长文本分块作为 TODO P2
+ * - 长文本按段落边界组成完整语义单元，单段不会在字段中间截断
  */
 export async function upsertEmbedding(params: {
   projectId: string;
@@ -26,33 +49,37 @@ export async function upsertEmbedding(params: {
   targetId: string;
   content: string;
 }): Promise<void> {
-  const hash = contentHash(params.content);
+  const units = splitSemanticUnits(params.content);
   const existing = await novelDb.embeddings
     .where("[projectId+targetTable]")
     .equals([params.projectId, params.targetTable])
-    .and((e) => e.targetId === params.targetId && e.chunkIndex === undefined)
-    .first();
-  if (existing && existing.contentHash === hash) return;
+    .and((e) => e.targetId === params.targetId)
+    .toArray();
+  if (!units.length) {
+    await novelDb.embeddings.bulkDelete(existing.map((item) => item.id));
+    return;
+  }
 
   const provider = getEmbeddingProvider();
-  const vector = await provider.embed(params.content);
+  const expectedIndexes: Array<number | undefined> = units.length === 1 ? [undefined] : units.map((_, index) => index);
+  const existingByIndex = new Map(existing.map((item) => [item.chunkIndex, item]));
+  const changed = units.map((content, index) => ({ content, chunkIndex: expectedIndexes[index], hash: contentHash(content), existing: existingByIndex.get(expectedIndexes[index]) }))
+    .filter((item) => !item.existing || item.existing.contentHash !== item.hash || item.existing.model !== provider.name || item.existing.dimension !== provider.dimension);
+  if (!changed.length && existing.length === units.length) return;
+  const vectors = changed.length ? await provider.embedBatch(changed.map((item) => item.content)) : [];
+  if (vectors.some((vector) => vector.length !== provider.dimension)) throw new Error(`embedding 维度与 provider 声明不一致：期望 ${provider.dimension}`);
   const now = Date.now();
-  const id = existing?.id ?? crypto.randomUUID();
-  await novelDb.embeddings.put({
-    id,
-    projectId: params.projectId,
-    schemaVersion: RECORD_SCHEMA_VERSION,
-    revision: (existing?.revision ?? 0) + 1,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    createdBy: "local-user",
-    updatedBy: "local-user",
-    targetTable: params.targetTable,
-    targetId: params.targetId,
-    model: provider.name,
-    dimension: provider.dimension,
-    vector,
-    contentHash: hash,
+  const next = changed.map((item, index): NovelEmbedding => ({
+    id: item.existing?.id ?? crypto.randomUUID(), projectId: params.projectId, schemaVersion: RECORD_SCHEMA_VERSION,
+    revision: (item.existing?.revision ?? 0) + 1, createdAt: item.existing?.createdAt ?? now, updatedAt: now,
+    createdBy: "local-user", updatedBy: "local-user", targetTable: params.targetTable, targetId: params.targetId,
+    model: provider.name, dimension: provider.dimension, vector: vectors[index], contentHash: item.hash, chunkIndex: item.chunkIndex,
+  }));
+  const retainedIds = new Set([...existing.filter((item) => !changed.some((change) => change.existing?.id === item.id)).map((item) => item.id), ...next.map((item) => item.id)]);
+  await novelDb.transaction("rw", novelDb.embeddings, async () => {
+    if (next.length) await novelDb.embeddings.bulkPut(next);
+    const staleIds = existing.filter((item) => !retainedIds.has(item.id) || !expectedIndexes.includes(item.chunkIndex)).map((item) => item.id);
+    if (staleIds.length) await novelDb.embeddings.bulkDelete(staleIds);
   });
 }
 
@@ -65,18 +92,18 @@ export async function vectorSearch(params: {
   targetTables?: NovelEmbedding["targetTable"][];
   query: string;
   topK?: number;
-}): Promise<Array<{ targetId: string; targetTable: NovelEmbedding["targetTable"]; score: number }>> {
+}): Promise<Array<{ targetId: string; targetTable: NovelEmbedding["targetTable"]; chunkIndex?: number; score: number }>> {
   const provider = getEmbeddingProvider();
   const queryVec = await provider.embed(params.query);
 
   const all = await novelDb.embeddings.where("projectId").equals(params.projectId).toArray();
-  const filtered = params.targetTables
-    ? all.filter((e) => params.targetTables!.includes(e.targetTable))
-    : all;
+  const compatible = all.filter((item) => item.model === provider.name && item.dimension === provider.dimension && item.vector.length === provider.dimension);
+  const filtered = params.targetTables ? compatible.filter((e) => params.targetTables!.includes(e.targetTable)) : compatible;
 
   const scored = filtered.map((e) => ({
     targetId: e.targetId,
     targetTable: e.targetTable,
+    chunkIndex: e.chunkIndex,
     score: cosineSimilarity(queryVec, e.vector),
   }));
   scored.sort((a, b) => b.score - a.score);

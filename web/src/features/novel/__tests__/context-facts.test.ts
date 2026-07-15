@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { compileNovelContext } from "../context";
-import { createChapter, createNovelProject, novelDb, recordBase, saveStoryArchitecture, updateProject } from "../db";
+import { createChapter, createNovelProject, novelDb, recordBase, saveStoryArchitecture } from "../db";
 import { commitAcceptedFacts, setFactCandidateStatus, storeFactCandidates } from "../facts";
 import type { FactAssertion, StoryEntity } from "../types";
 
@@ -11,13 +11,13 @@ beforeEach(async () => {
 });
 
 describe("context invariants and fact commits", () => {
-  it("stops instead of truncating mandatory rules when the context budget is exhausted", async () => {
+  it("includes complete mandatory rules without applying a project token budget", async () => {
     const project = await createNovelProject({ title: "规则测试", genre: ["奇幻"], premise: "潮水会改变记忆。" });
-    await updateProject(project.id, { settings: { ...project.settings, contextBudget: 120 } });
     const rule: StoryEntity = { ...recordBase(project.id), kind: "rule", name: "潮汐规则", aliases: [], summary: "退潮前不可说出失踪者姓名", description: "潮水".repeat(1200), tags: [], lockedFacts: ["退潮前说出姓名会让说话者失去相关记忆"], attributes: {} };
     await novelDb.entities.add(rule);
-    await expect(compileNovelContext({ projectId: project.id, task: "planning", instruction: "规划第一章", stage: "planning" })).rejects.toThrow(/必带资料需要.*超过当前/);
-    expect(await novelDb.contextPackets.where("projectId").equals(project.id).count()).toBe(0);
+    const packet = await compileNovelContext({ projectId: project.id, task: "planning", instruction: "规划第一章", stage: "planning" });
+    expect(packet.sources.find((item) => item.id === rule.id)?.content).toContain("潮水".repeat(1200));
+    expect(packet.omittedSourceIds).toEqual([]);
   });
 
   it("pins approved architecture and the target chapter scene plan", async () => {
@@ -79,7 +79,6 @@ describe("context invariants and fact commits", () => {
     expect(packet.sources.some((item) => item.id === "fact-early")).toBe(true);
     expect(packet.sources.some((item) => item.id === "fact-future")).toBe(false);
     expect(packet.informationView).toMatchObject({ mode: "reader", targetDocumentId: target.id, targetNarrativeOrder: 2 });
-    expect(packet.layerBudgets).toBeDefined();
     expect(packet.layerUsage).toBeDefined();
     expect(packet.sources.every((item) => Boolean(item.layer && item.visibilityReason))).toBe(true);
   });
@@ -88,6 +87,7 @@ describe("context invariants and fact commits", () => {
     const project = await createNovelProject({ title: "角色认知", genre: ["悬疑"], premise: "角色知道的秘密不等于读者已知。" });
     const character: StoryEntity = { ...recordBase(project.id), kind: "character", name: "陆沉", aliases: [], summary: "", description: "", tags: [], lockedFacts: [], attributes: {}, character: { role: "主角", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", state: { location: "", physical: "正常", emotional: "平静", objective: "", inventory: [], relationshipNotes: [] } } };
     await novelDb.entities.add(character);
+    await createChapter(project.id, "序章");
     const target = await createChapter(project.id, "第一章");
     await novelDb.documents.update(target.id, { blueprint: { ...target.blueprint, povCharacterId: character.id, characterIds: [character.id] } });
     const fact: FactAssertion = { ...recordBase(project.id), id: "fact-secret", subject: { kind: "project", id: project.id }, predicate: "mystery.truth", object: { kind: "string", value: "城主是凶手" }, polarity: "affirmed", truthStatus: "objective", timeMode: "timeless", revealedAt: { narrativeOrder: 10, precision: "exact" }, sourceRevisionId: "revision-secret", provenance: "approved-revision", evidence: "作者秘密", confidence: 1, humanReadable: "城主是凶手", status: "active", derivedFromCandidateId: "candidate-secret" };

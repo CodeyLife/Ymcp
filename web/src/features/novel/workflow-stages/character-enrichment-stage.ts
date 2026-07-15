@@ -2,6 +2,7 @@ import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
 import { appendOperation, novelDb, recordBase } from "../db";
 import { formatSkillPrompt, resolveNovelSkills } from "../skills";
+import { novelMemoryService } from "../memory-service";
 import type { FactAssertion, StoryEntity } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
@@ -83,7 +84,9 @@ export const characterEnrichmentStageHandler: StageHandler = {
 
     const [draft, packet, skills] = await Promise.all([
       novelDb.workflowArtifacts.get(run.draftArtifactId!),
-      novelDb.contextPackets.get(run.contextPacketId!),
+      run.conversationThreadId
+        ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "character-enrichment", role: "character-enricher", instruction: "基于本章正式事实完善相关人物档案", workflowRunId: run.id, skillStage: "character-enrichment" })
+        : novelDb.contextPackets.get(run.contextPacketId!),
       resolveNovelSkills({ projectId: run.projectId, stage: "character-enrichment", explicitSkillIds: ["character-desire-engine", "classic-character-ensemble"] }),
     ]);
     if (!draft || !packet) throw new Error("人物完善输入不完整");

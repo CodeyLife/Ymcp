@@ -2,9 +2,12 @@ import Dexie, { type EntityTable } from "dexie";
 import type {
   AgentRun,
   AIProposal,
+  ArchitecturePhase,
   CanvasLayout,
   CanvasPanelKey,
   ChangeOperation,
+  ConversationMemory,
+  CreativeBrief,
   DocumentRevision,
   EntityRelation,
   FactAssertion,
@@ -17,6 +20,10 @@ import type {
   ManuscriptChange,
   NovelContextPacket,
   NovelEmbedding,
+  NovelConversationMessage,
+  NovelConversationThread,
+  NovelMemoryJob,
+  NovelRetrievalRun,
   NovelSkillManifest,
   OutlineNode,
   PlotThread,
@@ -37,7 +44,7 @@ import type {
   WorkflowRun,
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
-import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateOutlineBeatFields, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES } from "./db-schema";
+import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -100,6 +107,12 @@ export class NovelDatabase extends Dexie {
   tasteProfiles!: EntityTable<ProjectTasteProfile, "id">;
   embeddings!: EntityTable<NovelEmbedding, "id">;
   canvasLayouts!: EntityTable<CanvasLayout, "id">;
+  conversationThreads!: EntityTable<NovelConversationThread, "id">;
+  conversationMessages!: EntityTable<NovelConversationMessage, "id">;
+  conversationMemories!: EntityTable<ConversationMemory, "id">;
+  creativeBriefs!: EntityTable<CreativeBrief, "id">;
+  retrievalRuns!: EntityTable<NovelRetrievalRun, "id">;
+  memoryJobs!: EntityTable<NovelMemoryJob, "id">;
 
   constructor() {
     super("ymcp-novel-db-v4");
@@ -121,6 +134,8 @@ export class NovelDatabase extends Dexie {
     this.version(12).stores(V12_STORES).upgrade(migrateOutlineBeatFields);
     this.version(13).stores(V13_STORES).upgrade(cleanupPollutedMemorySummaries);
     this.version(14).stores(V14_STORES).upgrade(cleanupApprovalMetaPollution);
+    this.version(15).stores(V15_STORES);
+    this.version(16).stores(V16_STORES).upgrade(migrateNovelMemoryReliability);
   }
 }
 
@@ -262,8 +277,6 @@ export async function createNovelProject(input: Pick<StoryProject, "title" | "ge
     settings: {
       textModel: "auto",
       temperature: 0.75,
-      autoCommitFacts: false,
-      contextBudget: 24000,
       recentChapterCount: 5,
       encrypted: false,
       contentProfile: "general-serial",
@@ -309,9 +322,23 @@ export async function ensureStoryArchitecture(projectId: string) {
   return architecture;
 }
 
+export function normalizeArchitecturePhases(phases: ArchitecturePhase[]) {
+  return phases.map((phase, order) => phase.order === order ? phase : { ...phase, order });
+}
+
+export function normalizeArchitecturePayload(payload: Record<string, unknown>) {
+  if (!Array.isArray(payload.phases)) return payload;
+  return {
+    ...payload,
+    phases: payload.phases.map((phase, order) => phase && typeof phase === "object" && !Array.isArray(phase)
+      ? { ...phase as Record<string, unknown>, order }
+      : phase),
+  };
+}
+
 export async function saveStoryArchitecture(architecture: StoryArchitecture) {
   const before = await novelDb.architectures.get(architecture.id);
-  const next = { ...architecture, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now(), updatedBy: ACTOR_ID };
+  const next = { ...architecture, phases: normalizeArchitecturePhases(architecture.phases), revision: (before?.revision ?? 0) + 1, updatedAt: Date.now(), updatedBy: ACTOR_ID };
   await novelDb.transaction("rw", novelDb.architectures, novelDb.operations, async () => {
     await novelDb.architectures.put(next);
     await appendOperation(architecture.projectId, "architectures", architecture.id, before ? "update" : "create", {
@@ -623,7 +650,17 @@ export async function deleteChapter(documentId: string) {
   const sceneIds = (await novelDb.scenes.where("chapterId").equals(documentId).primaryKeys()) as string[];
   const revisionIds = (await novelDb.revisions.where("documentId").equals(documentId).primaryKeys()) as string[];
   const embeddingIds = [documentId, ...sceneIds];
-  await novelDb.transaction("rw", [novelDb.documents, novelDb.scenes, novelDb.revisions, novelDb.manuscriptChanges, novelDb.workflowRuns, novelDb.workflowArtifacts, novelDb.qualityReports, novelDb.factCandidates, novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.derivedMemories, novelDb.outlineRealizations, novelDb.proposals, novelDb.agentRuns, novelDb.contextPackets, novelDb.embeddings, novelDb.operations], async () => {
+  const conversationThreads = await novelDb.conversationThreads.where("targetId").equals(documentId).toArray();
+  const conversationThreadIds = conversationThreads.map((thread) => thread.id);
+  const threadMemories = conversationThreadIds.length
+    ? await novelDb.conversationMemories.where("threadId").anyOf(conversationThreadIds).toArray()
+    : [];
+  const retainedProjectMemories = threadMemories.filter((memory) => memory.scope === "project").map((memory): ConversationMemory => {
+    const { threadId: _threadId, targetId: _targetId, ...retained } = memory;
+    return { ...retained, sourceMessageIds: [], revision: memory.revision + 1, updatedAt: Date.now() };
+  });
+  const removedConversationMemoryIds = threadMemories.filter((memory) => memory.scope !== "project").map((memory) => memory.id);
+  await novelDb.transaction("rw", [novelDb.documents, novelDb.scenes, novelDb.revisions, novelDb.manuscriptChanges, novelDb.workflowRuns, novelDb.workflowArtifacts, novelDb.qualityReports, novelDb.factCandidates, novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.derivedMemories, novelDb.outlineRealizations, novelDb.proposals, novelDb.agentRuns, novelDb.contextPackets, novelDb.embeddings, novelDb.operations, novelDb.conversationThreads, novelDb.conversationMessages, novelDb.conversationMemories, novelDb.creativeBriefs, novelDb.retrievalRuns, novelDb.memoryJobs], async () => {
     await retireChapterDependencies(document.projectId, documentId, revisionIds);
     await novelDb.documents.delete(documentId);
     await novelDb.scenes.where("chapterId").equals(documentId).delete();
@@ -640,6 +677,22 @@ export async function deleteChapter(documentId: string) {
     }
     await novelDb.proposals.where("targetId").equals(documentId).delete();
     await novelDb.embeddings.where("targetId").anyOf(embeddingIds).delete();
+    if (conversationThreadIds.length) {
+      await novelDb.conversationMessages.where("threadId").anyOf(conversationThreadIds).delete();
+      if (removedConversationMemoryIds.length) {
+        await novelDb.conversationMemories.bulkDelete(removedConversationMemoryIds);
+        await novelDb.embeddings.where("targetId").anyOf(removedConversationMemoryIds).delete();
+      }
+      if (retainedProjectMemories.length) await novelDb.conversationMemories.bulkPut(retainedProjectMemories);
+      await novelDb.creativeBriefs.where("threadId").anyOf(conversationThreadIds).delete();
+      await novelDb.retrievalRuns.where("threadId").anyOf(conversationThreadIds).delete();
+      await novelDb.conversationThreads.bulkDelete(conversationThreadIds);
+    }
+    await novelDb.memoryJobs.where("projectId").equals(document.projectId).and((job) => (
+      job.payload.targetDocumentId === documentId
+      || (typeof job.payload.threadId === "string" && conversationThreadIds.includes(job.payload.threadId))
+      || (typeof job.payload.targetId === "string" && removedConversationMemoryIds.includes(job.payload.targetId))
+    )).delete();
     await appendOperation(document.projectId, "documents", documentId, "delete", { title: { before: document.title, after: null } });
   });
   const { deleteCollaborativeDocument } = await import("./collaboration");

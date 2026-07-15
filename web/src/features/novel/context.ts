@@ -1,10 +1,22 @@
-import { novelDb, recordBase } from "./db";
+import { normalizeArchitecturePhases, novelDb, recordBase } from "./db";
 import { vectorSearch } from "./retrieval";
 import { resolveNovelSkills } from "./skills";
-import type { ContextSource, DerivedMemory, FactAssertion, NovelContextPacket, NovelSkillManifest, NovelSkillStage, StoryEntity } from "./types";
+import type { ContextSource, DerivedMemory, FactAssertion, NovelAgentRole, NovelContextPacket, NovelRetrievalHit, NovelSkillManifest, NovelSkillStage, StoryEntity, WorkflowStage } from "./types";
 
 const LAYERS: ContextSource["layer"][] = ["mandatory", "working", "continuity", "retrieval", "background"];
-const FLEXIBLE_LAYER_WEIGHTS: Record<Exclude<ContextSource["layer"], "mandatory">, number> = { working: 0.46, continuity: 0.31, retrieval: 0.15, background: 0.08 };
+
+const ROLE_SOURCE_KINDS: Partial<Record<NovelAgentRole, Set<ContextSource["kind"]>>> = {
+  architect: new Set(["instruction", "style", "architecture", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "fact", "memory", "creative-brief", "skill", "conversation-memory"]),
+  writer: new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
+  "style-reviewer": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill", "conversation-memory"]),
+  "character-reviewer": new Set(["instruction", "style", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
+  "continuity-reviewer": new Set(["instruction", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "snapshot", "fact", "knowledge", "memory", "creative-brief", "skill"]),
+  "plot-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "foreshadowing", "memory", "creative-brief", "skill"]),
+  "pacing-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "memory", "creative-brief", "skill"]),
+  "revision-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
+  "fact-extractor": new Set(["instruction", "document", "fact", "creative-brief", "skill"]),
+  "character-enricher": new Set(["instruction", "document", "entity", "fact", "knowledge", "creative-brief", "skill"]),
+};
 
 /**
  * 按 taskKey 排除与任务焦点无关的 skill。
@@ -32,6 +44,11 @@ function source(params: {
   reason?: string;
   priorityClass?: ContextSource["priorityClass"];
   visibilityReason?: string;
+  authority?: ContextSource["authority"];
+  sourceRevisionId?: string;
+  narrativeOrder?: number;
+  evidenceRefs?: string[];
+  retrieval?: ContextSource["retrieval"];
 }): ContextSource {
   let hash = 2166136261;
   for (let index = 0; index < params.content.length; index += 1) hash = Math.imul(hash ^ params.content.charCodeAt(index), 16777619);
@@ -48,6 +65,11 @@ function source(params: {
     contentHash: (hash >>> 0).toString(16).padStart(8, "0"),
     layer: params.layer,
     visibilityReason: params.visibilityReason ?? params.reason ?? "当前信息视角允许读取",
+    authority: params.authority ?? "working",
+    sourceRevisionId: params.sourceRevisionId,
+    narrativeOrder: params.narrativeOrder,
+    evidenceRefs: params.evidenceRefs,
+    retrieval: params.retrieval,
   };
 }
 
@@ -95,38 +117,19 @@ function revealOrder(assertion: FactAssertion, documentOrderByRevision: Map<stri
   return assertion.revealedAt?.narrativeOrder ?? documentOrderByRevision.get(assertion.sourceRevisionId);
 }
 
-function allocateContext(candidates: ContextSource[], budget: number) {
+function allocateContext(candidates: ContextSource[]) {
   const unique = [...new Map(candidates.map((candidate) => [candidate.id, candidate])).values()];
-  const mandatory = unique.filter((candidate) => candidate.layer === "mandatory").sort((a, b) => b.weight - a.weight);
-  const mandatoryTokens = mandatory.reduce((sum, candidate) => sum + candidate.estimatedTokens, 0);
-  if (mandatoryTokens > budget) throw new Error(`必带资料需要 ${mandatoryTokens} tokens，超过当前 ${budget} tokens 上下文预算；请提高预算或缩小当前任务范围`);
-
-  const remaining = budget - mandatoryTokens;
-  const layerBudgets: Record<ContextSource["layer"], number> = {
-    mandatory: mandatoryTokens,
-    working: Math.floor(remaining * FLEXIBLE_LAYER_WEIGHTS.working),
-    continuity: Math.floor(remaining * FLEXIBLE_LAYER_WEIGHTS.continuity),
-    retrieval: Math.floor(remaining * FLEXIBLE_LAYER_WEIGHTS.retrieval),
-    background: remaining,
-  };
-  layerBudgets.background = Math.max(0, remaining - layerBudgets.working - layerBudgets.continuity - layerBudgets.retrieval);
   const layerUsage = Object.fromEntries(LAYERS.map((layer) => [layer, 0])) as Record<ContextSource["layer"], number>;
-  const included = [...mandatory];
-  layerUsage.mandatory = mandatoryTokens;
-  const omissions: NonNullable<NovelContextPacket["omissions"]> = [];
-
-  for (const layer of LAYERS.slice(1)) {
+  const included: ContextSource[] = [];
+  for (const layer of LAYERS) {
     const ranked = unique.filter((candidate) => candidate.layer === layer).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.weight - a.weight);
     for (const candidate of ranked) {
-      if (layerUsage[layer] + candidate.estimatedTokens <= layerBudgets[layer]) {
-        included.push(candidate);
-        layerUsage[layer] += candidate.estimatedTokens;
-      } else {
-        omissions.push({ sourceId: candidate.id, title: candidate.title, layer, estimatedTokens: candidate.estimatedTokens, reason: `超过${layer}层预算，完整资料未被截断` });
-      }
+      included.push(candidate);
+      layerUsage[layer] += candidate.estimatedTokens;
     }
   }
-  return { included, omissions, layerBudgets, layerUsage, estimatedTokens: included.reduce((sum, candidate) => sum + candidate.estimatedTokens, 0) };
+  const estimatedTokens = included.reduce((sum, candidate) => sum + candidate.estimatedTokens, 0);
+  return { included, omissions: [] as NonNullable<NovelContextPacket["omissions"]>, layerUsage, estimatedTokens };
 }
 
 export async function compileNovelContext(params: {
@@ -141,6 +144,13 @@ export async function compileNovelContext(params: {
   resolvedSkills?: NovelSkillManifest[];
   informationView?: "author" | "reader" | "character";
   viewCharacterId?: string;
+  threadId?: string;
+  creativeBriefId?: string;
+  retrievalRunId?: string;
+  retrievalSourceIds?: string[];
+  retrievalHits?: NovelRetrievalHit[];
+  factCutoffOrder?: number;
+  consumer?: { workflowRunId?: string; stage?: WorkflowStage; role?: NovelAgentRole | string; messageId?: string };
 }): Promise<NovelContextPacket> {
   const { projectId, task, instruction, targetDocumentId, pinnedSourceIds = [], excludedSourceIds = [] } = params;
   const [project, architecture, entities, relations, outline, scenes, threads, clues, snapshots, documents, revisions, assertions, knowledge, memories, units] = await Promise.all([
@@ -166,25 +176,45 @@ export async function compileNovelContext(params: {
   const mode = params.informationView ?? defaultInformationView(stage, target);
   const characterId = params.viewCharacterId ?? (mode === "character" ? target?.blueprint.povCharacterId : undefined);
   if (mode === "character" && !characterId) throw new Error("角色视角需要指定角色");
-  const cutoffOrder = target ? target.order - 1 : undefined;
+  const cutoffOrder = params.factCutoffOrder ?? (target ? target.order - 1 : undefined);
   const resolvedSkills = params.resolvedSkills ?? (await resolveNovelSkills({ projectId, stage, explicitSkillIds: params.explicitSkillIds })).skills;
   const terms = searchTerms(instruction, `${target?.title ?? ""} ${target?.plainText.slice(-3000) ?? ""}`);
   const vectorResults = await vectorSearch({ projectId, query: instruction, targetTables: ["entities", "outlineNodes", "documents", "plotThreads", "foreshadowing"], topK: 30 }).catch(() => [] as Array<{ targetId: string; targetTable: string; score: number }>);
   const vectorScoreMap = new Map(vectorResults.map((result) => [result.targetId, result.score]));
   const pinned = new Set(pinnedSourceIds);
   const excluded = new Set(excludedSourceIds);
+  const retrieved = params.retrievalSourceIds ? new Set(params.retrievalSourceIds) : undefined;
   const candidates: ContextSource[] = [];
   const push = (candidate: ContextSource) => {
+    const role = params.consumer?.role as NovelAgentRole | undefined;
+    const allowedKinds = role ? ROLE_SOURCE_KINDS[role] : undefined;
+    if (allowedKinds && !allowedKinds.has(candidate.kind)) return;
     if (pinned.has(candidate.id)) { candidate.pinned = true; candidate.layer = "mandatory"; candidate.priorityClass = "invariant"; candidate.visibilityReason = "作者为本次任务临时固定"; }
+    if (retrieved && candidate.layer !== "mandatory" && !retrieved.has(candidate.id) && !candidate.pinned) return;
     if (!excluded.has(candidate.id) || candidate.layer === "mandatory") candidates.push(candidate);
   };
 
-  push(source({ kind: "instruction", id: "instruction", title: "本次任务", content: instruction, weight: 100, layer: "mandatory", pinned: true, reason: "作者本次明确指令", priorityClass: "invariant" }));
-  push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant" }));
-  if (architecture) push(source({ kind: "architecture", id: architecture.id, title: architecture.status === "approved" ? "已批准全书架构（创作契约，不是已发生事实）" : "全书架构草案", content: [`结构方法：${architecture.framework}`, `核心问题：${architecture.centralQuestion}`, `核心冲突：${architecture.centralConflict}`, `全书梗概：${architecture.synopsis}`, `结构阶段：\n${architecture.phases.map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`).join("\n")}`].join("\n"), weight: architecture.status === "approved" ? 96 : 72, layer: architecture.status === "approved" ? "mandatory" : "working", pinned: architecture.status === "approved", reason: architecture.status === "approved" ? "作者批准的未来创作契约" : "尚未批准的工作规划", priorityClass: architecture.status === "approved" ? "invariant" : "working" }));
+  push(source({ kind: "instruction", id: "instruction", title: "本次任务", content: instruction, weight: 100, layer: "mandatory", pinned: true, reason: "作者本次明确指令", priorityClass: "invariant", authority: "author" }));
+  push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant", authority: "approved", evidenceRefs: [project.id] }));
+  if (params.creativeBriefId) {
+    const brief = await novelDb.creativeBriefs.get(params.creativeBriefId);
+    if (!brief || brief.status !== "confirmed" || brief.projectId !== projectId) throw new Error("创作简报不存在或尚未确认");
+    push(source({ kind: "creative-brief", id: brief.id, title: "本次已确认创作简报", content: [`目标：${brief.goal}`, brief.povCharacterId ? `POV：${brief.povCharacterId}` : "", `事实截止点：章节顺序 ${brief.factCutoffOrder ?? cutoffOrder ?? "未指定"}`, `基调：${brief.tone || "沿用项目基调"}`, `语言要求：${brief.languageRequirements.join("；") || "沿用项目文风"}`, `必写：${brief.mustHappen.join("；") || "无"}`, `禁写：${brief.forbidden.join("；") || "无"}`, `目标字数：${brief.targetWords}`].filter(Boolean).join("\n"), weight: 100, layer: "mandatory", pinned: true, reason: "作者确认的本次章节生产契约", priorityClass: "invariant", authority: "author", evidenceRefs: brief.sourceMessageIds }));
+  }
+  for (const hit of params.retrievalHits ?? []) {
+    push(source({ kind: hit.kind, id: hit.sourceId, title: hit.title, content: hit.content, weight: 70 + hit.fusedScore * 100, layer: "retrieval", reason: hit.reason, priorityClass: "relevant", authority: hit.authority, narrativeOrder: hit.narrativeOrder, evidenceRefs: hit.evidenceRefs, retrieval: { runId: params.retrievalRunId ?? "", round: hit.round, lexicalRank: hit.lexicalRank, vectorRank: hit.vectorRank, entityRank: hit.entityRank, fusedScore: hit.fusedScore } }));
+  }
+  if (params.consumer?.stage === "draft" && mode === "character") {
+    push(source({ kind: "instruction", id: "pov-boundary", title: "POV 行为边界", content: "作者层真相和未来创作契约只能约束叙事铺垫，当前 POV 角色的判断、对白和主动行为只能依据其已知、怀疑或误解的内容。不得让角色利用尚未得知的信息。", weight: 100, layer: "mandatory", pinned: true, reason: "正文阶段必须隔离作者知识与角色知识", priorityClass: "invariant", authority: "approved" }));
+  }
+  if (params.threadId) {
+    const conversationMemories = await novelDb.conversationMemories.where("projectId").equals(projectId).and((memory) => memory.status === "active" && (!memory.threadId || memory.threadId === params.threadId || memory.scope === "project")).toArray();
+    for (const memory of conversationMemories) push(source({ kind: "conversation-memory", id: memory.id, title: memory.title, content: memory.content, weight: 78 + memory.confidence * 12, layer: params.retrievalSourceIds?.includes(memory.id) ? "working" : "retrieval", reason: "作者对话中提炼并仍然有效的偏好", priorityClass: "working", authority: "author", evidenceRefs: memory.sourceMessageIds }));
+  }
+  if (architecture) push(source({ kind: "architecture", id: architecture.id, title: architecture.status === "approved" ? "已批准全书架构（创作契约，不是已发生事实）" : "全书架构草案", content: [`结构方法：${architecture.framework}`, `核心问题：${architecture.centralQuestion}`, `核心冲突：${architecture.centralConflict}`, `全书梗概：${architecture.synopsis}`, `结构阶段：\n${normalizeArchitecturePhases(architecture.phases).map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`).join("\n")}`].join("\n"), weight: architecture.status === "approved" ? 96 : 72, layer: architecture.status === "approved" ? "mandatory" : "working", pinned: architecture.status === "approved", reason: architecture.status === "approved" ? "作者批准的未来创作契约" : "尚未批准的工作规划", priorityClass: architecture.status === "approved" ? "invariant" : "working" }));
   for (const skill of resolvedSkills) {
     if (TASK_SKILL_EXCLUSIONS[task]?.has(skill.skillId)) continue;
-    const item = source({ kind: "skill", id: `skill:${skill.id}`, title: `创作技能：${skill.name}`, content: skill.prompt, weight: 82 + Math.min(18, skill.priority / 50), layer: skill.priority >= 900 ? "mandatory" : "working", pinned: skill.priority >= 900, reason: `${stage} 阶段启用 · ${skill.source}`, priorityClass: skill.priority >= 900 ? "invariant" : "working" });
+    const item = source({ kind: "skill", id: `skill:${skill.id}`, title: `创作技能：${skill.name}`, content: skill.prompt, weight: 82 + Math.min(18, skill.priority / 50), layer: "mandatory", pinned: true, reason: `${stage} 阶段启用 · ${skill.source}`, priorityClass: "invariant" });
     item.skillId = skill.skillId;
     push(item);
   }
@@ -225,11 +255,12 @@ export async function compileNovelContext(params: {
   const documentById = new Map(documents.map((document) => [document.id, document]));
   const documentOrderByRevision = new Map(revisions.map((revision) => [revision.id, documentById.get(revision.documentId)?.order]).filter((entry): entry is [string, number] => typeof entry[1] === "number"));
   const readerVisibleFacts = assertions.filter((assertion) => (revealOrder(assertion, documentOrderByRevision) ?? Number.POSITIVE_INFINITY) <= (cutoffOrder ?? Number.POSITIVE_INFINITY));
-  const visibleFacts = mode === "author" ? assertions : mode === "reader" ? readerVisibleFacts : [];
-  for (const assertion of visibleFacts) push(source({ kind: "fact", id: assertion.id, title: `正式资料：${assertion.humanReadable}`, content: [`真值：${assertion.truthStatus}`, `时间：${assertion.timeMode}`, `证据：${assertion.evidence}`].join("\n"), weight: assertion.truthStatus === "objective" ? 88 : 72, layer: assertion.truthStatus === "objective" ? "continuity" : "retrieval", reason: mode === "author" ? "作者视角可见全部有效事实" : "揭示点不晚于当前事实截止点", priorityClass: assertion.truthStatus === "objective" ? "invariant" : "relevant" }));
+  const cutoffVisibleFacts = assertions.filter((assertion) => (revealOrder(assertion, documentOrderByRevision) ?? Number.POSITIVE_INFINITY) <= (cutoffOrder ?? Number.POSITIVE_INFINITY));
+  const visibleFacts = mode === "author" ? cutoffVisibleFacts : mode === "reader" ? readerVisibleFacts : [];
+  for (const assertion of visibleFacts) push(source({ kind: "fact", id: assertion.id, title: `正式资料：${assertion.humanReadable}`, content: [`真值：${assertion.truthStatus}`, `时间：${assertion.timeMode}`, `证据：${assertion.evidence}`].join("\n"), weight: assertion.truthStatus === "objective" ? 88 : 72, layer: assertion.truthStatus === "objective" ? "continuity" : "retrieval", reason: mode === "author" ? "作者视角可见全部有效事实" : "揭示点不晚于当前事实截止点", priorityClass: assertion.truthStatus === "objective" ? "invariant" : "relevant", authority: "approved", sourceRevisionId: assertion.sourceRevisionId, narrativeOrder: assertion.revealedAt?.narrativeOrder, evidenceRefs: [assertion.sourceRevisionId] }));
   if (mode === "character" && characterId) {
     const assertionById = new Map(assertions.map((assertion) => [assertion.id, assertion]));
-    const knowledgeCutoffOrder = target?.order ?? Number.POSITIVE_INFINITY;
+    const knowledgeCutoffOrder = cutoffOrder ?? Number.POSITIVE_INFINITY;
     for (const item of knowledge.filter((entry) => {
       if (entry.characterId !== characterId) return false;
       const learnedOrder = entry.learnedAt?.narrativeOrder
@@ -258,24 +289,27 @@ export async function compileNovelContext(params: {
   }
   if (snapshots[0] && !eligibleMemories.length) push(source({ kind: "snapshot", id: snapshots[0].id, title: `旧式故事快照：${snapshots[0].label}`, content: `${snapshots[0].storyTime}\n${snapshots[0].recentSummary}`, weight: 40, layer: "background", reason: "项目尚未建立章节记忆，临时回退到旧式快照" }));
   const taste = await novelDb.tasteProfiles.where("projectId").equals(projectId).and((item) => item.status === "confirmed").last();
-  if (taste) push(source({ kind: "taste", id: taste.id, title: "已确认写作偏好", content: `${taste.summary}\n偏好：${taste.preferredPatterns.join("；")}\n避免：${taste.avoidedPatterns.join("；")}`, weight: 88, layer: "working", reason: "作者已确认的文风偏好", priorityClass: "invariant" }));
+  if (taste) push(source({ kind: "taste", id: taste.id, title: "已确认写作偏好", content: `${taste.summary}\n偏好：${taste.preferredPatterns.join("；")}\n避免：${taste.avoidedPatterns.join("；")}`, weight: 88, layer: "mandatory", pinned: true, reason: "作者已确认的文风偏好", priorityClass: "invariant" }));
 
-  const allocated = allocateContext(candidates, project.settings.contextBudget);
+  const allocated = allocateContext(candidates);
   const packet: NovelContextPacket = {
     ...recordBase(projectId),
     task,
     instruction,
     targetId: targetDocumentId,
     sources: allocated.included,
-    tokenBudget: project.settings.contextBudget,
     estimatedTokens: allocated.estimatedTokens,
     omittedSourceIds: allocated.omissions.map((item) => item.sourceId),
     omissions: allocated.omissions,
-    layerBudgets: allocated.layerBudgets,
     layerUsage: allocated.layerUsage,
     informationView: { mode, targetDocumentId, targetNarrativeOrder: target?.order, characterId },
     skillRefs: resolvedSkills.map((skill) => ({ id: skill.skillId, version: skill.version, name: skill.name, source: skill.source })),
     compiledAt: Date.now(),
+    threadId: params.threadId,
+    creativeBriefId: params.creativeBriefId,
+    retrievalRunId: params.retrievalRunId,
+    factCutoffOrder: cutoffOrder,
+    consumer: params.consumer ? { ...params.consumer, role: params.consumer.role as NovelAgentRole | undefined } : undefined,
   };
   await novelDb.contextPackets.add(packet);
   return packet;
@@ -283,7 +317,7 @@ export async function compileNovelContext(params: {
 
 export function formatContextPacket(packet: NovelContextPacket) {
   const view = packet.informationView ? `# 信息视角\n${packet.informationView.mode}${packet.informationView.characterId ? ` · 角色 ${packet.informationView.characterId}` : ""}${packet.informationView.targetNarrativeOrder !== undefined ? ` · 截止章节顺序 ${packet.informationView.targetNarrativeOrder - 1}` : ""}\n\n` : "";
-  return `${view}${packet.sources.map((item) => `## ${item.title}\n[层级：${item.layer}；来源理由：${item.reason}；可见理由：${item.visibilityReason}；哈希：${item.contentHash}]\n${item.content}`).join("\n\n")}`;
+  return `${view}${packet.sources.map((item) => `## ${item.title}\n[层级：${item.layer}；权威：${item.authority ?? "working"}；来源理由：${item.reason}；可见理由：${item.visibilityReason}；哈希：${item.contentHash}]\n${item.content}`).join("\n\n")}`;
 }
 
 export function formatReviewerContext(packet: NovelContextPacket) {

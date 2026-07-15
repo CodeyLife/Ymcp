@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "id": "novel-prose-production",
+  "objective": "将 Ymcp/web 小说创作板块的正文生成工作流优化为可实际支撑原创长篇生产的系统：基于现有架构梳理创作上下文与提示词链路，建立具有明确场景、人物欲望与选择、叙事张力、自然对白、语言节奏、意象回响和跨章延展性的原创写作约束；用固定代表性样例进行真实 LLM 生成，以结构化文学质量审核识别机械报表式事实陈述并持续迭代；保留现有用户改动和功能，以生成样本、审核结果、自动化测试、类型检查与构建证据证明达到生产门槛。",
+  "status": "complete",
+  "createdAt": "2026-07-15T02:38:01.754Z",
+  "updatedAt": "2026-07-15T03:24:51.240Z",
+  "loopCount": 3,
+  "budgets": {
+    "maxLoops": 12,
+    "maxNoProgressLoops": 3,
+    "maxMinutes": 180
+  },
+  "lastDecision": "complete",
+  "lastCheckpoint": "Close dialogue and paragraph defects, validate two final repaired manuscripts, and complete only after full engineering verification. Strengthened dialogue around incompatible goals and stable speaker tactics. Strengthened blueprint causality, visible costs, information-driven c...",
+  "completionEvidence": "result=pass Two genres passed real generation, character-preserving repair, and independent LLM audit. command goal-local real LLM integration test exitCode=0; result=pass Urban final scored 4.00; every dimension 4, no blocker, no deterministic major issue. path .goal/goals/novel-prose-production/artifacts/iteration-2-urban-audit.json; result=pass Wuxia final scored 4.00; every dimension at least 4, long-form potential 5, no blocker, no deterministic major issue. path .goal/goals/novel-prose-production/artifacts/iteration-2-wuxia-audit.json; result=pass All 33 test files and 303 tests passed. command npm test exitCode=0; result=pass TypeScript, production build, and whitespace validation passed; only non-blocking existing build warnings remained. command npm run lint && npm run build && git diff --check exitCode=0",
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "workflow-map",
+        "intent-final-contract"
+      ]
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "evidence-final-review"
+      ]
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "scope-final-audit"
+      ]
+    },
+    {
+      "id": "prose-production-quality",
+      "text": "Representative original chapter samples produced by the real workflow achieve at least 4.0/5 in an independent LLM literary audit, with no blocker and no core dimension below 3.5.",
+      "status": "satisfied",
+      "weight": 3,
+      "evidenceRefs": [
+        "baseline-urban-audit",
+        "iteration-one-urban-audit",
+        "iteration-one-wuxia-audit",
+        "quality-final-audits"
+      ]
+    },
+    {
+      "id": "anti-mechanical-prose",
+      "text": "Generated samples are scene-led rather than report-like: character desire, consequential choice, subtext, sensory embodiment, sentence rhythm, and chapter-end drive are evidenced while summary-like exposition and template phrasing stay below defined gates.",
+      "status": "satisfied",
+      "weight": 3,
+      "evidenceRefs": [
+        "iteration-one-urban-audit",
+        "iteration-one-wuxia-audit",
+        "anti-mechanical-final-evidence"
+      ]
+    },
+    {
+      "id": "workflow-quality-loop",
+      "text": "The production workflow applies layered drafting constraints and a prose-focused review rubric, preserves long-form context boundaries, and can use review findings for another bounded iteration without corrupting approved facts or prose.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "workflow-map",
+        "quality-baseline",
+        "workflow-final-evidence"
+      ]
+    },
+    {
+      "id": "engineering-verification",
+      "text": "Focused prompt and quality regression tests, the relevant novel test suite, TypeScript checking, and production build all pass after the changes.",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "iteration-one-focused-tests",
+        "engineering-final-evidence"
+      ]
+    }
+  ],
+  "strategy": {
+    "current": "Use fixed original story briefs to compare real generated prose before and after narrowly changing the drafting contract and literary audit rubric; prefer a small hierarchy of high-impact narrative obligations over a long flat prompt checklist.",
+    "lastChangeReason": "Target-specific production evidence and an iterative LLM audit are required to distinguish prompt quality from code-only correctness.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 1,
+  "errorPatterns": [
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose production artifacts",
+      "examples": [
+        ".goal/goals/novel-prose-production/artifacts"
+      ],
+      "count": 3,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel workflow stages",
+      "examples": [
+        "src/features/novel/workflow-stages"
+      ],
+      "count": 2,
+      "firstLoop": 1,
+      "lastLoop": 3
+    },
+    {
+      "kind": "error",
+      "canonicalKey": "pnpm attempted an implicit dependency install and was blocked by ignored esbuild protobufjs build scripts verification switched to the already installed project",
+      "examples": [
+        "pnpm attempted an implicit dependency install and was blocked by ignored esbuild/protobufjs build scripts; verification switched to the already-installed project Vitest executable."
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel test quality test ts",
+      "examples": [
+        "src/features/novel/__tests__/quality.test.ts"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "node modules bin vitest cmd run src features novel test quality test ts src features",
+      "examples": [
+        ".\\node_modules\\.bin\\vitest.cmd run src/features/novel/__tests__/quality.test.ts src/features"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose production artifacts baseline urban audit json",
+      "examples": [
+        ".goal/goals/novel-prose-production/artifacts/baseline-urban-audit.json"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose production artifacts iteration 1 urban audit json",
+      "examples": [
+        ".goal/goals/novel-prose-production/artifacts/iteration-1-urban-audit.json"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose production artifacts iteration 1 wuxia audit json",
+      "examples": [
+        ".goal/goals/novel-prose-production/artifacts/iteration-1-wuxia-audit.json"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel test",
+      "examples": [
+        "src/features/novel/__tests__"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "node modules bin vitest cmd run src features novel test prose prompts test ts src features novel test qua",
+      "examples": [
+        ".\\node_modules\\.bin\\vitest.cmd run src/features/novel/__tests__/prose-prompts.test.ts src/features/novel/__tests__/qua"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npm run lint exitcode 0",
+      "examples": [
+        "npm run lint exitCode=0"
+      ],
+      "count": 1,
+      "firstLoop": 2,
+      "lastLoop": 2
+    },
+    {
+      "kind": "error",
+      "canonicalKey": "the in app browser runtime could not initialize because browser client attempted to redefine process real model calls used a goal local harness with the same pr",
+      "examples": [
+        "The in-app browser runtime could not initialize because browser-client attempted to redefine process; real model calls used a goal-local harness with the same production-facing messages."
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "error",
+      "canonicalKey": "a memory service test fail once while that area was concurrently changing then all 303 test passed on the stable rerun that area was not modified",
+      "examples": [
+        "A memory-service test failed once while that area was concurrently changing, then all 303 tests passed on the stable rerun; that area was not modified."
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "src features novel prose prompts ts",
+      "examples": [
+        "src/features/novel/prose-prompts.ts"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel prose production goal md",
+      "examples": [
+        ".goal/goals/novel-prose-production/goal.md"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "package json",
+      "examples": [
+        "package.json"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "goal local real llm integration test exitcode 0",
+      "examples": [
+        "goal-local real LLM integration test exitCode=0"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npm test exitcode 0",
+      "examples": [
+        "npm test exitCode=0"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    },
+    {
+      "kind": "command",
+      "canonicalKey": "npm run lint npm run build git diff check exitcode 0",
+      "examples": [
+        "npm run lint && npm run build && git diff --check exitCode=0"
+      ],
+      "count": 1,
+      "firstLoop": 3,
+      "lastLoop": 3
+    }
+  ],
+  "attestationSha256": "ad83383688e49d78d6a966264036044d3b38975976ffd3e7c5dac3e7a7afe2fc"
+}

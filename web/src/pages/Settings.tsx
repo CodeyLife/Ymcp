@@ -13,6 +13,7 @@ export default function Settings() {
   const apiBaseUrl = useUIStore((s) => s.apiBaseUrl);
   const apiKey = useUIStore((s) => s.apiKey);
   const chatModel = useUIStore((s) => s.chatModel);
+  const modelContextWindow = useUIStore((s) => s.modelContextWindow);
   const thumbSize = useUIStore((s) => s.thumbSize);
   const greenscreenPrompt = useUIStore((s) => s.greenscreenPrompt);
   const spritesheetPrompt = useUIStore((s) => s.spritesheetPrompt);
@@ -20,6 +21,7 @@ export default function Settings() {
   const setApiBaseUrl = useUIStore((s) => s.setApiBaseUrl);
   const setApiKey = useUIStore((s) => s.setApiKey);
   const setChatModel = useUIStore((s) => s.setChatModel);
+  const setModelContextWindow = useUIStore((s) => s.setModelContextWindow);
   const setThumbSize = useUIStore((s) => s.setThumbSize);
   const setGreenscreenPrompt = useUIStore((s) => s.setGreenscreenPrompt);
   const setSpritesheetPrompt = useUIStore((s) => s.setSpritesheetPrompt);
@@ -30,6 +32,7 @@ export default function Settings() {
     api_base_url: string;
     api_key: string;
     chat_model: string;
+    model_context_window: number;
     thumb_size: number;
     greenscreen_prompt: string;
     spritesheet_prompt: string;
@@ -37,6 +40,7 @@ export default function Settings() {
     setApiBaseUrl(values.api_base_url || "");
     setApiKey(values.api_key || "");
     setChatModel(values.chat_model || "auto");
+    setModelContextWindow(values.model_context_window || 0);
     setThumbSize(values.thumb_size || 256);
     setGreenscreenPrompt(values.greenscreen_prompt || "");
     setSpritesheetPrompt(values.spritesheet_prompt || "");
@@ -74,6 +78,7 @@ export default function Settings() {
             api_base_url: apiBaseUrl,
             api_key: apiKey,
             chat_model: chatModel,
+            model_context_window: modelContextWindow,
             thumb_size: thumbSize,
             greenscreen_prompt: greenscreenPrompt,
             spritesheet_prompt: spritesheetPrompt,
@@ -88,6 +93,9 @@ export default function Settings() {
           </Form.Item>
           <Form.Item label="对话模型" name="chat_model" help="默认 auto，由接口自动选择可用模型">
             <ChatModelSelect style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="模型上下文硬上限" name="model_context_window" help="留空或 0 时读取 /models 返回的能力字段；自定义接口未返回时可手动填写，例如 128000">
+            <InputNumber min={0} step={1000} precision={0} style={{ width: "100%" }} placeholder="自动检测" addonAfter="tokens" />
           </Form.Item>
           <Divider style={{ borderColor: "#27272a" }} />
           <Form.Item

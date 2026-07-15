@@ -12,7 +12,7 @@ vi.mock("../ai", () => ({
 
 import { callStructuredNovelModel, streamNovelModel } from "../ai";
 import { applyProposalItems, buildRefinementSnapshot, fingerprintRefinementSnapshot, getGenerationTask, runGenerationTask, runRefinementTask, tasksForScope, updateProposalItemPayload } from "../generation";
-import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, novelDb, recordBase, saveApprovedDocumentRevision } from "../db";
+import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, novelDb, recordBase, saveApprovedDocumentRevision, saveStoryArchitecture } from "../db";
 import { createChapterMemory, linkOutlineRealization } from "../memory";
 import type { AIProposal, StoryEntity, WorkflowRun } from "../types";
 
@@ -20,6 +20,7 @@ beforeEach(async () => {
   await novelDb.delete();
   await novelDb.open();
   localStorage.clear();
+  vi.mocked(callStructuredNovelModel).mockClear();
   vi.mocked(streamNovelModel).mockReset();
 });
 
@@ -29,6 +30,31 @@ function proposal(projectId: string, items: AIProposal["items"]): AIProposal {
 
 function characterPayload(name: string) {
   return { kind: "character", name, summary: "核心人物", description: "负责推动故事选择", character: { role: "主角", appearance: "", personality: "谨慎", desire: "找出真相", motivation: "保护记忆", weakness: "过度怀疑", secret: "", abilities: [], voice: "简短", arc: "从记录走向行动", state: { location: "", physical: "正常", emotional: "警惕", objective: "调查", inventory: [], relationshipNotes: [] } } };
+}
+
+function outlineResponse(title: string) {
+  return {
+    data: { summary: `${title}候选`, items: [
+      { label: title, operation: "create", targetTable: "outlineNodes", tempId: "act", payload: { kind: "act", title, summary: `${title}概要`, order: 0 }, rationale: "建立本幕" },
+      { label: `${title}序列`, operation: "create", targetTable: "outlineNodes", tempId: "sequence", payload: { parentId: "ref:act", kind: "sequence", title: `${title}序列`, summary: "推进本幕", order: 0 }, rationale: "推进" },
+      { label: `${title}事件`, operation: "create", targetTable: "outlineNodes", tempId: "event", payload: { parentId: "ref:sequence", kind: "event", title: `${title}事件`, summary: "事件改变了人物处境，并留下后续影响。", order: 0 }, rationale: "事件" },
+    ] },
+    usage: { inputTokens: 10, outputTokens: 10 },
+    promptHash: `outline-${title}`,
+  };
+}
+
+async function addArchitecture(projectId: string, phaseCount = 3) {
+  const existing = await novelDb.architectures.where("projectId").equals(projectId).first();
+  await novelDb.architectures.put({
+    ...(existing ?? recordBase(projectId)),
+    framework: "three-act",
+    status: "approved",
+    centralQuestion: "人物能否找回真相？",
+    centralConflict: "记忆与现实冲突",
+    synopsis: "人物逐步接近真相。",
+    phases: Array.from({ length: phaseCount }, (_, order) => ({ id: `phase-${order}`, title: `阶段${order + 1}`, purpose: `推进阶段${order + 1}`, turningPoint: `转折${order + 1}`, order, locked: false })),
+  });
 }
 
 describe("generation task ownership", () => {
@@ -278,6 +304,135 @@ describe("structured refinement", () => {
 
     await expect(runGenerationTask({ projectId: project.id, taskKey: "outline", instruction: "生成大纲" })).rejects.toThrow(/流民队伍规则.*plotThreadIds.*survival_thread/);
     expect(await novelDb.proposals.where("projectId").equals(project.id).count()).toBe(0);
+  });
+});
+
+describe("single-act outline generation", () => {
+  it("normalizes architecture phase order when the author saves the architecture", async () => {
+    const project = await createNovelProject({ title: "手动顺序修复", genre: ["武侠"], premise: "保存时修复阶段编号。" });
+    const architecture = await novelDb.architectures.where("projectId").equals(project.id).first();
+
+    await saveStoryArchitecture({
+      ...architecture!,
+      phases: [
+        { id: "first", title: "第一阶段", purpose: "开端", turningPoint: "选择", order: 3, locked: false },
+        { id: "second", title: "第二阶段", purpose: "推进", turningPoint: "代价", order: 8, locked: false },
+      ],
+    });
+
+    expect((await novelDb.architectures.get(architecture!.id))?.phases.map((phase) => phase.order)).toEqual([0, 1]);
+  });
+
+  it("normalizes architecture phase order when an AI architecture proposal is accepted", async () => {
+    const project = await createNovelProject({ title: "候选顺序修复", genre: ["武侠"], premise: "AI 顺序不能直接污染正式架构。" });
+    const architecture = await novelDb.architectures.where("projectId").equals(project.id).first();
+    const payload = {
+      framework: "three-act",
+      status: "approved",
+      centralQuestion: "如何选择",
+      centralConflict: "规则与人情",
+      synopsis: "人物进入江湖。",
+      phases: [
+        { id: "first", title: "江湖初识", purpose: "进入江湖", turningPoint: "决定留下", order: 2, locked: false },
+        { id: "second", title: "风波渐起", purpose: "卷入冲突", turningPoint: "付出代价", order: 5, locked: false },
+      ],
+    };
+    const draft = proposal(project.id, [{ id: "architecture", label: "全书架构", operation: "update", targetTable: "architectures", targetId: architecture!.id, expectedRevision: architecture!.revision, status: "pending", payload, rationale: "建立阶段", dependencies: [] }]);
+    draft.taskKey = "architecture";
+    draft.scope = "architecture";
+    await novelDb.proposals.add(draft);
+
+    await applyProposalItems(draft.id, ["architecture"]);
+
+    expect((await novelDb.architectures.get(architecture!.id))?.phases.map((phase) => phase.order)).toEqual([0, 1]);
+  });
+
+  it("generates only the first missing architecture phase and appends it", async () => {
+    const project = await createNovelProject({ title: "逐幕生成", genre: ["悬疑"], premise: "每一幕单独审核。" });
+    await addArchitecture(project.id, 3);
+    const oldAct = await addOutlineNode(project.id, undefined, "act", "阶段1", 0);
+    const oldEvent = await addOutlineNode(project.id, oldAct.id, "event", "旧事件", 0);
+    const chapter = await createChapter(project.id, "旧事件章节");
+    const realization = await linkOutlineRealization({ projectId: project.id, outlineNodeId: oldEvent.id, documentId: chapter.id });
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce(outlineResponse("阶段2"));
+
+    const generated = await runGenerationTask({ projectId: project.id, taskKey: "outline", instruction: "继续生成下一幕" });
+
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(callStructuredNovelModel).mock.calls[0][0]).toMatchObject({ maxTokens: 8192, role: "architect" });
+    expect(vi.mocked(callStructuredNovelModel).mock.calls[0][0].prompt).toContain("第 2 幕（共 3 幕）「阶段2」");
+    expect(generated.proposal).toMatchObject({ outlineGenerationMode: "act-append", architecturePhaseId: "phase-1", architecturePhaseOrder: 1 });
+    expect(generated.proposal.items.find((item) => item.payload.kind === "act")?.payload.order).toBe(1);
+
+    await applyProposalItems(generated.proposal.id, generated.proposal.items.map((item) => item.id));
+    expect(await novelDb.outlineNodes.get(oldAct.id)).toBeDefined();
+    expect(await novelDb.outlineNodes.get(oldEvent.id)).toBeDefined();
+    expect(await novelDb.outlineRealizations.get(realization.id)).toBeDefined();
+    expect((await novelDb.outlineNodes.where("projectId").equals(project.id).and((node) => node.kind === "act" && !node.parentId).sortBy("order")).map((node) => node.title)).toEqual(["阶段1", "阶段2"]);
+  });
+
+  it("retries only the current act when its structure is invalid", async () => {
+    const project = await createNovelProject({ title: "单幕重试", genre: ["悬疑"], premise: "失败不能触发整树回退。" });
+    await addArchitecture(project.id, 2);
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce({ data: { summary: "残缺", items: [{ label: "阶段1", operation: "create", targetTable: "outlineNodes", tempId: "act", payload: { kind: "act", title: "阶段1", summary: "残缺", order: 0 }, rationale: "残缺" }] }, usage: { inputTokens: 1, outputTokens: 1 }, promptHash: "invalid" })
+      .mockResolvedValueOnce(outlineResponse("阶段1"));
+
+    const generated = await runGenerationTask({ projectId: project.id, taskKey: "outline", instruction: "生成第一幕" });
+
+    expect(generated.proposal.items).toHaveLength(3);
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(callStructuredNovelModel).mock.calls[1][0].prompt).toContain("请只重新生成当前这一幕");
+    expect(vi.mocked(callStructuredNovelModel).mock.calls[1][0].prompt).not.toContain("重新生成完整大纲树");
+  });
+
+  it("rejects an append when the target act order became occupied", async () => {
+    const project = await createNovelProject({ title: "顺序冲突", genre: ["悬疑"], premise: "生成与采纳之间可能发生编辑。" });
+    await addArchitecture(project.id, 1);
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce(outlineResponse("阶段1"));
+    const generated = await runGenerationTask({ projectId: project.id, taskKey: "outline", instruction: "生成第一幕" });
+    const manual = await addOutlineNode(project.id, undefined, "act", "手动第一幕", 0);
+
+    await expect(applyProposalItems(generated.proposal.id, generated.proposal.items.map((item) => item.id))).rejects.toThrow(/第 1 幕已存在/);
+    expect(await novelDb.outlineNodes.get(manual.id)).toBeDefined();
+    expect(await novelDb.outlineNodes.where("projectId").equals(project.id).count()).toBe(1);
+  });
+
+  it("uses the next free root order when no architecture exists", async () => {
+    const project = await createNovelProject({ title: "自由大纲", genre: ["都市"], premise: "没有预设架构。" });
+    await addOutlineNode(project.id, undefined, "act", "已有第一幕", 0);
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce(outlineResponse("自由第二幕"));
+
+    const generated = await runGenerationTask({ projectId: project.id, taskKey: "outline", instruction: "继续故事" });
+
+    expect(generated.proposal).toMatchObject({ outlineGenerationMode: "act-append", architecturePhaseId: undefined, architecturePhaseOrder: 1 });
+    expect(generated.proposal.items.find((item) => item.payload.kind === "act")?.payload.order).toBe(1);
+  });
+
+  it("treats the first stored architecture phase as act one even when its legacy order is 2", async () => {
+    const project = await createNovelProject({ title: "错位阶段", genre: ["武侠"], premise: "第一幕不应被旧顺序误标。" });
+    const architecture = await novelDb.architectures.where("projectId").equals(project.id).first();
+    await novelDb.architectures.put({
+      ...architecture!,
+      phases: [{ id: "legacy-phase", title: "江湖初识：规则之外的人间温度", purpose: "初识江湖", turningPoint: "作出选择", order: 2, locked: false }],
+    });
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce(outlineResponse("江湖初识：规则之外的人间温度"));
+
+    const generated = await runGenerationTask({ projectId: project.id, taskKey: "outline", instruction: "生成下一幕" });
+
+    expect(generated.proposal).toMatchObject({ architecturePhaseId: "legacy-phase", architecturePhaseOrder: 0 });
+    expect(vi.mocked(callStructuredNovelModel).mock.calls[0][0].prompt).toContain("第 1 幕（共 1 幕）");
+    expect(generated.proposal.items.find((item) => item.payload.kind === "act")?.payload.order).toBe(0);
+  });
+
+  it("stops before calling the model when every architecture phase is occupied", async () => {
+    const project = await createNovelProject({ title: "架构完成", genre: ["悬疑"], premise: "全部阶段已规划。" });
+    await addArchitecture(project.id, 2);
+    await addOutlineNode(project.id, undefined, "act", "阶段1", 0);
+    await addOutlineNode(project.id, undefined, "act", "阶段2", 1);
+
+    await expect(runGenerationTask({ projectId: project.id, taskKey: "outline", instruction: "继续生成" })).rejects.toThrow(/全部架构阶段均已生成/);
+    expect(callStructuredNovelModel).not.toHaveBeenCalled();
   });
 });
 
@@ -572,17 +727,22 @@ describe("outline and chapter ownership", () => {
     const memory = await createChapterMemory({ projectId: project.id, documentId: chapter.id, sourceRevisionId: approved.revision.id, summary: "证人留下证词" });
     const outline = await addOutlineNode(project.id, undefined, "event", "证人作证", 0);
     const realization = await linkOutlineRealization({ projectId: project.id, outlineNodeId: outline.id, documentId: chapter.id });
-    const packet = { ...recordBase(project.id), task: "draft", instruction: "写作", targetId: chapter.id, sources: [], tokenBudget: 1000, estimatedTokens: 0, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
+    const packet = { ...recordBase(project.id), task: "draft", instruction: "写作", targetId: chapter.id, sources: [], estimatedTokens: 0, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: chapter.id, status: "running", currentStage: "context", stageIndex: 0, revisionIteration: 0, contextPacketId: packet.id, factCandidateIds: [], startedAt: Date.now() };
     await novelDb.contextPackets.add(packet);
     await novelDb.workflowRuns.add(run);
     await novelDb.agentRuns.add({ ...recordBase(project.id), workflowRunId: run.id, goal: "写作", status: "completed", model: "test", promptVersion: "test", steps: [] });
-    const ordinaryPacket = { ...recordBase(project.id), task: "chapter-draft", instruction: "重写本章", targetId: chapter.id, sources: [], tokenBudget: 1000, estimatedTokens: 0, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
+    const ordinaryPacket = { ...recordBase(project.id), task: "chapter-draft", instruction: "重写本章", targetId: chapter.id, sources: [], estimatedTokens: 0, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
     const ordinaryAgent = { ...recordBase(project.id), goal: "重写本章", status: "completed" as const, model: "test", promptVersion: "test", contextPacketId: ordinaryPacket.id, steps: [] };
     const ordinaryProposal = { ...proposal(project.id, []), targetId: chapter.id, contextPacketId: ordinaryPacket.id, agentRunId: ordinaryAgent.id };
+    const conversationThread = { ...recordBase(project.id), taskKey: "chapter-workflow" as const, targetId: chapter.id, title: "证词 · 创作协作", summary: "", status: "active" as const, pinnedSourceIds: [], excludedSourceIds: [], lastMessageAt: Date.now() };
+    const projectPreference = { ...recordBase(project.id), id: "project-preference", threadId: conversationThread.id, targetId: chapter.id, scope: "project" as const, scopeKey: `project:${project.id}`, kind: "preference" as const, title: "全书句式", content: "保持克制短句", status: "active" as const, confidence: 1, sourceMessageIds: [], evidenceQuotes: ["我偏好克制短句"], extractorVersion: "test", autoApplied: false };
+    const chapterConstraint = { ...recordBase(project.id), id: "chapter-constraint", threadId: conversationThread.id, targetId: chapter.id, scope: "task" as const, scopeKey: `thread:${conversationThread.id}`, kind: "constraint" as const, title: "本章限制", content: "只在本章生效", status: "active" as const, confidence: 1, sourceMessageIds: [], evidenceQuotes: [], extractorVersion: "test", autoApplied: false };
     await novelDb.contextPackets.add(ordinaryPacket);
     await novelDb.agentRuns.add(ordinaryAgent);
     await novelDb.proposals.add(ordinaryProposal);
+    await novelDb.conversationThreads.add(conversationThread);
+    await novelDb.conversationMemories.bulkAdd([projectPreference, chapterConstraint]);
     await deleteChapter(chapter.id);
     expect(await novelDb.documents.get(chapter.id)).toBeUndefined();
     expect(await novelDb.scenes.get(scene.id)).toBeUndefined();
@@ -596,6 +756,11 @@ describe("outline and chapter ownership", () => {
     expect((await novelDb.knowledgeAssertions.get(knowledge.id))?.status).toBe("retracted");
     expect((await novelDb.derivedMemories.get(memory.id))?.status).toBe("stale");
     expect(await novelDb.outlineRealizations.get(realization.id)).toBeUndefined();
+    expect(await novelDb.conversationMemories.get(chapterConstraint.id)).toBeUndefined();
+    const retainedPreference = await novelDb.conversationMemories.get(projectPreference.id);
+    expect(retainedPreference?.scope).toBe("project");
+    expect(retainedPreference).not.toHaveProperty("threadId");
+    expect(retainedPreference).not.toHaveProperty("targetId");
   });
 
   it("retires chapter truth and memory when a structured proposal deletes the chapter", async () => {

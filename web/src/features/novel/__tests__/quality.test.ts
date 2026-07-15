@@ -142,4 +142,27 @@ describe("prose discipline checks", () => {
     const result = runDeterministicQualityChecks({ text });
     expect(result.metrics.imageryDensity).toBeGreaterThan(0);
   });
+
+  it("flags sustained interpretive summaries that explain meaning for the reader", () => {
+    const text = Array.from({ length: 16 }, (_, index) => index % 2 === 0
+      ? `他把第${index + 1}枚钥匙藏回袖中，没有看桌对面的人。他自己也清楚，这意味着两个人之间又多了一道门。`
+      : `她收起第${index + 1}块没有修好的表，站到门边。她终于意识到，这说明他仍旧想替所有人作决定。`
+    ).join("\n\n");
+
+    const result = runDeterministicQualityChecks({ text });
+
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "style.interpretive-summary-density", dimension: "specificity" }),
+    ]));
+    expect(result.metrics.interpretiveSummaryHits).toBeGreaterThanOrEqual(4);
+  });
+
+  it("does not flag concrete action and subtext without explanatory conclusions", () => {
+    const text = Array.from({ length: 8 }, () => "他把钥匙藏回袖中，右手仍压着柜沿。她把旧表推回去，只说修好之前不会来取。").join("\n\n");
+
+    const result = runDeterministicQualityChecks({ text });
+
+    expect(result.issues.some((item) => item.rule === "style.interpretive-summary-density")).toBe(false);
+    expect(result.metrics.interpretiveSummaryHits).toBe(0);
+  });
 });

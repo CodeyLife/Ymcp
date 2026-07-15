@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Dexie from "dexie";
 import "./setup";
 import { createNovelProject, getCanvasLayout, novelDb, recordBase, saveCanvasLayout, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES } from "../db-schema";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V16_STORES } from "../db-schema";
 import { exportNovel, importNovel, verifyProjectArchive } from "../export";
 
 beforeEach(async () => {
@@ -12,8 +12,8 @@ beforeEach(async () => {
 });
 
 describe("db-schema constants", () => {
-  it("DB_VERSION is 14", () => {
-    expect(DB_VERSION).toBe(14);
+  it("DB_VERSION is 16", () => {
+    expect(DB_VERSION).toBe(16);
   });
 
   it("RECORD_SCHEMA_VERSION is 6", () => {
@@ -71,6 +71,11 @@ describe("db-schema constants", () => {
   it("V11_STORES keeps the v10 indexes for the data-cleanup migration", () => {
     expect(V11_STORES).toEqual(V10_STORES);
   });
+
+  it("V16_STORES retains durable conversation and memory-job indexes", () => {
+    expect(V16_STORES.conversationThreads).toContain("[projectId+targetId]");
+    expect(V16_STORES.memoryJobs).toContain("[status+availableAt]");
+  });
 });
 
 describe("database v9 schema", () => {
@@ -89,7 +94,7 @@ describe("database v9 schema", () => {
 
   it("rejects project imports older than v4", async () => {
     const file = { text: async () => JSON.stringify({ manifest: { format: "ymcp-novel", schemaVersion: 3 }, project: { id: "legacy" } }) } as File;
-    await expect(importNovel(file)).rejects.toThrow(/v4-v9/);
+    await expect(importNovel(file)).rejects.toThrow(/v4-v11/);
   });
 
   it("imports v4 backups without retired run data or proposal links", async () => {
@@ -300,7 +305,7 @@ describe("database v9 schema", () => {
       await exportNovel(project.id, "json");
       expect(exportedBlob).toBeDefined();
       const backup = JSON.parse(await exportedBlob!.text()) as Record<string, unknown> & { manifest: { schemaVersion: number } };
-      expect(backup.manifest.schemaVersion).toBe(9);
+      expect(backup.manifest.schemaVersion).toBe(11);
       expect(backup).toHaveProperty("factAssertions");
       expect(backup).toHaveProperty("knowledgeAssertions");
       expect(backup).toHaveProperty("narrativeUnits");

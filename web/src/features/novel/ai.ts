@@ -1,8 +1,9 @@
 import Ajv, { type AnySchema } from "ajv";
 import { getEffectiveApiConfig } from "@/stores/ui";
 import type { NovelAgentRole } from "./types";
+import { assertModelContextLimit } from "./model-capabilities";
 
-const SYSTEM_INVARIANTS = `你在专业小说创作系统内工作。用户批准的事实库、锁定规则、角色知识边界和审批状态不可被覆盖。区分事实、推断、建议和候选正文。未经批准不得声称已经修改正文或资料。审批状态（候选/待审核/已批准等）由系统统一管理，payload 各字段只写故事内容本身，禁止在内容里标注“候选”“待审核”“待确认”“未批准”“仅供参考”等状态标记。输出必须尊重指定格式，不泄露内部推理。`;
+const SYSTEM_INVARIANTS = `你在专业小说创作系统内工作。用户批准的事实库、锁定规则、角色知识边界和审批状态不可被覆盖。输出必须尊重指定格式，不泄露内部推理。`;
 
 const ROLE_PROMPTS: Record<NovelAgentRole, string> = {
   architect: "你是长篇小说架构师。先经营故事土壤——人物处境、世态人情、情境气味——让戏剧性在布局中自然显现，而不是急于宣告主题或推进剧情。规划时注重循序渐进：每层节点先回答'发生了什么、人物如何感受、世界因此有何不同'，再让因果、转折、伏笔在事件铺陈中浮现。情怀、感情与中文意境是规划期就要考虑的底色，不是正文阶段才补的装饰。",
@@ -16,6 +17,8 @@ const ROLE_PROMPTS: Record<NovelAgentRole, string> = {
   "fact-extractor": "你是事实分析员。只提取已批准正文中有明确证据的状态变化，不直接提交。",
   "quality-editor": "你是总编。汇总相互独立的审校报告，合并重复问题并区分阻断、主要问题和警告。",
   "character-enricher": "你是人物塑造编辑。基于已确认的事实与正文证据，补完人物的外在欲望、内在恐惧、错误信念、未承认需求、道德边界、声音特征与弧光。只填写正文已建立或可合理推断的内容，不得发明与既定事实冲突的设定；不得在 payload 中标注候选/待审核等审批状态。",
+  "conversation-assistant": "你是章节创作协作编辑。先理解作者本轮意图，再依据带来源的检索资料回答、澄清和整理创作简报。不得把检索资料之外的推测说成已确认事实；需要进一步证据时提出精确搜索问题。",
+  "memory-curator": "你是小说记忆整理员。只从作者明确表达的内容中提炼偏好和任务要求，不把助手建议、推测或未确认故事设定写成长期记忆。",
 };
 
 export function endpoint(baseUrl: string) {
@@ -123,10 +126,13 @@ async function requestChat(params: {
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   signal?: AbortSignal;
   responseSchema?: Record<string, unknown>;
+  maxTokens?: number;
 }) {
   const config = getEffectiveApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
+  assertModelContextLimit({ model: params.model, text: params.messages.map((message) => message.content).join("\n"), override: config.modelContextWindow, outputReserve: params.maxTokens ?? 4096 });
   const body: Record<string, unknown> = { model: params.model, temperature: params.temperature, messages: params.messages };
+  if (params.maxTokens && params.maxTokens > 0) body.max_tokens = params.maxTokens;
   if (params.responseSchema) body.response_format = { type: "json_schema", json_schema: { name: "novel_artifact", strict: true, schema: params.responseSchema } };
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
@@ -164,6 +170,7 @@ export async function streamNovelModel(params: {
   const config = getEffectiveApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt].filter(Boolean).join("\n\n");
+  assertModelContextLimit({ model: params.model, text: `${system}\n${params.prompt}`, override: config.modelContextWindow, outputReserve: params.maxTokens ?? 8192 });
   const signal = createTimeoutSignal(params.timeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS, params.signal);
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
@@ -228,6 +235,7 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
   schema: Record<string, unknown>;
   signal?: AbortSignal;
   timeoutMs?: number;
+  maxTokens?: number;
 }) {
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt, "只输出符合 JSON Schema 的 JSON，不要使用 Markdown 代码围栏。"].filter(Boolean).join("\n\n");
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [{ role: "system", content: system }, { role: "user", content: params.prompt }];
@@ -243,7 +251,7 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
       const repairPrompt = attempt === 0
         ? `把下面输出修复为严格符合给定 Schema 的 JSON。不得增加原输出没有的故事事实。summary 字段只写候选整体概览，禁止描述修复过程、Schema 约束或被丢弃的字段。\n\nSchema:\n${schemaStr}\n\n校验错误：${errors}\n\n原输出：\n${response.content}`
         : `上一次修复仍然失败。请完全重新生成符合 Schema 的 JSON。只输出 JSON，不要输出任何其他内容。summary 字段只写候选整体概览，禁止描述修复过程、Schema 约束或被丢弃的字段。\n\n必须包含的字段：${Object.keys(params.schema.properties ?? {}).join(", ")}\n\nSchema:\n${schemaStr}\n\n校验错误：${errors}\n\n原输出：\n${response.content}`;
-      const repaired = await requestChat({ model: params.model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: repairPrompt }], signal, responseSchema: params.schema });
+      const repaired = await requestChat({ model: params.model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: repairPrompt }], signal, responseSchema: params.schema, maxTokens: params.maxTokens });
       response = { content: repaired.content, usage: { inputTokens: response.usage.inputTokens + repaired.usage.inputTokens, outputTokens: response.usage.outputTokens + repaired.usage.outputTokens } };
       try { parsed = parseJsonContent(response.content); } catch { parsed = undefined; }
       if (parsed && validate(parsed)) break;

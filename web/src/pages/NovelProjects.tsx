@@ -1,13 +1,21 @@
 import { useRef, useState } from "react";
-import { App, Button, Empty, Form, Input, Modal, Progress, Select, Tag } from "antd";
-import { BookOutlined, CloudSyncOutlined, DeleteOutlined, ExportOutlined, ImportOutlined, PlusOutlined, RightOutlined } from "@ant-design/icons";
+import { App, Button, Empty, Form, Input, Modal, Progress, Steps, Tag } from "antd";
+import { ApartmentOutlined, BookOutlined, BulbOutlined, CloudSyncOutlined, DeleteOutlined, ExportOutlined, ImportOutlined, PlusOutlined, RightOutlined, StopOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useNavigate } from "react-router-dom";
-import { createNovelProject, deleteProject, novelDb } from "@/features/novel/db";
+import { deleteProject, novelDb } from "@/features/novel/db";
+import { bootstrapNovelFromCoreIdea, NovelBootstrapError, type NovelBootstrapProgress, type NovelBootstrapStage } from "@/features/novel/bootstrap";
 import { exportNovel, importNovel } from "@/features/novel/export";
 import "@/features/novel/novel.css";
 
-const GENRES = ["玄幻", "奇幻", "科幻", "悬疑", "都市", "历史", "武侠", "言情", "现实", "轻小说", "其他"];
+const BOOTSTRAP_STAGE_META: Record<NovelBootstrapStage, { title: string; description: string; icon: React.ReactNode }> = {
+  "project-positioning": { title: "作品定位", description: "书名、题材、主题与文风", icon: <BulbOutlined /> },
+  architecture: { title: "全书架构", description: "核心问题、冲突与阶段走向", icon: <ApartmentOutlined /> },
+};
+
+function initialBootstrapProgress(): NovelBootstrapProgress[] {
+  return (Object.keys(BOOTSTRAP_STAGE_META) as NovelBootstrapStage[]).map((stage) => ({ stage, status: "waiting" }));
+}
 
 // 字数简写：达到 1 万字后用「x.x 万字」避免数字过长
 function formatWordCount(words: number): string {
@@ -21,19 +29,53 @@ export default function NovelProjects() {
   const documents = useLiveQuery(() => novelDb.documents.toArray(), []) ?? [];
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [bootstrapProjectId, setBootstrapProjectId] = useState<string>();
+  const [bootstrapProgress, setBootstrapProgress] = useState<NovelBootstrapProgress[]>(initialBootstrapProgress);
+  const [bootstrapError, setBootstrapError] = useState<string>();
   const importRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | undefined>(undefined);
   const [form] = Form.useForm();
 
-  async function create(values: { title: string; genre: string[]; premise: string }) {
+  function resetCreateDialog() {
+    setOpen(false);
+    setBootstrapProjectId(undefined);
+    setBootstrapProgress(initialBootstrapProgress());
+    setBootstrapError(undefined);
+    form.resetFields();
+  }
+
+  function closeCreateDialog() {
+    if (!creating) resetCreateDialog();
+  }
+
+  function enterBootstrapProject() {
+    if (!bootstrapProjectId) return;
+    const projectId = bootstrapProjectId;
+    resetCreateDialog();
+    navigate(`/novels/${projectId}?view=planning`);
+  }
+
+  async function create(values: { coreIdea: string }) {
     setCreating(true);
+    setBootstrapError(undefined);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const project = await createNovelProject(values);
-      setOpen(false);
-      form.resetFields();
-      navigate(`/novels/${project.id}`);
+      const result = await bootstrapNovelFromCoreIdea({
+        coreIdea: values.coreIdea,
+        projectId: bootstrapProjectId,
+        signal: controller.signal,
+        onProgress: setBootstrapProgress,
+      });
+      resetCreateDialog();
+      message.success("故事工作区已建立");
+      navigate(`/novels/${result.projectId}?view=planning`);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "创建失败");
+      if (error instanceof NovelBootstrapError) setBootstrapProjectId(error.projectId);
+      const cancelled = controller.signal.aborted;
+      setBootstrapError(cancelled ? "生成已取消，可继续完成剩余内容" : error instanceof Error ? error.message : "创建失败");
     } finally {
+      if (abortRef.current === controller) abortRef.current = undefined;
       setCreating(false);
     }
   }
@@ -115,12 +157,60 @@ export default function NovelProjects() {
         </section>
       )}
 
-      <Modal title="创建小说项目" open={open} onCancel={() => setOpen(false)} footer={null} destroyOnHidden>
-        <Form form={form} layout="vertical" onFinish={(values) => void create(values)} initialValues={{ genre: ["玄幻"] }}>
-          <Form.Item name="title" label="作品名称" rules={[{ required: true, message: "请输入作品名称" }]}><Input autoFocus placeholder="例如：潮汐尽头" /></Form.Item>
-          <Form.Item name="genre" label="题材" rules={[{ required: true }]}><Select mode="multiple" options={GENRES.map((value) => ({ value, label: value }))} /></Form.Item>
-          <Form.Item name="premise" label="核心创意" rules={[{ required: true, message: "用一两句话描述故事" }]}><Input.TextArea rows={4} placeholder="当……发生时，一名……必须……否则……" /></Form.Item>
-          <Button type="primary" htmlType="submit" loading={creating} block>建立故事工作区</Button>
+      <Modal
+        className="novel-bootstrap-modal"
+        title={creating || bootstrapProjectId ? "建立故事工作区" : "从核心创意开始"}
+        open={open}
+        onCancel={closeCreateDialog}
+        closable={!creating}
+        maskClosable={!creating}
+        keyboard={!creating}
+        footer={null}
+        width={620}
+        destroyOnHidden
+      >
+        <Form form={form} layout="vertical" className="novel-bootstrap-form" onFinish={(values) => void create(values)}>
+          {!creating && !bootstrapProjectId && !bootstrapError ? <>
+            <Form.Item
+              name="coreIdea"
+              label="核心创意"
+              rules={[
+                { required: true, whitespace: true, message: "请输入核心创意" },
+                { max: 2000, message: "核心创意不能超过 2000 字" },
+              ]}
+            >
+              <Input.TextArea
+                autoFocus
+                rows={7}
+                maxLength={2000}
+                showCount
+                placeholder="一座城市每天会遗忘一个人，只有负责销毁档案的女孩记得他们存在过。"
+              />
+            </Form.Item>
+            <Button type="primary" htmlType="submit" icon={<BulbOutlined />} size="large" block>生成故事设定</Button>
+          </> : <div className="novel-bootstrap-progress">
+            <blockquote>{form.getFieldValue("coreIdea")}</blockquote>
+            <Steps
+              direction="vertical"
+              current={bootstrapProgress.findIndex((item) => item.status === "running" || item.status === "failed")}
+              items={bootstrapProgress.map((item) => {
+                const meta = BOOTSTRAP_STAGE_META[item.stage];
+                return {
+                  title: meta.title,
+                  description: item.error || (item.status === "completed" ? "已写入项目" : item.status === "running" ? "正在生成并保存" : meta.description),
+                  icon: meta.icon,
+                  status: item.status === "completed" ? "finish" : item.status === "running" ? "process" : item.status === "failed" ? "error" : "wait",
+                };
+              })}
+            />
+            {bootstrapError && <div className="novel-bootstrap-error" role="alert">{bootstrapError}</div>}
+            <div className="novel-bootstrap-actions">
+              {creating ? <Button icon={<StopOutlined />} onClick={() => abortRef.current?.abort()}>取消生成</Button> : <>
+                {bootstrapProjectId && <Button onClick={enterBootstrapProject}>进入项目</Button>}
+                <Button type="primary" htmlType="submit">继续生成</Button>
+              </>}
+            </div>
+          </div>}
         </Form>
       </Modal>
     </div>

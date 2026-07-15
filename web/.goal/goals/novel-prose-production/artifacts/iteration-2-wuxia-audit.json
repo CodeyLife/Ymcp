@@ -1,0 +1,66 @@
+{
+  "llmAudit": {
+    "scores": {
+      "scenePresence": 4,
+      "characterAgency": 4,
+      "causalTension": 4,
+      "dialogueSubtext": 4,
+      "proseRhythm": 4,
+      "specificity": 4,
+      "longformPotential": 5,
+      "antiMechanical": 4
+    },
+    "overall": 4,
+    "blockers": [],
+    "issues": [
+      {
+        "title": "关键秘密揭示过晚但铺垫不足",
+        "evidence": "断剑、听见金铁余响、鼻血等设定明显承担主线悬念功能，但正文前半段只写‘袖口里那截断剑碰到腕骨，冰凉一片’，直到结尾沈砚舟才指出‘你方才撒了一个谎’，读者对断剑能力和顾石生隐瞒内容缺少足够推断空间。",
+        "revision": "增加1-2处早期微小异常，例如顾石生避开某种声音、对旧剑反应异常、过去事件留下的痕迹，让读者产生疑问而不是只等待作者揭谜。"
+      },
+      {
+        "title": "周槐反派逻辑略显单线",
+        "evidence": "周槐从提出伪证要求到利用塌井、逼顾石生承担责任，功能明确，但多数行动都服务于压迫主角，缺少现实利益之外的个人动机。",
+        "revision": "补充周槐维护盐场秩序、上级压力、过往与顾石生或罗二的关系等因素，使其成为有利益选择的人，而非单纯施压工具。"
+      },
+      {
+        "title": "高潮转折略依赖主角特殊能力",
+        "evidence": "井下救援主要靠顾石生听见‘沉重的金铁余响’判断结构危险，这一能力直接解决危机，普通行动线的紧张感被削弱。",
+        "revision": "让能力只是辅助判断，增加顾石生的经验、错误选择、体力代价或团队协作，使救援结果来自能力与人物行动共同作用。"
+      },
+      {
+        "title": "部分对白承担解释功能",
+        "evidence": "例如周槐说‘你若说昨日看见罗二拿了印，我便替你垫三日药钱’，直接说明交易；沈砚舟后段连续复述‘他说自己看见罗二偷印……你说顾石生做局’，信息功能强于人物攻防。",
+        "revision": "减少直接说明，把利益交换和判断过程藏入停顿、试探、回避和行动反应中，让角色通过说话方式暴露立场。"
+      }
+    ],
+    "strengths": [
+      "盐井、盐场、账册、药钱等元素形成了明确的生存压力场景，开篇不是空泛设定，而是从劳动细节进入冲突。",
+      "顾石生拒绝伪证但选择承担损失，人物选择具有代价，避免了单纯善良型主角。",
+      "罗二的贫嘴与危险场景形成反差，使人物关系具有商业长篇需要的情感入口。",
+      "结尾留下断剑秘密、周槐态度变化、沈砚舟调查方向等未决问题，具备继续展开的动力。"
+    ],
+    "verdict": "revise"
+  },
+  "deterministic": {
+    "metrics": {
+      "characters": 2445,
+      "paragraphs": 95,
+      "dialogueRatio": 0.363,
+      "paragraphVariation": 0.669,
+      "singleSentenceNarrativeRatio": 0.099,
+      "maxConsecutiveSingleSentenceNarrative": 1,
+      "templateHits": 0,
+      "imageryDensity": 71,
+      "interpretiveSummaryHits": 0
+    },
+    "issues": [
+      {
+        "rule": "style.short-sentence-tic",
+        "severity": "warning",
+        "title": "短句排比过多",
+        "description": "检测到 3 处连续短句排比，超过单章 2 处上限。"
+      }
+    ]
+  }
+}

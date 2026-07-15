@@ -2,7 +2,7 @@ import Ajv, { type ValidateFunction } from "ajv";
 import type { Table } from "dexie";
 import { callStructuredNovelModel } from "./ai";
 import { compileNovelContext, formatContextPacket } from "./context";
-import { appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, deleteOutlineRealizations, emptyChapterBlueprint, novelDb, recordBase, retireChapterDependencies } from "./db";
+import { appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, deleteOutlineRealizations, emptyChapterBlueprint, normalizeArchitecturePayload, normalizeArchitecturePhases, novelDb, recordBase, retireChapterDependencies } from "./db";
 import { sanitizeApprovalMetaInPlace } from "./db-schema";
 import { analyzeOutlineProposal } from "./outline-structure";
 import { assertProposalReferences, assertResolvedPayloadReferences, buildProjectReferenceCatalogs, catalogWithResolvedProposalItems, emptyReferenceCatalog, repairProposalCharacterReferences, repairUnresolvableTempRefs } from "./reference-integrity";
@@ -20,7 +20,6 @@ import type {
   ProposalTargetTable,
   RefinementSnapshot,
   RefinementSnapshotInput,
-  StoryArchitecture,
 } from "./types";
 import { repairDraftStructureOnce } from "./workflow-stages/draft-structure-repair";
 
@@ -156,7 +155,10 @@ const CREATE_REQUIRED_FIELDS: Record<ProposalTargetTable, string[]> = {
 };
 const CREATE_PAYLOAD_VALIDATORS = Object.fromEntries(Object.entries(TABLE_PAYLOAD_SCHEMAS).map(([table, schema]) => [table, payloadAjv.compile({ ...schema, required: CREATE_REQUIRED_FIELDS[table as ProposalTargetTable] })])) as Record<ProposalTargetTable, ValidateFunction>;
 
-function proposalSchema(allowedTables: ProposalTargetTable[]) {
+function proposalSchema(
+  allowedTables: ProposalTargetTable[],
+  requiredPayloadFields?: Partial<Record<ProposalTargetTable, string[]>>,
+) {
   return {
     type: "object",
     additionalProperties: false,
@@ -184,6 +186,9 @@ function proposalSchema(allowedTables: ProposalTargetTable[]) {
           allOf: [
             ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table } } }, then: { properties: { payload: MODEL_PAYLOAD_SCHEMAS[table] } } })),
             ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "create" } }, required: ["targetTable", "operation"] }, then: { properties: { payload: { ...MODEL_PAYLOAD_SCHEMAS[table], required: CREATE_REQUIRED_FIELDS[table] } } } })),
+            ...allowedTables.flatMap((table) => requiredPayloadFields?.[table]?.length
+              ? [{ if: { properties: { targetTable: { const: table } }, required: ["targetTable"] }, then: { properties: { payload: { ...MODEL_PAYLOAD_SCHEMAS[table], required: requiredPayloadFields[table] } } } }]
+              : []),
             { if: { properties: { operation: { const: "update" } }, required: ["operation"] }, then: { required: ["targetId"], properties: { payload: { type: "object", minProperties: 1 } } } },
           ],
         },
@@ -354,11 +359,6 @@ function deepMergeRecord(base: Record<string, unknown>, changes: Record<string, 
       : structuredClone(value);
   }
   return next;
-}
-
-function estimateTokens(text: string) {
-  const cjk = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
-  return Math.ceil(cjk * 1.1 + (text.length - cjk) / 4);
 }
 
 function stableValue(value: unknown): unknown {
@@ -542,105 +542,125 @@ function namespaceTempIds(items: ProposalItem[], prefix: string): ProposalItem[]
   return items;
 }
 
-async function generateOutlineByPhases(params: {
+interface OutlineActTarget {
+  phaseId?: string;
+  order: number;
+  title?: string;
+  purpose?: string;
+  turningPoint?: string;
+  totalPhases?: number;
+}
+
+async function resolveNextOutlineActTarget(projectId: string): Promise<OutlineActTarget> {
+  const [architecture, roots] = await Promise.all([
+    novelDb.architectures.where("projectId").equals(projectId).first(),
+    novelDb.outlineNodes.where("projectId").equals(projectId).and((node) => node.kind === "act" && !node.parentId).toArray(),
+  ]);
+  const occupiedOrders = new Set(roots.map((node) => node.order));
+  const phases = normalizeArchitecturePhases(architecture?.phases ?? []);
+  if (phases.length) {
+    const phase = phases.find((item) => !occupiedOrders.has(item.order));
+    if (!phase) throw new Error("全部架构阶段均已生成，请重写已有幕或先扩展全书架构");
+    return {
+      phaseId: phase.id,
+      order: phase.order,
+      title: phase.title,
+      purpose: phase.purpose,
+      turningPoint: phase.turningPoint,
+      totalPhases: phases.length,
+    };
+  }
+  let order = 0;
+  while (occupiedOrders.has(order)) order += 1;
+  return { order };
+}
+
+function validateSingleOutlineAct(items: ProposalItem[], expectedOrder?: number) {
+  const analysis = analyzeOutlineProposal(items);
+  if (analysis.issues.length) throw new Error([...new Set(analysis.issues.map((issue) => issue.message))].join("；"));
+  const rootActs = items.filter((item) => item.payload.kind === "act" && !item.payload.parentId);
+  if (rootActs.length !== 1) throw new Error(`单幕候选必须且只能包含 1 个根级幕，当前为 ${rootActs.length} 个`);
+  const order = Number(rootActs[0].payload.order);
+  if (!Number.isInteger(order) || order < 0) throw new Error("单幕候选缺少有效的根级顺序");
+  if (expectedOrder !== undefined && order !== expectedOrder) throw new Error(`单幕候选顺序应为 ${expectedOrder + 1}，实际为 ${order + 1}`);
+  return { analysis, order };
+}
+
+async function generateSingleOutlineAct(params: {
   projectId: string;
   model: string;
   role: NovelAgentRole;
   skillPrompt?: string;
-  architecture: StoryArchitecture;
+  instruction: string;
+  target: OutlineActTarget;
   inventory: string;
   availableReferences: string;
   referenceAliases: string;
   contextPacket: NovelContextPacket;
   allowedTables: ProposalTargetTable[];
+  signal?: AbortSignal;
 }): Promise<{ items: ProposalItem[]; summary: string; promptHash: string; usage: { inputTokens: number; outputTokens: number } }> {
-  const characters = (await novelDb.entities.where("projectId").equals(params.projectId).toArray()).filter((e) => e.kind === "character");
+  const [entities, existingRoots] = await Promise.all([
+    novelDb.entities.where("projectId").equals(params.projectId).toArray(),
+    novelDb.outlineNodes.where("projectId").equals(params.projectId).and((node) => node.kind === "act" && !node.parentId).sortBy("order"),
+  ]);
+  const characters = entities.filter((entity) => entity.kind === "character");
   const characterRoster = characters.length
     ? `\n# 角色名→ID 映射（事件中出现的角色必须使用以下真实 ID，不得张冠李戴）\n${characters.map((c) => `- ${c.name} → id=${c.id}${c.character?.role ? `（${c.character.role}）` : ""}`).join("\n")}`
     : "";
   const formattedContext = formatContextPacket(params.contextPacket);
-  const allItems: ProposalItem[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   const promptHashes: string[] = [];
-  const phaseSummaries: string[] = [];
+  const previousActs = existingRoots.filter((root) => root.order < params.target.order);
+  const previousActBlock = previousActs.length
+    ? `\n# 已采纳前情概要（保持因果连贯）\n${previousActs.map((root) => `第${root.order + 1}幕「${root.title}」：${root.summary || "暂无概要"}`).join("\n")}\n`
+    : "";
+  const phaseTask = params.target.phaseId
+    ? `为第 ${params.target.order + 1} 幕（共 ${params.target.totalPhases} 幕）「${params.target.title}」生成完整的故事大纲子树。\n\n# 本幕信息\n- 目的：${params.target.purpose}\n- 转折：${params.target.turningPoint}`
+    : `生成第 ${params.target.order + 1} 幕的完整故事大纲子树。结合作者要求与现有故事，自行拟定本幕标题、目的和转折。`;
+  const titleRule = params.target.title
+    ? `act 的 title 必须直接使用「${params.target.title}」，不得自行添加"第X幕"前缀或修改编号。`
+    : "act 的 title 应是简洁、具体且能概括本幕变化的故事标题。";
+  const perActPrompt = `# 任务\n${phaseTask}\n\n# 作者要求\n${params.instruction}\n${previousActBlock}${characterRoster}\n\n# 单幕结构要求\n1. 只生成 1 个 act 节点，parentId 留空，order 必须为 ${params.target.order}。${titleRule}\n2. 生成 2-4 个 sequence 节点，parentId 用 ref:act 的 tempId。\n3. 每个 sequence 下生成 2-4 个 event 节点，parentId 用 ref:sequence 的 tempId。\n4. sequence 与 event 的 order 均从 0 开始，同一父节点下不重复。\n5. 事件的 summary 应以散文形式完整交代"缘起→触发→阻碍→直接结果→延后余波"五要素，不使用标签拆段。\n6. 本次结果只用于追加这一幕，不得生成其它幕，也不得更新现有节点。\n\n# 角色引用规则\n- 事件中出现的角色名，其对应 ID 必须出现在 characterIds 中。\n- 不得将一个角色的 ID 用于另一个角色的事件。\n- 角色未在事件中出现时不要填入 characterIds。\n\n# 允许生成的资料表\n${params.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${params.inventory}\n\n# 可引用对象索引\n${params.availableReferences}\n\n# 已采纳引用别名\n${params.referenceAliases}\n\n# 输出要求\npayload 各字段只写故事内容本身，禁止出现"候选""待审核"等审批元信息。创建的对象使用 tempId 互相引用，格式为 ref:tempId。\n\n# 冻结上下文\n${formattedContext}`;
 
-  for (const [phaseIndex, phase] of params.architecture.phases.entries()) {
-    const previousActs = phaseSummaries.length
-      ? `\n# 前情概要（已完成各幕摘要，保持因果连贯）\n${phaseSummaries.map((s, i) => `第${i + 1}幕：${s}`).join("\n")}\n`
-      : "";
-
-    const perActPrompt = `# 任务\n为第 ${phase.order + 1} 幕（共 ${params.architecture.phases.length} 幕）「${phase.title}」生成完整的故事大纲子树：1 个 act + 2-4 个 sequence + 每个 sequence 下 2-4 个 event。\n\n# 本幕信息\n- 目的：${phase.purpose}\n- 转折：${phase.turningPoint}\n${previousActs}${characterRoster}\n\n# 完整大纲结构要求\n1. 生成 1 个 act 节点（本幕），parentId 留空。act 的 title 必须直接使用「${phase.title}」，不得自行添加"第X幕"前缀或修改编号。\n2. 生成 2-4 个 sequence 节点，parentId 用 ref:act 的 tempId。\n3. 每个 sequence 下生成 2-4 个 event 节点，parentId 用 ref:sequence 的 tempId。\n4. order 从 0 开始，同一父节点下不重复。\n5. 事件的 summary 应以散文形式完整交代"缘起→触发→阻碍→直接结果→延后余波"五要素，不使用标签拆段。\n\n# 角色引用规则\n- 事件中出现的角色名，其对应 ID 必须出现在 characterIds 中。\n- 不得将一个角色的 ID 用于另一个角色的事件。\n- 角色未在事件中出现时不要填入 characterIds。\n\n# 允许生成的资料表\n${params.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${params.inventory}\n\n# 可引用对象索引\n${params.availableReferences}\n\n# 已采纳引用别名\n${params.referenceAliases}\n\n# 输出要求\npayload 各字段只写故事内容本身，禁止出现"候选""待审核"等审批元信息。创建的对象使用 tempId 互相引用，格式为 ref:tempId。\n\n# 冻结上下文\n${formattedContext}`;
-
-    let phaseResult = await callStructuredNovelModel<Record<string, unknown>>({
+  let lastErrors = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const phaseResult = await callStructuredNovelModel<Record<string, unknown>>({
       model: params.model,
-      temperature: 0.55,
+      temperature: attempt === 0 ? 0.55 : attempt === 1 ? 0.3 : 0.6,
       role: params.role,
       skillPrompt: params.skillPrompt,
       schema: proposalSchema(params.allowedTables),
-      prompt: perActPrompt,
+      prompt: attempt === 0 ? perActPrompt : `${perActPrompt}\n\n# 第 ${attempt} 次校验失败\n${lastErrors}\n\n请只重新生成当前这一幕，并严格修复上述结构问题。`,
+      signal: params.signal,
+      maxTokens: 8192,
     });
     totalInputTokens += phaseResult.usage.inputTokens;
     totalOutputTokens += phaseResult.usage.outputTokens;
     promptHashes.push(phaseResult.promptHash);
-
-    let phaseItems = namespaceTempIds(parseProposalItems(phaseResult.data), `p${phaseIndex}_`);
+    const phaseItems = namespaceTempIds(parseProposalItems(phaseResult.data), `p${params.target.order}_`);
     normalizeOutlineItems(phaseItems);
-    // 关键修复：每个 phase 的 act order 必须按 phaseIndex 设置，避免合并后所有 act 都在 root 且 order=0 被判为重复
-    const applyActOrder = (items: ProposalItem[]) => {
-      for (const item of items) {
-        if (item.payload.kind === "act") {
-          item.payload = { ...item.payload, order: phaseIndex };
-          item.after = { ...item.payload };
-        }
-      }
-    };
-    applyActOrder(phaseItems);
-
-    // 3 次重试：LLM 在深层级树面前不可靠，单次重试不足以保证完整子树
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const phaseAnalysis = analyzeOutlineProposal(phaseItems);
-      if (phaseAnalysis.issues.length === 0) break;
-      if (attempt === 2) break;
-      const errorFeedback = [...new Set(phaseAnalysis.issues.map((issue) => issue.message))].join("；");
-      phaseResult = await callStructuredNovelModel<Record<string, unknown>>({
-        model: params.model,
-        temperature: attempt === 0 ? 0.3 : 0.6,
-        role: params.role,
-        skillPrompt: params.skillPrompt,
-        schema: proposalSchema(params.allowedTables),
-        prompt: `${perActPrompt}\n\n# 第 ${attempt + 1} 次校验失败\n${errorFeedback}\n\n请重新生成第 ${phase.order + 1} 幕（共 ${params.architecture.phases.length} 幕）的大纲子树，确保：1 个 act（parentId 留空，title 直接使用「${phase.title}」不得加"第X幕"前缀）+ 2-4 个 sequence（parentId=ref:act的tempId）+ 每个 sequence 下 2-4 个 event（parentId=ref:sequence的tempId）。tempId 格式：act_${phaseIndex}、seq_${phaseIndex}_0、evt_${phaseIndex}_0_0 等。`,
-      });
-      totalInputTokens += phaseResult.usage.inputTokens;
-      totalOutputTokens += phaseResult.usage.outputTokens;
-      promptHashes.push(phaseResult.promptHash);
-      phaseItems = namespaceTempIds(parseProposalItems(phaseResult.data), `p${phaseIndex}_`);
-      normalizeOutlineItems(phaseItems);
-      applyActOrder(phaseItems);
+    for (const item of phaseItems) {
+      if (item.payload.kind !== "act") continue;
+      item.payload = { ...item.payload, order: params.target.order };
+      item.after = { ...item.payload };
     }
-
-    const actItem = phaseItems.find((item) => item.payload.kind === "act");
-    if (actItem?.payload.summary) phaseSummaries.push(String(actItem.payload.summary));
-    allItems.push(...phaseItems);
+    try {
+      validateSingleOutlineAct(phaseItems, params.target.order);
+      const actItem = phaseItems.find((item) => item.payload.kind === "act");
+      return {
+        items: phaseItems,
+        summary: String(phaseResult.data.summary || actItem?.payload.summary || `第 ${params.target.order + 1} 幕候选`),
+        promptHash: promptHashes.join("|"),
+        usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+      };
+    } catch (error) {
+      lastErrors = error instanceof Error ? error.message : "单幕结构无效";
+      if (attempt === 2) throw new Error(`AI 返回的单幕结构无效：${lastErrors}`);
+    }
   }
-
-  // 接受部分有效结果：只保留通过结构校验的节点，不因个别幕失败而丢弃整棵大纲
-  const finalAnalysis = analyzeOutlineProposal(allItems, false);
-  const validItems = allItems.filter((item) => {
-    const nodeId = item.tempId?.trim() || item.id;
-    return finalAnalysis.validIds.has(nodeId);
-  });
-  if (validItems.length === 0) {
-    throw new Error(`分段大纲未产出任何有效节点：${[...new Set(finalAnalysis.issues.map((issue) => issue.message))].join("；")}`);
-  }
-  const validActs = validItems.filter((item) => item.payload.kind === "act");
-  const summary = `分段生成 ${params.architecture.phases.length} 幕大纲（成功 ${validActs.length}/${params.architecture.phases.length} 幕，${validItems.length} 节点）：\n${phaseSummaries.map((s, i) => `第${i + 1}幕：${s.slice(0, 100)}`).join("\n")}${finalAnalysis.issues.length ? `\n\n校验提示（已跳过无效节点）：${[...new Set(finalAnalysis.issues.map((issue) => issue.message))].join("；")}` : ""}`;
-  return {
-    items: validItems,
-    summary,
-    promptHash: promptHashes.join("|"),
-    usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
-  };
+  throw new Error("AI 未生成有效的单幕候选");
 }
 
 export async function runGenerationTask(params: {
@@ -649,13 +669,24 @@ export async function runGenerationTask(params: {
   instruction: string;
   targetId?: string;
   targetField?: string;
+  signal?: AbortSignal;
+  requiredPayloadFields?: Partial<Record<ProposalTargetTable, string[]>>;
 }) {
   const task = getGenerationTask(params.taskKey);
   const project = await novelDb.projects.get(params.projectId);
   if (!project) throw new Error("项目不存在");
+  const outlineTarget = params.taskKey === "outline" ? await resolveNextOutlineActTarget(params.projectId) : undefined;
   const skills = await resolveNovelSkills({ projectId: params.projectId, stage: task.skillStage });
   if (skills.conflicts.length) throw new Error(`Skill 冲突：${skills.conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")}`);
-  const packet = await compileNovelContext({ projectId: params.projectId, task: params.taskKey, instruction: params.instruction, targetDocumentId: params.targetId, stage: task.skillStage, resolvedSkills: skills.skills });
+  const packet = await compileNovelContext({
+    projectId: params.projectId,
+    task: params.taskKey,
+    instruction: params.instruction,
+    targetDocumentId: params.targetId,
+    stage: task.skillStage,
+    resolvedSkills: skills.skills,
+    consumer: params.taskKey === "outline" ? { role: task.role } : undefined,
+  });
   const inventory = await existingInventory(params.projectId, task.allowedTables);
   const availableReferences = await referenceInventory(params.projectId);
   const acceptedRefs = await acceptedProjectReferences(params.projectId);
@@ -663,18 +694,7 @@ export async function runGenerationTask(params: {
 
   let effectiveInstruction = params.instruction;
   let sectionContextBlock = "";
-  if (params.taskKey === "outline") {
-    effectiveInstruction = `${params.instruction || task.defaultInstruction}\n\n请输出一棵完整、可独立替换当前内容的故事大纲树。`;
-    const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
-    const architectureBlock = architecture?.phases?.length
-      ? `\n# 已批准架构阶段\n大纲必须有 ${architecture.phases.length} 个幕（kind=act），每个幕对应一个架构阶段。每幕至少包含 1 个序列，每个序列至少包含 2 个事件。不得省略任何阶段。\n${architecture.phases.map((p) => `- 第${p.order + 1}幕「${p.title}」：${p.purpose}；本幕转折：${p.turningPoint}`).join("\n")}\n`
-      : "";
-    const characters = (await novelDb.entities.where("projectId").equals(params.projectId).toArray()).filter((e) => e.kind === "character");
-    const characterRoster = characters.length
-      ? `\n# 角色名→ID 映射（事件中出现的角色必须使用以下真实 ID，不得张冠李戴）\n${characters.map((c) => `- ${c.name} → id=${c.id}${c.character?.role ? `（${c.character.role}）` : ""}`).join("\n")}\n`
-      : "";
-    sectionContextBlock = `\n# 完整大纲结构要求\n1. 所有候选项必须是 outlineNodes 的 create 操作，不得更新现有节点。\n2. 每个节点提供唯一 tempId。\n3. 幕(kind=act)必须位于根级，不填写 parentId。\n4. 序列(kind=sequence)必须使用 parentId=ref:幕的tempId。\n5. 事件(kind=event)必须使用 parentId=ref:序列的tempId。\n6. 同一父节点下的 order 从 0 开始且不得重复。\n7. 每一幕至少包含一个序列，每个序列至少包含一个事件。\n8. 用户采纳后会整体替换现有大纲，不得把本次结果设计成追加片段。\n${architectureBlock}${characterRoster}\n# 角色引用规则\n- 事件的 summary 或 title 中出现的角色名，其对应 ID 必须出现在该事件的 characterIds 中。\n- 不得将一个角色的 ID 用于另一个角色的事件（如不得将"剑心"的 ID 用于"沈青衫"的事件）。\n- 角色未在事件中出现时不要填入 characterIds。\n`;
-  }
+  if (params.taskKey === "outline" && outlineTarget) effectiveInstruction = `${params.instruction || task.defaultInstruction}\n\n本次只生成第 ${outlineTarget.order + 1} 幕，审核采纳后追加到现有大纲。`;
   if (params.taskKey === "outline-section-update" && params.targetId) {
     const allNodes = await novelDb.outlineNodes.where("projectId").equals(params.projectId).toArray();
     const target = allNodes.find((item) => item.id === params.targetId);
@@ -710,74 +730,32 @@ export async function runGenerationTask(params: {
     const basePrompt = `# 任务\n${effectiveInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段（title、summary、description、rationale 等）只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等审批元信息，这些状态由系统管理。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有角色、剧情线和伏笔时，只能复制“可引用对象索引”中的真实 ID，不得把名称、英文别名或规则名当成 ID；没有可用对象时对应数组必须为空。也可使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
     let result: { data: Record<string, unknown>; usage: { inputTokens: number; outputTokens: number }; promptHash: string };
     let items: ProposalItem[];
-    if (params.taskKey === "outline") {
-      const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
-      const runFallbackOutline = async (): Promise<{ result: typeof result; items: ProposalItem[] }> => {
-        const fallbackResult = await callStructuredNovelModel<Record<string, unknown>>({
-          model: project.settings.textModel,
-          temperature: 0.55,
-          role: task.role,
-          skillPrompt,
-          schema: proposalSchema(task.allowedTables),
-          prompt: basePrompt,
-        });
-        let fallbackItems = parseProposalItems(fallbackResult.data);
-        let lastResult = fallbackResult;
-        for (let outlineAttempt = 0; outlineAttempt < 2; outlineAttempt += 1) {
-          normalizeOutlineItems(fallbackItems);
-          const analysis = analyzeOutlineProposal(fallbackItems);
-          if (analysis.issues.length === 0) break;
-          if (outlineAttempt === 1) {
-            throw new Error(`AI 返回的大纲结构无效：${[...new Set(analysis.issues.map((issue) => issue.message))].join("；")}`);
-          }
-          const errorFeedback = [...new Set(analysis.issues.map((issue) => issue.message))].join("；");
-          lastResult = await callStructuredNovelModel<Record<string, unknown>>({
-            model: project.settings.textModel,
-            temperature: 0.3,
-            role: task.role,
-            skillPrompt,
-            schema: proposalSchema(task.allowedTables),
-            prompt: `${basePrompt}\n\n# 上次输出校验失败\n${errorFeedback}\n\n请重新生成完整大纲树，确保：每幕（kind=act）下至少有 1 个序列（kind=sequence），每个序列下至少有 1 个事件（kind=event）。序列的 parentId 用 ref:幕的tempId，事件的 parentId 用 ref:序列的tempId。`,
-          });
-          fallbackItems = parseProposalItems(lastResult.data);
-        }
-        return { result: lastResult, items: fallbackItems };
-      };
-      if (architecture?.phases?.length) {
-        try {
-          const segmented = await generateOutlineByPhases({
-            projectId: params.projectId,
-            model: project.settings.textModel,
-            role: task.role,
-            skillPrompt,
-            architecture,
-            inventory,
-            availableReferences,
-            referenceAliases,
-            contextPacket: packet,
-            allowedTables: task.allowedTables,
-          });
-          items = segmented.items;
-          result = { data: { summary: segmented.summary }, usage: segmented.usage, promptHash: segmented.promptHash };
-        } catch (segmentedError) {
-          // 分段生成失败时回退到单次 LLM 调用，避免整个大纲任务因单幕失败而无法生成
-          const fallback = await runFallbackOutline();
-          result = fallback.result;
-          items = fallback.items;
-        }
-      } else {
-        const fallback = await runFallbackOutline();
-        result = fallback.result;
-        items = fallback.items;
-      }
+    if (params.taskKey === "outline" && outlineTarget) {
+      const generatedAct = await generateSingleOutlineAct({
+        projectId: params.projectId,
+        model: project.settings.textModel,
+        role: task.role,
+        skillPrompt,
+        instruction: effectiveInstruction,
+        target: outlineTarget,
+        inventory,
+        availableReferences,
+        referenceAliases,
+        contextPacket: packet,
+        allowedTables: task.allowedTables,
+        signal: params.signal,
+      });
+      items = generatedAct.items;
+      result = { data: { summary: generatedAct.summary }, usage: generatedAct.usage, promptHash: generatedAct.promptHash };
     } else {
       result = await callStructuredNovelModel<Record<string, unknown>>({
         model: project.settings.textModel,
         temperature: task.role === "writer" ? project.settings.temperature : 0.55,
         role: task.role,
         skillPrompt,
-        schema: proposalSchema(task.allowedTables),
+        schema: proposalSchema(task.allowedTables, params.requiredPayloadFields),
         prompt: basePrompt,
+        signal: params.signal,
         // Loop 7 修复 #11：角色生成需输出 5 个角色完整字段（appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state），180s 默认超时不足
         timeoutMs: params.taskKey === "characters" ? 300_000 : undefined,
       });
@@ -899,6 +877,9 @@ export async function runGenerationTask(params: {
       contextPacketId: packet.id,
       agentRunId: agent.id,
       model: project.settings.textModel,
+      outlineGenerationMode: params.taskKey === "outline" ? "act-append" : undefined,
+      architecturePhaseId: outlineTarget?.phaseId,
+      architecturePhaseOrder: outlineTarget?.order,
     };
     agent.status = "completed";
     agent.finishedAt = Date.now();
@@ -996,7 +977,6 @@ export async function runRefinementTask(params: {
   const snapshot = await buildRefinementSnapshot(params);
   const sourceJson = JSON.stringify(snapshot, null, 2);
   if (!Object.keys(snapshot).length) throw new Error("当前板块还没有可微调的原数据");
-  if (estimateTokens(sourceJson) > Math.floor(project.settings.contextBudget * 0.7)) throw new Error("当前板块数据超过上下文预算，无法完整发送。请缩小微调范围，或使用大纲节点的子树/字段改写。");
   const sourceFingerprint = await fingerprintRefinementSnapshot(snapshot);
   const skills = await resolveNovelSkills({ projectId: params.projectId, stage: task.skillStage });
   if (skills.conflicts.length) throw new Error(`Skill 冲突：${skills.conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")}`);
@@ -1145,6 +1125,7 @@ function sanitizeModelPayload(table: ProposalTargetTable, payload: Record<string
   const sanitized = sanitizePayload(payload);
   // 剥离 LLM 在内容字段里添加的"候选/待审核"等审批元信息（状态应由系统管理）
   sanitizeApprovalMetaInPlace(sanitized);
+  if (table === "architectures") return normalizeArchitecturePayload(sanitized);
   if (table !== "documents" || !sanitized.blueprint || typeof sanitized.blueprint !== "object" || Array.isArray(sanitized.blueprint)) return sanitized;
   const blueprint = { ...sanitized.blueprint as Record<string, unknown> };
   delete blueprint.targetWords;
@@ -1164,7 +1145,7 @@ function normalizeDocumentPayload(payload: Record<string, unknown>) {
 
 export function normalizedCreate(table: ProposalTargetTable, projectId: string, id: string, payload: Record<string, unknown>) {
   const base = { ...recordBase(projectId), id };
-  if (table === "architectures") return { ...base, framework: "free", status: "draft", centralQuestion: "", centralConflict: "", synopsis: "", phases: [], ...payload };
+  if (table === "architectures") return normalizeArchitecturePayload({ ...base, framework: "free", status: "draft", centralQuestion: "", centralConflict: "", synopsis: "", phases: [], ...payload });
   if (table === "outlineNodes") return { ...base, parentId: undefined, kind: "event", title: "未命名事件", summary: "", order: 0, status: "idea", characterIds: [], plotThreadIds: [], foreshadowingIds: [], tags: [], ...payload };
   if (table === "documents") {
     const { blueprint, ...rest } = payload;
@@ -1343,7 +1324,15 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
   if (initialProposal.sourceFingerprint && options?.sourceFingerprint && initialProposal.sourceFingerprint !== options.sourceFingerprint) throw new Error("原数据已在微调后发生变化，请退回候选并重新微调");
   const initialSelected = initialProposal.items.filter((item) => selectedItemIds.includes(item.id) && (item.operation !== "update" || options?.selectedFields?.[item.id] === undefined || options.selectedFields[item.id].length > 0));
   if (!initialSelected.length) throw new Error("请至少选择一个候选项");
-  const fullOutlineReplacement = initialProposal.taskKey === "outline";
+  const appendSingleOutlineAct = initialProposal.taskKey === "outline" && initialProposal.outlineGenerationMode === "act-append";
+  const fullOutlineReplacement = initialProposal.taskKey === "outline" && !appendSingleOutlineAct;
+  if (appendSingleOutlineAct) {
+    try {
+      validateSingleOutlineAct(initialSelected, initialProposal.architecturePhaseOrder);
+    } catch (error) {
+      throw new Error(`单幕候选无法采纳：${error instanceof Error ? error.message : "结构无效"}`);
+    }
+  }
   if (fullOutlineReplacement) {
     const analysis = analyzeOutlineProposal(initialSelected);
     if (analysis.issues.length) throw new Error(`候选大纲无法采纳：${[...new Set(analysis.issues.map((issue) => issue.message))].join("；")}`);
@@ -1366,7 +1355,11 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     const proposal = await novelDb.proposals.get(proposalId);
     if (!proposal || proposal.status !== "pending") throw new Error("提案已由其他操作处理");
     const selected = proposal.items.filter((item) => selectedItemIds.includes(item.id) && (item.operation !== "update" || options?.selectedFields?.[item.id] === undefined || options.selectedFields[item.id].length > 0));
-    if (proposal.taskKey === "outline") {
+    if (proposal.taskKey === "outline" && proposal.outlineGenerationMode === "act-append") {
+      const { order } = validateSingleOutlineAct(selected, proposal.architecturePhaseOrder);
+      const occupied = await novelDb.outlineNodes.where("projectId").equals(proposal.projectId).and((node) => node.kind === "act" && !node.parentId && node.order === order).first();
+      if (occupied) throw new Error(`第 ${order + 1} 幕已存在，请退回候选后重写该幕或生成下一幕`);
+    } else if (proposal.taskKey === "outline") {
       const analysis = analyzeOutlineProposal(selected);
       if (analysis.issues.length) throw new Error(`候选大纲无法采纳：${[...new Set(analysis.issues.map((issue) => issue.message))].join("；")}`);
     }
@@ -1397,11 +1390,11 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
       const filtered = acceptedFields ? Object.fromEntries(Object.entries(resolved).filter(([key]) => acceptedFields.includes(key))) : resolved;
       const validate = item.operation === "create" ? CREATE_PAYLOAD_VALIDATORS[item.targetTable] : PAYLOAD_VALIDATORS[item.targetTable];
       if (!validate(filtered)) throw new Error(`“${item.label}”字段无效：${validate.errors?.map((error) => `${error.instancePath || "root"} ${error.message}`).join("；")}`);
-      const payload = item.targetTable === "documents" ? normalizeDocumentPayload(filtered) : filtered;
+      const payload = item.targetTable === "documents" ? normalizeDocumentPayload(filtered) : item.targetTable === "architectures" ? normalizeArchitecturePayload(filtered) : filtered;
       assertResolvedPayloadReferences(item, payload, catalog);
       preparedPayloads.set(item.id, payload);
     }
-    if (proposal.taskKey === "outline" && conflicts.length === 0) {
+    if (proposal.taskKey === "outline" && proposal.outlineGenerationMode !== "act-append" && conflicts.length === 0) {
       const oldNodes = await novelDb.outlineNodes.where("projectId").equals(proposal.projectId).toArray();
       const removedIds = new Set(oldNodes.map((node) => node.id));
       if (oldNodes.length) {

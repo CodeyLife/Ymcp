@@ -57,6 +57,10 @@ describe("prose aesthetics skills", () => {
 
     expect(compiled).toContain("普通叙事段落默认包含 2 至 5 句");
     expect(compiled).toContain("单句叙事段不得连续出现 3 个");
+    expect(compiled).toContain("人物欲望、选择与代价");
+    expect(compiled).toContain("蓝图是因果材料，不是逐项扩写清单");
+    expect(compiled).toContain("信息发现只有迫使新选择时才算推进");
+    expect(compiled).toContain("不再补写解释性心理总结");
     expect(compiled).toContain("禁止输出 Markdown 标题、代码围栏或水平分隔线");
     expect(compiled.match(/留白/g)).toHaveLength(1);
     expect(compiled).not.toMatch(/冬日荒地|模型遇到人|走进城门的老人|信任加入模型/);

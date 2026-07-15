@@ -10,7 +10,7 @@ vi.mock("../ai", () => ({
 }));
 
 import { callStructuredNovelModel, streamNovelModel } from "../ai";
-import { addEntity, createChapter, createNovelProject, novelDb, recordBase, saveApprovedDocumentRevision, updateProject } from "../db";
+import { addEntity, createChapter, createNovelProject, novelDb, recordBase, saveApprovedDocumentRevision } from "../db";
 import type { NovelContextPacket, QualityIssue, QualityReport, WorkflowArtifact, WorkflowRun } from "../types";
 import { advanceChapterWorkflow } from "../workflow";
 import { collectRevisionParagraphs, findIssueParagraph, isRevisionRefusal } from "../workflow-stages/revision-stage";
@@ -28,7 +28,7 @@ function artifact(run: WorkflowRun, input: Pick<WorkflowArtifact, "id" | "stage"
 }
 
 function packet(projectId: string): NovelContextPacket {
-  return { ...recordBase(projectId), task: "chapter-draft", instruction: "继续写作", sources: [], tokenBudget: 1000, estimatedTokens: 0, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
+  return { ...recordBase(projectId), task: "chapter-draft", instruction: "继续写作", sources: [], estimatedTokens: 0, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
 }
 
 describe("chapter workflow regressions", () => {
@@ -154,7 +154,7 @@ describe("chapter workflow regressions", () => {
     expect(await novelDb.snapshots.where("projectId").equals(project.id).count()).toBe(1);
   });
 
-  it("waits for author fact approval when automatic commits are disabled", async () => {
+  it("waits for author fact approval for high-risk changes", async () => {
     const project = await createNovelProject({ title: "事实审批", genre: ["都市"], premise: "事实必须先确认。" });
     const document = await createChapter(project.id, "第一章");
     const approved = await saveApprovedDocumentRevision({ ...document, plainText: "陆沉抵达北港。", contentHtml: "<p>陆沉抵达北港。</p>", wordCount: 7, status: "review" }, "批准正文", "ai");
@@ -162,7 +162,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "fact-extraction", stageIndex: 8, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-facts", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft-facts", stage: "draft", kind: "draft", title: "正文", contentMarkdown: "陆沉抵达北港。" });
     vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
-      data: { summary: "角色抵达北港", facts: [{ targetTable: "entities", targetId: "character-1", field: "character.state.location", after: "北港", evidence: "陆沉抵达北港。", confidence: 0.98, novelty: "update", conflict: false }] },
+      data: { summary: "角色承认身份", facts: [{ targetTable: "entities", targetId: "character-1", field: "character.secret", after: "继承人", evidence: "陆沉承认自己是继承人。", confidence: 0.98, novelty: "update", conflict: false }] },
       usage: { inputTokens: 1, outputTokens: 1 },
       promptHash: "fact-approval",
     });
@@ -173,12 +173,11 @@ describe("chapter workflow regressions", () => {
     const waiting = await advanceChapterWorkflow(run.id);
 
     expect(waiting).toMatchObject({ status: "waiting-approval", currentStage: "fact-approval" });
-    expect(await novelDb.factCandidates.where("workflowRunId").equals(run.id).first()).toMatchObject({ status: "pending", risk: "safe", sourceRevisionId: approved.revision.id });
+    expect(await novelDb.factCandidates.where("workflowRunId").equals(run.id).first()).toMatchObject({ status: "pending", risk: "high", sourceRevisionId: approved.revision.id });
   });
 
   it("auto-accepts only safe state changes and keeps high-risk facts for review", async () => {
     const project = await createNovelProject({ title: "风险审批", genre: ["悬疑"], premise: "安全状态可以自动提交。" });
-    await updateProject(project.id, { settings: { ...project.settings, autoCommitFacts: true } });
     const document = await createChapter(project.id, "第一章");
     const context = packet(project.id);
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "fact-extraction", stageIndex: 8, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-risk", factCandidateIds: [], startedAt: Date.now() };
@@ -205,7 +204,6 @@ describe("chapter workflow regressions", () => {
 
   it("creates a revision-bound chapter memory when all extracted facts are safely committed", async () => {
     const project = await createNovelProject({ title: "章节记忆", genre: ["都市"], premise: "已批准章节形成叶级记忆。" });
-    await updateProject(project.id, { settings: { ...project.settings, autoCommitFacts: true } });
     const character = await addEntity(project.id, "character", "陆沉");
     const document = await createChapter(project.id, "第一章");
     const approved = await saveApprovedDocumentRevision({ ...document, plainText: "陆沉抵达北港。", contentHtml: "<p>陆沉抵达北港。</p>", wordCount: 7, status: "review" }, "批准正文", "ai");

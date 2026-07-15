@@ -49,8 +49,6 @@ export interface StoryProject extends Omit<VersionedRecord, "projectId"> {
   settings: {
     textModel: string;
     temperature: number;
-    autoCommitFacts: boolean;
-    contextBudget: number;
     recentChapterCount: number;
     encrypted: boolean;
     contentProfile: "general-serial" | "progression" | "emotional";
@@ -271,7 +269,7 @@ export interface StorySnapshot extends VersionedRecord {
 
 export interface ContextSource {
   id: string;
-  kind: "instruction" | "architecture" | "document" | "entity" | "relation" | "outline" | "scene" | "thread" | "foreshadowing" | "snapshot" | "style" | "skill" | "taste" | "fact" | "knowledge" | "memory";
+  kind: "instruction" | "architecture" | "document" | "entity" | "relation" | "outline" | "scene" | "thread" | "foreshadowing" | "snapshot" | "style" | "skill" | "taste" | "fact" | "knowledge" | "memory" | "conversation-memory" | "creative-brief";
   title: string;
   content: string;
   weight: number;
@@ -284,6 +282,18 @@ export interface ContextSource {
   layer: "mandatory" | "working" | "continuity" | "retrieval" | "background";
   visibilityReason: string;
   skillId?: string;
+  authority?: "author" | "approved" | "derived" | "working";
+  sourceRevisionId?: string;
+  narrativeOrder?: number;
+  evidenceRefs?: string[];
+  retrieval?: {
+    runId: string;
+    round: number;
+    lexicalRank?: number;
+    vectorRank?: number;
+    entityRank?: number;
+    fusedScore: number;
+  };
 }
 
 export interface NovelContextPacket extends VersionedRecord {
@@ -291,15 +301,132 @@ export interface NovelContextPacket extends VersionedRecord {
   instruction: string;
   targetId?: string;
   sources: ContextSource[];
-  tokenBudget: number;
   estimatedTokens: number;
   omittedSourceIds: string[];
   skillRefs: Array<{ id: string; version: string; name: string; source: NovelSkillSource }>;
   compiledAt: number;
   informationView?: { mode: "author" | "reader" | "character"; targetDocumentId?: string; targetNarrativeOrder?: number; characterId?: string };
-  layerBudgets?: Record<ContextSource["layer"], number>;
   layerUsage?: Record<ContextSource["layer"], number>;
   omissions?: Array<{ sourceId: string; title: string; layer: ContextSource["layer"]; estimatedTokens: number; reason: string }>;
+  threadId?: string;
+  creativeBriefId?: string;
+  retrievalRunId?: string;
+  factCutoffOrder?: number;
+  consumer?: { workflowRunId?: string; stage?: WorkflowStage; role?: NovelAgentRole; messageId?: string };
+}
+
+export type NovelConversationTaskKey = "chapter-workflow";
+
+export interface NovelConversationThread extends VersionedRecord {
+  taskKey: NovelConversationTaskKey;
+  targetId: string;
+  title: string;
+  summary: string;
+  status: "active" | "archived";
+  pinnedSourceIds: string[];
+  excludedSourceIds: string[];
+  lastMessageAt: number;
+}
+
+export interface NovelConversationMessage extends VersionedRecord {
+  threadId: string;
+  role: "user" | "assistant";
+  content: string;
+  retrievalRunId?: string;
+  sourceIds: string[];
+}
+
+export type ConversationMemoryKind = "preference" | "decision" | "constraint" | "open-question";
+
+export interface ConversationMemory extends VersionedRecord {
+  threadId?: string;
+  targetId?: string;
+  scope: "project" | "task" | "target";
+  scopeKey: string;
+  kind: ConversationMemoryKind;
+  title: string;
+  content: string;
+  status: "active" | "pending" | "superseded" | "rejected";
+  confidence: number;
+  sourceMessageIds: string[];
+  evidenceQuotes: string[];
+  extractorVersion: string;
+  supersedesId?: string;
+  autoApplied: boolean;
+  revokedAt?: number;
+}
+
+export interface CreativeBrief extends VersionedRecord {
+  threadId: string;
+  targetDocumentId: string;
+  status: "draft" | "confirmed" | "superseded";
+  goal: string;
+  povCharacterId?: string;
+  factCutoffOrder?: number;
+  tone: string;
+  languageRequirements: string[];
+  mustHappen: string[];
+  forbidden: string[];
+  targetWords: number;
+  referencedMemoryIds: string[];
+  openQuestions: string[];
+  sourceMessageIds: string[];
+  confirmedAt?: number;
+}
+
+export interface NovelRetrievalHit {
+  sourceId: string;
+  kind: ContextSource["kind"];
+  title: string;
+  content: string;
+  reason: string;
+  authority: NonNullable<ContextSource["authority"]>;
+  narrativeOrder?: number;
+  evidenceRefs: string[];
+  lexicalRank?: number;
+  vectorRank?: number;
+  entityRank?: number;
+  fusedScore: number;
+  round: number;
+}
+
+export interface NovelRetrievalRound {
+  index: number;
+  query: string;
+  hitIds: string[];
+  selectedIds: string[];
+  enoughEvidence: boolean;
+}
+
+export interface NovelRetrievalRun extends VersionedRecord {
+  threadId: string;
+  messageId?: string;
+  targetDocumentId: string;
+  informationView: "author" | "reader" | "character";
+  purpose: "conversation" | "workflow-stage";
+  factCutoffOrder?: number;
+  consumer?: { workflowRunId?: string; stage?: WorkflowStage; role?: NovelAgentRole };
+  queries: string[];
+  rounds: NovelRetrievalRound[];
+  hits: NovelRetrievalHit[];
+  selectedSourceIds: string[];
+  pinnedSourceIds: string[];
+  excludedSourceIds: string[];
+  status: "running" | "completed" | "failed";
+  error?: string;
+}
+
+export interface NovelMemoryJob extends VersionedRecord {
+  jobType: "embedding" | "memory-extraction" | "memory-invalidation" | "memory-consolidation";
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+  status: "pending" | "running" | "completed" | "failed";
+  attempts: number;
+  lastError?: string;
+  availableAt: number;
+  completedAt?: number;
+  leaseOwner?: string;
+  leaseExpiresAt?: number;
 }
 
 export interface ProposalPatch {
@@ -379,6 +506,9 @@ export interface AIProposal extends VersionedRecord {
   artifactId?: string;
   generationMode?: "generate" | "refine";
   sourceFingerprint?: string;
+  outlineGenerationMode?: "full-replace" | "act-append";
+  architecturePhaseId?: string;
+  architecturePhaseOrder?: number;
 }
 
 export type RefinementSnapshotInput = Partial<Record<ProposalTargetTable, Array<Record<string, unknown>>>>;
@@ -421,7 +551,7 @@ export interface AgentRun extends VersionedRecord {
 export type NovelSkillSource = "builtin" | "user" | "project";
 export type NovelSkillCategory = "ideation" | "character-world" | "long-plan" | "chapter" | "drafting" | "serial" | "review" | "memory";
 export type NovelSkillStage = "foundation" | "planning" | "drafting" | "review" | "revision" | "fact-extraction" | "character-enrichment";
-export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "pacing-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher";
+export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "pacing-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher" | "conversation-assistant" | "memory-curator";
 
 export interface NovelSkillManifest extends VersionedRecord {
   skillId: string;
@@ -476,6 +606,8 @@ export interface WorkflowRun extends VersionedRecord {
   revisionIteration: number;
   previousScore?: number;
   contextPacketId?: string;
+  conversationThreadId?: string;
+  creativeBriefId?: string;
   blueprintArtifactId?: string;
   draftArtifactId?: string;
   qualityReportId?: string;
@@ -711,7 +843,7 @@ export interface SyncConflict extends VersionedRecord {
  * 通过 contentHash 判断内容是否变化，决定是否需要重新生成向量。
  */
 export interface NovelEmbedding extends VersionedRecord {
-  targetTable: "entities" | "outlineNodes" | "documents" | "scenes" | "plotThreads" | "foreshadowing";
+  targetTable: "entities" | "outlineNodes" | "documents" | "scenes" | "plotThreads" | "foreshadowing" | "factAssertions" | "derivedMemories" | "conversationMemories";
   targetId: string;
   model: string;
   dimension: number;

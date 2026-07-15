@@ -161,7 +161,7 @@ describe("fact approval policy", () => {
     expect(classifyFactRisk({ targetTable: "entities", field: "record", after: { name: "新角色" }, evidence: "有人出现。", confidence: 0.99, novelty: "new", conflict: false })).toMatchObject({ risk: "high" });
   });
 
-  it("auto-accepts safe updates only when the project policy is enabled", async () => {
+  it("auto-accepts safe updates while leaving high-risk facts pending", async () => {
     const { project, charA } = await seedProjectWithCharacters();
     const candidates = await storeFactCandidates({
       projectId: project.id,
@@ -173,10 +173,7 @@ describe("fact approval policy", () => {
       ],
     });
 
-    expect(await autoAcceptSafeFactCandidates(candidates, false)).toEqual([]);
-    expect(await novelDb.factCandidates.where("workflowRunId").equals("run-policy").and((item) => item.status === "pending").count()).toBe(2);
-
-    expect(await autoAcceptSafeFactCandidates(candidates, true)).toEqual([candidates[0].id]);
+    expect(await autoAcceptSafeFactCandidates(candidates)).toEqual([candidates[0].id]);
     expect(await novelDb.factCandidates.get(candidates[0].id)).toMatchObject({ status: "accepted", decisionSource: "auto-policy" });
     expect(await novelDb.factCandidates.get(candidates[1].id)).toMatchObject({ status: "pending", risk: "high" });
   });
@@ -236,7 +233,7 @@ describe("bulkSetFactCandidateStatus - 一键操作", () => {
         { targetTable: "entities", targetId: charA.id, field: "character.state.location", after: "北港", evidence: "陆沉抵达北港。", confidence: 0.97, novelty: "update", conflict: false },
       ],
     });
-    await autoAcceptSafeFactCandidates(candidates, true);
+    await autoAcceptSafeFactCandidates(candidates);
     const accepted = await novelDb.factCandidates.get(candidates[0].id);
     expect(accepted?.status).toBe("accepted");
     const changed = await bulkSetFactCandidateStatus([candidates[0].id], "accepted");

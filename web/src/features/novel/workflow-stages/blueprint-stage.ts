@@ -27,7 +27,7 @@ export const blueprintStageHandler: StageHandler = {
       role: "architect",
       skillPrompt: formatSkillPrompt(skills.skills),
       schema: blueprintSchema,
-      prompt: `为“${document.title}”生成章节蓝图。章节目标字数由系统设置为 ${document.blueprint.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，你只需按该篇幅规划，不要生成字数。\n\n当前章节要求：${document.blueprint.objective || "尚未规划，请结合全书架构与故事大纲设计"}\n故事大纲的每个节点 summary 已包含'原因→触发→阻碍→直接结果→延迟后果'的叙事节拍，请在生成蓝图时从中提取：阻碍→conflict（章节冲突），直接结果→turningPoint（价值转折点），延迟后果→mustHappen（本章需落实的节拍）。\n${feedback ? `\n用户退回意见：${feedback.contentMarkdown}` : ""}\n\n冻结上下文：\n${formatContextPacket(packet)}`,
+      prompt: `为“${document.title}”生成章节蓝图。章节目标字数由系统设置为 ${document.blueprint.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，你只需按该篇幅规划，不要生成字数。\n\n当前章节要求：${document.blueprint.objective || "尚未规划，请结合全书架构与故事大纲设计"}\n故事大纲的每个节点 summary 已包含'原因→触发→阻碍→直接结果→延迟后果'的叙事节拍，请在生成蓝图时从中提取：阻碍→conflict（章节冲突），直接结果→turningPoint（价值转折点），延迟后果→mustHappen（本章需落实的节拍）。\n\n蓝图质量门槛：上一节拍的 outcome 必须触发下一节拍的 action；至少一次由视角人物主动选择造成可见代价；每次信息释放都要改变人物选择；对手或阻力方必须保留自己的目标并作出反制。不要把若干气氛场面或线索发现并列成任务清单。\n${feedback ? `\n用户退回意见：${feedback.contentMarkdown}` : ""}\n\n冻结上下文：\n${formatContextPacket(packet)}`,
     });
     const targetWords = document.blueprint.targetWords || DEFAULT_CHAPTER_TARGET_WORDS;
     const structuredData = { ...result.data, targetWords };

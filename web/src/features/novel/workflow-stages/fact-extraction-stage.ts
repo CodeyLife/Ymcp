@@ -3,6 +3,7 @@ import { formatContextPacket } from "../context";
 import { novelDb } from "../db";
 import { autoAcceptSafeFactCandidates, dedupeCharacterFactCandidates, storeFactCandidates, type ExtractedFact } from "../facts";
 import { formatSkillPrompt, resolveNovelSkills } from "../skills";
+import { novelMemoryService } from "../memory-service";
 import { factSchema } from "../workflow-shared";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
@@ -12,7 +13,9 @@ export const factExtractionStageHandler: StageHandler = {
     const { run, project } = ctx;
     const [draft, packet, skills] = await Promise.all([
       novelDb.workflowArtifacts.get(run.draftArtifactId!),
-      novelDb.contextPackets.get(run.contextPacketId!),
+      run.conversationThreadId
+        ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "fact-extraction", role: "fact-extractor", instruction: "从本次已批准正文提取事实差异", workflowRunId: run.id, skillStage: "fact-extraction" })
+        : novelDb.contextPackets.get(run.contextPacketId!),
       resolveNovelSkills({ projectId: run.projectId, stage: "fact-extraction", explicitSkillIds: ["fact-delta-extraction"] }),
     ]);
     if (!draft || !packet) throw new Error("事实提取输入不完整");
@@ -53,7 +56,7 @@ ${formatContextPacket(packet)}`,
       defaultRevealedAt: { chapterId: ctx.document.id, narrativeOrder: ctx.document.order, precision: "exact" },
       facts: dedupedFacts,
     });
-    const autoAcceptedIds = await autoAcceptSafeFactCandidates(facts, project.settings.autoCommitFacts);
+    const autoAcceptedIds = await autoAcceptSafeFactCandidates(facts);
     const pendingCount = facts.length - autoAcceptedIds.length;
     const artifact = await ctx.saveArtifact(run, {
       projectId: run.projectId,

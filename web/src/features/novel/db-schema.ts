@@ -2,7 +2,7 @@
 import type { Transaction } from "dexie";
 import { buildProjectReferenceCatalogs, emptyReferenceCatalog, sanitizeProposalReferencesInPlace, sanitizeReferenceRecordInPlace } from "./reference-integrity";
 
-export const DB_VERSION = 14;
+export const DB_VERSION = 16;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
@@ -89,6 +89,38 @@ export const V13_STORES: Record<string, string | null> = {
 export const V14_STORES: Record<string, string | null> = {
   ...V13_STORES,
 };
+
+export const V15_STORES: Record<string, string | null> = {
+  ...V14_STORES,
+  conversationThreads: "id, projectId, taskKey, targetId, status, lastMessageAt, [projectId+taskKey], [projectId+targetId]",
+  conversationMessages: "id, projectId, threadId, role, createdAt, [threadId+createdAt]",
+  conversationMemories: "id, projectId, threadId, targetId, scope, scopeKey, kind, status, updatedAt, [projectId+status], [projectId+scopeKey]",
+  creativeBriefs: "id, projectId, threadId, targetDocumentId, status, updatedAt, [threadId+status], [projectId+targetDocumentId]",
+  retrievalRuns: "id, projectId, threadId, messageId, targetDocumentId, status, createdAt, [threadId+createdAt]",
+  memoryJobs: "id, projectId, jobType, idempotencyKey, status, availableAt, [projectId+status], [status+availableAt]",
+};
+
+export const V16_STORES: Record<string, string | null> = {
+  ...V15_STORES,
+};
+
+export async function migrateNovelMemoryReliability(transaction: Transaction) {
+  await transaction.table("conversationMemories").toCollection().modify((memory: Record<string, unknown>) => {
+    if (!Array.isArray(memory.evidenceQuotes)) memory.evidenceQuotes = [];
+    if (typeof memory.extractorVersion !== "string") memory.extractorVersion = "legacy-unverified";
+  });
+  await transaction.table("retrievalRuns").toCollection().modify((run: Record<string, unknown>) => {
+    if (run.purpose !== "conversation" && run.purpose !== "workflow-stage") run.purpose = run.messageId ? "conversation" : "workflow-stage";
+  });
+  await transaction.table("memoryJobs").toCollection().modify((job: Record<string, unknown>) => {
+    if (job.status === "running") {
+      job.status = "pending";
+      job.availableAt = Date.now();
+      delete job.leaseOwner;
+      delete job.leaseExpiresAt;
+    }
+  });
+}
 
 /**
  * 审批元信息污染模式：LLM 在内容字段里添加的"候选/待审核"等状态标记。

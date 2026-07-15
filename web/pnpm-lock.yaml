@@ -29,6 +29,9 @@ importers:
       axios:
         specifier: ^1.7.9
         version: 1.18.1
+      minisearch:
+        specifier: ^7.2.0
+        version: 7.2.0
       motion:
         specifier: ^12.42.0
         version: 12.42.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1025,6 +1028,8 @@ packages:
 
   motion-utils@12.39.0:
     resolution: {integrity: sha512-8nadJAJjTtqRkmRF36FoJTrywK9nnFmnPwnSMyxaOCU7GDjN9RTMJIxx9De8ErM+vpPhMccr/6fo5WciyQLnMQ==}
+
+  minisearch@7.2.0: {}
 
   motion@12.42.0:
     resolution: {integrity: sha512-Qhwvu9sVl5/URSq5CNzwMCpSKK8Uhnrwb6VO977kZyj/wOCS7mWebJUnBoHx5cZU1Zv8a9BD5CSICWKAlrLJgA==}
@@ -2333,6 +2338,8 @@ snapshots:
       motion-utils: 12.39.0
 
   motion-utils@12.39.0: {}
+
+  minisearch@7.2.0: {}
 
   motion@12.42.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     dependencies:

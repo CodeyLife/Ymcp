@@ -4,8 +4,8 @@ import type { Table } from "dexie";
 import { novelDb } from "./db";
 import { cleanupReferenceIntegrity, migrateLegacyProposal, removeReaderPromise, removeReaderPromiseFromProposal } from "./db-schema";
 
-const BACKUP_SCHEMA_VERSION = 9;
-const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "manuscriptChanges", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "factAssertions", "knowledgeAssertions", "narrativeUnits", "outlineRealizations", "derivedMemories", "preferenceSignals", "tasteProfiles", "embeddings"] as const;
+const BACKUP_SCHEMA_VERSION = 11;
+const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "manuscriptChanges", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "factAssertions", "knowledgeAssertions", "narrativeUnits", "outlineRealizations", "derivedMemories", "preferenceSignals", "tasteProfiles", "embeddings", "conversationThreads", "conversationMessages", "conversationMemories", "creativeBriefs", "retrievalRuns", "memoryJobs"] as const;
 
 async function bundleProject(projectId: string) {
   const project = await novelDb.projects.get(projectId);
@@ -92,7 +92,7 @@ export async function exportNovel(projectId: string, format: "json" | "markdown"
 
 export async function importNovel(file: File) {
   const payload = JSON.parse(await file.text()) as Record<string, unknown> & { manifest?: { format?: string; schemaVersion?: number; integrity?: { algorithm?: string; tables?: Record<string, { count?: number; hash?: string }> } }; project?: { id?: string } };
-  if (payload.manifest?.format !== "ymcp-novel" || ![4, 5, 6, 7, 8, 9].includes(payload.manifest.schemaVersion ?? 0) || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4-v9 文件");
+  if (payload.manifest?.format !== "ymcp-novel" || ![4, 5, 6, 7, 8, 9, 10, 11].includes(payload.manifest.schemaVersion ?? 0) || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v4-v11 文件");
   verifyProjectArchive(payload);
   const projectId = payload.project.id;
   const tables = ["projects", ...BACKUP_TABLES] as const;
@@ -104,7 +104,13 @@ export async function importNovel(file: File) {
         ? value.map((entry) => removeReaderPromiseFromProposal(migrateLegacyProposal({ ...(entry as Record<string, unknown>) })))
         : table === "architectures"
           ? value.map((entry) => removeReaderPromise({ ...(entry as Record<string, unknown>) }))
-          : value as Record<string, unknown>[];
+          : table === "conversationMemories"
+            ? value.map((entry) => ({ evidenceQuotes: [], extractorVersion: "legacy-unverified", ...(entry as Record<string, unknown>) }))
+            : table === "retrievalRuns"
+              ? value.map((entry) => ({ purpose: (entry as Record<string, unknown>).messageId ? "conversation" : "workflow-stage", ...(entry as Record<string, unknown>) }))
+              : table === "memoryJobs"
+                ? value.map((entry) => ({ ...(entry as Record<string, unknown>), ...((entry as Record<string, unknown>).status === "running" ? { status: "pending", availableAt: Date.now(), leaseOwner: undefined, leaseExpiresAt: undefined } : {}) }))
+                : value as Record<string, unknown>[];
       await (novelDb[table] as unknown as Table<Record<string, unknown>, string>).bulkPut(records);
     }
     await cleanupReferenceIntegrity(transaction);

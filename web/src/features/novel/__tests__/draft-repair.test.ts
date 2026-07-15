@@ -26,6 +26,26 @@ describe("draft structure repair", () => {
     expect(result.content).toBe("风停了。他抬起头。远处有人走来。");
   });
 
+  it("stitches short action beats to adjacent dialogue without changing manuscript characters", async () => {
+    const fragmented = [
+      "顾石生抬眼看他。",
+      "“你已经拖过三日了。”",
+      "罗二把硬饼藏到身后。",
+      "“三日和五日，也没差多少。”",
+      "井下传来撑木开裂的声音。",
+      "“别下去。”",
+      "顾石生把断剑塞紧，走向井绳。",
+      "“药铺日落就关门。”",
+    ].join("\n\n");
+
+    const result = await repairDraftStructureOnce({ content: fragmented, model: "test-model", skillPrompt: "修复契约" });
+
+    expect(streamNovelModel).not.toHaveBeenCalled();
+    expect(result.report.issues.some((item) => item.rule === "style.fragmented-paragraphs")).toBe(false);
+    expect(result.content).toContain("顾石生抬眼看他。“你已经拖过三日了。”");
+    expect(result.content.replace(/\s/g, "")).toBe(fragmented.replace(/\s/g, ""));
+  });
+
   it("does not call the model when only semantic-repeat review issues remain", async () => {
     const progression = [
       "队伍沿官道向南走。沈砚留在最后，观察每个人携带的东西。",

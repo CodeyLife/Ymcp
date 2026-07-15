@@ -9,6 +9,8 @@ import { approveWorkflowStage, BUILTIN_CHAPTER_WORKFLOW, cancelWorkflow, pauseWo
 import type { FactCandidate, ManuscriptDocument, QualityReport, WorkflowArtifact, WorkflowStage } from "./types";
 import { MarkdownContent } from "./AIWorkbench";
 import { prepareManuscriptChanges, updateManuscriptChangeText } from "./manuscript-review";
+import ChapterCollaboration from "./ChapterCollaboration";
+import type { CreativeBrief, NovelConversationThread } from "./types";
 
 const STAGE_LABELS: Record<WorkflowStage, string> = {
   context: "冻结上下文", blueprint: "生成蓝图", "blueprint-approval": "蓝图审批", draft: "正文草稿", "deterministic-check": "规则检查", review: "专业审校", revision: "定向修订", "manuscript-approval": "正文审批", "fact-extraction": "事实提取", "fact-approval": "事实审批", commit: "正式提交", "character-enrichment": "人物完善",
@@ -34,7 +36,8 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
     ? novelDb.manuscriptChanges.where("workflowRunId").equals(run.id).filter((change) => change.sourceArtifactId === run.draftArtifactId).sortBy("order")
     : [], [run?.id, run?.draftArtifactId]);
   const manuscriptChanges = queriedManuscriptChanges ?? [];
-  const [instruction, setInstruction] = useState("依据当前章节蓝图、场景计划和故事状态，完成本章正文、审校与事实更新。");
+  const [conversationThread, setConversationThread] = useState<NovelConversationThread>();
+  const [creativeBrief, setCreativeBrief] = useState<CreativeBrief>();
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedManuscriptChanges, setSelectedManuscriptChanges] = useState<string[]>([]);
@@ -116,7 +119,7 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
   return <div className="novel-view-content novel-workflow-center">
     <header className="novel-section-title"><div><span>CONTROLLED AGENT PIPELINE</span><h2>章节创作流程</h2><p>每个产物、审校证据和正式变更都沿同一条可恢复链路推进。</p></div>{active && <div className="novel-workflow-controls">{run.status === "paused" || run.status === "failed" ? <Button icon={<PlayCircleOutlined />} onClick={() => void perform(() => resumeWorkflow(run.id), "工作流已恢复")}>恢复</Button> : run.status === "running" ? <Button icon={<PauseOutlined />} onClick={() => void perform(() => pauseWorkflow(run.id))}>暂停</Button> : null}<Button danger icon={<StopOutlined />} onClick={() => void perform(() => cancelWorkflow(run.id))}>取消</Button></div>}</header>
 
-    {!document ? <Empty description="请先选择一个章节" /> : !active ? <section className="novel-workflow-launch"><div><span>STANDARD CHAPTER v2</span><h3>{document.title}</h3><p>先审批蓝图，再自动完成草稿、规则检查、五类独立审校和最多两轮定向修订。正文与事实分别确认。</p></div><Input.TextArea value={instruction} onChange={(event) => setInstruction(event.target.value)} rows={5} /><Button type="primary" size="large" loading={busy} icon={<ThunderboltOutlined />} onClick={() => void perform(() => startChapterWorkflow({ projectId, documentId: document.id, instruction }), "工作流已启动")}>启动标准流程</Button></section> : <>
+    {!document ? <Empty description="请先选择一个章节" /> : !active ? <><ChapterCollaboration projectId={projectId} document={document} onStateChange={(thread, brief) => { setConversationThread(thread); setCreativeBrief(brief); }} /><section className="novel-workflow-launch"><div><span>STANDARD CHAPTER v2</span><h3>{document.title}</h3><p>{creativeBrief?.status === "confirmed" ? "创作简报已冻结，可以进入章节生产流程。" : "确认创作简报后启动章节生产。"}</p></div><Button type="primary" size="large" loading={busy} disabled={!conversationThread || creativeBrief?.status !== "confirmed"} icon={<ThunderboltOutlined />} onClick={() => void perform(() => startChapterWorkflow({ projectId, documentId: document.id, threadId: conversationThread!.id, briefId: creativeBrief!.id }), "工作流已启动")}>启动标准流程</Button></section></> : <>
       <section className="novel-workflow-status"><div><Tag color={run.status === "failed" ? "red" : run.status === "waiting-approval" ? "gold" : run.status === "completed" ? "green" : "processing"}>{run.status}</Tag><strong>{STAGE_LABELS[run.currentStage]}</strong><span>第 {run.revisionIteration + 1} 轮 · {artifacts.length} 个产物</span></div>{busy && <Spin size="small" />} {run.error && <p>{run.error}</p>}</section>
       <div className="novel-workflow-rail">{BUILTIN_CHAPTER_WORKFLOW.stages.map((stage, index) => <Tooltip key={stage} title={STAGE_LABELS[stage]}><div className={index < run.stageIndex ? "done" : index === run.stageIndex ? "active" : ""}><i>{index < run.stageIndex ? <CheckOutlined /> : index + 1}</i><span>{STAGE_LABELS[stage]}</span></div></Tooltip>)}</div>
 

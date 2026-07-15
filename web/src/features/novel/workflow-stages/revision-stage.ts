@@ -1,5 +1,7 @@
 import { streamNovelModel } from "../ai";
+import { formatContextPacket } from "../context";
 import { novelDb } from "../db";
+import { novelMemoryService } from "../memory-service";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { asBlueprint } from "../workflow-shared";
 import type { QualityIssue } from "../types";
@@ -247,6 +249,11 @@ export const revisionStageHandler: StageHandler = {
       ? `- 标注为「保留」的段落（第${preserveList}段）必须原样输出，不改一字`
       : "- 每个段落都有明确的问题定位，只能按各段对应问题进行定向修改";
 
+    const packet = run.conversationThreadId
+      ? await novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "revision", role: "revision-editor", instruction: "依据质量报告定向修订当前章节", workflowRunId: run.id, skillStage: "revision" })
+      : await novelDb.contextPackets.get(run.contextPacketId!);
+    if (!packet) throw new Error("修订上下文不存在");
+
     const { agent } = await ctx.createAgentRecord({
       run,
       role: "revision-editor",
@@ -274,7 +281,10 @@ ${preserveInstruction}
 - “需修订”表示允许修改的边界，不要求为了改动而改动；只做解决问题所必需的调整
 - 不要输出段落标注标记（【第N段·xxx】），只输出正文
 - 保持第三人称限知视角和已有文风
-${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.contentMarkdown}` : ""}`,
+${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.contentMarkdown}` : ""}
+
+## 修订上下文
+${formatContextPacket(packet)}`,
     });
     if (isRevisionRefusal(generated.content)) {
       // LLM 拒绝修订（长度超限/请求分段/约束冲突）——回退到 draft 原文，转交人工审阅
@@ -294,7 +304,7 @@ ${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.con
         parentArtifactId: draft.id,
         model: project.settings.textModel,
         skillRefs: [],
-        contextPacketId: run.contextPacketId,
+        contextPacketId: packet.id,
       });
       await ctx.createApprovalProposal(run, fallbackArtifact, "workflow-manuscript",
         "修订模型拒绝任务（输出长度超限或请求分段发送），已保留原文草稿转交人工审阅；建议人工拆分章节、调整蓝图节拍或缩短目标字数");
@@ -321,10 +331,10 @@ ${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.con
       parentArtifactId: draft.id,
       model: project.settings.textModel,
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
-      contextPacketId: run.contextPacketId,
+      contextPacketId: packet.id,
     });
     await ctx.finishAgent(agent, { ...result, artifactId: artifact.id });
-    const nextRun = await ctx.transition(run, "deterministic-check", "running", { draftArtifactId: artifact.id, revisionIteration: nextIteration });
+    const nextRun = await ctx.transition(run, "deterministic-check", "running", { draftArtifactId: artifact.id, revisionIteration: nextIteration, contextPacketId: packet.id });
     return { run: nextRun };
   },
 };

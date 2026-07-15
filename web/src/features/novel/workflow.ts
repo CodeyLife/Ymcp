@@ -17,14 +17,18 @@ import type { WorkflowRun } from "./types";
 // Re-export 公共 API（保持 UI 和测试的导入路径不变）
 export { BUILTIN_CHAPTER_WORKFLOW, CHAPTER_WORKFLOW_ID, shouldAutoRevise } from "./workflow-shared";
 
-export async function startChapterWorkflow(params: { projectId: string; documentId: string; instruction?: string; blocking?: boolean }) {
+export async function startChapterWorkflow(params: { projectId: string; documentId: string; threadId: string; briefId: string; instruction?: string; blocking?: boolean }) {
   const [project, document] = await Promise.all([novelDb.projects.get(params.projectId), novelDb.documents.get(params.documentId)]);
   if (!project || !document || document.projectId !== params.projectId) throw new Error("章节或项目不存在");
+  const [thread, brief] = await Promise.all([novelDb.conversationThreads.get(params.threadId), novelDb.creativeBriefs.get(params.briefId)]);
+  if (!thread || thread.projectId !== params.projectId || thread.targetId !== params.documentId) throw new Error("协作对话与目标章节不匹配");
+  if (!brief || brief.threadId !== thread.id || brief.targetDocumentId !== document.id || brief.status !== "confirmed") throw new Error("请先确认本章创作简报");
   const active = await novelDb.workflowRuns.where("projectId").equals(params.projectId).and((item) => item.targetDocumentId === params.documentId && !["completed", "cancelled", "failed"].includes(item.status)).first();
   if (active) return active;
-  const run: WorkflowRun = { ...recordBase(params.projectId), workflowId: CHAPTER_WORKFLOW_ID, targetDocumentId: params.documentId, status: "running", currentStage: "context", stageIndex: 0, revisionIteration: 0, factCandidateIds: [], startedAt: Date.now() };
+  const run: WorkflowRun = { ...recordBase(params.projectId), workflowId: CHAPTER_WORKFLOW_ID, targetDocumentId: params.documentId, status: "running", currentStage: "context", stageIndex: 0, revisionIteration: 0, factCandidateIds: [], conversationThreadId: thread.id, creativeBriefId: brief.id, startedAt: Date.now() };
   await novelDb.workflowRuns.add(run);
-  if (params.instruction) await saveArtifact(run, { projectId: run.projectId, workflowRunId: run.id, stage: "context", kind: "prompt", title: "用户创作要求", contentMarkdown: params.instruction, skillRefs: [] });
+  const briefInstruction = params.instruction?.trim() || [brief.goal, brief.tone ? `基调：${brief.tone}` : "", brief.languageRequirements.length ? `语言要求：${brief.languageRequirements.join("；")}` : "", brief.mustHappen.length ? `必写：${brief.mustHappen.join("；")}` : "", brief.forbidden.length ? `禁写：${brief.forbidden.join("；")}` : ""].filter(Boolean).join("\n");
+  await saveArtifact(run, { projectId: run.projectId, workflowRunId: run.id, stage: "context", kind: "prompt", title: "已确认创作简报", contentMarkdown: briefInstruction, structuredData: { creativeBriefId: brief.id, threadId: thread.id }, skillRefs: [] });
   if (params.blocking === false) {
     advanceChapterWorkflow(run.id).catch((error) => { void failRun(run, error); });
     return run;

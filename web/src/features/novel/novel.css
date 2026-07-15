@@ -69,6 +69,26 @@
 .novel-project-meta { display: flex; flex-wrap: wrap; gap: 14px; color: #797d82; font: 11px var(--font-mono); margin-top: 6px; }
 .novel-project-actions { display: flex; align-items: center; gap: 2px; margin-top: auto; padding-top: 18px; border-top: 1px solid #282a2c; }
 .novel-project-actions .ant-btn:last-child { margin-left: auto; }
+.novel-bootstrap-modal .ant-modal-content { overflow: hidden; padding: 0; border: 1px solid #34373a; border-radius: 6px; background: #151719; box-shadow: 0 28px 90px rgba(0,0,0,.55); }
+.novel-bootstrap-modal .ant-modal-header { margin: 0; padding: 19px 22px; border-bottom: 1px solid #2d3033; background: #151719; }
+.novel-bootstrap-modal .ant-modal-title { color: #ece9e2; font: 500 20px Georgia, "Noto Serif SC", serif; }
+.novel-bootstrap-modal .ant-modal-close { top: 14px; color: #7e8286; }
+.novel-bootstrap-modal .ant-modal-body { padding: 22px; }
+.novel-bootstrap-form .ant-form-item-label > label { color: #aeb1b3; font-size: 12px; }
+.novel-bootstrap-form .ant-input-textarea textarea { min-height: 168px; resize: vertical; border-color: #35383b; background: #111315; color: #e8e5de; font: 15px/1.8 Georgia, "Noto Serif SC", serif; }
+.novel-bootstrap-form .ant-input-textarea textarea::placeholder { color: #606468; }
+.novel-bootstrap-form .ant-input-data-count { color: #696d71; font: 10px var(--font-mono); }
+.novel-bootstrap-progress blockquote { margin: 0 0 22px; padding: 3px 0 3px 14px; border-left: 2px solid #b5483a; color: #b9b6b0; font: 14px/1.7 Georgia, "Noto Serif SC", serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+.novel-bootstrap-progress .ant-steps { padding: 2px 4px 2px 2px; }
+.novel-bootstrap-progress .ant-steps-item { min-height: 74px; }
+.novel-bootstrap-progress .ant-steps-item-icon { border-radius: 5px; background: #202326; }
+.novel-bootstrap-progress .ant-steps-item-title { color: #d8d6d1 !important; font-weight: 650; }
+.novel-bootstrap-progress .ant-steps-item-description { color: #73777b !important; font-size: 11px; }
+.novel-bootstrap-progress .ant-steps-item-process .ant-steps-item-icon { border-color: #b5483a; background: #b5483a; box-shadow: 0 0 0 4px rgba(181,72,58,.12); }
+.novel-bootstrap-progress .ant-steps-item-finish .ant-steps-item-icon { border-color: #527963; background: #1c2d24; color: #7fc59d; }
+.novel-bootstrap-progress .ant-steps-item-error .ant-steps-item-icon { border-color: #a65349; background: #331f1e; }
+.novel-bootstrap-error { margin-top: 4px; padding: 10px 12px; border-left: 2px solid #b95e52; background: #211817; color: #d79287; font-size: 12px; line-height: 1.5; }
+.novel-bootstrap-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #2d3033; }
 .novel-empty-library { max-width: 1440px; margin: 60px auto; min-height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed #343638; background: rgba(21,23,25,.66); }
 
 .novel-studio { height: 100dvh; min-height: 700px; display: grid; grid-template-rows: 58px minmax(0, 1fr) 28px; overflow: hidden; background: #0d0f10; }
@@ -2193,4 +2213,96 @@
 @media (max-width: 760px) {
   .novel-relation-matrix-toolbar { flex-wrap: wrap; gap: 8px; padding: 10px; }
   .novel-relation-matrix-meta { margin-left: 0; width: 100%; }
+}
+
+/* Chapter collaboration: a dense editorial desk, not a generic chat screen. */
+.novel-collaboration-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, .85fr);
+  min-height: 610px;
+  border: 1px solid var(--novel-line);
+  background: #111315;
+}
+.novel-collaboration-dialogue,
+.novel-creative-brief { min-width: 0; display: flex; flex-direction: column; }
+.novel-collaboration-dialogue { border-right: 1px solid var(--novel-line); }
+.novel-collaboration-dialogue > header,
+.novel-creative-brief > header {
+  min-height: 68px;
+  padding: 15px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--novel-line);
+  background: #17191b;
+}
+.novel-collaboration-dialogue > header span,
+.novel-creative-brief > header span { color: var(--novel-gold); font: 600 9px var(--font-mono); }
+.novel-collaboration-dialogue > header h3,
+.novel-creative-brief > header h3 { margin: 3px 0 0; font: 500 18px Georgia, "Noto Serif SC", serif; letter-spacing: 0; }
+.novel-collaboration-messages {
+  height: 430px;
+  overflow: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scrollbar-width: thin;
+}
+.novel-collaboration-message { max-width: 88%; }
+.novel-collaboration-message.user {
+  align-self: flex-end;
+  padding: 11px 13px;
+  border-left: 2px solid var(--novel-red-bright);
+  background: #202225;
+}
+.novel-collaboration-message.assistant { align-self: stretch; max-width: 100%; padding: 0 2px 14px; border-bottom: 1px solid #26282b; }
+.novel-collaboration-message-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.novel-collaboration-message-meta strong { font-size: 11px; color: #d9d5ce; }
+.novel-collaboration-message-meta time { color: #696d72; font: 9px var(--font-mono); }
+.novel-collaboration-message > p { margin: 0; line-height: 1.72; white-space: pre-wrap; overflow-wrap: anywhere; }
+.novel-collaboration-message .novel-markdown { font-size: 13px; line-height: 1.72; }
+.novel-retrieval-receipt { margin-top: 10px; border-left: 1px solid #3a3c40; }
+.novel-retrieval-receipt > summary { cursor: pointer; padding: 7px 10px; color: #a7aaad; font-size: 11px; list-style-position: inside; }
+.novel-retrieval-receipt > div { padding-left: 10px; }
+.novel-retrieval-receipt section { position: relative; padding: 10px 54px 10px 0; border-top: 1px solid #292b2e; }
+.novel-retrieval-receipt section > div { display: flex; align-items: center; gap: 7px; }
+.novel-retrieval-receipt section > div strong { flex: 1; min-width: 0; font-size: 11px; overflow-wrap: anywhere; }
+.novel-retrieval-receipt section > div > span { color: #777b80; font: 9px var(--font-mono); }
+.novel-retrieval-receipt section p { margin: 6px 0 4px; color: #b3b5b6; font-size: 11px; line-height: 1.55; }
+.novel-retrieval-receipt section small { color: #70747a; font-size: 9px; overflow-wrap: anywhere; }
+.novel-retrieval-receipt section footer { position: absolute; right: 0; top: 7px; display: flex; }
+.novel-retrieval-receipt section footer .active { color: var(--novel-gold); }
+.novel-collaboration-thinking { display: flex; align-items: center; gap: 9px; color: var(--novel-muted); font-size: 11px; }
+.novel-collaboration-composer { min-height: 74px; padding: 11px 14px; display: grid; grid-template-columns: minmax(0, 1fr) 38px; align-items: end; gap: 8px; border-top: 1px solid var(--novel-line); background: #17191b; }
+.novel-collaboration-composer .ant-btn { width: 38px; height: 38px; padding: 0; }
+.novel-active-memories { border-top: 1px solid #25272a; padding: 9px 14px 12px; background: #141618; }
+.novel-active-memories > header { display: flex; justify-content: space-between; color: #8d9094; font-size: 10px; margin-bottom: 5px; }
+.novel-active-memories > div { display: flex; align-items: center; gap: 6px; color: #b5b3ae; font-size: 10px; }
+.novel-active-memories > div span { flex: 1; overflow-wrap: anywhere; }
+.novel-creative-brief.confirmed > header { box-shadow: inset 3px 0 #6f917f; }
+.novel-brief-fields { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.novel-brief-fields label { display: flex; flex-direction: column; gap: 6px; color: #96999d; font-size: 10px; }
+.novel-brief-fields label.must { color: #b8a173; }
+.novel-brief-fields label.forbidden { color: #b66f65; }
+.novel-brief-grid { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 10px; }
+.novel-brief-grid .ant-select,
+.novel-brief-grid .ant-input-number { width: 100%; }
+.novel-brief-fields > footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+
+@media (max-width: 1050px) {
+  .novel-collaboration-shell { grid-template-columns: 1fr; }
+  .novel-collaboration-dialogue { border-right: 0; border-bottom: 1px solid var(--novel-line); }
+  .novel-collaboration-messages { height: 380px; }
+}
+
+@media (max-width: 680px) {
+  .novel-collaboration-shell { min-height: 0; }
+  .novel-collaboration-messages { height: 340px; padding: 12px; }
+  .novel-collaboration-message { max-width: 96%; }
+  .novel-brief-grid { grid-template-columns: 1fr; }
+  .novel-collaboration-dialogue > header,
+  .novel-creative-brief > header { padding: 12px; }
+  .novel-brief-fields { padding: 12px; }
 }

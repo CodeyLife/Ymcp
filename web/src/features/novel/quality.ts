@@ -9,6 +9,13 @@ const EMPHASIS_WORDS = ["第一次", "突然", "忽然", "终于", "竟然", "�
 const EMOTION_DIRECT_WORDS = ["他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "她很悲伤", "她很愤怒", "她很高兴", "她很害怕", "她很孤独", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
 const APHORISM_PATTERNS = [/不是.{1,12}而是/, /也许.{1,12}就是/, /所谓.{1,12}不过/, /这.{0,6}便是/, /或许.{1,12}才是/, /所谓.{1,12}无非/];
 const IMAGERY_WORDS = ["风", "雪", "雨", "月", "灯", "剑", "路", "井", "烟", "尘", "云", "霜", "雾", "影", "光", "火", "水", "石", "树", "花"];
+const INTERPRETIVE_SUMMARY_PATTERNS = [
+  /(?:他|她)(?:自己)?(?:也)?(?:清楚|知道|明白)[，：]/g,
+  /(?:他|她)(?:忽然|突然|终于)?意识到/g,
+  /这(?:意味着|说明|代表着)/g,
+  /(?:也就是说|换句话说|归根结底|说到底)/g,
+  /这个动作.{0,16}(?:意味着|说明|像是)/g,
+];
 const STRUCTURAL_MAJOR_RULES = new Set(["style.fragmented-paragraphs", "plot.exact-paragraph-repeat", "plot.repeated-progression"]);
 
 export interface ReviewerFinding {
@@ -132,6 +139,17 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   }
   if (aphorismEndings > 3) issues.push(issue({ dimension: "specificity", severity: "warning", title: "金句收尾过密", description: `检测到 ${aphorismEndings} 处格言式收尾，超过单章 3 处上限。`, rule: "style.aphorism-density", suggestion: "将部分金句改为行动或沉默收尾，让行为本身承载主题。" }));
   const imageryHits = IMAGERY_WORDS.reduce((sum, word) => sum + countOccurrences(text, word), 0);
+  const interpretiveSummaryHits = INTERPRETIVE_SUMMARY_PATTERNS.reduce((sum, pattern) => sum + (text.match(pattern) ?? []).length, 0);
+  if (totalChars >= 600 && interpretiveSummaryHits >= 2 && interpretiveSummaryHits / totalChars * 1000 >= 0.75) {
+    issues.push(issue({
+      dimension: "specificity",
+      severity: "warning",
+      title: "解释性总结偏多",
+      description: `检测到 ${interpretiveSummaryHits} 处替读者归纳人物认知或文本含义的表达。`,
+      rule: "style.interpretive-summary-density",
+      suggestion: "删除动作或对白之后的解释句，让人物后续选择、关系反应和具体后果承载含义。",
+    }));
+  }
 
   const scores = Object.fromEntries(DIMENSIONS.map((dimension) => [dimension, 4.2])) as Record<QualityDimension, number>;
   for (const found of issues) {
@@ -150,6 +168,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       maxConsecutiveSingleSentenceNarrative: structure.maxConsecutiveSingleSentenceNarrative,
       templateHits,
       imageryDensity: imageryHits,
+      interpretiveSummaryHits,
     },
   };
 }

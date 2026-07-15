@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import "./setup";
 import { novelDb } from "../db";
 import { cosineSimilarity, setEmbeddingProvider, type EmbeddingProvider } from "../embedding";
-import { contentHash, hybridScore, upsertEmbedding, vectorSearch } from "../retrieval";
+import { contentHash, hybridScore, splitSemanticUnits, upsertEmbedding, vectorSearch } from "../retrieval";
 
 let embedCallCount = 0;
 
@@ -46,6 +46,32 @@ describe("contentHash", () => {
   it("returns 8-char hex string", () => {
     const hash = contentHash("test");
     expect(hash).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+describe("splitSemanticUnits", () => {
+  it("groups paragraphs without truncating a paragraph", () => {
+    const units = splitSemanticUnits(`${"甲".repeat(900)}\n\n${"乙".repeat(900)}\n\n${"丙".repeat(900)}`, 1800);
+    expect(units).toEqual(["甲".repeat(900), "乙".repeat(900), "丙".repeat(900)]);
+  });
+
+  it("stores long targets as independently searchable embedding chunks", async () => {
+    setEmbeddingProvider({
+      name: "chunk-provider",
+      dimension: 4,
+      embed: async () => [1, 0, 0, 0],
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+    });
+    await upsertEmbedding({ projectId: "p1", targetTable: "documents", targetId: "long", content: `${"甲".repeat(1000)}\n\n${"乙".repeat(1000)}\n\n${"丙".repeat(1000)}` });
+    const stored = await novelDb.embeddings.where("targetId").equals("long").sortBy("chunkIndex");
+    expect(stored).toHaveLength(3);
+    expect(stored.map((item) => item.chunkIndex)).toEqual([0, 1, 2]);
+  });
+
+  it("rejects provider responses with an inconsistent vector dimension", async () => {
+    setEmbeddingProvider({ name: "broken-provider", dimension: 4, embed: async () => [1, 0], embedBatch: async () => [[1, 0]] });
+    await expect(upsertEmbedding({ projectId: "p1", targetTable: "documents", targetId: "broken", content: "正文" })).rejects.toThrow(/维度/);
+    expect(await novelDb.embeddings.where("targetId").equals("broken").count()).toBe(0);
   });
 });
 

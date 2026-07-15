@@ -32,6 +32,8 @@ interface UIState {
   apiKey: string;
   /** OpenAI-compatible chat model. "auto" lets the upstream choose. */
   chatModel: string;
+  /** Provider hard context limit override. 0 means use /models metadata when available. */
+  modelContextWindow: number;
   thumbSize: number;
   greenscreenPrompt: string;
   spritesheetPrompt: string;
@@ -40,6 +42,7 @@ interface UIState {
   setApiBaseUrl: (baseUrl: string) => void;
   setApiKey: (apiKey: string) => void;
   setChatModel: (model: string) => void;
+  setModelContextWindow: (tokens: number) => void;
   setThumbSize: (size: number) => void;
   setGreenscreenPrompt: (prompt: string) => void;
   setSpritesheetPrompt: (prompt: string) => void;
@@ -57,6 +60,7 @@ export const useUIStore = create<UIState>()(
       apiBaseUrl: "",
       apiKey: "",
       chatModel: "auto",
+      modelContextWindow: 0,
       thumbSize: 256,
       greenscreenPrompt: "",
       spritesheetPrompt: "",
@@ -64,6 +68,7 @@ export const useUIStore = create<UIState>()(
       setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) }),
       setApiKey: (apiKey) => set({ apiKey }),
       setChatModel: (chatModel) => set({ chatModel: chatModel.trim() || "auto" }),
+      setModelContextWindow: (modelContextWindow) => set({ modelContextWindow: Math.max(0, Math.floor(modelContextWindow || 0)) }),
       setThumbSize: (size) => set({ thumbSize: size }),
       setGreenscreenPrompt: (prompt) => set({ greenscreenPrompt: prompt }),
       setSpritesheetPrompt: (prompt) => set({ spritesheetPrompt: prompt }),
@@ -71,7 +76,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "ymcp-ui",
-      version: 3,
+      version: 4,
       // v0 -> v1：老版本将默认提示词写入了 localStorage；迁移时把等于旧默认值的字段清空，
       // 让这些字段回到"未配置"状态，从而走默认配置读取逻辑。
       // v1 -> v2：新增 imageGenAdapter 字段，老数据缺失时回退到默认 "task"。
@@ -92,12 +97,14 @@ export const useUIStore = create<UIState>()(
         if (persistedState && version < 3) {
           persistedState.chatModel = "auto";
         }
+        if (persistedState && version < 4) persistedState.modelContextWindow = 0;
         return persistedState;
       },
       partialize: (state) => ({
         apiBaseUrl: state.apiBaseUrl,
         apiKey: state.apiKey,
         chatModel: state.chatModel,
+        modelContextWindow: state.modelContextWindow,
         thumbSize: state.thumbSize,
         greenscreenPrompt: state.greenscreenPrompt,
         spritesheetPrompt: state.spritesheetPrompt,
@@ -115,5 +122,5 @@ export function getEffectiveApiConfig() {
   const usesDefaultBaseUrl = baseUrl === defaultBaseUrl;
   const apiKey = state.apiKey.trim() || (usesDefaultBaseUrl ? DEFAULT_API_KEY : "");
   const hasOwnKey = !!state.apiKey.trim();
-  return { baseUrl, apiKey, hasOwnKey, usesDefaultBaseUrl };
+  return { baseUrl, apiKey, hasOwnKey, usesDefaultBaseUrl, modelContextWindow: state.modelContextWindow };
 }
