@@ -47,6 +47,8 @@ import {
 
 const SHOULD_RUN = process.env.BENCH_STAGE === "review";
 const describeOrSkip = SHOULD_RUN ? describe : describe.skip;
+// 支持 BENCH_CHAPTER=ch2 选择不同章节 fixture（多场景验证）
+const BENCH_CHAPTER = process.env.BENCH_CHAPTER === "ch2" ? "ch2" : "ch1";
 
 interface BlueprintFixture {
   contentMarkdown: string;
@@ -78,7 +80,7 @@ const REVIEW_ROLES: Array<Parameters<typeof buildChapterReviewPrompt>[0]["role"]
 describeOrSkip("bench-review: 切片测试", { timeout: 1_800_000 }, () => {
   it("reviews chapter draft with 4 reviewers", async () => {
     // 前置检查
-    requireFixture("ch1-draft.json", "npm run test:bench:draft");
+    requireFixture(`${BENCH_CHAPTER}-draft.json`, "npm run test:bench:draft");
 
     const { result: report, runId } = await runBench("review", "review", async (ctx) => {
       // 1. 加载 fixture + 初始化 DB
@@ -86,9 +88,9 @@ describeOrSkip("bench-review: 切片测试", { timeout: 1_800_000 }, () => {
       await resetDb();
       const foundation = loadFixture<FoundationSnapshot>("foundation.json");
       await loadFoundationIntoDb(foundation);
-      const blueprintFixture = loadFixture<BlueprintFixture>("ch1-blueprint.json");
+      const blueprintFixture = loadFixture<BlueprintFixture>(`${BENCH_CHAPTER}-blueprint.json`);
       const contextFixture = loadFixture<ContextFixture>("ch1-context-packet.json");
-      const draftFixture = loadFixture<DraftFixture>("ch1-draft.json");
+      const draftFixture = loadFixture<DraftFixture>(`${BENCH_CHAPTER}-draft.json`);
 
       // 2. 机械检查 + numberedDraft（复刻 review-stage.ts）
       log("review", "机械检查 + 构建编号正文");
@@ -207,7 +209,7 @@ describeOrSkip("bench-review: 切片测试", { timeout: 1_800_000 }, () => {
       });
 
       // 6. 保存滚动 fixture 供 revision 切片使用
-      saveFixture("ch1-quality-report.json", aggregated);
+      saveFixture(`${BENCH_CHAPTER}-quality-report.json`, aggregated);
 
       log(
         "review",

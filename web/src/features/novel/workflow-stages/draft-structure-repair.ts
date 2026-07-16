@@ -137,6 +137,33 @@ function mergeFragmentedParagraphs(text: string): string {
   return stitched.join("\n\n");
 }
 
+function characterNgrams(text: string, size = 3): Set<string> {
+  const normalized = normalizedParagraph(text);
+  const grams = new Set<string>();
+  for (let index = 0; index <= normalized.length - size; index += 1) {
+    grams.add(normalized.slice(index, index + size));
+  }
+  return grams;
+}
+
+function ngramDiceSimilarity(left: string, right: string): number {
+  const leftGrams = characterNgrams(left);
+  const rightGrams = characterNgrams(right);
+  if (leftGrams.size === 0 || rightGrams.size === 0) return 0;
+  let overlap = 0;
+  for (const gram of leftGrams) if (rightGrams.has(gram)) overlap += 1;
+  return (2 * overlap) / (leftGrams.size + rightGrams.size);
+}
+
+/** A replay repeats concrete phrasing from several earlier paragraphs, not merely topic words. */
+function isTrailingParagraphReplay(earlier: string[], trailing: string[]): boolean {
+  const replayed = trailing.filter((paragraph) => {
+    if (normalizedParagraph(paragraph).length < 8) return false;
+    return earlier.some((candidate) => ngramDiceSimilarity(candidate, paragraph) >= 0.5);
+  }).length;
+  return replayed >= 2 && replayed * 2 > trailing.length;
+}
+
 /**
  * 检测并截断"第二个结尾"重复。
  *
@@ -149,8 +176,8 @@ function mergeFragmentedParagraphs(text: string): string {
  * 模式二（短段序列，R8+R14）：章尾以 4+ 短段（<100 字符）重述已解决的主题。
  * R8 仅检测纯短叙事段；R14 扩展到包含短对白段的混合序列——第二个结尾常含
  * "原来线索在这里。"等短对白，打断纯叙事序列导致 R8 漏检。
- * 检测：保留前 2 个短段，从第 3 个开始逐段检查与前文整体的二元组相似度，
- * ≥0.15 且 tail ≥3 段则截断。
+ * 检测：保留前 2 个短段，从第 3 个开始检查尾部多数段落是否分别复演了前文的
+ * 具体措辞。共享题材词、人物名或场景物件不足以证明重演。
  *
  * 截断策略：只删除已确认重复的尾部序列。
  */
@@ -213,18 +240,11 @@ export function truncateTrailingSecondEnding(text: string): { truncated: boolean
 
   const shortSeqLength = paragraphs.length - shortSeqStart;
   if (shortSeqLength >= 4 && shortSeqStart >= 4) {
-    // 与前文整体比较（而非同长度窗口）——短段 bigram 较少，整体比较更稳定
-    const earlierCombined = normalizedParagraph(paragraphs.slice(0, shortSeqStart + 2).join(""));
     for (let splitOffset = 2; splitOffset < shortSeqLength; splitOffset++) {
       const splitAt = shortSeqStart + splitOffset;
       const tailParas = paragraphs.slice(splitAt);
-      const tailText = normalizedParagraph(tailParas.join(""));
-      if (tailText.length < 40) continue;
 
-      const similarity = bigramSimilarity(earlierCombined, tailText);
-
-      // 短段 containment 阈值 0.15（短段 bigram 少，天然偏低）；要求 tail ≥3 段确认是"第二个结尾"而非单次引用
-      if (similarity >= 0.15 && tailParas.length >= 3) {
+      if (tailParas.length >= 3 && isTrailingParagraphReplay(paragraphs.slice(0, splitAt), tailParas)) {
         const totalChars = paragraphs.reduce((sum, p) => sum + p.length, 0);
         const surviving = paragraphs.slice(0, splitAt);
         const removedChars = totalChars - surviving.reduce((sum, p) => sum + p.length, 0);

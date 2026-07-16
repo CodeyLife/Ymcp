@@ -79,7 +79,7 @@ describe("draft structure repair", () => {
     expect(streamNovelModel).not.toHaveBeenCalled();
   });
 
-  it("truncates a short-paragraph second ending that repeats earlier themes (R8)", () => {
+  it("preserves a short ending that reuses established motifs while advancing their state", () => {
     // 早期长段（≥100 字符）：建立并重复 寒灯/断穗/门人录/夜雾/佩剑客/她没有回头/转身/走入 主题
     const early = [
       "寒灯挂在庙檐下，火苗被风吹得摇晃，时明时暗。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。断穗的编法她曾见过，那是指尖能记住的旧事，不会轻易忘记。",
@@ -92,7 +92,7 @@ describe("draft structure repair", () => {
       "她没有回头。庙外雾已经漫过荒草。",
       "佩剑客追到门前。地上留下一截断穗。",
     ];
-    // 第二个结尾（4 个短段，重复 断穗/寒灯/门人录/夜雾/她没有回头/转身/走入 主题）
+    // 结尾复用既有意象，但让信物状态和人物行动继续变化，不属于段落重演。
     const secondEnding = [
       "佩剑客拾起断穗。穗尾旧线已经发白。",
       "寒灯重新燃起。火苗比先前更低。",
@@ -103,8 +103,8 @@ describe("draft structure repair", () => {
 
     const result = truncateTrailingSecondEnding(content);
 
-    expect(result.truncated).toBe(true);
-    expect(result.content).toBe([...early, ...climax].join("\n\n"));
+    expect(result.truncated).toBe(false);
+    expect(result.content).toBe(content);
   });
 
   it("does not truncate a short-paragraph ending when themes are not repeated", () => {
@@ -124,8 +124,8 @@ describe("draft structure repair", () => {
     expect(result.content).toBe(content);
   });
 
-  it("truncates a mixed narrative+dialogue second ending that repeats earlier themes (R14)", () => {
-    // R14：第二个结尾包含短对白段（如"原来线索在这里。"），打断纯短叙事序列导致 R8 漏检
+  it("preserves a mixed ending when repeated motifs lead to a new action", () => {
+    // 混合对白的尾声仍产生带走信物这一新行动，不应只因主题词重复而删除。
     const early = [
       "寒灯挂在庙檐下，火苗被风吹得摇晃，时明时暗。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。断穗的编法她曾见过，那是指尖能记住的旧事，不会轻易忘记。寒灯的火苗映着她的剑，像在等一个了结。",
       "佩剑客沿着渡口一路查访，把旧事的边角从人嘴里慢慢捞出来。他带着一张被水浸过的旧纸，纸上只剩几道淡墨，却足以让他辨认出断穗的回环扣编法。门人录的旧债在他心中压着，寒灯的光映在剑鞘上，像在等一个了结。断穗的回环扣编法他认得，那是旧日门人录的记号。",
@@ -142,8 +142,39 @@ describe("draft structure repair", () => {
     ];
     const content = [...early, ...climax, ...secondEnding].join("\n\n");
     const result = truncateTrailingSecondEnding(content);
+    expect(result.truncated).toBe(false);
+    expect(result.content).toBe(content);
+  });
+
+  it("truncates a cross-genre tail that concretely replays several earlier paragraphs", () => {
+    const earlier = [
+      "舱门警报亮起。导航员输入返航坐标。",
+      "主引擎降到怠速。飞船转向木卫二。",
+      "值班员关掉广播。观察窗重新结霜。",
+    ];
+    const middle = Array.from({ length: 4 }, (_, index) =>
+      `航行日志第${index + 1}节记录新的故障排查，机组更换不同模块并确认了新的风险。`.repeat(4));
+    const climax = ["通讯恢复了。", "地球的回信只有一行。"];
+    const replay = [
+      "舱门警报亮起。导航员输入返航坐标。",
+      "主引擎降到怠速。飞船转向木卫二。",
+      "值班员关掉广播。观察窗重新结霜。",
+    ];
+    const content = [...earlier, ...middle, ...climax, ...replay].join("\n\n");
+
+    const result = truncateTrailingSecondEnding(content);
+
     expect(result.truncated).toBe(true);
-    expect(result.content).toBe([...early, ...climax].join("\n\n"));
+    expect(result.content).toBe([...earlier, ...middle, ...climax].join("\n\n"));
+  });
+
+  it("does not rewrite short-sentence punctuation to satisfy a style score", async () => {
+    const content = "警报响了。舱门开了。人影出现。";
+
+    const result = await repairDraftStructureOnce({ content, model: "test-model", skillPrompt: "修复契约" });
+
+    expect(result.content).toBe(content);
+    expect(streamNovelModel).not.toHaveBeenCalled();
   });
 
   it("preserves a legitimate long scene after a short transition", () => {

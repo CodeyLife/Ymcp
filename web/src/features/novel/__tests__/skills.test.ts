@@ -67,8 +67,8 @@ describe("prose aesthetics skills", () => {
 
     const compiled = compileNovelStagePrompt(draftingSkills, "drafting");
 
-    expect(compiled).toContain("普通叙事段落默认包含 2 至 5 句");
-    expect(compiled).toContain("单句叙事段不得连续出现 3 个");
+    expect(compiled).toContain("段落边界服从注意力、动作因果与情绪停顿");
+    expect(compiled).toContain("短句簇只用于有意的节奏骤变");
     expect(compiled).toContain("本章主导叙事功能");
     expect(compiled).toContain("不得为完成目标提前消费后续大纲节点");
     expect(compiled).toContain("铺陈、相处、蓄势或余波章节");
@@ -78,6 +78,20 @@ describe("prose aesthetics skills", () => {
 
     expect(compiled).not.toMatch(/冬日荒地|模型遇到人|走进城门的老人|信任加入模型/);
     expect(JSON.stringify(BUILTIN_NOVEL_SKILLS)).not.toMatch(/冬日荒地|模型遇到人|走进城门的老人|信任加入模型/);
+  });
+
+  it("compiles neutral foundation and character-enrichment contracts", () => {
+    const foundationSkills = BUILTIN_NOVEL_SKILLS.filter((skill) => skill.stages.includes("foundation"));
+    const enrichmentSkills = BUILTIN_NOVEL_SKILLS.filter((skill) => skill.stages.includes("character-enrichment"));
+
+    const compiled = [
+      compileNovelStagePrompt(foundationSkills, "foundation"),
+      compileNovelStagePrompt(enrichmentSkills, "character-enrichment"),
+    ].join("\n");
+
+    expect(compiled).toContain("不得复制提示词示例");
+    expect(compiled).toContain("只根据本项目已确认事实、正文行动与对白");
+    expect(compiled).not.toMatch(/东宫|刑部仵作房|萧彻|沈知微|顾长安|皇子|宦官/);
   });
 
   it("appends enabled custom skill prompts after the canonical stage contract", () => {

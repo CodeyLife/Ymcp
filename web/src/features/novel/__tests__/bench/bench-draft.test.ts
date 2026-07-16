@@ -50,6 +50,8 @@ import {
 
 const SHOULD_RUN = process.env.BENCH_STAGE === "draft";
 const describeOrSkip = SHOULD_RUN ? describe : describe.skip;
+// 支持 BENCH_CHAPTER=ch2 选择不同章节 fixture（多场景验证）
+const BENCH_CHAPTER = process.env.BENCH_CHAPTER === "ch2" ? "ch2" : "ch1";
 
 interface BlueprintFixture {
   contentMarkdown: string;
@@ -78,7 +80,7 @@ describeOrSkip("bench-draft: 切片测试", { timeout: 1_800_000 }, () => {
       await resetDb();
       const foundation = loadFixture<FoundationSnapshot>("foundation.json");
       await loadFoundationIntoDb(foundation);
-      const blueprintFixture = loadFixture<BlueprintFixture>("ch1-blueprint.json");
+      const blueprintFixture = loadFixture<BlueprintFixture>(`${BENCH_CHAPTER}-blueprint.json`);
       const contextFixture = loadFixture<ContextFixture>("ch1-context-packet.json");
 
       // 2. 解析 skills（与 draft-stage.ts 完全一致）
@@ -188,7 +190,7 @@ describeOrSkip("bench-draft: 切片测试", { timeout: 1_800_000 }, () => {
       });
 
       // 9. 保存滚动 fixture 供 review/revision 切片使用
-      saveFixture("ch1-draft.json", {
+      saveFixture(`${BENCH_CHAPTER}-draft.json`, {
         contentMarkdown: repaired.content,
         promptHash: repaired.promptHash ?? promptHashes.join("+"),
       });

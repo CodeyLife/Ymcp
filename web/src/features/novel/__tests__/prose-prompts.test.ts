@@ -53,7 +53,7 @@ describe("production prose prompts", () => {
   it("appends endingHook as a synthetic beat in the last section contract when provided", () => {
     const beats = Array.from({ length: 5 }, (_, index) => ({ action: `行动${index + 1}`, emotion: `情绪${index + 1}`, outcome: `结果${index + 1}` }));
     const sections = planDraftSections(beats, 5000);
-    const endingHook = "他在封存遗物时看到一处不该出现的人为痕迹。";
+    const endingHook = "她听见门外有人叫出自己从未公开的名字。";
     const lastContract = buildDraftSectionContract(sections[2], "上一段结尾", endingHook);
     const middleContract = buildDraftSectionContract(sections[1], "上一段结尾", endingHook);
 
@@ -62,6 +62,8 @@ describe("production prose prompts", () => {
     expect(lastContract).toContain(endingHook);
     expect(lastContract).toContain("不得在最后节拍完整落地前结束本段");
     expect(lastContract).toContain("不得为了增强钩子另造异常、危险、物证或角色");
+    expect(lastContract).toContain("每个段落都必须推进尚未完成的叙事功能");
+    expect(lastContract).not.toMatch(/封存\/查验|多次封存|多次查看|萧承晏|沈知微|顾长安/);
     expect(lastContract).toContain("必须写完上述所有节拍");
     expect(lastContract).toContain("不得跳过最后节拍");
     expect(lastContract).not.toContain("可以完成章尾余韵");

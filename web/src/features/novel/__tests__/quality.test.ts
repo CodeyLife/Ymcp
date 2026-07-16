@@ -251,4 +251,14 @@ describe("prose discipline checks", () => {
     expect(result.issues.some((item) => item.rule === "style.interpretive-summary-density")).toBe(false);
     expect(result.metrics.interpretiveSummaryHits).toBe(0);
   });
+
+  it("detects scene-summary tails for character names outside known fixtures", () => {
+    const text = "林澈推开舱门，把损坏的呼吸阀递给工程师。此刻这些都已落在他的肩上。";
+
+    const result = runDeterministicQualityChecks({ text });
+
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "style.scene-summary-tail", revisionRanges: [{ start: 1, end: 1 }] }),
+    ]));
+  });
 });

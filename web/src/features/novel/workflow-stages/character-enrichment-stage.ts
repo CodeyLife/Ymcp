@@ -1,7 +1,7 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
 import { appendOperation, novelDb, recordBase } from "../db";
-import { formatSkillPrompt, resolveNovelSkills } from "../skills";
+import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { novelMemoryService } from "../memory-service";
 import type { FactAssertion, StoryEntity } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
@@ -126,7 +126,7 @@ export const characterEnrichmentStageHandler: StageHandler = {
       model: project.settings.textModel,
       temperature: 0.3,
       role: "character-enricher",
-      skillPrompt: formatSkillPrompt(skills.skills),
+      skillPrompt: compileNovelStagePrompt(skills.skills, "character-enrichment"),
       schema: enrichmentSchema,
       prompt: `基于已确认的事实与正文证据，为以下人物补完 profile 中的空缺字段。
 

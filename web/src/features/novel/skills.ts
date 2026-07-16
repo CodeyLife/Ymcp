@@ -231,6 +231,25 @@ function customSkillBlock(skills: NovelSkillManifest[]) {
 
 export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: NovelSkillStage) {
   const sections: string[] = [];
+  if (stage === "foundation") {
+    sections.push("## 基础设定契约\n从项目题材、主题承诺和已确认材料推导人物与世界，不套用示例作品、固定时代、职业或剧情模板。每项设定都应说明它如何产生人物选择、现实阻力或长线变化空间；无法进入故事因果的装饰性设定应压缩。");
+    if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
+      sections.push("## 事实边界\n区分作者已确认事实、模型建议和待验证推断。不得用常见题材惯例填补空缺；新设定只能作为候选提交，并保留与现有事实的来源关系。");
+    }
+    if (skills.some((skill) => skill.skillId === "character-desire-engine")) {
+      sections.push("## 人物基础\n从人物处境建立外在欲望、内在恐惧、错误信念、未承认需求、行为边界与可支付代价。初始状态必须给出项目内真实地点、具体身体与情绪状态、即时目标和可用资源；这些字段来自当前项目，不得复制提示词示例。人物矛盾应形成可持续选择压力，而不是套用固定反派或英雄类型。");
+    }
+    if (skills.some((skill) => skill.skillId === "world-rule-contract")) {
+      sections.push("## 世界规则\n规则写清适用条件、能力上限、代价、例外和社会后果，并能在不同人物与场景中接受一致检验。不得为了当前样例冲突临时增加只对某一角色生效的例外。");
+    }
+    return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
+  }
+
+  if (stage === "character-enrichment") {
+    sections.push("## 人物补全契约\n只根据本项目已确认事实、正文行动与对白补全空缺字段。欲望、动机、弱点、秘密、声音和弧光必须能指回具体证据；信息不足就保留空缺，不使用题材身份模板、示例角色或常见人设补齐。已有字段和未来剧情不得改写或臆造。");
+    return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
+  }
+
   if (stage === "planning") {
     sections.push("## 长篇规划契约\n大纲用于分配跨章节材料，不是要求尽快完成的任务表。先确定当前层级与本章主导叙事功能，再决定哪些内容只铺垫、哪些继续延迟、哪些已经到达兑现窗口。背景建立、人物相处、内心发展、情感积累、生活过程和意象生长都可以成为正式章节功能，不得默认每章都需要冲突升级、秘密揭晓、关系跃迁或强钩子。");
     if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
@@ -255,7 +274,7 @@ export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: Nov
       sections.push("## 章节节奏与长篇余量\n先服从本章主导叙事功能。行动章节可以改变局势；铺陈、相处、蓄势或余波章节可以主要深化世界、人物内心、关系和情感，不强求不可逆结果。背景、回忆、生活过程和意象只要改变读者对当下的理解或感受，就具有叙事价值。信息可以被感知、误读或暂时搁置，不必当章转化为决定。只落实蓝图明确列入 mustHappen 的内容，秘密真相、关系跃迁、伏笔回收和后续节点未经许可不得提前兑现。全章只保留一个开场和一个结尾。");
     }
     if (hasAnySkill(skills, DRAFTING_PROSE_SKILLS)) {
-      sections.push("## 文风与段落\n以行动、感官、环境和对白承载情绪；动作或对白已经传达含义后立即留白，不再补写解释性心理总结。核心意象只在状态或含义变化时重现，不连续用同一物件替人物说理。普通叙事段落默认包含 2 至 5 句；不要每句话或每轮对白都另起空行，单句叙事段不得连续出现 3 个。长短句随动作速度自然变化。");
+      sections.push("## 文风与段落\n以行动、感官、环境和对白承载情绪；动作或对白已经传达含义后立即留白，不再补写解释性心理总结。核心意象只在状态或含义变化时重现，不连续用同一物件替人物说理。段落边界服从注意力、动作因果与情绪停顿；短句簇只用于有意的节奏骤变，普通叙事不得反复形成同构断奏。长短句随动作速度自然变化。");
     }
     if (skills.some((skill) => skill.skillId === "romance-arc-design")) {
       sections.push("## 感情线\n感情变化必须由共同经历、人物选择和现实代价推动，保持双向吸引与阶段变化。关键情绪通过人物当下的行动、对白和未完成的表达呈现，不用模板化甜虐桥段替代主线因果。");
