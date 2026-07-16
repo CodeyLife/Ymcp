@@ -1,0 +1,106 @@
+{
+  "loop": 1,
+  "goalId": "novel-craft-broad-iter",
+  "plan": "Loop 1：读取已有真实 LLM 产物（novel-e2e-deepening 的 ch1-final-draft + ch1-14-quality-report）作为 baseline，与雪中/剑来/庆余年参考作品片段做 prose 级对比，识别 top 差距维度与根因，写入 findings.md。不消耗 LLM 配额，纯分析。",
+  "actions": [
+    {
+      "summary": "读取 baseline 产物 ch1-final-draft-draft.md（6227 字，191 段）",
+      "path": ".goal/goals/novel-e2e-deepening/tmp/ch1-final-draft-draft.md"
+    },
+    {
+      "summary": "读取 quality 报告 ch1-14-quality-report.json（weightedScore=3.91，0 blockers，pacing=3.25 最弱）",
+      "path": ".goal/goals/novel-e2e-deepening/tmp/ch1-14-quality-report.json"
+    },
+    {
+      "summary": "读取当前 prose-prompts.ts（200+ 行，约束极多）与 skills.ts（20+ builtin skills）",
+      "path": "src/features/novel/prose-prompts.ts + src/features/novel/skills.ts"
+    },
+    {
+      "summary": "读取参考作品技巧库 findings.md（雪中/剑来/庆余年/将夜/风花雪月 5 部作品技巧总结）",
+      "path": ".goal/goals/novel-craft-optimization/findings.md"
+    },
+    {
+      "summary": "做 prose 级对比分析，识别 8 个维度差距（去情绪化/器物隐喻/留白叙事差距 1.5 分最突出），归纳 5 个跨维度根因，提出 6 个优化方向",
+      "path": ".goal/goals/novel-craft-broad-iter/findings.md"
+    }
+  ],
+  "verification": [
+    {
+      "summary": "baseline 产物存在且为真实 LLM 生成（6227 字，非 mock）",
+      "path": ".goal/goals/novel-e2e-deepening/tmp/ch1-final-draft-draft.md",
+      "result": "pass"
+    },
+    {
+      "summary": "quality 报告存在且含 8 维评分与 issues 列表（weightedScore=3.91，0 blockers）",
+      "path": ".goal/goals/novel-e2e-deepening/tmp/ch1-14-quality-report.json",
+      "result": "pass"
+    },
+    {
+      "summary": "findings.md 已写入完整 prose 级对比分析（8 维度差距矩阵 + 5 根因 + 6 优化方向）",
+      "path": ".goal/goals/novel-craft-broad-iter/findings.md",
+      "result": "pass"
+    },
+    {
+      "summary": "识别出 baseline 在 6 个 prose 维度上与参考作品差距 1.0-1.5 分（去情绪化/器物隐喻/留白叙事最突出 1.5 分）",
+      "path": ".goal/goals/novel-craft-broad-iter/findings.md",
+      "result": "pass"
+    }
+  ],
+  "errors": [],
+  "selfReflection": "Loop 1 通过读取已有真实 LLM 产物（novel-e2e-deepening 的 ch1 final draft，weightedScore=3.91）建立 baseline，与雪中/剑来/庆余年参考作品片段做 prose 级对比，识别出 6 个维度差距 1.0-1.5 分。最突出的是去情绪化（1.5）、器物隐喻（1.5）、留白叙事（1.5）——这三者根因高度交叉：prompt 过载导致约束漏读 + 负面约束多但正面范本不足 + 机械检测与生成脱节。关键发现：prose-prompts.ts 已有大量禁令（短句排比/作者式心理结论句/POV 越界）但 LLM 仍违反——说明问题不在'约束是否存在'而在'约束如何被 LLM 内化'。优化方向覆盖 prose-prompts.ts/skills.ts/quality.ts/draft-stage.ts/review-stage.ts 多个文件，符合用户'迭代的视角不要太局限'的要求。下一步需跑 bench 建立 fresh baseline 并实施优化方向 #1/#3/#5/#6。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "Loop 1 成功建立 baseline 并完成 prose 级对比分析，识别出可操作的根因与优化方向。策略有效——先分析再迭代，避免盲目跑 LLM。",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 10,
+  "successSignalUpdates": [
+    {
+      "id": "intent-preserved",
+      "action": "update",
+      "text": "Goal brief 保留了用户意图（实际生成测试+读取结果+审视质量+优化 prompt/skill+对比参考作品迭代），边界放开到整个 novel 生成栈（不局限于 2 文件），迭代视角覆盖多维度。",
+      "note": "Loop 1 已确认 goal brief 与用户意图一致"
+    },
+    {
+      "id": "evidence-reviewed",
+      "action": "update",
+      "text": "Loop 1 基于 novel-e2e-deepening 的真实 LLM 产物（6227 字 draft + 8 维 quality report）做分析，证据可追溯。",
+      "note": "baseline 产物路径已记录在 findings.md"
+    },
+    {
+      "id": "real-generation-tested",
+      "action": "update",
+      "text": "Loop 1 复用了 novel-e2e-deepening 的真实 LLM 产物作为 baseline（非 mock），但尚未在本 goal 内独立运行 bench-draft + bench-review。Loop 2 将跑 bench-bootstrap + bench-draft + bench-review 建立 fresh baseline。",
+      "note": "复用产物已验证真实，但需 Loop 2 独立运行确认"
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 2：① 跑 bench-bootstrap 生成 fixture（~15min，foundation.json + ch1-blueprint.json + ch1-context-packet.json）；② 跑 bench-draft + bench-review 建立 fresh baseline（~10min）；③ 读取 fresh baseline 的 output.md + quality-report.json，与 Loop 1 baseline 对比确认当前 code 状态；④ 若 fixture 已存在则跳过 bootstrap。Loop 3 开始实施优化方向 #1（prose-prompts 增加参考作品质感锚点）+ #3（quality.ts 扩展检测）+ #5（reviewer 增加参考对比维度）+ #6（skills 增加范本库）。",
+  "artifactRefs": [
+    {
+      "id": "loop1-baseline-draft",
+      "successSignalId": "evidence-reviewed",
+      "kind": "chapter-draft",
+      "path": ".goal/goals/novel-e2e-deepening/tmp/ch1-final-draft-draft.md",
+      "evidence": "Baseline 产物：6227 字，191 段，真实 LLM 生成，weightedScore=3.91",
+      "status": "verified"
+    },
+    {
+      "id": "loop1-baseline-quality-report",
+      "successSignalId": "evidence-reviewed",
+      "kind": "quality-report",
+      "path": ".goal/goals/novel-e2e-deepening/tmp/ch1-14-quality-report.json",
+      "evidence": "Baseline 质量报告：8 维评分（pacing=3.25 最弱，characterVoice=3.94，sceneEmbodiment=4.01，dialogue=3.94），0 blockers",
+      "status": "verified"
+    },
+    {
+      "id": "loop1-findings",
+      "successSignalId": "evidence-reviewed",
+      "kind": "analysis-report",
+      "path": ".goal/goals/novel-craft-broad-iter/findings.md",
+      "evidence": "Loop 1 完整 prose 级对比分析：8 维度差距矩阵 + 5 跨维度根因 + 6 优化方向",
+      "status": "verified"
+    }
+  ]
+}

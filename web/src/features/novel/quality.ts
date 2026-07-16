@@ -16,6 +16,21 @@ const INTERPRETIVE_SUMMARY_PATTERNS = [
   /(?:也就是说|换句话说|归根结底|说到底)/g,
   /这个动作.{0,16}(?:意味着|说明|像是)/g,
 ];
+// 隐式 POV 越界：用"像/仿佛/宛如+心理动词"替视角人物判断他人内心状态。
+// 这类句子表面是比喻，实质是作者借视角人物之口宣告对他人心理的总结。
+const IMPLICIT_POV_BREACH_PATTERNS = [
+  /像(?:是)?(?:在)?(?:提醒自己|回忆|思考|权衡|盘算|犹豫|压抑|掩饰|强压|下定决心|换了一个人|变了一个人)/g,
+  /仿佛(?:在)?(?:提醒自己|回忆|思考|权衡|盘算|犹豫|压抑|掩饰|强压|下定决心|换了一个人|变了一个人)/g,
+  /宛如(?:在)?(?:提醒自己|回忆|思考|权衡|盘算|犹豫|压抑|掩饰|强压)/g,
+  /(?:却|似|恍)像(?:忽然)?换了一个人/g,
+];
+// 场景后追加总结：段落以具体动作/对白开始，却以抽象结论收尾。
+const SCENE_SUMMARY_TAIL_PATTERNS = [
+  /(?:说明|意味着|代表着|也就是说|换句话说)[，。]/,
+  /(?:已经)?(?:不止|不再|无法|未必|终究|毕竟)[^。，；]{0,20}(?:能够|可以|解释|涵盖|承担|挽回)/,
+  /(?:此刻|此时|这一切|这些)[^。，；]{0,12}(?:都|皆|已)[^。，；]{0,16}(?:落在|指向|汇聚|归于|超过)/,
+];
+const ACTION_MARKER_RE = /[“「『][^”」』]{2,}[”」』]|(?:他|她|它|那人|此人|韩景福|萧彻|沈知微|顾长安|沈砚秋|萧承渊)(?:走|抬|放|握|转|看|听|停|推|拉|翻|查|封|记|写|说|问|答|低头|垂手|攥紧|松开)/;
 const REVIEW_WARNING_MAJOR_PATTERN = /(?:视角|POV|限知|知识边界|感知范围).{0,18}(?:越界|超出|违反|冲突|他人心理|内心|心理解释)|(?:越过|超出|违反|进入|直接呈现|直接解释).{0,18}(?:视角|POV|限知|知识边界|感知范围|他人心理|内心判断)|第二个(?:结尾|开场)|重复(?:推进|事件链|收束)/i;
 
 export interface ReviewerFinding {
@@ -170,6 +185,57 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       description: `检测到 ${interpretiveSummaryHits} 处替读者归纳人物认知或文本含义的表达。`,
       rule: "style.interpretive-summary-density",
       suggestion: "删除动作或对白之后的解释句，让人物后续选择、关系反应和具体后果承载含义。",
+    }));
+  }
+
+  // 隐式 POV 越界检测：用"像/仿佛+心理动词"替视角人物判断他人内心。
+  // 这类句子表面是比喻，实质是作者借视角人物之口宣告对他人心理的总结。
+  const implicitPovBreachHits: string[] = [];
+  for (const pattern of IMPLICIT_POV_BREACH_PATTERNS) {
+    const matches = text.match(pattern) ?? [];
+    matches.forEach((m) => implicitPovBreachHits.push(m));
+  }
+  if (implicitPovBreachHits.length > 0) {
+    // 定位首次出现的段落用于 revisionRanges
+    const firstHit = implicitPovBreachHits[0];
+    let hitParagraph = 0;
+    for (let i = 0; i < blocks.length; i += 1) {
+      if (IMPLICIT_POV_BREACH_PATTERNS.some((p) => p.test(blocks[i]))) { hitParagraph = i + 1; break; }
+    }
+    issues.push(issue({
+      dimension: "continuity",
+      severity: implicitPovBreachHits.length >= 2 ? "major" : "warning",
+      title: "隐式 POV 越界",
+      description: `检测到 ${implicitPovBreachHits.length} 处用比喻句替视角人物判断他人心理（如"${firstHit}"）。这类句子表面是意象，实质是作者借视角人物之口宣告对他人内心的总结。`,
+      excerpt: firstHit,
+      paragraph: hitParagraph || undefined,
+      revisionRanges: hitParagraph ? [{ start: hitParagraph, end: hitParagraph }] : undefined,
+      rule: "pov.implicit-breach",
+      suggestion: "把他人心理判断改写为视角人物可观察的具体动作——如把"像忽然换了一个人"改为"入殿后他只是低头净手，指节未曾发颤"。",
+    }));
+  }
+
+  // 场景后追加总结检测：段落以具体动作/对白开始，却以抽象结论收尾。
+  // 这类段落前半是现场，后半是作者旁白，破坏第三人称限知的观察距离。
+  const sceneSummaryTails: number[] = [];
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    if (!ACTION_MARKER_RE.test(block)) continue;
+    // 检查段落最后一句是否以抽象总结收尾
+    const lastSentence = block.split(/[。！？]/).filter(Boolean).slice(-1)[0] ?? "";
+    if (SCENE_SUMMARY_TAIL_PATTERNS.some((p) => p.test(lastSentence))) {
+      sceneSummaryTails.push(i + 1);
+    }
+  }
+  if (sceneSummaryTails.length >= 1) {
+    issues.push(issue({
+      dimension: "pacing",
+      severity: sceneSummaryTails.length >= 2 ? "major" : "warning",
+      title: "场景后追加总结",
+      description: `检测到 ${sceneSummaryTails.length} 处段落在具体场景之后追加抽象总结（段 ${sceneSummaryTails.join("、")}）。场景已通过动作呈现人物状态，又追加结论形成二次解释，降低现场感。`,
+      revisionRanges: sceneSummaryTails.map((p) => ({ start: p, end: p })),
+      rule: "style.scene-summary-tail",
+      suggestion: "删除段尾的抽象评价，让具体检查、记录或观察动作本身表现人物状态。参考雪中范式：徐骁屠城从不正面总结，通过他人反应呈现。",
     }));
   }
 

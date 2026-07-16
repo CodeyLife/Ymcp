@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "id": "novel-craft-broad-iter",
+  "objective": "通过实际运行 bench-draft + bench-review 切片（及至少一次完整 e2e 章节验证）生成小说正文，将产出与雪中悍刀行/剑来/庆余年等参考作品实际片段做 prose 级对比，识别句式节奏/文白双声部/器物隐喻/去情绪化/章尾钩子/群像声音区分等维度的真实差距；分析根因后优化 novel 生成栈中任一需要的文件（prose-prompts.ts / skills.ts / generation.ts / quality.ts / blueprint-stage.ts / draft-stage.ts / review-stage.ts 等，不局限于 2 个文件）；反复迭代直到产出正文 prose 质感在 LLM 对比抽检下稳定接近参考作品。迭代视角覆盖 prose/structure/voice/pacing/hooks/imagery 多维度，不局限于单一维度。停止条件：连续 2 轮迭代后 LLM 对比抽检确认生成正文在至少 4 个 prose 维度（句式节奏/文白双声部/去情绪化/章尾钩子等）上与参考作品片段差距<=1 分（5 分制），且 8 维评分中 pacing/characterVoice/sceneEmbodiment/dialogue 四项均>=4.0、0 blockers。",
+  "status": "active",
+  "createdAt": "2026-07-16T09:16:19.273Z",
+  "updatedAt": "2026-07-16T09:21:48.428Z",
+  "loopCount": 1,
+  "budgets": {
+    "maxLoops": 100,
+    "maxNoProgressLoops": 8,
+    "maxMinutes": 720
+  },
+  "lastDecision": "continue",
+  "lastCheckpoint": "Loop 1：读取已有真实 LLM 产物（novel-e2e-deepening 的 ch1-final-draft + ch1-14-quality-report）作为 baseline，与雪中/剑来/庆余年参考作品片段做 prose 级对比，识别 top 差距维度与根因，写入 findings.md。不消耗 LLM 配额，纯分析。 [object Object] [object Object] [object Object] [object Object] [object Object] result=pass baseline 产物存在且为真实 ...",
+  "completionEvidence": null,
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "Goal brief 保留了用户意图（实际生成测试+读取结果+审视质量+优化 prompt/skill+对比参考作品迭代），边界放开到整个 novel 生成栈（不局限于 2 文件），迭代视角覆盖多维度。",
+      "status": "pending",
+      "weight": 1,
+      "evidenceRefs": []
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Loop 1 基于 novel-e2e-deepening 的真实 LLM 产物（6227 字 draft + 8 维 quality report）做分析，证据可追溯。",
+      "status": "pending",
+      "weight": 1,
+      "evidenceRefs": []
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "pending",
+      "weight": 1,
+      "evidenceRefs": []
+    },
+    {
+      "id": "real-generation-tested",
+      "text": "Loop 1 复用了 novel-e2e-deepening 的真实 LLM 产物作为 baseline（非 mock），但尚未在本 goal 内独立运行 bench-draft + bench-review。Loop 2 将跑 bench-bootstrap + bench-draft + bench-review 建立 fresh baseline。",
+      "status": "pending",
+      "weight": 2,
+      "evidenceRefs": []
+    },
+    {
+      "id": "prose-comparable",
+      "text": "LLM 对比抽检确认生成正文在至少 4 个 prose 维度（句式节奏/文白双声部/去情绪化/章尾钩子等）上与雪中悍刀行/剑来/庆余年等参考作品片段差距<=1 分（5 分制）。",
+      "status": "pending",
+      "weight": 3,
+      "evidenceRefs": []
+    },
+    {
+      "id": "dim-threshold-met",
+      "text": "8 维评分中 pacing/characterVoice/sceneEmbodiment/dialogue 四项均>=4.0，0 blockers。",
+      "status": "pending",
+      "weight": 2,
+      "evidenceRefs": []
+    },
+    {
+      "id": "iter-stable",
+      "text": "连续 2 轮迭代均满足 prose-comparable 和 dim-threshold-met（稳定性验证）。",
+      "status": "pending",
+      "weight": 2,
+      "evidenceRefs": []
+    }
+  ],
+  "strategy": {
+    "current": "Refine the broad goal only enough to choose the next evidence-seeking loop; avoid pre-building a task list.",
+    "lastChangeReason": "Initial strategy.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 0,
+  "errorPatterns": [
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel e2e deepening tmp ch1 final draft draft md",
+      "examples": [
+        ".goal/goals/novel-e2e-deepening/tmp/ch1-final-draft-draft.md"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel e2e deepening tmp ch1 14 quality report json",
+      "examples": [
+        ".goal/goals/novel-e2e-deepening/tmp/ch1-14-quality-report.json"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    },
+    {
+      "kind": "file",
+      "canonicalKey": "goal goals novel craft broad iter findings md",
+      "examples": [
+        ".goal/goals/novel-craft-broad-iter/findings.md"
+      ],
+      "count": 1,
+      "firstLoop": 1,
+      "lastLoop": 1
+    }
+  ],
+  "attestationSha256": "20259344baf0d46642d13ec06f22307234fafaafd7ed204f930f8d81d39c9314"
+}
