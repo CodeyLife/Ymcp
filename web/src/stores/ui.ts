@@ -30,7 +30,7 @@ interface UIState {
   setIncomingImage: (img: { src: string; from: string } | null) => void;
   apiBaseUrl: string;
   apiKey: string;
-  /** OpenAI-compatible chat model. "auto" lets the upstream choose. */
+  /** OpenAI-compatible chat model. Default "gpt-5-5"; "auto" lets the upstream choose. */
   chatModel: string;
   /** Provider hard context limit override. 0 means use /models metadata when available. */
   modelContextWindow: number;
@@ -49,6 +49,26 @@ interface UIState {
   setImageGenAdapter: (adapter: ImageGenAdapter) => void;
 }
 
+export function migratePersistedUIState(persistedState: any, version: number) {
+  if (persistedState && version < 1) {
+    if (persistedState.greenscreenPrompt === DEFAULT_GREENSCREEN_PROMPT) {
+      persistedState.greenscreenPrompt = "";
+    }
+    if (persistedState.spritesheetPrompt === DEFAULT_SPRITESHEET_PROMPT) {
+      persistedState.spritesheetPrompt = "";
+    }
+  }
+  if (persistedState && version < 2) {
+    if (persistedState.imageGenAdapter !== "task" && persistedState.imageGenAdapter !== "direct") {
+      persistedState.imageGenAdapter = "task";
+    }
+  }
+  if (persistedState && version < 3 && !persistedState.chatModel?.trim()) persistedState.chatModel = "gpt-5-5";
+  if (persistedState && version < 4) persistedState.modelContextWindow = 0;
+  if (persistedState && version < 5 && !persistedState.chatModel?.trim()) persistedState.chatModel = "gpt-5-5";
+  return persistedState;
+}
+
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
@@ -59,7 +79,7 @@ export const useUIStore = create<UIState>()(
       setIncomingImage: (img) => set({ incomingImage: img }),
       apiBaseUrl: "",
       apiKey: "",
-      chatModel: "auto",
+      chatModel: "gpt-5-5",
       modelContextWindow: 0,
       thumbSize: 256,
       greenscreenPrompt: "",
@@ -67,7 +87,7 @@ export const useUIStore = create<UIState>()(
       imageGenAdapter: "task",
       setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl) }),
       setApiKey: (apiKey) => set({ apiKey }),
-      setChatModel: (chatModel) => set({ chatModel: chatModel.trim() || "auto" }),
+      setChatModel: (chatModel) => set({ chatModel: chatModel.trim() || "gpt-5-5" }),
       setModelContextWindow: (modelContextWindow) => set({ modelContextWindow: Math.max(0, Math.floor(modelContextWindow || 0)) }),
       setThumbSize: (size) => set({ thumbSize: size }),
       setGreenscreenPrompt: (prompt) => set({ greenscreenPrompt: prompt }),
@@ -76,30 +96,11 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "ymcp-ui",
-      version: 4,
+      version: 5,
       // v0 -> v1：老版本将默认提示词写入了 localStorage；迁移时把等于旧默认值的字段清空，
       // 让这些字段回到"未配置"状态，从而走默认配置读取逻辑。
       // v1 -> v2：新增 imageGenAdapter 字段，老数据缺失时回退到默认 "task"。
-      migrate: (persistedState: any, version: number) => {
-        if (persistedState && version < 1) {
-          if (persistedState.greenscreenPrompt === DEFAULT_GREENSCREEN_PROMPT) {
-            persistedState.greenscreenPrompt = "";
-          }
-          if (persistedState.spritesheetPrompt === DEFAULT_SPRITESHEET_PROMPT) {
-            persistedState.spritesheetPrompt = "";
-          }
-        }
-        if (persistedState && version < 2) {
-          if (persistedState.imageGenAdapter !== "task" && persistedState.imageGenAdapter !== "direct") {
-            persistedState.imageGenAdapter = "task";
-          }
-        }
-        if (persistedState && version < 3) {
-          persistedState.chatModel = "auto";
-        }
-        if (persistedState && version < 4) persistedState.modelContextWindow = 0;
-        return persistedState;
-      },
+      migrate: migratePersistedUIState,
       partialize: (state) => ({
         apiBaseUrl: state.apiBaseUrl,
         apiKey: state.apiKey,

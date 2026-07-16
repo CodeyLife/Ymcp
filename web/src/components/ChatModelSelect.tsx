@@ -17,7 +17,7 @@ function loadModels() {
   return pendingModels;
 }
 
-export function ChatModelSelect({ value = "auto", onChange, ...props }: SelectProps<string>) {
+export function ChatModelSelect({ value = "gpt-5-5", onChange, ...props }: SelectProps<string>) {
   const [models, setModels] = useState<string[]>(cachedModels ?? []);
   const [loading, setLoading] = useState(false);
 

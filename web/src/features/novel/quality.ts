@@ -2,8 +2,9 @@ import { novelDb, recordBase } from "./db";
 import { analyzeDraftStructure, isDialogueOnlyParagraph } from "./draft-structure";
 import type { ChapterBlueprint, NovelAgentRole, QualityDimension, QualityIssue, QualityReport } from "./types";
 
-const DIMENSIONS: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "pacing", "specificity", "hookPayoff", "continuity"];
-const WEIGHTS: Record<QualityDimension, number> = { plot: 0.17, characterVoice: 0.14, sceneEmbodiment: 0.12, dialogue: 0.1, pacing: 0.14, specificity: 0.1, hookPayoff: 0.1, continuity: 0.13 };
+const DIMENSIONS: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity"];
+const WEIGHTS: Record<QualityDimension, number> = { plot: 0.19, characterVoice: 0.16, sceneEmbodiment: 0.14, dialogue: 0.11, specificity: 0.14, hookPayoff: 0.11, continuity: 0.15 };
+export const QUALITY_SCORING_VERSION = 2;
 const TEMPLATE_EXPRESSIONS = ["眼中闪过", "瞳孔微缩", "嘴角微微上扬", "意味深长", "若有所思", "不由自主", "与此同时", "正因如此", "他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "他感到", "她感到", "第一次意识到", "第一次发现", "第一次明白", "第一次感到", "第一次看清", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
 const EMPHASIS_WORDS = ["第一次", "突然", "忽然", "终于", "竟然", "不由得", "不禁"];
 const EMOTION_DIRECT_WORDS = ["他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "她很悲伤", "她很愤怒", "她很高兴", "她很害怕", "她很孤独", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
@@ -15,6 +16,10 @@ const INTERPRETIVE_SUMMARY_PATTERNS = [
   /这(?:意味着|说明|代表着)/g,
   /(?:也就是说|换句话说|归根结底|说到底)/g,
   /这个动作.{0,16}(?:意味着|说明|像是)/g,
+  // 回顾式心理总结句：替人物宣告处世原则或制度规矩（Loop 4 新增）
+  /(?:他|她)这(?:些年|些日子|半生|一生|辈子)[^。，；]{0,24}(?:靠的便是|靠的就是|凭的便是|凭的就是|都是因为|只凭|全凭)/g,
+  /(?:他|她)从来(?:都是|便是|就是)[^。，；]{0,12}(?:的|人)/g,
+  /(?:内廷|宫里|宫廷|朝廷|江湖|规矩)(?:最忌讳|最忌|最怕|最讲究)[^。，；]{0,18}(?:替|把|让|是)/g,
 ];
 // 隐式 POV 越界：用"像/仿佛/宛如+心理动词"替视角人物判断他人内心状态。
 // 这类句子表面是比喻，实质是作者借视角人物之口宣告对他人心理的总结。
@@ -89,7 +94,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   const issues: QualityIssue[] = [];
   const structure = analyzeDraftStructure(text);
   for (const found of structure.issues) {
-    const dimension: QualityDimension = found.rule.startsWith("plot.") ? "plot" : "pacing";
+    const dimension: QualityDimension = found.rule.startsWith("plot.") ? "plot" : "specificity";
     issues.push(issue({
       dimension,
       severity: found.severity,
@@ -129,7 +134,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       suggestion: "只补足完成本章叙事功能所必需的场景、人物体验、关系过程或行动后果，不得为接近参考目标而凑篇幅。",
     }));
   }
-  if (blocks.length >= 6 && paragraphVariation < 0.18) issues.push(issue({ dimension: "pacing", severity: "warning", title: "段落节奏过于均匀", description: "段落长度变化很小，可能产生模型化节奏。", rule: "style.paragraph-variation", suggestion: "按动作速度和情绪停顿重新划分段落，而非机械打散。" }));
+  if (blocks.length >= 6 && paragraphVariation < 0.18) issues.push(issue({ dimension: "specificity", severity: "warning", title: "段落节奏过于均匀", description: "段落长度变化很小，可能产生模型化节奏。", rule: "style.paragraph-variation", suggestion: "按动作速度和情绪停顿重新划分段落，而非机械打散。" }));
   if (totalChars > 0 && templateHits / totalChars * 1000 > 2) issues.push(issue({ dimension: "specificity", severity: "warning", title: "模板化表达偏多", description: `检测到 ${templateHits} 处常见模板表达。`, rule: "style.template-density", suggestion: "结合人物身体状态、环境和具体目标替换重复动作。" }));
   const openings = blocks.map((block) => block.slice(0, 8));
   for (let index = 2; index < openings.length; index += 1) {
@@ -168,7 +173,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       }
     }
   }
-  if (shortSentenceStreaks > 2) issues.push(issue({ dimension: "pacing", severity: shortSentenceStreaks > 5 ? "major" : "warning", title: "短句排比过多", description: `检测到 ${shortSentenceStreaks} 处连续短句排比，超过单章 2 处上限。`, revisionRanges: shortSentenceRanges, rule: "style.short-sentence-tic", suggestion: "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。" }));
+  if (shortSentenceStreaks > 2) issues.push(issue({ dimension: "specificity", severity: shortSentenceStreaks > 5 ? "major" : "warning", title: "短句排比过多", description: `检测到 ${shortSentenceStreaks} 处连续短句排比，超过单章 2 处上限。`, revisionRanges: shortSentenceRanges, rule: "style.short-sentence-tic", suggestion: "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。" }));
   let aphorismEndings = 0;
   for (const block of blocks) {
     const trimmedBlock = block.trim();
@@ -211,7 +216,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       paragraph: hitParagraph || undefined,
       revisionRanges: hitParagraph ? [{ start: hitParagraph, end: hitParagraph }] : undefined,
       rule: "pov.implicit-breach",
-      suggestion: "把他人心理判断改写为视角人物可观察的具体动作——如把"像忽然换了一个人"改为"入殿后他只是低头净手，指节未曾发颤"。",
+      suggestion: `把他人心理判断改写为视角人物可观察的具体动作——如把"像忽然换了一个人"改为"入殿后他只是低头净手，指节未曾发颤"。`,
     }));
   }
 
@@ -229,7 +234,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   }
   if (sceneSummaryTails.length >= 1) {
     issues.push(issue({
-      dimension: "pacing",
+      dimension: "sceneEmbodiment",
       severity: sceneSummaryTails.length >= 2 ? "major" : "warning",
       title: "场景后追加总结",
       description: `检测到 ${sceneSummaryTails.length} 处段落在具体场景之后追加抽象总结（段 ${sceneSummaryTails.join("、")}）。场景已通过动作呈现人物状态，又追加结论形成二次解释，降低现场感。`,
@@ -359,6 +364,7 @@ export async function saveQualityReport(params: {
     workflowRunId: params.workflowRunId,
     artifactId: params.artifactId,
     iteration: params.iteration,
+    scoringVersion: QUALITY_SCORING_VERSION,
     scores: aggregated.scores,
     weightedScore: aggregated.weightedScore,
     blockerCount: aggregated.blockerCount,
@@ -372,5 +378,10 @@ export async function saveQualityReport(params: {
 }
 
 export const QUALITY_DIMENSION_LABELS: Record<QualityDimension, string> = {
-  plot: "叙事组织", characterVoice: "人物声音", sceneEmbodiment: "场景具象", dialogue: "对白", pacing: "节奏", specificity: "语言具体性", hookPayoff: "悬念与余韵", continuity: "连续性",
+  plot: "叙事组织", characterVoice: "人物声音", sceneEmbodiment: "场景具象", dialogue: "对白", specificity: "语言具体性", hookPayoff: "悬念与余韵", continuity: "连续性",
 };
+
+export function qualityDimensionLabel(dimension: string) {
+  if (dimension === "pacing") return "节奏";
+  return QUALITY_DIMENSION_LABELS[dimension as QualityDimension] ?? dimension;
+}

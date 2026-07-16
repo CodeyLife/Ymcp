@@ -1,5 +1,5 @@
 /**
- * Review 切片测试：复刻 review-stage.ts 核心路径，5 个 reviewer 并发审校 + 聚合质量报告。
+ * Review 切片测试：复刻 review-stage.ts 核心路径，4 个 reviewer 并发审校 + 聚合质量报告。
  *
  * 默认 skip，通过 BENCH_STAGE=review 启用：
  *   BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts bench-review.test.ts
@@ -33,7 +33,7 @@ import { aggregateQuality, runDeterministicQualityChecks, type ReviewerFinding }
 import { compileNovelStagePrompt, resolveNovelSkills } from "../../skills";
 import { asBlueprint, reviewerSchema } from "../../workflow-shared";
 import { settleWithConcurrency } from "../../workflow-stages/settled-pool";
-import type { NovelAgentRole, QualityDimension, QualityIssue } from "../../types";
+import type { QualityDimension, QualityIssue } from "../../types";
 import {
   loadFixture,
   loadFoundationIntoDb,
@@ -73,11 +73,10 @@ const REVIEW_ROLES: Array<Parameters<typeof buildChapterReviewPrompt>[0]["role"]
   "character-reviewer",
   "continuity-reviewer",
   "plot-reviewer",
-  "pacing-reviewer",
 ];
 
 describeOrSkip("bench-review: 切片测试", { timeout: 1_800_000 }, () => {
-  it("reviews chapter draft with 5 reviewers", async () => {
+  it("reviews chapter draft with 4 reviewers", async () => {
     // 前置检查
     requireFixture("ch1-draft.json", "npm run test:bench:draft");
 
@@ -106,7 +105,7 @@ describeOrSkip("bench-review: 切片测试", { timeout: 1_800_000 }, () => {
         .filter((paragraph) => paragraph.trim())
         .join("\n\n");
 
-      // 3. 5 个 reviewer 并发（concurrency=2）+ 失败重试（复刻 review-stage.ts）
+      // 3. 4 个 reviewer 并发（concurrency=2）+ 失败重试（复刻 review-stage.ts）
       log("review", `启动 ${REVIEW_ROLES.length} 个 reviewer（concurrency=2）`);
 
       const reviewOne = async (

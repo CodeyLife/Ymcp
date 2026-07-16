@@ -30,7 +30,7 @@ export const BUILTIN_CHAPTER_WORKFLOW: WorkflowDefinition = {
   updatedBy: "system",
   workflowId: CHAPTER_WORKFLOW_ID,
   name: "标准章节创作",
-  description: "蓝图审批、正文生成、规则与五类专业审校、定向修订、正文审批和事实回写。",
+  description: "蓝图审批、正文生成、规则与四类专业审校、定向修订、正文审批和事实回写。",
   stages: ["context", "blueprint", "blueprint-approval", "draft", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit", "character-enrichment"],
   requiredSkillIds: ["story-facts-invariant", "chapter-blueprint", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
   maxAutoRevisions: 2,
@@ -55,7 +55,7 @@ export const blueprintSchema = {
   },
 };
 
-const qualityDimensions: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "pacing", "specificity", "hookPayoff", "continuity"];
+const qualityDimensions: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity"];
 
 export const reviewerSchema = {
   type: "object", additionalProperties: false, required: ["scores", "issues"],

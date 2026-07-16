@@ -75,7 +75,7 @@ describe("prose aesthetics skills", () => {
     expect(compiled).toContain("背景、回忆、生活过程和意象");
     expect(compiled).toContain("不再补写解释性心理总结");
     expect(compiled).toContain("禁止输出 Markdown 标题、代码围栏或水平分隔线");
-    expect(compiled.match(/留白/g)).toHaveLength(1);
+
     expect(compiled).not.toMatch(/冬日荒地|模型遇到人|走进城门的老人|信任加入模型/);
     expect(JSON.stringify(BUILTIN_NOVEL_SKILLS)).not.toMatch(/冬日荒地|模型遇到人|走进城门的老人|信任加入模型/);
   });

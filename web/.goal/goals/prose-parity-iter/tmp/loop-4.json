@@ -1,0 +1,118 @@
+{
+  "loop": 4,
+  "goalId": "prose-parity-iter",
+  "plan": "修复 Loop 3 识别的 revision-stage 约束继承问题：(1) 在修订 prompt 中注入声音/POV 硬约束；(2) 修复首次验证暴露的窗口边界重复段落问题——新增 adjacent-near-duplicate 检测 + 边界不复述约束。然后重新运行 bench-revision + re-review 验证。",
+  "actions": [
+    "revision-stage.ts：在修订 prompt 中新增'## 修订时声音与视角硬约束（违反即重写）'4 条规则（单POV/禁止心理结论句/对白声线区分/生成时自检）",
+    "bench-revision.test.ts：同步注入声音/POV 硬约束",
+    "revision-stage.ts + bench-revision.test.ts：在'局部修订契约'中新增第 5 条边界不复述硬约束",
+    "draft-structure.ts：新增 plot.adjacent-near-duplicate 规则——检测相邻段落 bigram 相似度 ≥0.7 或包含关系，标记较短段落删除",
+    "draft-structure-repair.ts：在 dedup filter 中加入 plot.adjacent-near-duplicate",
+    "Loop 4a 首次验证回归（weighted 3.45）：LLM 在窗口边界复述相邻段落内容产生重复段落",
+    "Loop 4b 修复后验证（weighted 3.96）：adjacent-near-duplicate 检测 + 边界不复述约束双保险消除重复段落",
+    "更新 findings.md 写入 Loop 4 完整分析：量化对比表 + 5 个剩余 major + 6 维度复检 + 根因 9+10 + Loop 4 结论"
+  ],
+  "verification": [
+    {
+      "result": "pass",
+      "summary": "247/247 unit tests passed (31 test files)",
+      "path": "src/features/novel/__tests__/draft-structure.test.ts"
+    },
+    {
+      "result": "pass",
+      "summary": "0 new TypeScript compilation errors",
+      "path": "src/features/novel/draft-structure.ts"
+    },
+    {
+      "result": "pass",
+      "summary": "bench-revision: 7 windows accepted, 4055 words, 重复段落完全消除",
+      "path": ".novel-bench/runs/20260716-221029-revision/output.md"
+    },
+    {
+      "result": "pass",
+      "summary": "bench-review: weighted=3.96 (Loop 3: 3.84), 0 blocker, 5 major, dialogue 4.02 (Loop 3: 3.38), continuity 4.27——均创历史最佳",
+      "path": ".novel-bench/runs/20260716-221238-review/quality-report.json"
+    },
+    {
+      "result": "pass",
+      "summary": "findings.md 已写入 Loop 4 完整分析：量化对比表 + 5 个剩余 major + 6 维度复检 + 根因 9+10",
+      "path": ".goal/goals/prose-parity-iter/findings.md"
+    }
+  ],
+  "errors": [
+    {
+      "issue": "Loop 4a 首次验证回归：weighted 3.45（从 Loop 3 的 3.84 回归）",
+      "rootCause": "revision-stage 声音/POV 约束注入后，LLM 在修订窗口边界处复述了相邻段落内容，applyRevisionWindows 拼接后产生重复段落",
+      "fix": "新增 plot.adjacent-near-duplicate 检测 + 边界不复述约束，Loop 4b 完全消除重复段落"
+    }
+  ],
+  "selfReflection": "Loop 4 经历了'注入约束→首次回归→根因分析→修复→二次验证创历史最佳'的完整闭环。关键发现：revision-stage 的声音/POV 约束注入是正确方向（POV 越界消除、dialogue 3.38→4.02），但约束注入会占用 token 并改变 LLM 输出模式，暴露了窗口边界拼接的结构性缺陷。adjacent-near-duplicate 检测是必要的后处理保障——不能仅靠 prompt 约束防止 LLM 复述边界内容。Loop 4b 的 weighted 3.96 是目前最佳结果，但剩余 5 个 major 均为 prose 级问题（POV 越界总结/心理直说/对白声音趋近/章尾收束重复），需 Loop 5 针对 POV 越界总结和交锋场景声线区分做进一步优化。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "revision-stage 约束继承 + 后处理去重的组合策略有效，Loop 4b weighted 3.96 创历史最佳证明方向正确",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.2,
+  "progressRationale": "Loop 3 结束时 weighted 3.84，剩余 3 个 major（声线接近/POV越界/线索汇总）。Loop 4 修复了 revision-stage 约束继承问题并解决了窗口边界重复段落，weighted 提升至 3.96（+0.12），dialogue 从 3.38 提升至 4.02（+0.64），continuity 从 4.02 提升至 4.27（+0.25）。剩余 5 个 major 均为 prose 级（POV 越界总结/心理直说/对白声音趋近/章尾收束重复），非结构性问题。进度从 60% 提升至 80%。",
+  "successSignalUpdates": [
+    {
+      "action": "observe",
+      "id": "prose-parity-verified",
+      "status": "pending",
+      "evidenceRefs": ["loop4b-revision-221029", "loop4b-review-221238"]
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 5：针对剩余 5 个 prose 级 major 优化——(1) 修复 POV 越界总结：在修订 prompt 中增加'禁止因果总结句'约束（如'他发现X皆因Y被牵到一处'式越界），或增加后处理检测作者级总结段落；(2) 修复交锋场景声线趋近：在修订 prompt 中增加萧承晏 vs 魏成礼交锋对白的具体改写样例（皇子=追问+不表态 vs 宦官=回避+推制度）；(3) 修复章尾收束重复：在修订 prompt 中增加'章尾只保留一个收束动作'约束。然后重新运行 bench-revision + re-review 验证。若 5 个 major 均消除或降为 warning，进入至少一次完整 e2e 章节验证阶段。",
+  "artifactRefs": [
+    {
+      "id": "loop4b-revision-221029",
+      "successSignalId": "prose-parity-verified",
+      "path": ".novel-bench/runs/20260716-221029-revision/output.md",
+      "kind": "revision-output",
+      "status": "verified",
+      "evidence": "Loop 4b bench-revision: 7 windows accepted, 4055 words, 重复段落完全消除, POV 越界消除"
+    },
+    {
+      "id": "loop4b-review-221238",
+      "successSignalId": "prose-parity-verified",
+      "path": ".novel-bench/runs/20260716-221238-review/quality-report.json",
+      "kind": "post-revision-review",
+      "status": "verified",
+      "evidence": "weighted 3.96 (Loop 3: 3.84), 0 blocker, 5 major, dialogue 4.02 (Loop 3: 3.38), continuity 4.27——均创历史最佳"
+    },
+    {
+      "id": "findings-md-loop-4",
+      "successSignalId": "prose-parity-verified",
+      "path": ".goal/goals/prose-parity-iter/findings.md",
+      "kind": "analysis",
+      "status": "produced",
+      "evidence": "Loop 4 完整分析：量化对比表 + 5 个剩余 major + 6 维度复检 + 根因 9（修订 LLM 引入作者级总结段落）+ 根因 10（交锋场景声线约束执行力度不足）"
+    },
+    {
+      "id": "src-draft-structure-loop4",
+      "successSignalId": "prose-parity-verified",
+      "path": "src/features/novel/draft-structure.ts",
+      "kind": "code-change",
+      "status": "verified",
+      "evidence": "新增 plot.adjacent-near-duplicate 规则——检测相邻段落 bigram 相似度 ≥0.7 或包含关系"
+    },
+    {
+      "id": "src-draft-repair-loop4",
+      "successSignalId": "prose-parity-verified",
+      "path": "src/features/novel/workflow-stages/draft-structure-repair.ts",
+      "kind": "code-change",
+      "status": "verified",
+      "evidence": "dedup filter 加入 plot.adjacent-near-duplicate"
+    },
+    {
+      "id": "src-revision-stage-loop4",
+      "successSignalId": "prose-parity-verified",
+      "path": "src/features/novel/workflow-stages/revision-stage.ts",
+      "kind": "code-change",
+      "status": "verified",
+      "evidence": "修订 prompt 注入声音/POV 硬约束 + 边界不复述约束"
+    }
+  ]
+}

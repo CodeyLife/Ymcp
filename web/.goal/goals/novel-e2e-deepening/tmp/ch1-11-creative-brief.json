@@ -1,17 +1,17 @@
 {
-  "id": "ed64b965-bc5d-4d2d-97ae-e475434e20c6",
-  "projectId": "06480200-6cd3-44aa-b431-3d14657de429",
+  "id": "b96700cf-cced-4c19-918a-dd081bb45bbf",
+  "projectId": "877d9c7a-a310-492b-9aba-58775abc1f0d",
   "schemaVersion": 8,
   "revision": 3,
-  "createdAt": 1784165598159,
-  "updatedAt": 1784165598160,
+  "createdAt": 1784215066800,
+  "updatedAt": 1784215066802,
   "createdBy": "local-user",
   "updatedBy": "local-user",
-  "threadId": "e3a69ee1-8d62-4ab3-b011-10472abd7999",
-  "targetDocumentId": "f53450b8-d9ba-47d4-b498-f5ff457455df",
+  "threadId": "cbad8273-6edf-4579-b865-29295074e2e7",
+  "targetDocumentId": "3cc0a319-b396-409c-a866-3af2485b2c0d",
   "status": "confirmed",
-  "goal": "完成《初雪夜，东宫三盏未熄的灯》正文。本章是引子章，承担\"暴毙之夜多视角切片\"功能。三位主角在同一夜里分别与太子发生某种接触或位置接近，并在章尾汇合于一个共同信息压力。不要揭示真凶或核心动机。",
-  "povCharacterId": "0571eb84-26f0-4d43-8275-11ad06b3e281",
+  "goal": "完成《第一章 初雪夜，东宫灯尽》正文。本章是引子章，承担\"暴毙之夜多视角切片\"功能。三位主角在同一夜里分别与太子发生某种接触或位置接近，并在章尾汇合于一个共同信息压力。不要揭示真凶或核心动机。",
+  "povCharacterId": "0b80a016-9606-4a6d-beaf-f41a0cae41bb",
   "factCutoffOrder": -1,
   "tone": "克制而诡谲，宫廷礼俗与市井烟火交织",
   "languageRequirements": [
@@ -32,5 +32,5 @@
   "referencedMemoryIds": [],
   "openQuestions": [],
   "sourceMessageIds": [],
-  "confirmedAt": 1784165598160
+  "confirmedAt": 1784215066802
 }

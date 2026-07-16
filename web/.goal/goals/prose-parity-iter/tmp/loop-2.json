@@ -1,0 +1,104 @@
+{
+  "loop": 2,
+  "goalId": "prose-parity-iter",
+  "plan": "实施方向 A+B+C 优化（prose-prompts.ts 生成时自检钩子 + 角色声部样例机制；skills.ts classic-prose-texture 身份声部样例库），运行 bench-draft + bench-review 切片验证优化效果，与 Loop 1 基线做 6 维度 prose 级对比，识别残留问题。",
+  "actions": [
+    "prose-prompts.ts：新增'角色声部样例'机制（动笔写第一句对白前为每个角色生成 2-3 句声部样例锚点，含意图/用词层次/回避说什么三维度）",
+    "prose-prompts.ts：新增'## 生成时自检钩子'章节（10 个'写到X时立即做Y'指令：人物特质/情绪/器物/章尾/身份列表/格言/环境/朝堂对白/市井对白/POV越界）+ '## 输出前终检'段落",
+    "skills.ts classic-prose-texture：新增'【身份声部样例库（生成时锚点）】'章节，为 4 种身份角色（掌事宦官/皇子/文献官/市井仵作）各提供 3 个声部样例 + '为什么这么说'解释",
+    "修复 skills.ts 第 98 行 esbuild 解析错误：身份声部样例库中 ASCII 双引号在双引号 JS 字符串中截断字符串，统一改为中文全角引号“”",
+    "运行 BENCH_STAGE=draft bench-draft.test.ts（61.3s）→ 20260716-213606-draft/output.md（2706 字，机械预检 0 major/1 warning）",
+    "运行 BENCH_STAGE=review bench-review.test.ts（62.3s）→ 20260716-213725-review/quality-report.json（weighted 3.86, 0 blocker, 2 major, 11 warning）",
+    "读取优化后 draft 全文 + quality-report.json，按 6 维度做 prose 级对比分析，写入 findings.md Loop 2 段落"
+  ],
+  "verification": [
+    {
+      "result": "pass",
+      "summary": "bench-draft 通过：2706 字，3 段生成，61.3s，机械预检仅 1 warning（基线 14 warning）",
+      "path": ".novel-bench/runs/20260716-213606-draft/output.md"
+    },
+    {
+      "result": "pass",
+      "summary": "bench-review 通过：weighted 3.86（基线 3.67，+0.19），0 blocker（基线 1），2 major（基线 4），11 warning（基线 14），7 维 avg 3.93（基线 3.78）",
+      "path": ".novel-bench/runs/20260716-213725-review/quality-report.json"
+    },
+    {
+      "result": "pass",
+      "summary": "findings.md 已写入 Loop 2 量化对比表 + 6 维度 prose 级复检 + 5 条残留问题汇总 + Loop 2 结论",
+      "path": ".goal/goals/prose-parity-iter/findings.md"
+    },
+    {
+      "result": "pass",
+      "summary": "prose 级抽检：6 维度中 3 个（句式节奏/文白双声部/去情绪化）显著改善接近参考作品质感，3 个（器物隐喻/章尾钩子/群像声音）部分改善残留 major",
+      "path": ".novel-bench/runs/20260716-213606-draft/output.md"
+    }
+  ],
+  "errors": [],
+  "selfReflection": "Loop 2 验证了'生成时自检钩子 + 身份声部样例库'机制的有效性。最大进步维度是文白双声部——4 个角色声部已分化，魏成礼典雅宦官声部、萧承晏皇子追问声部、沈知微史官考据声部、顾长安市井仵作声部均落地，与声部样例库几乎一致。去情绪化也达成核心目标——太子薨逝消息通过'膝盖磕青砖+册页声音停住'承载，全章几乎无心理直说。但残留 2 个 major：(1) 章尾异常过于泛化，读者只知'一行墨迹'但不知'具体哪里不合理'；(2) 群像入场方式同质，三人都'带线索来→被询问→回答'。声部样例库解决了'怎么说'，但未解决'怎么入场/怎么主动推进'。需 Loop 3 针对这 2 个 major 优化。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "先对比分析→再优化 prompts/skills→bench 验证→prose 级复检的策略有效，Loop 2 量化与质感双重改善证明生成时钩子机制方向正确",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.25,
+  "progressRationale": "Loop 2 完成优化实施 + bench 验证 + 6 维度复检。6 维度中 3 个显著改善接近参考作品，3 个部分改善。整体进度从 Loop 1 的 10%（对比分析）提升至约 35%（核心机制验证有效，残留 2 major 需 Loop 3 收尾）。",
+  "successSignalUpdates": [
+    {
+      "action": "satisfy",
+      "id": "evidence-reviewed",
+      "status": "satisfied",
+      "evidenceRefs": ["loop2-draft-213606", "loop2-review-213725", "findings-md-loop-2"]
+    },
+    {
+      "action": "observe",
+      "id": "prose-parity-verified",
+      "status": "pending",
+      "evidenceRefs": ["loop2-draft-213606", "loop2-review-213725"]
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 3：针对残留 2 个 major 优化——(1) 章尾钩子：在 prose-prompts.ts 生成时自检钩子的'章尾落点'指令中增加'必须给出具体不可能的物证细节（如纸料不符/褶痕缺失/墨迹时辰矛盾）而非泛化异常'的约束；(2) 群像入场：在声部样例机制中增加'入场方式差异化'约束——每个角色入场必须体现立场差异（如史官先问问题再给卷册/仵作直接动手检验/皇子只看不碰），禁止都'带线索来→被询问→回答'。同时考虑环境意象与器物决策的 warning。然后运行 bench-draft + bench-review + 至少一次 bench-revision 验证全链路。",
+  "artifactRefs": [
+    {
+      "id": "loop2-draft-213606",
+      "successSignalId": "evidence-reviewed",
+      "path": ".novel-bench/runs/20260716-213606-draft/output.md",
+      "kind": "optimized-draft",
+      "status": "verified",
+      "evidence": "优化后 draft 2706 字，机械预检 0 major/1 warning（基线 14 warning），4 角色声部分化，去情绪化达成"
+    },
+    {
+      "id": "loop2-review-213725",
+      "successSignalId": "prose-parity-verified",
+      "path": ".novel-bench/runs/20260716-213725-review/quality-report.json",
+      "kind": "optimized-review",
+      "status": "verified",
+      "evidence": "weighted 3.86（+0.19），0 blocker（-1），2 major（-2），7 维 avg 3.93（+0.15），残留 major 为章尾异常泛化+群像入场同质"
+    },
+    {
+      "id": "findings-md-loop-2",
+      "successSignalId": "prose-parity-verified",
+      "path": ".goal/goals/prose-parity-iter/findings.md",
+      "kind": "analysis",
+      "status": "produced",
+      "evidence": "findings.md 已写入 Loop 2 量化对比表 + 6 维度 prose 级复检 + 5 条残留问题汇总"
+    },
+    {
+      "id": "prose-prompts-loop2",
+      "successSignalId": "prose-parity-verified",
+      "path": "src/features/novel/prose-prompts.ts",
+      "kind": "code-change",
+      "status": "verified",
+      "evidence": "新增角色声部样例机制 + 生成时自检钩子章节（10 个即时替换指令）"
+    },
+    {
+      "id": "skills-loop2",
+      "successSignalId": "prose-parity-verified",
+      "path": "src/features/novel/skills.ts",
+      "kind": "code-change",
+      "status": "verified",
+      "evidence": "classic-prose-texture 新增身份声部样例库（4 身份×3 样例），修复 ASCII 引号解析错误"
+    }
+  ]
+}

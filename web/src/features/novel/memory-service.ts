@@ -480,7 +480,6 @@ const STAGE_RETRIEVAL_KINDS: Partial<Record<NovelAgentRole, Set<NovelRetrievalHi
   "character-reviewer": new Set(["entity", "fact", "memory"]),
   "continuity-reviewer": new Set(["entity", "fact", "memory", "document", "thread", "foreshadowing"]),
   "plot-reviewer": new Set(["outline", "memory", "document", "thread", "foreshadowing"]),
-  "pacing-reviewer": new Set(["outline", "memory", "document", "thread"]),
   "fact-extractor": new Set(["fact"]),
   "character-enricher": new Set(["entity", "fact"]),
 };

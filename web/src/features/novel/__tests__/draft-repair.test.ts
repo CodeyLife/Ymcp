@@ -67,6 +67,18 @@ describe("draft structure repair", () => {
     expect(result.content).toBe([...progression, ...filler].join("\n\n"));
   });
 
+  it("preserves adjacent paragraphs that reuse vocabulary in a different order", async () => {
+    const content = [
+      "他将木匣放在案上，又把钥匙收入袖中，转身吩咐众人封门。",
+      "他转身吩咐众人封门，又将钥匙收入袖中，最后把木匣放在案上。",
+    ].join("\n\n");
+
+    const result = await repairDraftStructureOnce({ content, model: "test-model", skillPrompt: "修复契约" });
+
+    expect(result.content).toBe(content);
+    expect(streamNovelModel).not.toHaveBeenCalled();
+  });
+
   it("truncates a short-paragraph second ending that repeats earlier themes (R8)", () => {
     // 早期长段（≥100 字符）：建立并重复 寒灯/断穗/门人录/夜雾/佩剑客/她没有回头/转身/走入 主题
     const early = [

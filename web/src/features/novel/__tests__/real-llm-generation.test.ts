@@ -94,7 +94,7 @@ const XIANXIA_CONTEXT = `## 冻结事实
 
 async function callRealLLM(prompt: string, systemPrompt: string, maxTokens: number, temperature: number) {
   const body = {
-    model: "auto",
+    model: "gpt-5-5",
     temperature,
     stream: true,
     stream_options: { include_usage: true },
@@ -153,7 +153,7 @@ async function callRealLLM(prompt: string, systemPrompt: string, maxTokens: numb
 
 async function callStructuredReview(prompt: string, _schema: Record<string, unknown>) {
   const body = {
-    model: "auto",
+    model: "gpt-5-5",
     temperature: 0,
     stream: true,
     stream_options: { include_usage: true },

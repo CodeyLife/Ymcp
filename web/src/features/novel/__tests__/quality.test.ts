@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateQuality, countNovelWords, runDeterministicQualityChecks } from "../quality";
+import { aggregateQuality, countNovelWords, qualityDimensionLabel, runDeterministicQualityChecks } from "../quality";
 
 describe("novel quality gates", () => {
   it("counts Chinese characters and alphanumeric words with the production metric", () => {
@@ -41,6 +41,21 @@ describe("novel quality gates", () => {
     expect(passed.passed).toBe(true);
     const failed = aggregateQuality({ deterministic, threshold: 4.8 });
     expect(failed.passed).toBe(false);
+  });
+
+  it("keeps the weighted quality scale normalized to five", () => {
+    const deterministic = runDeterministicQualityChecks({ text: "船工收紧缆绳，岸边众人依次登船。".repeat(100) });
+    deterministic.issues = [];
+    deterministic.scores = { plot: 5, characterVoice: 5, sceneEmbodiment: 5, dialogue: 5, specificity: 5, hookPayoff: 5, continuity: 5 };
+
+    const result = aggregateQuality({ deterministic, threshold: 5 });
+
+    expect(result.weightedScore).toBe(5);
+    expect(result.passed).toBe(true);
+  });
+
+  it("keeps a label for pacing scores stored by older reports", () => {
+    expect(qualityDimensionLabel("pacing")).toBe("节奏");
   });
 
   it("uses 1000 words as the only hard length floor and keeps the target as a metric", () => {
@@ -101,7 +116,7 @@ describe("novel quality gates", () => {
       threshold: 3.7,
       reviewers: [{
         role: "style-reviewer",
-        scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 },
+        scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 },
         issues: [{ dimension: "continuity", severity: "warning", title: "视角中出现直接心理解释", description: "直接解释罗渡的心理判断，削弱当前第三人称限知。", rule: "review.pov-psychology", suggestion: "只保留可观察动作。" }],
       }],
     });
@@ -124,7 +139,7 @@ describe("novel quality gates", () => {
       threshold: 3.7,
       reviewers: [
         { role: "plot-reviewer", scores: { plot: 2 }, issues: [{ ...baseIssue, revisionRanges: [{ start: 291, end: 293 }] }] },
-        { role: "pacing-reviewer", scores: { pacing: 2 }, issues: [{ ...baseIssue, revisionRanges: [{ start: 294, end: 296 }] }] },
+        { role: "style-reviewer", scores: { specificity: 2 }, issues: [{ ...baseIssue, revisionRanges: [{ start: 294, end: 296 }] }] },
       ],
     });
 
@@ -156,7 +171,7 @@ describe("prose discipline checks", () => {
       expect.objectContaining({
         rule: "style.fragmented-paragraphs",
         severity: "major",
-        dimension: "pacing",
+        dimension: "specificity",
         revisionRanges: [{ start: 1, end: 4 }],
       }),
     ]));

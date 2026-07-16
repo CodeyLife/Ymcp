@@ -1,9 +1,9 @@
 {
-  "id": "06480200-6cd3-44aa-b431-3d14657de429",
+  "id": "877d9c7a-a310-492b-9aba-58775abc1f0d",
   "schemaVersion": 8,
   "revision": 1,
-  "createdAt": 1784165294567,
-  "updatedAt": 1784165294567,
+  "createdAt": 1784214711130,
+  "updatedAt": 1784214711130,
   "createdBy": "local-user",
   "updatedBy": "local-user",
   "title": "初雪夜长歌",
@@ -26,7 +26,7 @@
   "status": "planning",
   "coverColor": "#b5483a",
   "settings": {
-    "textModel": "auto",
+    "textModel": "gpt-5-5",
     "temperature": 0.75,
     "recentChapterCount": 5,
     "encrypted": false,

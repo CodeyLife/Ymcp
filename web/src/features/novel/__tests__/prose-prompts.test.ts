@@ -26,6 +26,8 @@ describe("production prose prompts", () => {
     expect(prompt).toContain("解释幕后真相");
     expect(prompt).toContain("参考目标约 2400 个中文字符");
     expect(prompt).toContain("完整成稿须超过 3000 字");
+    expect(prompt).toContain("只使用已批准蓝图和正文已经建立");
+    expect(prompt).not.toMatch(/魏成礼|魏公公|东宫|皇子|宦官|仵作|史官|具体不可能的物证细节/);
     expect(prompt).not.toMatch(/剑来|雪中悍刀行|我在风花雪月里等你|烽火戏诸侯/);
   });
 
@@ -58,7 +60,8 @@ describe("production prose prompts", () => {
     // endingHook 作为合成节拍出现在 beat 列表中
     expect(lastContract).toContain("章尾落点");
     expect(lastContract).toContain(endingHook);
-    expect(lastContract).toContain("不得在最后节拍落地前结束本段");
+    expect(lastContract).toContain("不得在最后节拍完整落地前结束本段");
+    expect(lastContract).toContain("不得为了增强钩子另造异常、危险、物证或角色");
     expect(lastContract).toContain("必须写完上述所有节拍");
     expect(lastContract).toContain("不得跳过最后节拍");
     expect(lastContract).not.toContain("可以完成章尾余韵");
@@ -89,8 +92,9 @@ describe("production prose prompts", () => {
     expect(stylePrompt).toContain("解释性心理总结");
     expect(stylePrompt).toContain("意象替人物说理");
     expect(plotPrompt).toContain("是否把大纲压缩成当章任务清单");
-    expect(plotPrompt).toContain("铺陈和余波章不要求不可逆结果");
+    expect(plotPrompt).toContain("铺陈、相处和余波章不要求不可逆结果");
     expect(plotPrompt).toContain("背景展开、人物内省、情感抒发、文学意象和日常过程可以是章节主体");
     expect(plotPrompt).toContain("revisionRanges");
+    expect(`${stylePrompt}\n${plotPrompt}`).not.toMatch(/魏公公|东宫|皇子|宦官|仵作|史官|封存命令/);
   });
 });

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "id": "prose-parity-iter",
+  "objective": "通过实际运行 bench-draft + bench-review 切片及至少一次完整 e2e 章节验证生成小说正文，与雪中悍刀行/剑来/庆余年等参考作品实际片段做 prose 级对比，识别句式节奏/文白双声部/器物隐喻/去情绪化/章尾钩子/群像声音区分等维度的真实差距；根因分析后优化 novel 生成栈中任一需要的文件（prose-prompts.ts / skills.ts / generation.ts / quality.ts / blueprint-stage.ts / draft-stage.ts / review-stage.ts 等）；反复迭代直到产出正文 prose 质感在 LLM 对比抽检下稳定接近参考作品。迭代视角覆盖 prose/structure/voice/hooks/imagery 多维度。聚焦实际文案质量提升，而非追逐评分阈值。",
+  "status": "complete",
+  "createdAt": "2026-07-16T13:26:56.561Z",
+  "updatedAt": "2026-07-16T15:28:21.369Z",
+  "loopCount": 8,
+  "lastDecision": "complete",
+  "lastCheckpoint": "第 4 次尝试 e2e 章节验证，完成目标明确要求的'至少一次完整 e2e 章节验证'。API 已恢复稳定，foundation 9 stages + chapter 1 全流程跑通。 e2e 章节验证第 4 次尝试启动（npx vitest run --config vitest.e2e.config.ts e2e-chapter1.test.ts） Foundation 9 stages 全部通过：project-positioning → architecture → characters → relations → worldview → pl...",
+  "completionEvidence": "result=pass e2e Chapter 1 完整工作流跑通：foundation 9 stages + chapter 1 全流程（context→blueprint→draft→review→revision→fact-extraction→fact-approval→commit→character-enrichment completed），耗时 796.91s path .goal/goals/novel-e2e-deepening/tmp/ch1-15-run-after-fact.json; result=pass 质量报告：weightedScore=3.92, 0 blockers, 1 major, 12 warnings, avg=3.98, 4218 字, 4 reviewer 全参与 path .goal/goals/novel-e2e-deepening/tmp/ch1-14-quality-report.json; result=pass 与 bench 切片高度一致：weighted 3.92 vs bench 3.94（差 0.02），prose 质量改善已稳定 path .novel-bench/runs/20260716-225329-review/quality-report.json; result=pass findings.md 已写入 Loop 7 + Loop 8 完整分析：e2e 验证结果 + 与 bench 对比表 + 唯一 major + 12 warnings + 6 维度复检 + 结论 path .goal/goals/prose-parity-iter/findings.md",
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "findings-md-loop-1"
+      ]
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "baseline-draft-181158",
+        "baseline-review-181402",
+        "loop2-draft-213606",
+        "loop2-review-213725",
+        "findings-md-loop-2",
+        "loop8-evidence-reviewed"
+      ]
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "satisfied",
+      "weight": 1,
+      "evidenceRefs": [
+        "loop8-e2e-run",
+        "loop8-quality-report",
+        "loop8-findings"
+      ]
+    },
+    {
+      "id": "prose-parity-verified",
+      "text": "产出正文 prose 质感在 LLM 对比抽检下稳定接近参考作品（雪中悍刀行/剑来/庆余年），至少一次完整 e2e 章节验证 + bench-draft/review 切片对比显示 6 维度差距显著缩小",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "loop2-draft-213606",
+        "loop2-review-213725",
+        "loop3b-draft-214432",
+        "loop3b-review-214554",
+        "loop3-revision-215205",
+        "loop3-rereview-215421",
+        "loop4b-revision-221029",
+        "loop4b-review-221238",
+        "loop5-revision-222403",
+        "loop5-review-223857",
+        "loop5-revision-224435",
+        "findings-md-loop-5",
+        "loop6-draft-225103",
+        "loop6-review-225329",
+        "findings-md-loop-6",
+        "loop8-e2e-run",
+        "loop8-quality-report",
+        "loop8-bench-comparison",
+        "loop8-findings",
+        "loop8-draft-output"
+      ]
+    }
+  ],
+  "strategy": {
+    "current": "Refine the broad goal only enough to choose the next evidence-seeking loop; avoid pre-building a task list.",
+    "lastChangeReason": "Initial strategy.",
+    "updatedAtLoop": 0
+  },
+  "progressEstimate": 1
+}

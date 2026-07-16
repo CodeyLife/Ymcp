@@ -277,7 +277,7 @@ export async function createNovelProject(input: Pick<StoryProject, "title" | "ge
     status: "planning",
     coverColor: "#b5483a",
     settings: {
-      textModel: "auto",
+      textModel: "gpt-5-5",
       temperature: 0.75,
       recentChapterCount: 5,
       encrypted: false,

@@ -4,7 +4,7 @@ vi.mock("../ai", () => ({
   callStructuredNovelModel: vi.fn(async ({ role }: { role: string }) => {
     if (role === "fact-extractor") return { data: { summary: "无变化", facts: [] }, usage: { inputTokens: 1, outputTokens: 1 }, promptHash: "fact" };
     if (role === "character-enricher") return { data: { enrichments: [] }, usage: { inputTokens: 1, outputTokens: 1 }, promptHash: "enrichment" };
-    return { data: { scores: { plot: 1, characterVoice: 1, sceneEmbodiment: 1, dialogue: 1, pacing: 1, specificity: 1, hookPayoff: 1, continuity: 1 }, issues: [] }, usage: { inputTokens: 1, outputTokens: 1 }, promptHash: "review" };
+    return { data: { scores: { plot: 1, characterVoice: 1, sceneEmbodiment: 1, dialogue: 1, specificity: 1, hookPayoff: 1, continuity: 1 }, issues: [] }, usage: { inputTokens: 1, outputTokens: 1 }, promptHash: "review" };
   }),
   streamNovelModel: vi.fn(),
 }));
@@ -35,7 +35,7 @@ function packet(projectId: string): NovelContextPacket {
 describe("chapter workflow regressions", () => {
   it("merges adjacent revision ranges and only replaces their paragraph window", () => {
     const paragraphs = ["第一段", "第二段", "第三段", "第四段"];
-    const first = { id: "a", dimension: "pacing", severity: "major", title: "碎片", description: "碎片", revisionRanges: [{ start: 2, end: 2 }], rule: "style.short", suggestion: "合并", deterministic: false } satisfies QualityIssue;
+    const first = { id: "a", dimension: "specificity", severity: "major", title: "碎片", description: "碎片", revisionRanges: [{ start: 2, end: 2 }], rule: "style.short", suggestion: "合并", deterministic: false } satisfies QualityIssue;
     const second = { ...first, id: "b", revisionRanges: [{ start: 3, end: 3 }] } satisfies QualityIssue;
 
     const planned = planRevisionWindows([first, second], paragraphs);
@@ -46,7 +46,7 @@ describe("chapter workflow regressions", () => {
 
   it("keeps deterministic deletions out of revision windows and gives deletion precedence", () => {
     const paragraphs = ["第一段", "重复段", "需要局部改写的第三段", "第四段"];
-    const issue = { id: "overlap", dimension: "pacing", severity: "major", title: "重叠问题", description: "第二、三段需要处理", revisionRanges: [{ start: 2, end: 3 }], rule: "style.overlap", suggestion: "局部修订", deterministic: false } satisfies QualityIssue;
+    const issue = { id: "overlap", dimension: "specificity", severity: "major", title: "重叠问题", description: "第二、三段需要处理", revisionRanges: [{ start: 2, end: 3 }], rule: "style.overlap", suggestion: "局部修订", deterministic: false } satisfies QualityIssue;
     const deleted = new Set([1]);
 
     const planned = planRevisionWindows([issue], paragraphs, deleted);
@@ -79,7 +79,7 @@ describe("chapter workflow regressions", () => {
   it("locates review excerpts despite punctuation and whitespace differences", () => {
     const issue = {
       id: "fuzzy",
-      dimension: "pacing",
+      dimension: "specificity",
       severity: "major",
       title: "动作停滞",
       description: "需要压缩",
@@ -162,7 +162,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-before-format-revision", blueprintArtifactId: "blueprint-format-revision", qualityReportId: "report-format-revision", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft-before-format-revision", stage: "draft", kind: "draft", title: "原稿", contentMarkdown: "风从门缝里灌进来。他压低灯芯，屋里暗了一层。\n\n脚步停在门外。他没有出声，只把短刀移到手边。" });
     const blueprint = artifact(run, { id: "blueprint-format-revision", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图", structuredData: { title: "第一章", objective: "守住屋门", startingState: "屋内", beats: [], endingHook: "门外来人", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
-    const report: QualityReport = { ...recordBase(project.id), id: "report-format-revision", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 2, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, weightedScore: 3.5, blockerCount: 0, passed: false, issues: [{ id: "revise-range", dimension: "plot", severity: "major", title: "动作结果不清", description: "补足人物应对结果。", revisionRanges: [{ start: 1, end: 2 }], rule: "plot.action-result", suggestion: "在原范围内补足结果。", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report-format-revision", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 2, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, weightedScore: 3.5, blockerCount: 0, passed: false, issues: [{ id: "revise-range", dimension: "plot", severity: "major", title: "动作结果不清", description: "补足人物应对结果。", revisionRanges: [{ start: 1, end: 2 }], rule: "plot.action-result", suggestion: "在原范围内补足结果。", deterministic: false }], metrics: {}, reviewerRoles: [] };
     const invalid = ["以下是修订后的正文：", "风停了。", "灯暗了。", "脚步来到门外。"].join("\n\n");
     // 修订输出不足 1000 字时直接保留原文并转人工，不再浪费一轮审校调用。
     vi.mocked(streamNovelModel)
@@ -276,7 +276,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, draftArtifactId: "draft", blueprintArtifactId: "blueprint", qualityReportId: "report", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft", stage: "draft", kind: "draft", title: "正文", contentMarkdown: "第一段。\n\n第二段。" });
     const blueprint = artifact(run, { id: "blueprint", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
-    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, pacing: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "warning", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "warning", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
     await novelDb.qualityReports.add(report);
@@ -295,7 +295,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft", blueprintArtifactId: "blueprint", qualityReportId: "report", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft", stage: "draft", kind: "draft", title: "正文", contentMarkdown: "第一段。\n\n第二段。" });
     const blueprint = artifact(run, { id: "blueprint", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
-    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, pacing: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "major", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "major", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
@@ -319,7 +319,7 @@ describe("chapter workflow regressions", () => {
     const draftContent = "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。\n\n佩剑客从佛像旁走出，衣着整洁，剑穗随步轻摆。那是她曾见过的样式。听潮阁已灭，所以才要寻。他递茶试探，言语温雅却句句指向旧事。\n\n她抬手一挥，桌上的寒灯翻倒。灯油洒在地面，火光被夜风卷起。佩剑客人退了一步。沈雁声借这一瞬掠向侧墙，剑锋擦过她的袖口。";
     const draft = artifact(run, { id: "draft-similar", stage: "draft", kind: "draft", title: "正文", contentMarkdown: draftContent });
     const blueprint = artifact(run, { id: "blueprint-similar", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
-    const report: QualityReport = { ...recordBase(project.id), id: "report-similar", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, pacing: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-similar", dimension: "plot", severity: "major", title: "心理判断句", description: "需要修订", revisionRanges: [{ start: 1, end: 1 }], rule: "style.test", suggestion: "改写第一段", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report-similar", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-similar", dimension: "plot", severity: "major", title: "心理判断句", description: "需要修订", revisionRanges: [{ start: 1, end: 1 }], rule: "style.test", suggestion: "改写第一段", deterministic: false }], metrics: {}, reviewerRoles: [] };
     // Mock LLM 返回与原文完全相同的内容（相似度 = 1.0 > 0.92）
     vi.mocked(streamNovelModel).mockResolvedValue({ content: draftContent, promptHash: "no-change" });
     await novelDb.contextPackets.add(context);
@@ -338,7 +338,7 @@ describe("chapter workflow regressions", () => {
   });
 
   it("does not regress a revision that removes major issues despite a slightly lower score", () => {
-    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, blockerCount: 0, passed: false, metrics: {}, reviewerRoles: [] };
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, blockerCount: 0, passed: false, metrics: {}, reviewerRoles: [] };
     const major = { id: "major", dimension: "plot", severity: "major", title: "主要问题", description: "问题", rule: "plot.test", suggestion: "修订", deterministic: false } satisfies QualityIssue;
     const previous = { ...base, weightedScore: 4.2, issues: [major] } satisfies QualityReport;
     const current = { ...base, id: "current", weightedScore: 4.1, issues: [] } satisfies QualityReport;
@@ -346,11 +346,19 @@ describe("chapter workflow regressions", () => {
   });
 
   it("regresses a higher-scoring revision that introduces a blocker", () => {
-    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, passed: false, metrics: {}, reviewerRoles: [] };
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, passed: false, metrics: {}, reviewerRoles: [] };
     const blocker = { id: "blocker", dimension: "continuity", severity: "blocker", title: "事实冲突", description: "冲突", rule: "continuity.test", suggestion: "恢复事实", deterministic: false } satisfies QualityIssue;
     const previous = { ...base, weightedScore: 3.8, blockerCount: 0, issues: [] } satisfies QualityReport;
     const current = { ...base, id: "current-blocked", weightedScore: 4.3, blockerCount: 1, issues: [blocker] } satisfies QualityReport;
     expect(isQualityRegression({ previous, current })).toBe(true);
+  });
+
+  it("does not compare weighted scores across scoring versions", () => {
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, blockerCount: 0, passed: false, issues: [], metrics: {}, reviewerRoles: [] };
+    const previous = { ...base, scoringVersion: 1, weightedScore: 4.4 } satisfies QualityReport;
+    const current = { ...base, id: "current-v2", scoringVersion: 2, weightedScore: 3.8 } satisfies QualityReport;
+
+    expect(isQualityRegression({ previous, current })).toBe(false);
   });
 
   it("restores the previous draft when a revision scores lower", async () => {

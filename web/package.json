@@ -14,8 +14,8 @@
     "test:bench:review": "BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-review.test.ts",
     "test:bench:revision": "BENCH_STAGE=revision npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-revision.test.ts",
     "test:bench:smoke": "BENCH_SMOKE=true npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-smoke.test.ts",
-    "test:e2e:foundation": "npx vitest run src/features/novel/__tests__/e2e-foundation.test.ts",
-    "test:e2e:chapter1": "npx vitest run src/features/novel/__tests__/e2e-chapter1.test.ts",
+    "test:e2e:foundation": "npx vitest run --config vitest.e2e.config.ts src/features/novel/__tests__/e2e-foundation.test.ts",
+    "test:e2e:chapter1": "npx vitest run --config vitest.e2e.config.ts src/features/novel/__tests__/e2e-chapter1.test.ts",
     "bench:compare": "node scripts/novel-bench/compare.mjs"
   },
   "dependencies": {

@@ -569,7 +569,7 @@ export interface AgentRun extends VersionedRecord {
 export type NovelSkillSource = "builtin" | "user" | "project";
 export type NovelSkillCategory = "ideation" | "character-world" | "long-plan" | "chapter" | "drafting" | "serial" | "review" | "memory";
 export type NovelSkillStage = "foundation" | "planning" | "drafting" | "review" | "revision" | "fact-extraction" | "character-enrichment";
-export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "pacing-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher" | "conversation-assistant" | "memory-curator";
+export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher" | "conversation-assistant" | "memory-curator";
 
 export interface NovelSkillManifest extends VersionedRecord {
   skillId: string;
@@ -648,7 +648,7 @@ export interface WorkflowArtifact extends VersionedRecord {
   contextPacketId?: string;
 }
 
-export type QualityDimension = "plot" | "characterVoice" | "sceneEmbodiment" | "dialogue" | "pacing" | "specificity" | "hookPayoff" | "continuity";
+export type QualityDimension = "plot" | "characterVoice" | "sceneEmbodiment" | "dialogue" | "specificity" | "hookPayoff" | "continuity";
 
 export interface QualityIssue {
   id: string;
@@ -670,6 +670,7 @@ export interface QualityReport extends VersionedRecord {
   workflowRunId: string;
   artifactId: string;
   iteration: number;
+  scoringVersion?: number;
   scores: Record<QualityDimension, number>;
   weightedScore: number;
   blockerCount: number;

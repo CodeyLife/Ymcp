@@ -11,6 +11,7 @@ export default defineConfig({
       "src/features/novel/**/__tests__/*.test.{ts,tsx}",
       "src/lib/**/__tests__/*.test.{ts,tsx}",
       "src/shared/**/__tests__/*.test.{ts,tsx}",
+      "src/stores/**/__tests__/*.test.{ts,tsx}",
     ],
     exclude: [
       "**/node_modules/**",

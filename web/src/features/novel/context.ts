@@ -12,7 +12,6 @@ const ROLE_SOURCE_KINDS: Partial<Record<NovelAgentRole, Set<ContextSource["kind"
   "character-reviewer": new Set(["instruction", "style", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
   "continuity-reviewer": new Set(["instruction", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "snapshot", "fact", "knowledge", "memory", "creative-brief", "skill"]),
   "plot-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "foreshadowing", "memory", "creative-brief", "skill"]),
-  "pacing-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "memory", "creative-brief", "skill"]),
   "revision-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
   "fact-extractor": new Set(["instruction", "document", "fact", "creative-brief", "skill"]),
   "character-enricher": new Set(["instruction", "document", "entity", "fact", "knowledge", "creative-brief", "skill"]),

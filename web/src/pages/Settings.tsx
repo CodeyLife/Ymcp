@@ -39,7 +39,7 @@ export default function Settings() {
   }) {
     setApiBaseUrl(values.api_base_url || "");
     setApiKey(values.api_key || "");
-    setChatModel(values.chat_model || "auto");
+    setChatModel(values.chat_model || "gpt-5-5");
     setModelContextWindow(values.model_context_window || 0);
     setThumbSize(values.thumb_size || 256);
     setGreenscreenPrompt(values.greenscreen_prompt || "");
@@ -91,7 +91,7 @@ export default function Settings() {
           <Form.Item label="API Key" name="api_key" help={apiKey ? "使用自有 Key" : "留空使用默认 Key（不显示）"}>
             <Input.Password placeholder="sk-..." />
           </Form.Item>
-          <Form.Item label="对话模型" name="chat_model" help="默认 auto，由接口自动选择可用模型">
+          <Form.Item label="对话模型" name="chat_model" help="新配置默认 gpt-5-5；仍可选择 auto 由接口自动选择可用模型">
             <ChatModelSelect style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item label="模型上下文硬上限" name="model_context_window" help="留空或 0 时读取 /models 返回的能力字段；自定义接口未返回时可手动填写，例如 128000">

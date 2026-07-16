@@ -16,6 +16,7 @@ function majorCount(report: QualityReport) {
 
 export function isQualityRegression(params: { previous?: QualityReport; previousScore?: number; current: QualityReport }) {
   if (!params.previous) return params.previousScore !== undefined && params.current.weightedScore < params.previousScore;
+  if ((params.previous.scoringVersion ?? 1) !== (params.current.scoringVersion ?? 1)) return false;
   if (params.current.blockerCount !== params.previous.blockerCount) return params.current.blockerCount > params.previous.blockerCount;
   const previousMajors = majorCount(params.previous);
   const currentMajors = majorCount(params.current);
@@ -39,7 +40,7 @@ export const reviewStageHandler: StageHandler = {
       .map((paragraph, index) => `【第${index + 1}段】\n${paragraph.trim()}`)
       .filter((paragraph) => paragraph.trim())
       .join("\n\n");
-    const roles: Array<Parameters<typeof buildChapterReviewPrompt>[0]["role"]> = ["style-reviewer", "character-reviewer", "continuity-reviewer", "plot-reviewer", "pacing-reviewer"];
+    const roles: Array<Parameters<typeof buildChapterReviewPrompt>[0]["role"]> = ["style-reviewer", "character-reviewer", "continuity-reviewer", "plot-reviewer"];
     const reviewPackets = new Map<NovelAgentRole, Awaited<ReturnType<typeof novelMemoryService.compileStageContext>>>();
     const reviewOne = async (role: typeof roles[number]) => {
       const [skills, packet] = await Promise.all([
@@ -133,6 +134,10 @@ export const reviewStageHandler: StageHandler = {
       contextPacketId: receiptPacket?.id,
     });
     const previousReport = run.qualityReportId ? await novelDb.qualityReports.get(run.qualityReportId) : undefined;
+    const comparablePreviousScore = previousReport
+      && (previousReport.scoringVersion ?? 1) === (report.scoringVersion ?? 1)
+      ? run.previousScore
+      : undefined;
     if (isQualityRegression({ previous: previousReport, previousScore: run.previousScore, current: report }) && draft.parentArtifactId) {
       const previousDraft = await novelDb.workflowArtifacts.get(draft.parentArtifactId);
       if (previousDraft) {
@@ -148,7 +153,7 @@ export const reviewStageHandler: StageHandler = {
       passed: report.passed,
       iteration: run.revisionIteration,
       maxIterations: project.settings.maxAutoRevisions,
-      previousScore: run.previousScore,
+      previousScore: comparablePreviousScore,
       currentScore: report.weightedScore,
     });
     if (shouldRevise) {

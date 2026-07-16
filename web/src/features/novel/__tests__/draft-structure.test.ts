@@ -62,6 +62,17 @@ describe("draft structure analysis", () => {
     ]));
   });
 
+  it("does not classify adjacent vocabulary reuse as a duplicate", () => {
+    const text = [
+      "他将木匣放在案上，又把钥匙收入袖中，转身吩咐众人封门。",
+      "他转身吩咐众人封门，又将钥匙收入袖中，最后把木匣放在案上。",
+    ].join("\n\n");
+
+    const report = analyzeDraftStructure(text);
+
+    expect(report.issues).toEqual([]);
+  });
+
   it("locates the later four-paragraph window when a progression is repeated after a gap", () => {
     const firstProgression = [
       "队伍沿着官道向南走。沈砚留在最后，先观察每个人携带的东西。",

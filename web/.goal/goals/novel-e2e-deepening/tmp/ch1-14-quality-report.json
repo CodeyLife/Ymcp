@@ -1,422 +1,311 @@
 {
-  "id": "7010f54d-5631-4d51-95e3-74d1cc001550",
-  "projectId": "06480200-6cd3-44aa-b431-3d14657de429",
+  "id": "7f17dfcd-fa37-4dde-a4a2-a4c3e0d2156c",
+  "projectId": "877d9c7a-a310-492b-9aba-58775abc1f0d",
   "schemaVersion": 8,
   "revision": 1,
-  "createdAt": 1784166034807,
-  "updatedAt": 1784166034807,
+  "createdAt": 1784215309258,
+  "updatedAt": 1784215309258,
   "createdBy": "local-user",
   "updatedBy": "local-user",
-  "workflowRunId": "228cf44c-4ac0-43e3-bfeb-f3f94591f729",
-  "artifactId": "artifact:228cf44c-4ac0-43e3-bfeb-f3f94591f729:revision:2:revision",
-  "iteration": 2,
+  "workflowRunId": "b77a04de-f995-42bf-bc60-6165c0bfd481",
+  "artifactId": "artifact:b77a04de-f995-42bf-bc60-6165c0bfd481:revision:1:revision",
+  "iteration": 1,
   "scores": {
-    "plot": 4.01,
-    "characterVoice": 3.94,
-    "sceneEmbodiment": 4.01,
-    "dialogue": 3.94,
-    "pacing": 3.25,
-    "specificity": 3.94,
-    "hookPayoff": 4.25,
-    "continuity": 4.04
+    "plot": 4.02,
+    "characterVoice": 4.02,
+    "sceneEmbodiment": 4.02,
+    "dialogue": 3.52,
+    "specificity": 3.99,
+    "hookPayoff": 4.02,
+    "continuity": 4.27
   },
-  "weightedScore": 3.91,
+  "weightedScore": 3.92,
   "blockerCount": 0,
   "passed": false,
   "issues": [
     {
       "dimension": "specificity",
       "severity": "warning",
-      "title": "强调词贬值",
-      "description": "“忽然”出现 3 次，超过单章 2 次上限，强调效果贬值。",
-      "rule": "style.emphasis-devaluation",
-      "suggestion": "用具体事件呈现认知转变，或替换为不同表达，删除多余的强调。",
-      "id": "2f197c89-7072-42bf-90ad-272b21ccdd6f",
-      "deterministic": true
-    },
-    {
-      "dimension": "pacing",
-      "severity": "warning",
       "title": "短句排比过多",
-      "description": "检测到 3 处连续短句排比，超过单章 2 处上限。",
+      "description": "检测到 5 处连续短句排比，超过单章 2 处上限。",
       "revisionRanges": [
         {
-          "start": 79,
-          "end": 80
+          "start": 54,
+          "end": 55
         },
         {
-          "start": 125,
-          "end": 126
+          "start": 95,
+          "end": 96
         },
         {
-          "start": 180,
-          "end": 182
+          "start": 108,
+          "end": 109
+        },
+        {
+          "start": 129,
+          "end": 130
+        },
+        {
+          "start": 132,
+          "end": 133
         }
       ],
       "rule": "style.short-sentence-tic",
       "suggestion": "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。",
-      "id": "bcdeb816-db68-4abf-ad55-e2156c2c08ff",
+      "id": "705c08d0-4274-434b-bce6-268752527f5a",
       "deterministic": true
     },
     {
-      "dimension": "hookPayoff",
+      "dimension": "sceneEmbodiment",
       "severity": "warning",
-      "title": "章尾可能缺乏开放压力",
-      "description": "末段未出现问号、转折词、未行动信号或新信息压力，可能停留在情感余韵的封闭画面。",
-      "rule": "style.chapter-ending-hook",
-      "suggestion": "在末段加入指向未解信息、未行动方向或新压力的细节，让读者产生“接下来会发生什么”的期待。可参考章尾钩子十型：信息遮断/关键信息凸显/倒计时/抉择时刻/立场反转/危险前置/目标失效/关系破裂/动机揭露/认知反转。",
-      "id": "0aada8f9-2c34-4dfd-a77d-84270220c196",
-      "deterministic": true
+      "title": "环境意象功能重复",
+      "description": "部分环境意象连续承担相同的冷寂氛围功能，但没有每次都推动韩景福判断变化。雪、灯、脚步、声响多次出现，后段个别描写与前文信息增量接近。",
+      "excerpt": "第110段：“东宫夜里比往常少了许多声响……连鞋底落在砖面上的声响也被刻意收住。”",
+      "paragraph": 110,
+      "revisionRanges": [
+        {
+          "start": 110,
+          "end": 110
+        }
+      ],
+      "rule": "环境描写应尽量同时提供人物感知、信息变化或行动压力，避免重复强化同一种氛围。",
+      "sourceId": "style.environment-function",
+      "suggestion": "保留冷寂氛围的基础上，让环境细节与韩景福的判断或现场异常建立更直接的关联。",
+      "rewriteExample": "韩景福经过前殿时，没有先听见人的动静，只听见一名小内侍换灯芯时碰了一下铜剪。他顺着那声响看去，才发现檐下仍亮着的灯盏少了一半。",
+      "id": "c943dd2a-7deb-473d-b1ad-529bcab888b2",
+      "deterministic": false
     },
     {
       "dimension": "characterVoice",
       "severity": "warning",
-      "title": "部分心理判断被直接总结",
-      "description": "部分段落直接替韩景福总结局势判断和心理权衡，虽然没有越出POV，但叙述距离拉远，削弱了读者从行动、物件和停顿中自行感知异常的空间。",
-      "excerpt": "“封禁之后仍有人在此查档，说明今夜之事已经不止是守门与传令能够解释的范围。”",
-      "paragraph": 58,
+      "title": "心理总结替代人物呈现",
+      "description": "少数心理总结替代了韩景福通过动作或判断呈现出的压力，削弱了克制感。该问题局限于局部，没有形成全文心理解释模式。",
+      "excerpt": "第145段：“韩景福听见这句话，手中的佛珠慢慢转过一圈。他看着偏殿中三人的位置，看着那件尚未收起的异常物事，心中第一次清楚地感觉到，今夜要封存的并不只是太子的遗体。”",
+      "paragraph": 145,
       "revisionRanges": [
         {
-          "start": 58,
-          "end": 58
-        },
-        {
-          "start": 168,
-          "end": 168
-        },
-        {
-          "start": 186,
-          "end": 186
+          "start": 145,
+          "end": 145
         }
       ],
-      "rule": "减少直接解释人物判断的句子，让行动、物件和环境承担信息表达。",
-      "suggestion": "将抽象判断改为可观察的动作或细节反应，让韩景福的推断通过现场痕迹呈现。",
-      "rewriteExample": "韩景福看了一眼案上的旧册，又看了一眼门外新增的守卫名册。东宫今夜留下的每一道痕迹，都已超出了寻常封门该有的次序。",
-      "id": "1f604809-9fe5-4bbc-8541-6e4d28bcbb7c",
+      "rule": "人物心理应优先通过动作、选择和观察呈现，避免直接替人物下结论。",
+      "sourceId": "style.explanatory-emotion",
+      "suggestion": "将心理判断转化为韩景福对现场物件、流程和异常之处的观察。",
+      "rewriteExample": "他看了一眼封匣，又看了一眼案上的纸角。按东宫旧例，此刻本该只剩下封存与回禀，可案上的东西仍没人敢碰。",
+      "id": "7c12e2b6-2b76-41b8-b147-fa2c9432005c",
       "deterministic": false
     },
     {
-      "dimension": "specificity",
+      "dimension": "dialogue",
       "severity": "warning",
-      "title": "部分核心意象重复承担同一功能",
-      "description": "雪、灯、安静、脚步等意象符合基调，但部分重复只承担强化异常氛围的作用，没有每次推进新的信息层，后半段出现轻微同质化。",
-      "excerpt": "“雪压在檐角，风从廊柱间穿过，带得悬灯轻轻晃动，灯影落在青砖上，像被水揉散了一层。”",
-      "paragraph": 27,
+      "title": "对白直接表达立场",
+      "description": "陆三斤部分对白较直接地表达角色立场，个别句子承担了作者说明功能，潜台词和具体经验还可增加。",
+      "excerpt": "第94段：“尸体摆在那里，不能因为穿了龙袍，就少一根骨头，多一分遮掩。”",
+      "paragraph": 94,
       "revisionRanges": [
         {
-          "start": 27,
+          "start": 88,
+          "end": 94
+        }
+      ],
+      "rule": "对白应尽量通过角色经验、语气和行动传递信息，减少直接说明主题。",
+      "sourceId": "style.dialogue-subtext",
+      "suggestion": "保留陆三斤的直率语气，同时加入他的验尸经验或具体动作，让观点自然显现。",
+      "rewriteExample": "陆三斤拍了拍布包：“我验过的人，有穿绸子的，也有裹草席的。躺下以后，都只有一副身子。”",
+      "id": "e5e34aff-5548-401d-b8d3-3c504987b1a8",
+      "deterministic": false
+    },
+    {
+      "dimension": "plot",
+      "severity": "warning",
+      "title": "流程动作信息重复",
+      "description": "韩景福重复执行记录、登记、添名册等流程动作，部分段落的信息功能相近。重复并未破坏结构，但可压缩以突出他作为秩序维护者的判断。",
+      "excerpt": "第75至79段：“随后低头翻开自己手中的名册……‘添一行。’……‘沈砚书，携内书堂旧档入内。’”",
+      "paragraph": 79,
+      "revisionRanges": [
+        {
+          "start": 75,
+          "end": 79
+        }
+      ],
+      "rule": "重复事件链应在信息未增加时压缩，避免流程描写替代人物判断和场景推进。",
+      "sourceId": "style.repetition",
+      "suggestion": "合并部分登记流程，将重点转向三个名字并列出现后对韩景福判断造成的变化。",
+      "rewriteExample": "韩景福翻过名册最后一页，原本留给值守交接的空栏，已经被今夜三个名字占去。他让小内侍记下沈砚书携档入内，目光却停在那几行并列的记录上。",
+      "id": "19788dab-880e-4597-b574-188765c79760",
+      "deterministic": false
+    },
+    {
+      "dimension": "characterVoice",
+      "severity": "warning",
+      "title": "韩景福的个人立场张力不足",
+      "description": "韩景福的主动选择成立，但个人代价和立场撕裂展示不足。他更多作为高效的宫务调度者行动，尚未充分显露其‘控制流言以保自身权位’与‘曾受太子恩惠却隐瞒消息’之间的矛盾张力。当前读者能看到他的谨慎，却较难感受到这个人物为什么会在每一道命令背后承担风险。",
+      "excerpt": "第25段：“有些话能送出去，有些话要压下来。有些人该进宫，有些人今夜不能让他知道太早。”",
+      "revisionRanges": [
+        {
+          "start": 24,
           "end": 27
         }
       ],
-      "rule": "重复出现的环境意象应承担新的叙事功能，而非只重复营造相同氛围。",
-      "suggestion": "保留雪与灯的基调，但让环境变化关联人物行动或新的线索。",
-      "rewriteExample": "雪水沿檐角滴落，廊下悬灯晃了一下，青砖上的影子随之偏移，原本应守在此处的人影竟空出了一瞬。",
-      "id": "2efeb546-e9c9-407a-809f-53e15487054a",
-      "deterministic": false
-    },
-    {
-      "dimension": "pacing",
-      "severity": "warning",
-      "title": "场景呈现后追加总结",
-      "description": "部分场景已经通过动作呈现人物状态后，又追加抽象总结，形成轻微的二次解释，降低了现场感。",
-      "excerpt": "“韩景福看着殿中一切，仍旧维持着掌事者该有的沉稳，只是不再让任何一处细节脱离自己的掌控。”",
-      "paragraph": 171,
-      "revisionRanges": [
-        {
-          "start": 171,
-          "end": 171
-        }
-      ],
-      "rule": "避免重复说明已经通过场景和动作表达出的状态。",
-      "suggestion": "删除抽象评价，改用具体检查、记录或观察动作表现人物控制感。",
-      "rewriteExample": "韩景福重新看了一遍殿内名册、封条和几人的站位，将每一道手续记在心中。",
-      "id": "a7a75aad-aa95-4b28-ab43-d6b9d319edfc",
-      "deterministic": false
-    },
-    {
-      "dimension": "dialogue",
-      "severity": "warning",
-      "title": "部分对白承担说明功能",
-      "description": "对白整体能区分身份，但部分对白更接近作者说明，人物之间的潜台词和关系张力可以通过停顿、规避和礼节体现。",
-      "excerpt": "“只是今夜东宫牵涉的人太多，有些东西若不先留在手里，等该看的时候，未必还能看见。”",
-      "paragraph": 84,
-      "revisionRanges": [
-        {
-          "start": 84,
-          "end": 84
-        }
-      ],
-      "rule": "对白应优先体现人物目的和关系，而非直接传递结论。",
-      "suggestion": "减少解释性对白，增加人物动作和言外之意。",
-      "rewriteExample": "韩景福指尖压住卷角：“先留在这里。等该送的时候，再按该送的路走。”",
-      "id": "3b425bc7-ca58-49e7-822f-750d31e976b6",
-      "deterministic": false
-    },
-    {
-      "dimension": "hookPayoff",
-      "severity": "warning",
-      "title": "章尾推理解释略多",
-      "description": "章尾异常揭示有效，没有提前揭露真相，但连续解释纸条意义削弱了最后发现脚印时的冲击。",
-      "excerpt": "“若有人提前留下此物，便不该出现在封禁之后；可若不是提前留下，便更难解释它为何还留在这里。”",
-      "paragraph": 187,
-      "revisionRanges": [
-        {
-          "start": 179,
-          "end": 179
-        },
-        {
-          "start": 187,
-          "end": 187
-        }
-      ],
-      "rule": "悬念结尾应保留未知空间，避免重复解释异常物件的意义。",
-      "suggestion": "保留推理过程，但减少对物件象征和意义的总结，把重点留给发现本身。",
-      "rewriteExample": "韩景福看着那行字，没有伸手去碰。原本只该记录死亡的寝殿，多了一件不在册中的东西。",
-      "id": "69bde85f-9224-4fec-ba4d-58fd1dec63d2",
-      "deterministic": false
-    },
-    {
-      "dimension": "characterVoice",
-      "severity": "major",
-      "title": "韩景福核心动机的冲突显现不足",
-      "description": "韩景福的当下欲望主要表现为维持宫务秩序和控制现场，但正文缺少能体现其维护自身权势、避免查案触及权臣利益这一核心动机的主动选择。当前行动几乎全部服务于查验和保护现场，使他更像正直调查者，而不是带有利益牵制的复杂掌事宦官。",
-      "excerpt": "奴才只按规矩办事。只是今夜东宫牵涉的人太多，有些东西若不先留在手里，等该看的时候，未必还能看见。",
-      "revisionRanges": [
-        {
-          "start": 84,
-          "end": 89
-        },
-        {
-          "start": 168,
-          "end": 170
-        }
-      ],
-      "rule": "人物行动应体现角色自身利益、顾虑或关系牵制，而非只完成事件功能。",
-      "suggestion": "在韩景福处理线索和现场时增加体现其立场压力的选择，让他的谨慎同时包含自保与权衡。",
-      "rewriteExample": "奴才只按规矩办事。只是规矩也有先后。今夜若有人急着把东西送出去，日后少不得有人问起，为何司礼监连看过什么都说不清。",
-      "id": "ed9d717c-6f07-4289-8ef5-b5b37271aacc",
-      "deterministic": false
-    },
-    {
-      "dimension": "dialogue",
-      "severity": "warning",
-      "title": "韩景福对白部分偏向理念总结",
-      "description": "韩景福的对白整体稳定，但部分关键对白偏向作者概括人物理念，削弱了他作为圆滑宦官的双层含义。与萧承渊交谈时，语言更像总结主题，而非在身份压力下的试探。",
-      "excerpt": "韩公公一向只说该说的话。宫里能长久留下来的，也只有这些话。",
-      "revisionRanges": [
-        {
-          "start": 45,
-          "end": 46
-        }
-      ],
-      "rule": "对白应优先呈现人物当下目的和关系博弈，避免直接输出人物理念。",
-      "suggestion": "让韩景福的表达保留试探、回避和身份压力，使话语同时服务于当前交流和人物性格。",
-      "rewriteExample": "殿下，宫里有些话，说出口是祸，不说出口也是祸。奴才不过是挑些还能活着说完的话。",
-      "id": "08d6e404-591f-43d1-af9a-0c493c78be2d",
+      "rule": "人物行动需要体现其目标、代价与内在冲突，而不仅是完成事务。",
+      "suggestion": "在韩景福做出调度决定的段落中补充其犹豫、取舍或承担风险的瞬间，使命令背后体现人物立场。",
+      "rewriteExample": "韩景福捻着佛珠，把那几张牌票重新排过一遍。该送出去的若晚了一刻，明日便有人问罪；该压下去的若漏了一句，今夜这座宫城便会换一个说法。他的手停在其中一张牌票上片刻，最终仍将它压进最下面。",
+      "id": "d35e17cb-1a89-4faa-a5fc-5a3033bba9cd",
       "deterministic": false
     },
     {
       "dimension": "characterVoice",
       "severity": "warning",
-      "title": "裴守谦缺少独立判断瞬间",
-      "description": "裴守谦在本章中主要承担稳定秩序的功能，符合配角戏份要求，但缺少一个只属于他的选择瞬间。目前他的行动多为回应韩景福和下属请示，人物独立判断感略弱。",
-      "excerpt": "有人低声请示是否该报入宫中，有人询问东宫文书该如何收存，裴守谦都只缓缓应答。",
+      "title": "死亡事件后的情绪反应显露不足",
+      "description": "韩景福面对太子死亡的情绪主要通过环境和秩序变化表现，个人情感反应较少。考虑到原输出指出的设定关联，完全隐藏这层关系会削弱后续人物弧线的早期埋点。",
+      "excerpt": "第8段：“殿下……薨了。”",
       "revisionRanges": [
         {
-          "start": 28,
-          "end": 35
+          "start": 13,
+          "end": 14
         }
       ],
-      "rule": "配角也应通过关键选择体现自身判断，而非只承担主角行动的响应功能。",
-      "suggestion": "在秩序处理过程中增加裴守谦基于自身判断做出的一个决定。",
-      "rewriteExample": "文书先归原处。谁若急着翻出一封一页，便先把自己的名字写在值守册上。东宫今夜少一张纸，明日便多一条命案。",
-      "id": "f99f7579-4129-4d56-9480-2e02e7d5d849",
-      "deterministic": false
-    },
-    {
-      "dimension": "characterVoice",
-      "severity": "warning",
-      "title": "顾长安宫廷场景中的声音辨识度下降",
-      "description": "顾长安的市井声音已与宫廷人物形成区别，但进入寝殿后的表达趋于过度端正，削弱了他直白、不耐官场虚话的个人辨识度。应保留他的职业习惯和市井判断，而不是只承担验尸功能。",
-      "excerpt": "人死了，都是一具身子。不过我会守规矩。",
-      "revisionRanges": [
-        {
-          "start": 134,
-          "end": 136
-        }
-      ],
-      "rule": "角色声音应在不同场景中保持核心辨识度，不应因环境变化完全趋同。",
-      "suggestion": "让顾长安在遵守宫廷规矩的同时保留直白表达和市井判断。",
-      "rewriteExample": "活着的时候身份压人，死了也就剩这副身子。可规矩我懂，谁让我今日进的是宫门，不是西市停尸房。",
-      "id": "97b250cc-5e77-4694-bfc0-b7d5d1c2021c",
-      "deterministic": false
-    },
-    {
-      "dimension": "characterVoice",
-      "severity": "major",
-      "title": "部分段落超出单一视角知识边界",
-      "description": "部分段落直接解释韩景福之外人物的心理变化或认知含义，削弱了通过韩景福观察他人的限制。第131段对顾长安状态变化进行判断，第165段直接说明沈砚秋携带物件背后的疑处。",
-      "excerpt": "进了东宫后，却像忽然换了一个人。",
-      "paragraph": 131,
-      "revisionRanges": [
-        {
-          "start": 131,
-          "end": 131
-        },
-        {
-          "start": 165,
-          "end": 165
-        }
-      ],
-      "rule": "角色视角内只能呈现该角色可观察、可推断的信息，不能直接呈现其他人物的内心和未知认知。",
-      "suggestion": "将对他人心理和意图的解释改为外部动作、表情、物件和韩景福自身判断。",
-      "rewriteExample": "方才在宫门外，这人说话带着西市的粗声粗气。入殿之后，他只是低头净手，打开木匣时指节未曾发颤。韩景福看着那双手，心中多留了一分戒备。",
-      "id": "00f29e5b-a0b6-4eac-a142-6d263efd1908",
+      "rule": "人物重大关系事件后的反应应与其既有关系基础保持连续。",
+      "suggestion": "在处理太子死讯的关键动作中加入短暂的私人反应，再转回宫务处理。",
+      "rewriteExample": "韩景福将佛珠绕过指节，指腹碰到其中一颗旧珠时停了一瞬。那颗珠子并不值钱，是多年以前太子赏下的东西。他很快收回手，将空白宫牒铺开。",
+      "id": "9a83ef57-b3b6-4411-af05-adefa886f18e",
       "deterministic": false
     },
     {
       "dimension": "specificity",
       "severity": "warning",
-      "title": "事件意义部分由总结替代现场呈现",
-      "description": "后半段部分内容通过直接总结事件性质推进信息，减少了读者从物件、动作和现场细节中自行判断的空间。",
-      "excerpt": "说明今夜之事已经不止是守门与传令能够解释的范围。",
+      "title": "标志性物件尚未充分参与人物选择",
+      "description": "主要角色的标志性物件大多完成了功能绑定，但韩景福的佛珠目前更多承担身份象征，尚未参与关键选择瞬间。萧景衡的玉佩已经具有行动功能，因此无需修改。",
+      "excerpt": "第14段：“韩景福将佛珠绕过指节，站起身来。”",
       "revisionRanges": [
         {
-          "start": 58,
-          "end": 58
-        },
-        {
-          "start": 171,
-          "end": 171
+          "start": 5,
+          "end": 14
         }
       ],
-      "rule": "悬念和判断应优先通过具体场景、行为和可见线索呈现，避免使用作者式结论替代过程。",
-      "suggestion": "保留韩景福的观察，但减少直接定义事件性质的句子。",
-      "rewriteExample": "韩景福看着登记簿上的名字，又看了一眼未归位的卷册。守门的人没有失职，可缺失的东西仍然少了一页。",
-      "id": "2f6f98c5-3b7d-4505-8180-31e4c331c31b",
-      "deterministic": false
-    },
-    {
-      "dimension": "pacing",
-      "severity": "warning",
-      "title": "章尾异常线索存在重复确认",
-      "description": "东宫现场已经完成发现异常物与确认墨迹未干，第187至191段继续围绕有人回来过进行确认，信息功能相近，可适度压缩以保持章尾集中度。",
-      "excerpt": "东宫封门之前，或许还有人曾经回来过。",
-      "revisionRanges": [
-        {
-          "start": 187,
-          "end": 191
-        }
-      ],
-      "rule": "重复的信息确认应服务于新的体验深化，否则会削弱段落推进效率。",
-      "suggestion": "保留一次关键发现，将后续确认转化为新的人物反应或更具体的线索。",
-      "rewriteExample": "韩景福顺着纸角看去，灯影下，一道浅痕压在积尘里，像有人曾在封门前匆匆停过片刻。他没有问出口，只将那处痕迹记入心中。",
-      "id": "6f83e623-2ac2-4e4e-99fd-4041baaaa98d",
-      "deterministic": false
-    },
-    {
-      "dimension": "continuity",
-      "severity": "warning",
-      "title": "密令物品痕迹不足",
-      "description": "已确认携带司礼监腰牌与密令，但正文主要展示腰牌、手令、朱签等物件，密令本身没有明确出现或使用。若密令为既定随身物，需要保持其存在痕迹。",
-      "excerpt": "正文主要描写腰牌、手令、朱签。",
-      "revisionRanges": [],
-      "rule": "已确认的重要物品应在叙事中保持可追踪性，避免关键物件无痕出现。",
-      "suggestion": "在不改变剧情的位置增加密令出现或说明其作用。",
-      "rewriteExample": "可在相关段落补充韩景福确认密令仍在身侧，或交代其已由其他内廷文书形式承接。",
-      "id": "bdedc16c-576d-4427-87ab-1d2660d11211",
-      "deterministic": false
-    },
-    {
-      "dimension": "pacing",
-      "severity": "warning",
-      "title": "悬疑信息存在直接总结，削弱留白空间",
-      "description": "部分悬疑信息在呈现之后被角色直接归纳为结论，减少读者自行判断空间。第101段将多个线索明确关联，第168-171段连续解释韩景福的职责、权衡和局势意义，信息功能与前文行动存在重复。",
-      "excerpt": "第101段：‘前殿的封禁、东宫的传令、缺失的一页旧档，此刻都落在同一个夜里。’；第168-171段：‘他是司礼监掌事，不是查案之人……只是有些东西一旦落入旁人手中，便不再只是东宫之事。’",
-      "revisionRanges": [
-        {
-          "start": 168,
-          "end": 171
-        }
-      ],
-      "rule": "pacing.explanatory-inference",
-      "suggestion": "保留韩景福的观察与行动，让线索关系通过物件、记录和人物反应显现，减少直接概括局势意义的句子。",
-      "rewriteExample": "韩景福将登记册翻过一页，又看了一眼殿门外值守的内侍。‘入殿之人，逐一记名。’他说完，把那页纸压在案角，没有再看任何人的脸。",
-      "id": "25dddd2c-f4f5-4b0c-9b6e-a5106330686e",
-      "deterministic": false
-    },
-    {
-      "dimension": "pacing",
-      "severity": "warning",
-      "title": "同一功能信息多次重复，后段变化不足",
-      "description": "藏书阁与寝殿两个阶段中，韩景福多次体现按规矩、登记、封存、掌控细节的职责特点。该功能已建立，但后半段再次强调时新增变化不足，部分段落体验接近同功能循环。",
-      "excerpt": "第57-59段安排记录出入与登记；第81-89段再次强调文书出处、登记和封存；第167-171段再次说明登记封存和掌控手续。",
-      "revisionRanges": [
-        {
-          "start": 167,
-          "end": 171
-        }
-      ],
-      "rule": "pacing.repetition",
-      "suggestion": "在保留韩景福职责特点的基础上，让登记、封存等行为承载新的信息差或人物选择，避免重复呈现同一功能。",
-      "rewriteExample": "韩景福没有追问三人的来意，只让内侍把名册摊开。萧承渊的手令、沈砚秋的纸封、顾长安的木匣，一样样摆在灯下，各自留下来源。",
-      "id": "d5820f53-9923-4000-b4da-ab09a3300713",
-      "deterministic": false
-    },
-    {
-      "dimension": "pacing",
-      "severity": "warning",
-      "title": "死亡现场异常信息重复强调",
-      "description": "死亡现场发现异常后的信息推进出现轻微重复。第172-179段已经完成发现墨痕、发现纸条、确认字迹改变现场意义的主要悬念建立，第184-187段再次用解释性分析重复强调异常原因，降低了读者自行判断的空间。",
-      "revisionRanges": [
-        {
-          "start": 184,
-          "end": 187
-        }
-      ],
-      "rule": "避免同一悬念信息被多次解释，应保留发现后的张力与读者判断空间。",
-      "suggestion": "压缩后续解释，将重点转移到韩景福的观察或现场细节上，让新的异常推动下一步行动。",
-      "rewriteExample": "韩景福没有追问。他只看向门侧积尘中那一道新痕。封门之后仍有人进出，已经足够让这间寝殿失去原本的安稳。",
-      "id": "fcc3d1bc-955b-4844-a241-b38e333cf6a5",
+      "rule": "人物标志性细节应服务于行动、心理或选择，而不只是重复出现。",
+      "suggestion": "让佛珠在韩景福犹豫、判断或改变命令时产生动作关联。",
+      "rewriteExample": "韩景福将佛珠绕过指节，原本要传令的手在最后一刻改了方向，先把那张写着东宫急症的宫牒压入案下。",
+      "id": "e9b2b87d-38e2-4c00-a81d-b7e5a292e249",
       "deterministic": false
     },
     {
       "dimension": "sceneEmbodiment",
       "severity": "warning",
-      "title": "部分判断转为直接总结",
-      "description": "少数段落将韩景福的职责判断直接总结给读者，削弱了现场观察的力度。问题不在内心描写本身，而在部分句子从具体行动跳转到抽象结论。",
+      "title": "部分总结性表达削弱现场观察感",
+      "description": "部分总结性句子略微替代了韩景福对局势的归纳，降低了现场感。第135段将三条线归结为“原本分散的几条线，在这一刻都落到了同一件不起眼的物事上”，信息本身符合韩景福可推断范围，但表达更接近作者总结，而非角色当下观察。",
+      "excerpt": "第135段：“从东宫封门，到萧景衡带来的旧玉佩，从沈砚书带来的缺页旧档，再到陆三斤所验之处，原本分散的几条线，在这一刻都落到了同一件不起眼的物事上。”",
       "revisionRanges": [
         {
-          "start": 168,
-          "end": 171
+          "start": 135,
+          "end": 135
         }
       ],
-      "rule": "人物判断应尽量通过行动、细节和现场反应体现，避免作者替人物完成过多总结。",
-      "suggestion": "将抽象职责判断改为具体动作或对白，让韩景福的谨慎和掌控感从现场行为中体现。",
-      "rewriteExample": "韩景福将登记册推到内侍面前：“先记人，再记物。”他说完看向殿门。今夜进出的每一个人，都不能只留下脚印。",
-      "id": "fca2617c-c5d2-4678-8b1e-240c7428ff7b",
+      "rule": "避免用全知视角替代角色即时感知，关键判断应尽量通过角色观察、行动和具体物件呈现。",
+      "suggestion": "将概括性判断拆解为韩景福当下看到、想到或注意到的具体线索，让异常感来自现场而非作者归纳。",
+      "rewriteExample": "韩景福的目光在案上停住。旧玉佩、旧档册、那几句关于茶盏痕迹的话，此刻都指向了眼前这只无人收走的青瓷盏。",
+      "id": "ef44245a-ce62-42df-bb24-3bbb32bfc958",
+      "deterministic": false
+    },
+    {
+      "dimension": "specificity",
+      "severity": "warning",
+      "title": "异常氛围描写存在功能重复",
+      "description": "中段多次通过“东宫灯少、声音变轻、脚步改变”等相近意象强化异常氛围，单次使用有效，但第2至31段、第106至117段再次集中重复同一功能，部分描写没有增加新的宫务信息。",
+      "excerpt": "第3段：“只是东边宫墙那头，少了些灯。”；第31段：“远处东宫的灯仍没有重新亮起几盏。”；第110段：“今夜那些声音都压得极轻。”",
+      "revisionRanges": [
+        {
+          "start": 110,
+          "end": 117
+        }
+      ],
+      "rule": "重复氛围描写需要带来新的信息、人物变化或关系推进，否则应压缩或替换为更具体的场景细节。",
+      "suggestion": "减少同类静态异常描写，改为表现值夜流程、人员行动或宫务变化等新的现场信息。",
+      "rewriteExample": "韩景福经过前殿时，发现值夜册上的交接时间比往常慢了一刻。内侍仍按旧规行礼，却无人主动靠近偏殿方向。",
+      "id": "7b0443ad-3877-40f4-b9a5-c94efb78e9f4",
+      "deterministic": false
+    },
+    {
+      "dimension": "dialogue",
+      "severity": "warning",
+      "title": "线索对白承担过多解释功能",
+      "description": "部分线索对白直接告知异常存在，人物反应空间较少，更接近线索播报。沈砚书提出旧档缺页、陆三斤说明茶盏痕迹时，可以增加观察过程和人物判断的留白。",
+      "excerpt": "第68-72段沈砚书提出旧档缺页；第132-134段陆三斤直接解释茶盏痕迹。",
+      "revisionRanges": [
+        {
+          "start": 68,
+          "end": 72
+        },
+        {
+          "start": 132,
+          "end": 134
+        }
+      ],
+      "rule": "dialogue.information-delivery",
+      "suggestion": "将直接说明异常改为通过人物动作、停顿或不完整判断呈现，让线索由场景和人物反应自然显露。",
+      "rewriteExample": "“原也不是今夜该翻开的。”沈砚书指尖停在封口处，未拆那册旧档，“只是这封线，比臣记得的薄了一寸。”",
+      "id": "557e191e-e69f-41ca-9adc-a7a506d8c244",
+      "deterministic": false
+    },
+    {
+      "dimension": "hookPayoff",
+      "severity": "warning",
+      "title": "伏笔呈现提示感偏强",
+      "description": "部分异常物事的出现带有较明显的功能提示感，容易让读者感觉作者在标记线索，而不是韩景福自然发现。",
+      "excerpt": "第26段空白名册、第104段水痕判断。",
+      "revisionRanges": [
+        {
+          "start": 26,
+          "end": 27
+        },
+        {
+          "start": 103,
+          "end": 104
+        }
+      ],
+      "rule": "foreshadowing.self-marking",
+      "suggestion": "减少对异常意义的直接强调，让韩景福先记录感受或细节，再逐步形成疑问。",
+      "rewriteExample": "那一页比前后几页都平整，像是有人翻过，却没有留下该留下的字。韩景福合上册子，先将疑问压回心里。",
+      "id": "781c6661-4e47-4179-ad79-a762ac5375c6",
+      "deterministic": false
+    },
+    {
+      "dimension": "hookPayoff",
+      "severity": "major",
+      "title": "章尾对异常压力重复强化",
+      "description": "第135段已经完成茶盏与纸页汇合后的疑点形成，第145-147段再次强调流程停顿和异常压力，造成后半段收束信息重复。建议保留更有推动力的一次停顿作为结尾。",
+      "excerpt": "第135段完成共同关注点形成；第145-147段再次说明流程停滞。",
+      "revisionRanges": [
+        {
+          "start": 145,
+          "end": 147
+        }
+      ],
+      "rule": "ending.duplicate-pressure",
+      "suggestion": "压缩重复说明，将章尾集中于一次更强的异常停顿或未完成动作。",
+      "rewriteExample": "他正要吩咐封匣，门外却无人应声。韩景福望向殿门，忽然意识到今夜第一次有人让宫规等了一刻。雪声压着满殿寂静，而那半寸纸角仍露在灯下。",
+      "id": "2b98575d-144c-4918-82ba-8d369cae3037",
       "deterministic": false
     }
   ],
   "metrics": {
-    "characters": 7244,
-    "wordCount": 6227,
+    "characters": 4971,
+    "wordCount": 4218,
     "targetWords": 5000,
-    "targetRatio": 1.245,
-    "paragraphs": 191,
-    "dialogueRatio": 0.217,
-    "paragraphVariation": 0.751,
-    "singleSentenceNarrativeRatio": 0.112,
-    "maxConsecutiveSingleSentenceNarrative": 1,
+    "targetRatio": 0.844,
+    "paragraphs": 147,
+    "dialogueRatio": 0.258,
+    "paragraphVariation": 0.682,
+    "singleSentenceNarrativeRatio": 0.119,
+    "maxConsecutiveSingleSentenceNarrative": 2,
     "templateHits": 0,
-    "imageryDensity": 107,
-    "interpretiveSummaryHits": 1
+    "imageryDensity": 49,
+    "interpretiveSummaryHits": 0
   },
   "reviewerRoles": [
     "style-reviewer",
     "character-reviewer",
     "continuity-reviewer",
-    "plot-reviewer",
-    "pacing-reviewer"
+    "plot-reviewer"
   ]
 }
