@@ -1,0 +1,64 @@
+{
+  "id": "f53450b8-d9ba-47d4-b498-f5ff457455df",
+  "projectId": "06480200-6cd3-44aa-b431-3d14657de429",
+  "schemaVersion": 8,
+  "revision": 1,
+  "createdAt": 1784165598104,
+  "updatedAt": 1784165598104,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "order": 0,
+  "title": "初雪夜，东宫三盏未熄的灯",
+  "contentHtml": "",
+  "plainText": "",
+  "summary": "本章以暴毙之夜的多视角切片展开，让三位主角分别与太子事件产生关联，最终汇聚于东宫死亡现场，出现第一道异常信息但不揭露真相。",
+  "status": "outline",
+  "wordCount": 0,
+  "branch": "main",
+  "yjsDocumentId": "e3733b54-ad6c-4c7c-a1be-73fbd5de12ea",
+  "plotSegmentId": "c3cc1822-8eb4-430a-a2ec-1ac8d9efe285",
+  "blueprint": {
+    "objective": "描绘初雪夜中宫廷表面秩序与暗中裂痕并存的氛围，通过不同身份视角积累死亡发生前后的压迫感。",
+    "locationIds": [
+      "1a07b10b-51c8-405e-8811-d369fbab43b0",
+      "38308aed-c222-480a-814e-18fc5d90bdc8"
+    ],
+    "characterIds": [
+      "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+      "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+      "e2adc989-aff1-4b90-8d50-d3140819435d",
+      "3458db78-f714-43ea-8162-97250c2c2ff5"
+    ],
+    "plotThreadIds": [
+      "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+      "4d2f5dea-d873-48b1-b983-5baddef55e41",
+      "d1be8374-af38-48a5-84d7-897f7c7be8ef"
+    ],
+    "foreshadowingIds": [
+      "42087d41-816e-4ae1-ac79-3510f21bafad",
+      "58f39f8b-fab7-487d-812a-5e590174b92e"
+    ],
+    "conflict": "皇室礼制要求接受太子暴毙的表面解释，但三位主角分别感受到不协调之处。",
+    "informationRelease": [
+      "展示太子死亡后的异常气氛，出现死亡现场留下的第一句信息，但不确定其含义与来源。"
+    ],
+    "mustHappen": [
+      "萧承渊、沈砚秋、顾长安在同一夜分别与东宫事件产生关联。",
+      "三人的视角最终汇合于太子死亡现场。",
+      "太子留下的第一道死亡相关信息出现。"
+    ],
+    "flexible": [
+      "三人接近东宫的具体路径与先后顺序。",
+      "第一句信息的具体载体形式。",
+      "太子死亡前最后一次公开接触的细节。"
+    ],
+    "forbidden": [
+      "揭示真凶身份。",
+      "揭示太子死亡核心动机。",
+      "确定死亡后改变现场痕迹的人。",
+      "完成三人之间的信任建立。"
+    ],
+    "targetWords": 5000,
+    "povCharacterId": "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+  }
+}

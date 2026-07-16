@@ -16,7 +16,7 @@ const INTERPRETIVE_SUMMARY_PATTERNS = [
   /(?:也就是说|换句话说|归根结底|说到底)/g,
   /这个动作.{0,16}(?:意味着|说明|像是)/g,
 ];
-const STRUCTURAL_MAJOR_RULES = new Set(["style.fragmented-paragraphs", "plot.exact-paragraph-repeat", "plot.repeated-progression"]);
+const REVIEW_WARNING_MAJOR_PATTERN = /(?:视角|POV|限知|知识边界|感知范围).{0,18}(?:越界|超出|违反|冲突|他人心理|内心|心理解释)|(?:越过|超出|违反|进入|直接呈现|直接解释).{0,18}(?:视角|POV|限知|知识边界|感知范围|他人心理|内心判断)|第二个(?:结尾|开场)|重复(?:推进|事件链|收束)/i;
 
 export interface ReviewerFinding {
   role: NovelAgentRole;
@@ -43,6 +43,10 @@ function coefficientOfVariation(values: number[]) {
 function countOccurrences(text: string, needle: string) {
   if (!needle) return 0;
   return text.split(needle).length - 1;
+}
+
+export function countNovelWords(text: string) {
+  return (text.match(/[\u3400-\u9fff]|[a-zA-Z0-9]+/g) ?? []).length;
 }
 
 function containsMeaning(text: string, requirement: string) {
@@ -85,6 +89,7 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     }));
   }
   const totalChars = text.replace(/\s/g, "").length;
+  const wordCount = countNovelWords(text);
   const dialogueChars = (text.match(/[“「『][^”」』]+[”」』]/g) ?? []).join("").length;
   const templateHits = TEMPLATE_EXPRESSIONS.reduce((sum, word) => sum + countOccurrences(text, word), 0);
   const paragraphLengths = blocks.map((block) => block.length);
@@ -97,7 +102,18 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   // 第3章 E2E 验证：5 个 mustHappen major issue 全部为误报（节拍已在文中落地，仅措辞不同）。
   // LLM plot-reviewer 独立检查节拍遗漏，比确定性 bigram 匹配更准确，且能识别文学化表达。
   // forbidden 检查保留（blocker 级，forbidden 触发是真实阻断）。
-  if (totalChars < 300) issues.push(issue({ dimension: "plot", severity: "major", title: "正文过短", description: "当前文本不足以形成完整章节体验。", rule: "chapter.minimum-substance", suggestion: "依据本章主导功能，补足场景、人物体验、关系过程或必要行动。" }));
+  const targetWords = params.blueprint?.targetWords ?? 0;
+  const targetRatio = targetWords > 0 ? wordCount / targetWords : 1;
+  if (wordCount <= 1000) {
+    issues.push(issue({
+      dimension: "plot",
+      severity: "blocker",
+      title: "正文不足最低篇幅",
+      description: `当前约 ${wordCount} 字；完整章节须超过 1000 字。参考目标 ${targetWords || "未设置"} 字不参与通过判定。`,
+      rule: "chapter.minimum-length",
+      suggestion: "只补足完成本章叙事功能所必需的场景、人物体验、关系过程或行动后果，不得为接近参考目标而凑篇幅。",
+    }));
+  }
   if (blocks.length >= 6 && paragraphVariation < 0.18) issues.push(issue({ dimension: "pacing", severity: "warning", title: "段落节奏过于均匀", description: "段落长度变化很小，可能产生模型化节奏。", rule: "style.paragraph-variation", suggestion: "按动作速度和情绪停顿重新划分段落，而非机械打散。" }));
   if (totalChars > 0 && templateHits / totalChars * 1000 > 2) issues.push(issue({ dimension: "specificity", severity: "warning", title: "模板化表达偏多", description: `检测到 ${templateHits} 处常见模板表达。`, rule: "style.template-density", suggestion: "结合人物身体状态、环境和具体目标替换重复动作。" }));
   const openings = blocks.map((block) => block.slice(0, 8));
@@ -117,21 +133,27 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     if (text.includes(phrase)) issues.push(issue({ dimension: "sceneEmbodiment", severity: "warning", title: "情绪直说", description: `检测到“${phrase}”，情绪被直接宣告而非通过行动或意象承载。`, excerpt: phrase, rule: "style.emotion-direct", suggestion: "用一个反常动作、环境意象变化或没说完的话来承载该情绪。" }));
   }
   let shortSentenceStreaks = 0;
-  let shortSentenceStreak = 0;
-  for (const block of blocks) {
+  let shortSentenceParagraphs: number[] = [];
+  const shortSentenceRanges: Array<{ start: number; end: number }> = [];
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+    const block = blocks[blockIndex];
     if (isDialogueOnlyParagraph(block)) {
-      shortSentenceStreak = 0;
+      shortSentenceParagraphs = [];
       continue;
     }
     const sentences = block.split(/[。！？\n]/).map((s) => s.trim()).filter(Boolean);
     for (const s of sentences) {
       // R5: 阈值从 ≤6 放宽到 ≤10，覆盖"里面没有尸体。""也没有打斗痕迹。"等 7-10 字短句排比
-      if (s.length > 0 && s.length <= 10) shortSentenceStreak += 1;
-      else shortSentenceStreak = 0;
-      if (shortSentenceStreak >= 3) { shortSentenceStreaks += 1; shortSentenceStreak = 0; }
+      if (s.length > 0 && s.length <= 10) shortSentenceParagraphs.push(blockIndex + 1);
+      else shortSentenceParagraphs = [];
+      if (shortSentenceParagraphs.length >= 3) {
+        shortSentenceStreaks += 1;
+        shortSentenceRanges.push({ start: Math.min(...shortSentenceParagraphs), end: Math.max(...shortSentenceParagraphs) });
+        shortSentenceParagraphs = [];
+      }
     }
   }
-  if (shortSentenceStreaks > 2) issues.push(issue({ dimension: "pacing", severity: "warning", title: "短句排比过多", description: `检测到 ${shortSentenceStreaks} 处连续短句排比，超过单章 2 处上限。`, rule: "style.short-sentence-tic", suggestion: "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。" }));
+  if (shortSentenceStreaks > 2) issues.push(issue({ dimension: "pacing", severity: shortSentenceStreaks > 5 ? "major" : "warning", title: "短句排比过多", description: `检测到 ${shortSentenceStreaks} 处连续短句排比，超过单章 2 处上限。`, revisionRanges: shortSentenceRanges, rule: "style.short-sentence-tic", suggestion: "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。" }));
   let aphorismEndings = 0;
   for (const block of blocks) {
     const trimmedBlock = block.trim();
@@ -151,6 +173,22 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     }));
   }
 
+  // 章尾钩子压力检测：末段若缺乏开放问题信号或未行动指向，可能停在封闭画面。
+  // 开放信号 = 问号/省略号/转折连词/未行动指向词；任一出现即视为章尾携带未解压力。
+  const OPEN_HOOK_MARKERS = ["？", "……", "然而", "可是", "只是", "尚未", "还没", "且看", "即将", "将要", "忽然", "突然", "蓦地", "陡然", "倏地", "身影", "转身", "停步", "回头", "没说", "没动", "没走", "但", "却", "竟"];
+  const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : "";
+  const lastBlockHasOpenSignal = OPEN_HOOK_MARKERS.some((marker) => lastBlock.includes(marker));
+  if (totalChars >= 600 && lastBlock.length > 0 && !lastBlockHasOpenSignal) {
+    issues.push(issue({
+      dimension: "hookPayoff",
+      severity: "warning",
+      title: "章尾可能缺乏开放压力",
+      description: "末段未出现问号、转折词、未行动信号或新信息压力，可能停留在情感余韵的封闭画面。",
+      rule: "style.chapter-ending-hook",
+      suggestion: "在末段加入指向未解信息、未行动方向或新压力的细节，让读者产生“接下来会发生什么”的期待。可参考章尾钩子十型：信息遮断/关键信息凸显/倒计时/抉择时刻/立场反转/危险前置/目标失效/关系破裂/动机揭露/认知反转。",
+    }));
+  }
+
   const scores = Object.fromEntries(DIMENSIONS.map((dimension) => [dimension, 4.2])) as Record<QualityDimension, number>;
   for (const found of issues) {
     const penalty = found.severity === "blocker" ? 2 : found.severity === "major" ? 1 : 0.35;
@@ -161,6 +199,9 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     scores,
     metrics: {
       characters: totalChars,
+      wordCount,
+      targetWords,
+      targetRatio: Number(targetRatio.toFixed(3)),
       paragraphs: blocks.length,
       dialogueRatio: totalChars ? Number((dialogueChars / totalChars).toFixed(3)) : 0,
       paragraphVariation: Number(paragraphVariation.toFixed(3)),
@@ -222,13 +263,19 @@ export function aggregateQuality(params: { deterministic: ReturnType<typeof runD
   for (const reviewer of params.reviewers ?? []) {
     reviewerRoles.push(reviewer.role);
     for (const [dimension, score] of Object.entries(reviewer.scores) as Array<[QualityDimension, number]>) scores[dimension] = Number(((scores[dimension] + Math.max(0, Math.min(5, score))) / 2).toFixed(2));
-    for (const found of reviewer.issues) issues = deduplicateReviewerIssues(issues, found);
+    for (const found of reviewer.issues) {
+      const normalized = found.severity === "warning" && REVIEW_WARNING_MAJOR_PATTERN.test(`${found.title} ${found.description}`)
+        ? { ...found, severity: "major" as const }
+        : found;
+      issues = deduplicateReviewerIssues(issues, normalized);
+    }
   }
   const blockerCount = issues.filter((item) => item.severity === "blocker").length;
-  const structuralMajorCount = issues.filter((item) => item.severity === "major" && STRUCTURAL_MAJOR_RULES.has(item.rule)).length;
+  const majorCount = issues.filter((item) => item.severity === "major").length;
+  const reviewerCoveragePassed = !issues.some((item) => item.rule === "reviewer.unavailable");
   const weightedScore = Number(DIMENSIONS.reduce((sum, dimension) => sum + scores[dimension] * WEIGHTS[dimension], 0).toFixed(2));
   const coreFloorPassed = DIMENSIONS.every((dimension) => scores[dimension] >= 3);
-  return { scores, issues, blockerCount, weightedScore, passed: blockerCount === 0 && structuralMajorCount === 0 && coreFloorPassed && weightedScore >= params.threshold, reviewerRoles };
+  return { scores, issues, blockerCount, weightedScore, passed: blockerCount === 0 && majorCount === 0 && reviewerCoveragePassed && coreFloorPassed && weightedScore >= params.threshold, reviewerRoles };
 }
 
 export async function saveQualityReport(params: {

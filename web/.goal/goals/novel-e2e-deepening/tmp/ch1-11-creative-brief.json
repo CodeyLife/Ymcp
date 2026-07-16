@@ -1,0 +1,36 @@
+{
+  "id": "ed64b965-bc5d-4d2d-97ae-e475434e20c6",
+  "projectId": "06480200-6cd3-44aa-b431-3d14657de429",
+  "schemaVersion": 8,
+  "revision": 3,
+  "createdAt": 1784165598159,
+  "updatedAt": 1784165598160,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "threadId": "e3a69ee1-8d62-4ab3-b011-10472abd7999",
+  "targetDocumentId": "f53450b8-d9ba-47d4-b498-f5ff457455df",
+  "status": "confirmed",
+  "goal": "完成《初雪夜，东宫三盏未熄的灯》正文。本章是引子章，承担\"暴毙之夜多视角切片\"功能。三位主角在同一夜里分别与太子发生某种接触或位置接近，并在章尾汇合于一个共同信息压力。不要揭示真凶或核心动机。",
+  "povCharacterId": "0571eb84-26f0-4d43-8275-11ad06b3e281",
+  "factCutoffOrder": -1,
+  "tone": "克制而诡谲，宫廷礼俗与市井烟火交织",
+  "languageRequirements": [
+    "古风文言质感，但不堆砌典故",
+    "对白要区分朝堂典雅与市井俚俗",
+    "意象要承担信息压力，不只是装饰"
+  ],
+  "mustHappen": [
+    "三位主角分别在暴毙之夜出现在太子附近",
+    "章尾三人汇合于一个共同信息压力点（同一具尸体、同一行字或同一物事）"
+  ],
+  "forbidden": [
+    "揭示太子真凶或核心动机",
+    "使用现代词汇或网络用语",
+    "使用 AI 痕迹明显的对仗排比堆砌"
+  ],
+  "targetWords": 6000,
+  "referencedMemoryIds": [],
+  "openQuestions": [],
+  "sourceMessageIds": [],
+  "confirmedAt": 1784165598160
+}

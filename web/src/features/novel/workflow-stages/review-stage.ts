@@ -5,9 +5,23 @@ import { runDeterministicQualityChecks, saveQualityReport, type ReviewerFinding 
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { buildChapterReviewPrompt } from "../prose-prompts";
 import { novelMemoryService } from "../memory-service";
-import type { NovelAgentRole, QualityDimension, QualityIssue } from "../types";
+import type { NovelAgentRole, QualityDimension, QualityIssue, QualityReport } from "../types";
 import { asBlueprint, reviewerSchema, shouldAutoRevise } from "../workflow-shared";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
+import { settleWithConcurrency } from "./settled-pool";
+
+function majorCount(report: QualityReport) {
+  return report.issues.filter((issue) => issue.severity === "major").length;
+}
+
+export function isQualityRegression(params: { previous?: QualityReport; previousScore?: number; current: QualityReport }) {
+  if (!params.previous) return params.previousScore !== undefined && params.current.weightedScore < params.previousScore;
+  if (params.current.blockerCount !== params.previous.blockerCount) return params.current.blockerCount > params.previous.blockerCount;
+  const previousMajors = majorCount(params.previous);
+  const currentMajors = majorCount(params.current);
+  if (currentMajors !== previousMajors) return currentMajors > previousMajors;
+  return params.current.weightedScore < params.previous.weightedScore;
+}
 
 export const reviewStageHandler: StageHandler = {
   stage: "review",
@@ -27,45 +41,51 @@ export const reviewStageHandler: StageHandler = {
       .join("\n\n");
     const roles: Array<Parameters<typeof buildChapterReviewPrompt>[0]["role"]> = ["style-reviewer", "character-reviewer", "continuity-reviewer", "plot-reviewer", "pacing-reviewer"];
     const reviewPackets = new Map<NovelAgentRole, Awaited<ReturnType<typeof novelMemoryService.compileStageContext>>>();
-    const settled = await Promise.allSettled(
-      roles.map(async (role) => {
-        const [skills, packet] = await Promise.all([
-          resolveNovelSkills({ projectId: run.projectId, stage: "review" }),
-          run.conversationThreadId
-            ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "review", role, instruction: `${role} 独立审校当前章节`, workflowRunId: run.id, skillStage: "review" })
-            : novelDb.contextPackets.get(run.contextPacketId!),
-        ]);
-        if (!packet) throw new Error("审校上下文不存在");
-        reviewPackets.set(role, packet);
-        const { agent } = await ctx.createAgentRecord({
-          run,
+    const reviewOne = async (role: typeof roles[number]) => {
+      const [skills, packet] = await Promise.all([
+        resolveNovelSkills({ projectId: run.projectId, stage: "review" }),
+        run.conversationThreadId
+          ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "review", role, instruction: `${role} 独立审校当前章节`, workflowRunId: run.id, skillStage: "review" })
+          : novelDb.contextPackets.get(run.contextPacketId!),
+      ]);
+      if (!packet) throw new Error("审校上下文不存在");
+      reviewPackets.set(role, packet);
+      const { agent } = await ctx.createAgentRecord({
+        run,
+        role,
+        goal: `${role} 独立审校`,
+        skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
+      });
+      try {
+        const result = await callStructuredNovelModel<Record<string, unknown>>({
+          model: project.settings.textModel,
+          temperature: 0.15,
           role,
-          goal: `${role} 独立审校`,
-          skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
-        });
-        try {
-          const result = await callStructuredNovelModel<Record<string, unknown>>({
-            model: project.settings.textModel,
-            temperature: 0.15,
+          skillPrompt: compileNovelStagePrompt(skills.skills, "review"),
+          schema: reviewerSchema,
+          prompt: buildChapterReviewPrompt({
             role,
-            skillPrompt: compileNovelStagePrompt(skills.skills, "review"),
-            schema: reviewerSchema,
-            prompt: buildChapterReviewPrompt({
-              role,
-              blueprintMarkdown: blueprint.contentMarkdown,
-              numberedDraft,
-              reviewerContext: formatReviewerContext(packet),
-            }),
-          });
-          await ctx.finishAgent(agent, result);
-          const data = result.data as { scores: Partial<Record<QualityDimension, number>>; issues: Array<Omit<QualityIssue, "id" | "deterministic">> };
-          return { role, scores: data.scores, issues: data.issues } satisfies ReviewerFinding;
-        } catch (error) {
-          await ctx.failAgent(agent, error);
-          throw error;
-        }
-      }),
-    );
+            blueprintMarkdown: blueprint.contentMarkdown,
+            numberedDraft,
+            reviewerContext: formatReviewerContext(packet),
+          }),
+        });
+        await ctx.finishAgent(agent, result);
+        const data = result.data as { scores: Partial<Record<QualityDimension, number>>; issues: Array<Omit<QualityIssue, "id" | "deterministic">> };
+        return { role, scores: data.scores, issues: data.issues } satisfies ReviewerFinding;
+      } catch (error) {
+        await ctx.failAgent(agent, error);
+        throw error;
+      }
+    };
+    const settled = await settleWithConcurrency(roles, 2, reviewOne);
+    const failedIndexes = settled.flatMap((result, index) => result.status === "rejected" ? [index] : []);
+    if (failedIndexes.length > 0) {
+      const retries = await settleWithConcurrency(failedIndexes, 1, (index) => reviewOne(roles[index]));
+      retries.forEach((result, retryIndex) => {
+        settled[failedIndexes[retryIndex]] = result;
+      });
+    }
     const reviewers: ReviewerFinding[] = settled.map((result, index) => {
       if (result.status === "fulfilled") return result.value;
       const role = roles[index];
@@ -80,14 +100,15 @@ export const reviewStageHandler: StageHandler = {
           description: `该审校维度因调用失败而降级：${message}`,
           rule: "reviewer.unavailable",
           suggestion: "可重试该维度或进行人工审阅。其它维度的审校结果仍然有效。",
+          rewriteExample: "结构问题，审校调用失败需人工复核后再决定改写方向。",
         }],
       } satisfies ReviewerFinding;
     });
-    // R11 修复：检查 major+ issue 的 rewriteExample 覆盖率，记录警告供调试
+    // R11 修复：schema 已强制 rewriteExample 必填（minLength=1），此处仅做最终保险统计
     const majorIssues = reviewers.flatMap((r) => r.issues).filter((i) => i.severity === "major" || i.severity === "blocker");
     const missingRewrite = majorIssues.filter((i) => !i.rewriteExample?.trim());
     if (missingRewrite.length > 0) {
-      console.warn(`[review-stage] ${missingRewrite.length}/${majorIssues.length} major+ issues missing rewriteExample (prompt requires it for major+)`);
+      console.warn(`[review-stage] ${missingRewrite.length}/${majorIssues.length} major+ issues missing rewriteExample after schema enforcement`);
     }
     const report = await saveQualityReport({
       projectId: run.projectId,
@@ -111,10 +132,11 @@ export const reviewStageHandler: StageHandler = {
       skillRefs: [],
       contextPacketId: receiptPacket?.id,
     });
-    if (run.previousScore !== undefined && report.weightedScore < run.previousScore && draft.parentArtifactId) {
+    const previousReport = run.qualityReportId ? await novelDb.qualityReports.get(run.qualityReportId) : undefined;
+    if (isQualityRegression({ previous: previousReport, previousScore: run.previousScore, current: report }) && draft.parentArtifactId) {
       const previousDraft = await novelDb.workflowArtifacts.get(draft.parentArtifactId);
       if (previousDraft) {
-        await ctx.createApprovalProposal(run, previousDraft, "workflow-manuscript", `修订分数由 ${run.previousScore} 降至 ${report.weightedScore}，已恢复上一版本`);
+        await ctx.createApprovalProposal(run, previousDraft, "workflow-manuscript", `修订版本的 blocker/major/分数综合质量退步，已恢复上一版本（${run.previousScore ?? previousReport?.weightedScore} → ${report.weightedScore}）`);
         const nextRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", {
           qualityReportId: run.qualityReportId,
           draftArtifactId: previousDraft.id,

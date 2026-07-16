@@ -102,6 +102,24 @@ describe("phase plot design", () => {
     expect(() => validatePlotDesignItems([segment, chapter("one", 0)], "phase", 0, 0)).toThrow(/2-4 个章节/);
     expect(() => validatePlotDesignItems([segment, chapter("one", 0), chapter("two", 1)], "phase", 0, 0)).not.toThrow();
   });
+
+  it("drops an unresolved POV when plot design runs before character setup", async () => {
+    const project = await createNovelProject({ title: "先规划后建人物", genre: ["历史"], premise: "从一座水乡开始。" });
+    const architecture = await addArchitecture(project.id, 1);
+    const phase = architecture.phases[0];
+    const response = plotDesignResponse(phase.id);
+    const chapter = (response.data.items as Array<{ targetTable: string; payload: Record<string, unknown> }>).find((item) => item.targetTable === "documents")!;
+    chapter.payload.blueprint = { ...(chapter.payload.blueprint as Record<string, unknown>), povCharacterId: "" };
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(evidenceReady() as never)
+      .mockResolvedValueOnce(response as never);
+
+    const { proposal: generated } = await runPlotDesignTask({ projectId: project.id, phaseId: phase.id });
+
+    const blueprint = generated.items.find((item) => item.targetTable === "documents")?.payload.blueprint as Record<string, unknown>;
+    expect(blueprint.povCharacterId).toBeUndefined();
+    expect(vi.mocked(callStructuredNovelModel).mock.calls.at(-1)?.[0].skillPrompt).toContain("当前没有角色时必须省略该字段");
+  });
 });
 
 describe("generation task ownership", () => {

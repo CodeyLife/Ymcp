@@ -1,0 +1,393 @@
+{
+  "id": "737142c9-b7dd-4a30-b5a0-38bcdddc9a75",
+  "projectId": "06480200-6cd3-44aa-b431-3d14657de429",
+  "schemaVersion": 8,
+  "revision": 1,
+  "createdAt": 1784165543116,
+  "updatedAt": 1784165543116,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "title": "规划时间线",
+  "operation": "structured:timeline",
+  "taskKey": "timeline",
+  "scope": "timeline",
+  "status": "pending",
+  "previewMarkdown": "# 规划时间线\n\n太子暴毙前后的一系列时间线事件，围绕东宫旧档、私人手札、死亡疑云与后续查验展开，记录人物行动、线索出现及朝局变化。\n\n## 1. timeline_event_001\n\n记录太子暴毙前东宫内的一次重要议事，为后续异常线索出现提供时间节点。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：太子召见旧臣，东宫夜议未散\n**故事日期**：太子暴毙前7日\n**持续时间**：一夜\n**叙事顺序**：1\n**描述**：太子在东宫召见裴守谦商议朝局与旧年文书，萧承渊因奉命入宫短暂旁听。席间太子情绪沉郁，似有未决之事，却未向二人说明全部缘由。夜深后，东宫留下几页未收起的文稿，成为后来追查时被注意的异常。\n\n## 2. timeline_event_002\n\n记录沈砚秋发现文书异常的过程，使旧档线索进入时间线。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：沈砚秋发现旧档缺页\n**故事日期**：太子暴毙前6日\n**持续时间**：半日\n**叙事顺序**：2\n**描述**：沈砚秋在整理宫档时发现一卷与东宫旧事有关的记录存在不自然的断页。她没有立即上报，只将缺失处与卷宗编号记下，以防惊动掌管文书流转的人。此事让她开始留意太子近期频繁查阅旧档的动向。\n\n## 3. timeline_event_003\n\n记录太子留下私人线索的事件节点。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：太子托付焦角手札\n**故事日期**：太子暴毙前4日\n**持续时间**：一刻钟\n**叙事顺序**：3\n**描述**：太子私下将一封夹有焦角绢帛的手札交给沈砚秋，请她暂存。沈砚秋察觉太子似乎不愿让此物经过正式宫档流程，却没有追问其中缘由。手札成为太子死亡后唯一明确留下的私人线索。\n\n## 4. timeline_event_004\n\n记录东宫值守变化，为后续人员核查提供时间依据。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：韩景福调整东宫夜值安排\n**故事日期**：太子暴毙前3日\n**持续时间**：一日\n**叙事顺序**：4\n**描述**：韩景福以宫务调度为由重新安排东宫部分值守人员。调整后，一些熟悉太子习惯的宫人离开夜班，新的值守名单被记录在内廷册中。此举让案发当夜东宫人员关系变得复杂，也留下日后核查的空间。\n\n## 5. timeline_event_005\n\n记录死亡前顾长安接触相关信息的节点。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：顾长安受召准备验查贵人遗体事宜\n**故事日期**：太子暴毙前2日\n**持续时间**：半日\n**叙事顺序**：5\n**描述**：京中开始流传太子身体不适的消息，顾长安被京兆府提前询问相关验查准备。他虽未进入东宫，却从药材与宫中传出的零碎消息里察觉此次病情不像寻常风寒。\n\n## 6. timeline_event_006\n\n记录核心死亡事件及其引发的后续调查背景。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：初雪夜东宫太子暴毙\n**故事日期**：太子暴毙当日\n**持续时间**：一夜\n**叙事顺序**：6\n**描述**：初雪夜，东宫灯火熄灭，太子被发现死于寝殿。宫中按照礼制封锁消息并整理现场，韩景福负责维持内廷秩序，裴守谦处理太子身后礼仪，萧承渊因身份敏感被重新召回视野。死亡原因暂被归于急病，但东宫留下的异常让部分人无法安心。\n\n## 7. timeline_event_007\n\n记录调查团队形成及首次查验过程。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：三人首次进入东宫查验\n**故事日期**：太子暴毙后1日\n**持续时间**：一日\n**叙事顺序**：7\n**描述**：萧承渊、沈砚秋与顾长安因各自掌握的信息被安排共同查验东宫。顾长安在遗体检查中发现舌下丹砂异香，沈砚秋发现现场记录与宫档存在不一致，萧承渊则注意到部分宫人言辞闪烁。三人由此形成临时合作。\n\n## 8. timeline_event_008\n\n记录现场复查中出现的新异常。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：东宫现场出现二次整理痕迹\n**故事日期**：太子暴毙后2日\n**持续时间**：数个时辰\n**叙事顺序**：8\n**描述**：顾长安确认尸身异常后，三人重新检查东宫寝殿，发现部分物件摆放与死亡当夜记录不完全相符。韩景福以宫禁规矩解释变动原因，却使萧承渊等人意识到死亡之后仍有人试图维持某种表面秩序。\n\n## 9. timeline_event_009\n\n记录调查扩大并开始影响朝局的阶段。\n\n- 操作：新增\n- 类型：timelineEvents\n\n### 内容\n**标题**：清查司接管异常文书复核\n**故事日期**：太子暴毙后3日\n**持续时间**：一日\n**叙事顺序**：9\n**描述**：清查司开始复核东宫相关文书与人员记录，沈砚秋协助整理异常卷宗，萧承渊被迫面对朝臣对储位变化的试探。案件从单纯死亡疑云逐渐牵动朝局，但关于真正幕后原因仍停留在诸多未解的线索之间。",
+  "patches": [],
+  "items": [
+    {
+      "id": "fc34ca6f-3487-4d7c-aa0e-bd5b23761392",
+      "label": "timeline_event_001",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_001",
+      "status": "pending",
+      "payload": {
+        "title": "太子召见旧臣，东宫夜议未散",
+        "storyDate": "太子暴毙前7日",
+        "duration": "一夜",
+        "narrativeOrder": 1,
+        "participantIds": [
+          "1a07b10b-51c8-405e-8811-d369fbab43b0",
+          "3458db78-f714-43ea-8162-97250c2c2ff5",
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+        ],
+        "causeIds": [
+          "4d2f5dea-d873-48b1-b983-5baddef55e41"
+        ],
+        "consequenceIds": [
+          "58f39f8b-fab7-487d-812a-5e590174b92e"
+        ],
+        "description": "太子在东宫召见裴守谦商议朝局与旧年文书，萧承渊因奉命入宫短暂旁听。席间太子情绪沉郁，似有未决之事，却未向二人说明全部缘由。夜深后，东宫留下几页未收起的文稿，成为后来追查时被注意的异常。"
+      },
+      "after": {
+        "title": "太子召见旧臣，东宫夜议未散",
+        "storyDate": "太子暴毙前7日",
+        "duration": "一夜",
+        "narrativeOrder": 1,
+        "participantIds": [
+          "3458db78-f714-43ea-8162-97250c2c2ff5",
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "太子在东宫召见裴守谦商议朝局与旧年文书，萧承渊因奉命入宫短暂旁听。席间太子情绪沉郁，似有未决之事，却未向二人说明全部缘由。夜深后，东宫留下几页未收起的文稿，成为后来追查时被注意的异常。"
+      },
+      "rationale": "记录太子暴毙前东宫内的一次重要议事，为后续异常线索出现提供时间节点。",
+      "dependencies": []
+    },
+    {
+      "id": "b6c88f38-ac66-4d73-a3ae-d702a4e69a6f",
+      "label": "timeline_event_002",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_002",
+      "status": "pending",
+      "payload": {
+        "title": "沈砚秋发现旧档缺页",
+        "storyDate": "太子暴毙前6日",
+        "duration": "半日",
+        "narrativeOrder": 2,
+        "participantIds": [
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "38308aed-c222-480a-814e-18fc5d90bdc8"
+        ],
+        "causeIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "consequenceIds": [
+          "58f39f8b-fab7-487d-812a-5e590174b92e"
+        ],
+        "description": "沈砚秋在整理宫档时发现一卷与东宫旧事有关的记录存在不自然的断页。她没有立即上报，只将缺失处与卷宗编号记下，以防惊动掌管文书流转的人。此事让她开始留意太子近期频繁查阅旧档的动向。"
+      },
+      "after": {
+        "title": "沈砚秋发现旧档缺页",
+        "storyDate": "太子暴毙前6日",
+        "duration": "半日",
+        "narrativeOrder": 2,
+        "participantIds": [
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "沈砚秋在整理宫档时发现一卷与东宫旧事有关的记录存在不自然的断页。她没有立即上报，只将缺失处与卷宗编号记下，以防惊动掌管文书流转的人。此事让她开始留意太子近期频繁查阅旧档的动向。"
+      },
+      "rationale": "记录沈砚秋发现文书异常的过程，使旧档线索进入时间线。",
+      "dependencies": []
+    },
+    {
+      "id": "54e757f4-a5b3-456b-a09d-d45164d577f8",
+      "label": "timeline_event_003",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_003",
+      "status": "pending",
+      "payload": {
+        "title": "太子托付焦角手札",
+        "storyDate": "太子暴毙前4日",
+        "duration": "一刻钟",
+        "narrativeOrder": 3,
+        "participantIds": [
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0"
+        ],
+        "causeIds": [
+          "58f39f8b-fab7-487d-812a-5e590174b92e"
+        ],
+        "consequenceIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "description": "太子私下将一封夹有焦角绢帛的手札交给沈砚秋，请她暂存。沈砚秋察觉太子似乎不愿让此物经过正式宫档流程，却没有追问其中缘由。手札成为太子死亡后唯一明确留下的私人线索。"
+      },
+      "after": {
+        "title": "太子托付焦角手札",
+        "storyDate": "太子暴毙前4日",
+        "duration": "一刻钟",
+        "narrativeOrder": 3,
+        "participantIds": [
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "太子私下将一封夹有焦角绢帛的手札交给沈砚秋，请她暂存。沈砚秋察觉太子似乎不愿让此物经过正式宫档流程，却没有追问其中缘由。手札成为太子死亡后唯一明确留下的私人线索。"
+      },
+      "rationale": "记录太子留下私人线索的事件节点。",
+      "dependencies": []
+    },
+    {
+      "id": "52820e3f-20c3-405e-9fe9-2f13d3e339ad",
+      "label": "timeline_event_004",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_004",
+      "status": "pending",
+      "payload": {
+        "title": "韩景福调整东宫夜值安排",
+        "storyDate": "太子暴毙前3日",
+        "duration": "一日",
+        "narrativeOrder": 4,
+        "participantIds": [
+          "0571eb84-26f0-4d43-8275-11ad06b3e281",
+          "1a07b10b-51c8-405e-8811-d369fbab43b0"
+        ],
+        "causeIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "consequenceIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "description": "韩景福以宫务调度为由重新安排东宫部分值守人员。调整后，一些熟悉太子习惯的宫人离开夜班，新的值守名单被记录在内廷册中。此举让案发当夜东宫人员关系变得复杂，也留下日后核查的空间。"
+      },
+      "after": {
+        "title": "韩景福调整东宫夜值安排",
+        "storyDate": "太子暴毙前3日",
+        "duration": "一日",
+        "narrativeOrder": 4,
+        "participantIds": [
+          "0571eb84-26f0-4d43-8275-11ad06b3e281",
+          "0571eb84-26f0-4d43-8275-11ad06b3e281"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "韩景福以宫务调度为由重新安排东宫部分值守人员。调整后，一些熟悉太子习惯的宫人离开夜班，新的值守名单被记录在内廷册中。此举让案发当夜东宫人员关系变得复杂，也留下日后核查的空间。"
+      },
+      "rationale": "记录东宫值守变化，为后续人员核查提供时间依据。",
+      "dependencies": []
+    },
+    {
+      "id": "f6e45a50-8251-4624-a406-508051a47063",
+      "label": "timeline_event_005",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_005",
+      "status": "pending",
+      "payload": {
+        "title": "顾长安受召准备验查贵人遗体事宜",
+        "storyDate": "太子暴毙前2日",
+        "duration": "半日",
+        "narrativeOrder": 5,
+        "participantIds": [
+          "e2adc989-aff1-4b90-8d50-d3140819435d"
+        ],
+        "causeIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "consequenceIds": [
+          "42087d41-816e-4ae1-ac79-3510f21bafad"
+        ],
+        "description": "京中开始流传太子身体不适的消息，顾长安被京兆府提前询问相关验查准备。他虽未进入东宫，却从药材与宫中传出的零碎消息里察觉此次病情不像寻常风寒。"
+      },
+      "after": {
+        "title": "顾长安受召准备验查贵人遗体事宜",
+        "storyDate": "太子暴毙前2日",
+        "duration": "半日",
+        "narrativeOrder": 5,
+        "participantIds": [
+          "e2adc989-aff1-4b90-8d50-d3140819435d"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "京中开始流传太子身体不适的消息，顾长安被京兆府提前询问相关验查准备。他虽未进入东宫，却从药材与宫中传出的零碎消息里察觉此次病情不像寻常风寒。"
+      },
+      "rationale": "记录死亡前顾长安接触相关信息的节点。",
+      "dependencies": []
+    },
+    {
+      "id": "1fe0192f-2b1c-4b1a-b933-7b55f87bbceb",
+      "label": "timeline_event_006",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_006",
+      "status": "pending",
+      "payload": {
+        "title": "初雪夜东宫太子暴毙",
+        "storyDate": "太子暴毙当日",
+        "duration": "一夜",
+        "narrativeOrder": 6,
+        "participantIds": [
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "0571eb84-26f0-4d43-8275-11ad06b3e281",
+          "3458db78-f714-43ea-8162-97250c2c2ff5",
+          "1a07b10b-51c8-405e-8811-d369fbab43b0"
+        ],
+        "causeIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "consequenceIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+          "4d2f5dea-d873-48b1-b983-5baddef55e41"
+        ],
+        "description": "初雪夜，东宫灯火熄灭，太子被发现死于寝殿。宫中按照礼制封锁消息并整理现场，韩景福负责维持内廷秩序，裴守谦处理太子身后礼仪，萧承渊因身份敏感被重新召回视野。死亡原因暂被归于急病，但东宫留下的异常让部分人无法安心。"
+      },
+      "after": {
+        "title": "初雪夜东宫太子暴毙",
+        "storyDate": "太子暴毙当日",
+        "duration": "一夜",
+        "narrativeOrder": 6,
+        "participantIds": [
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "0571eb84-26f0-4d43-8275-11ad06b3e281",
+          "3458db78-f714-43ea-8162-97250c2c2ff5"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "初雪夜，东宫灯火熄灭，太子被发现死于寝殿。宫中按照礼制封锁消息并整理现场，韩景福负责维持内廷秩序，裴守谦处理太子身后礼仪，萧承渊因身份敏感被重新召回视野。死亡原因暂被归于急病，但东宫留下的异常让部分人无法安心。"
+      },
+      "rationale": "记录核心死亡事件及其引发的后续调查背景。",
+      "dependencies": []
+    },
+    {
+      "id": "e1c6abac-baee-4e7a-8521-eea38dd06a79",
+      "label": "timeline_event_007",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_007",
+      "status": "pending",
+      "payload": {
+        "title": "三人首次进入东宫查验",
+        "storyDate": "太子暴毙后1日",
+        "duration": "一日",
+        "narrativeOrder": 7,
+        "participantIds": [
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "e2adc989-aff1-4b90-8d50-d3140819435d",
+          "1a07b10b-51c8-405e-8811-d369fbab43b0"
+        ],
+        "causeIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "consequenceIds": [
+          "42087d41-816e-4ae1-ac79-3510f21bafad",
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "description": "萧承渊、沈砚秋与顾长安因各自掌握的信息被安排共同查验东宫。顾长安在遗体检查中发现舌下丹砂异香，沈砚秋发现现场记录与宫档存在不一致，萧承渊则注意到部分宫人言辞闪烁。三人由此形成临时合作。"
+      },
+      "after": {
+        "title": "三人首次进入东宫查验",
+        "storyDate": "太子暴毙后1日",
+        "duration": "一日",
+        "narrativeOrder": 7,
+        "participantIds": [
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "e2adc989-aff1-4b90-8d50-d3140819435d"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "萧承渊、沈砚秋与顾长安因各自掌握的信息被安排共同查验东宫。顾长安在遗体检查中发现舌下丹砂异香，沈砚秋发现现场记录与宫档存在不一致，萧承渊则注意到部分宫人言辞闪烁。三人由此形成临时合作。"
+      },
+      "rationale": "记录调查团队形成及首次查验过程。",
+      "dependencies": []
+    },
+    {
+      "id": "ff1a77f3-f9ff-4263-8a14-6c958f9cbc03",
+      "label": "timeline_event_008",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_008",
+      "status": "pending",
+      "payload": {
+        "title": "东宫现场出现二次整理痕迹",
+        "storyDate": "太子暴毙后2日",
+        "duration": "数个时辰",
+        "narrativeOrder": 8,
+        "participantIds": [
+          "0571eb84-26f0-4d43-8275-11ad06b3e281",
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "e2adc989-aff1-4b90-8d50-d3140819435d"
+        ],
+        "causeIds": [
+          "42087d41-816e-4ae1-ac79-3510f21bafad"
+        ],
+        "consequenceIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "description": "顾长安确认尸身异常后，三人重新检查东宫寝殿，发现部分物件摆放与死亡当夜记录不完全相符。韩景福以宫禁规矩解释变动原因，却使萧承渊等人意识到死亡之后仍有人试图维持某种表面秩序。"
+      },
+      "after": {
+        "title": "东宫现场出现二次整理痕迹",
+        "storyDate": "太子暴毙后2日",
+        "duration": "数个时辰",
+        "narrativeOrder": 8,
+        "participantIds": [
+          "0571eb84-26f0-4d43-8275-11ad06b3e281",
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "e2adc989-aff1-4b90-8d50-d3140819435d"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "顾长安确认尸身异常后，三人重新检查东宫寝殿，发现部分物件摆放与死亡当夜记录不完全相符。韩景福以宫禁规矩解释变动原因，却使萧承渊等人意识到死亡之后仍有人试图维持某种表面秩序。"
+      },
+      "rationale": "记录现场复查中出现的新异常。",
+      "dependencies": []
+    },
+    {
+      "id": "a74100f1-9de8-41a8-8488-07084e5670f1",
+      "label": "timeline_event_009",
+      "operation": "create",
+      "targetTable": "timelineEvents",
+      "tempId": "timeline_event_009",
+      "status": "pending",
+      "payload": {
+        "title": "清查司接管异常文书复核",
+        "storyDate": "太子暴毙后3日",
+        "duration": "一日",
+        "narrativeOrder": 9,
+        "participantIds": [
+          "04a5c24b-273e-452c-a7e8-06b49a783341",
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+        ],
+        "causeIds": [
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "consequenceIds": [
+          "4d2f5dea-d873-48b1-b983-5baddef55e41",
+          "47a24816-02e9-4571-a2d6-c6f2331c50c9"
+        ],
+        "description": "清查司开始复核东宫相关文书与人员记录，沈砚秋协助整理异常卷宗，萧承渊被迫面对朝臣对储位变化的试探。案件从单纯死亡疑云逐渐牵动朝局，但关于真正幕后原因仍停留在诸多未解的线索之间。"
+      },
+      "after": {
+        "title": "清查司接管异常文书复核",
+        "storyDate": "太子暴毙后3日",
+        "duration": "一日",
+        "narrativeOrder": 9,
+        "participantIds": [
+          "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+        ],
+        "causeIds": [],
+        "consequenceIds": [],
+        "description": "清查司开始复核东宫相关文书与人员记录，沈砚秋协助整理异常卷宗，萧承渊被迫面对朝臣对储位变化的试探。案件从单纯死亡疑云逐渐牵动朝局，但关于真正幕后原因仍停留在诸多未解的线索之间。"
+      },
+      "rationale": "记录调查扩大并开始影响朝局的阶段。",
+      "dependencies": []
+    }
+  ],
+  "contextPacketId": "8480d43e-4997-4017-b070-527f0fafd119",
+  "agentRunId": "4984f95d-debd-4872-b16b-4dc253b4f1bb",
+  "model": "auto"
+}

@@ -1,0 +1,53 @@
+{
+  "loop": 1,
+  "goalId": "novel-e2e-deepening",
+  "plan": "Loop 1: 用真实 LLM 通过 e2e-foundation.test.ts 端到端跑完 9 个地基阶段；分析每步产物并写入 findings.md；标定 6 项通用提示词改进 + 2 个工作流 bug；append ledger 并进入 Loop 2 落地代码改进。",
+  "actions": [
+    "创建 src/features/novel/__tests__/e2e-foundation.test.ts，绕过 DEV 模式 /ai-proxy URL 改写（通过 mock @/stores/ui 的 getEffectiveApiConfig 返回带显式 :443 端口的 baseUrl）",
+    "通过 runGenerationTask / runPlotDesignTask / applyProposalItems 实际调用代码路径完成 9 个阶段，303s 无错误",
+    "逐项分析 9 个阶段 LLM 产物 JSON，写入 .goal/goals/novel-e2e-deepening/findings.md",
+    "在 findings.md 中标定 6 项通用提示词改进点（题材无关）与 2 个工作流 bug 的根因"
+  ],
+  "verification": [
+    {
+      "result": "pass",
+      "summary": "e2e-foundation.test.ts 9 个阶段全部通过，产出 5 阶段架构、5 角色、9 关系、9 实体、4 剧情线、4 伏笔、10 时间线事件、2 章节，全部存入 .goal/goals/novel-e2e-deepening/tmp/01-*.json 至 10-*.json"
+    },
+    {
+      "result": "pass",
+      "summary": "findings.md 完整覆盖 9 个阶段的 LLM 产物分析，引用具体 JSON 字段与 ID 示例作为证据，并归纳出 6 项通用改进 + 2 个工作流 bug"
+    },
+    {
+      "result": "pass",
+      "summary": "6 项改进点均为题材无关规则（不限定于古风权谋探案测试主题），符合用户'迭代优化通用工作流而非局限于测试'的要求"
+    }
+  ],
+  "selfReflection": "Loop 1 通过 e2e-foundation.test.ts 端到端跑通 9 个地基阶段（项目定位→架构→角色→关系→世界观→剧情线→伏笔→时间线→剧情段与章节设计），全部使用真实 LLM 调用与实际代码路径。303s 完成，无错误。逐项分析 LLM 产物后，findings.md 总结了 6 项通用提示词改进点（turningPoint 文学化叙事、角色名不与地名重名、角色 state 字段必填、reference-integrity 扩展校验、POV 与 mustHappen 一致性、plot-design 章节节奏建议）和 2 个工作流 bug（timeline.participantIds 混入 location ID 根因是 assertPayloadReferences 用 entityIds 而非 characterIds 校验；timeline.causeIds/consequenceIds 凭空发明 ID 根因是这些字段完全没有校验）。Loop 1 验证了工作流地基阶段可在真实 LLM 下完整跑通，也暴露了引用完整性校验缺位这一系统级问题。Loop 2 将落实全部 6 项改进与 2 个 bug 修复到通用代码，再进入章节正文流程。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "地基阶段 e2e 实测完成，6 项通用改进与 2 个工作流 bug 已定位并写入 findings.md，与用户'迭代优化通用工作流'要求一致。",
+    "confidence": 0.7,
+    "needsStrategyChange": false
+  },
+  "strategyUpdate": null,
+  "progressDelta": 0.15,
+  "successSignalUpdates": [
+    { "action": "satisfy", "id": "intent-preserved", "evidenceRefs": ["findings.md:6 通用改进均为题材无关规则"] },
+    { "action": "satisfy", "id": "evidence-reviewed", "evidenceRefs": ["findings.md:9 阶段 LLM 产物逐项分析"] },
+    { "action": "add", "id": "three-chapters-e2e", "text": "第 1-3 章均通过代码端到端走完全流程（context→blueprint→draft→review→revision→fact-extraction→commit）", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "aesthetic-score-target", "text": "每章 8 维度平均评分 ≥ 3.8，且 chapterEndingDrive/imageryUsage/chineseAesthetic 三项无 blocker", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "general-prompt-iter", "text": "≥3 项对 prose-prompts.ts/skills.ts/generation.ts 中通用规则的具体改进已合入代码", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "workflow-bug-fixed", "text": "≥2 个工作流 bug 或不足已定位并修复，每条记录根因+证据", "status": "pending", "weight": 2 },
+    { "action": "add", "id": "step-analysis", "text": "每个工作流阶段（定位/架构/世界观/角色/剧情线/伏笔/时间线/章节规划/场景/正文/审校/修订/事实提取/提交）的 LLM 产物均有分析报告写入 findings.md", "status": "pending", "weight": 2 }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 2: 把 6 项通用提示词改进 + 2 个工作流 bug 修复落地到 skills.ts / generation.ts / reference-integrity.ts / prose-prompts.ts，跑现有 novel 测试套件验证不破坏；之后进入 Loop 3 第 1 章完整 workflow（context→blueprint→draft→review→revision→fact-extract→commit）。",
+  "errors": [],
+  "artifactRefs": [
+    { "id": "e2e-foundation-test", "successSignalId": "evidence-reviewed", "kind": "test", "path": "src/features/novel/__tests__/e2e-foundation.test.ts", "evidence": "Loop 1 测试脚本，9 阶段端到端跑通", "status": "verified" },
+    { "id": "loop1-findings", "successSignalId": "evidence-reviewed", "kind": "analysis", "path": ".goal/goals/novel-e2e-deepening/findings.md", "evidence": "9 阶段 LLM 产物分析 + 6 通用改进 + 2 工作流 bug", "status": "verified" },
+    { "id": "intent-artifact", "successSignalId": "intent-preserved", "kind": "analysis", "path": ".goal/goals/novel-e2e-deepening/findings.md", "evidence": "改进点均为题材无关通用规则，未硬编码测试主题", "status": "verified" },
+    { "id": "step-analysis-artifact", "successSignalId": "step-analysis", "kind": "analysis", "path": ".goal/goals/novel-e2e-deepening/findings.md", "evidence": "地基 9 步分析完成；章节阶段待 Loop 2-4", "status": "planned" },
+    { "id": "timeline-bug-artifact", "successSignalId": "workflow-bug-fixed", "kind": "artifact", "path": ".goal/goals/novel-e2e-deepening/tmp/09-timeline-applied.json", "evidence": "2 工作流 bug 已定位根因（reference-integrity.ts:95-97 + 186-209），待 Loop 2 落地修复", "status": "planned" }
+  ]
+}

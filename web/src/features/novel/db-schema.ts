@@ -317,12 +317,14 @@ export async function migrateOutlineBeatFields(transaction: Transaction) {
 }
 
 export async function cleanupReferenceIntegrity(transaction: Transaction) {
-  const [entities, threads, clues] = await Promise.all([
+  const [entities, threads, clues, timelineEvents, outlineNodes] = await Promise.all([
     transaction.table("entities").toArray(),
     transaction.table("plotThreads").toArray(),
     transaction.table("foreshadowing").toArray(),
+    transaction.table("timelineEvents").toArray(),
+    transaction.table("outlineNodes").toArray(),
   ]);
-  const catalogs = buildProjectReferenceCatalogs(entities, threads, clues);
+  const catalogs = buildProjectReferenceCatalogs(entities, threads, clues, timelineEvents, outlineNodes);
   const catalogFor = (record: Record<string, unknown>) => catalogs.get(String(record.projectId ?? "")) ?? emptyReferenceCatalog();
   await Promise.all([
     transaction.table("outlineNodes").toCollection().modify((record) => sanitizeReferenceRecordInPlace("outlineNodes", record, catalogFor(record))),
@@ -330,6 +332,7 @@ export async function cleanupReferenceIntegrity(transaction: Transaction) {
     transaction.table("documents").toCollection().modify((record) => sanitizeReferenceRecordInPlace("documents", record, catalogFor(record))),
     transaction.table("plotThreads").toCollection().modify((record) => sanitizeReferenceRecordInPlace("plotThreads", record, catalogFor(record))),
     transaction.table("timelineEvents").toCollection().modify((record) => sanitizeReferenceRecordInPlace("timelineEvents", record, catalogFor(record))),
+    transaction.table("foreshadowing").toCollection().modify((record) => sanitizeReferenceRecordInPlace("foreshadowing", record, catalogFor(record))),
     transaction.table("proposals").toCollection().modify((record) => sanitizeProposalReferencesInPlace(record, catalogFor(record))),
   ]);
 }

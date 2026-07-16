@@ -1,7 +1,7 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
 import { novelDb } from "../db";
-import { autoAcceptSafeFactCandidates, dedupeCharacterFactCandidates, storeFactCandidates, type ExtractedFact } from "../facts";
+import { autoAcceptSafeFactCandidates, formatFactCandidateValue, prepareFactCandidates, storeFactCandidates, type ExtractedFact } from "../facts";
 import { formatSkillPrompt, resolveNovelSkills } from "../skills";
 import { novelMemoryService } from "../memory-service";
 import { factSchema } from "../workflow-shared";
@@ -37,6 +37,8 @@ export const factExtractionStageHandler: StageHandler = {
 - 角色知道、怀疑、误解或不知道某事实时写入 knowledgeDeltas
 - targetId、subject.id、characterId 只能使用上下文中真实存在的 ID；无法定位投影目标时省略 targetId
 - 新人物新建时 targetId 与 subject.id 省略（由系统生成），但 after.name 必须填写；上下文事实库中已存在同名或同别名 character 时不得提取为 new，应改为 update
+- 只提取正文肯定建立或明确否定的故事世界事实；“正文未说明、尚未建立、没有交代”是分析备注，不是事实，不得输出
+- 同一主体、字段和值只输出一次；无法定位 targetId 的普通字段变化无法投影，不得伪装成 new，只有完整 record 可以创建新对象
 - 不得根据未来大纲补充正文没有建立的事实
 
 正文：
@@ -46,15 +48,14 @@ ${draft.contentMarkdown}
 ${formatContextPacket(packet)}`,
     });
     const data = result.data as { summary: string; facts: ExtractedFact[] };
-    // 预去重：丢弃 LLM 误判为新建的同名/同别名 character 候选
-    const { facts: dedupedFacts, discardedCount } = await dedupeCharacterFactCandidates(run.projectId, data.facts);
+    const prepared = await prepareFactCandidates(run.projectId, data.facts);
     const facts = await storeFactCandidates({
       projectId: run.projectId,
       workflowRunId: run.id,
       sourceArtifactId: draft.id,
       sourceRevisionId: ctx.document.approvedRevisionId,
       defaultRevealedAt: { chapterId: ctx.document.id, narrativeOrder: ctx.document.order, precision: "exact" },
-      facts: dedupedFacts,
+      facts: prepared.facts,
     });
     const autoAcceptedIds = await autoAcceptSafeFactCandidates(facts);
     const pendingCount = facts.length - autoAcceptedIds.length;
@@ -64,8 +65,17 @@ ${formatContextPacket(packet)}`,
       stage: "fact-extraction",
       kind: "fact-delta",
       title: "事实与状态差异",
-      contentMarkdown: `# 事实差异\n\n${data.summary}\n\n${facts.map((item) => `- ${item.targetTable}.${item.field}：${String(item.after)}\n  - 证据：${item.evidence}\n  - 置信度：${Math.round(item.confidence * 100)}%${item.conflict ? " · 存在冲突" : ""}`).join("\n") || "未提取到变化"}${discardedCount > 0 ? `\n\n# 预去重\n\n已丢弃 ${discardedCount} 个重复人物新建候选（项目中已存在同名或同别名角色）。` : ""}`,
-      structuredData: { summary: data.summary, factCount: facts.length, autoAcceptedCount: autoAcceptedIds.length, pendingCount, discardedDuplicateCharacterCount: discardedCount },
+      contentMarkdown: `# 事实差异\n\n${data.summary}\n\n${facts.map((item) => `- ${item.targetTable}.${item.field}：${formatFactCandidateValue(item)}\n  - 证据：${item.evidence}\n  - 置信度：${Math.round(item.confidence * 100)}%${item.conflict ? " · 存在冲突" : ""}`).join("\n") || "未提取到变化"}${Object.values(prepared).slice(1).some((count) => typeof count === "number" && count > 0) ? `\n\n# 提取清理\n\n已过滤：重复人物 ${prepared.discardedDuplicateCharacterCount} 项、元叙事空事实 ${prepared.discardedMetaAbsenceCount} 项、无法投影 ${prepared.discardedUnprojectableCount} 项、批内重复 ${prepared.discardedDuplicateFactCount} 项。` : ""}`,
+      structuredData: {
+        summary: data.summary,
+        factCount: facts.length,
+        autoAcceptedCount: autoAcceptedIds.length,
+        pendingCount,
+        discardedDuplicateCharacterCount: prepared.discardedDuplicateCharacterCount,
+        discardedMetaAbsenceCount: prepared.discardedMetaAbsenceCount,
+        discardedUnprojectableCount: prepared.discardedUnprojectableCount,
+        discardedDuplicateFactCount: prepared.discardedDuplicateFactCount,
+      },
       model: project.settings.textModel,
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
       contextPacketId: packet.id,

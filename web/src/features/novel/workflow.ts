@@ -17,9 +17,32 @@ import type { WorkflowRun } from "./types";
 // Re-export 公共 API（保持 UI 和测试的导入路径不变）
 export { BUILTIN_CHAPTER_WORKFLOW, CHAPTER_WORKFLOW_ID, shouldAutoRevise } from "./workflow-shared";
 
+export async function listDocumentWorkflowRuns(projectId: string, documentId: string) {
+  return novelDb.workflowRuns
+    .where("targetDocumentId")
+    .equals(documentId)
+    .filter((run) => run.projectId === projectId)
+    .reverse()
+    .sortBy("createdAt");
+}
+
+export async function assertPrecedingChaptersFinal(projectId: string, documentId: string) {
+  const document = await novelDb.documents.get(documentId);
+  if (!document || document.projectId !== projectId) throw new Error("章节或项目不存在");
+  const unfinished = await novelDb.documents
+    .where("projectId")
+    .equals(projectId)
+    .filter((item) => !item.deletedAt && item.order < document.order && item.status !== "final")
+    .sortBy("order");
+  if (unfinished.length > 0) {
+    throw new Error(`请先正式提交前置章节：${unfinished.map((item) => item.title).join("、")}。前章正文与事实未定稿时不能启动后章生产。`);
+  }
+}
+
 export async function startChapterWorkflow(params: { projectId: string; documentId: string; threadId: string; briefId: string; instruction?: string; blocking?: boolean }) {
   const [project, document] = await Promise.all([novelDb.projects.get(params.projectId), novelDb.documents.get(params.documentId)]);
   if (!project || !document || document.projectId !== params.projectId) throw new Error("章节或项目不存在");
+  await assertPrecedingChaptersFinal(params.projectId, params.documentId);
   const [thread, brief] = await Promise.all([novelDb.conversationThreads.get(params.threadId), novelDb.creativeBriefs.get(params.briefId)]);
   if (!thread || thread.projectId !== params.projectId || thread.targetId !== params.documentId) throw new Error("协作对话与目标章节不匹配");
   if (!brief || brief.threadId !== thread.id || brief.targetDocumentId !== document.id || brief.status !== "confirmed") throw new Error("请先确认本章创作简报");

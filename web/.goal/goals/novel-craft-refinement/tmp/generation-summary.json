@@ -1,0 +1,26 @@
+{
+  "generatedAt": "2026-07-16T00:29:55.831Z",
+  "generationDurationMs": 21426,
+  "reviewDurationMs": 13983,
+  "charCount": 2629,
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "scores": {
+    "narrativeAppeal": 4,
+    "chineseAesthetic": 4,
+    "characterVoice": 4,
+    "plotContinuity": 4,
+    "imageryUsage": 4,
+    "dialogueQuality": 4,
+    "pacing": 4,
+    "chapterEndingDrive": 4
+  },
+  "averageScore": 4,
+  "blockerCount": 0,
+  "majorCount": 1,
+  "baselineComparison": {
+    "beforeFixes": 2.75,
+    "afterFixes": 3.88,
+    "current": 4
+  }
+}

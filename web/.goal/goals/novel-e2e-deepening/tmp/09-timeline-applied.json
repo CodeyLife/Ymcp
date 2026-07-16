@@ -1,0 +1,215 @@
+[
+  {
+    "id": "044a3677-0e65-4f93-a692-32bb8b3f226d",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516061,
+    "updatedAt": 1784167516061,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "三方形成临时代查默契",
+    "storyDate": "太子暴毙后2日",
+    "duration": "一日",
+    "narrativeOrder": 9,
+    "participantIds": [
+      "8b97fcb4-41d4-49fc-9a8a-aa1b37ef0eb6",
+      "a5991203-0c5f-4ecc-a31c-9db5717600e7",
+      "d0c63f88-529e-4f3a-b95a-6ae29ace90c5"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "萧景珩、沈砚秋、陆停舟因各自掌握的一部分线索开始交换信息。三人没有公开挑战宫中结论，而是在礼制允许的范围内寻找漏洞。沈砚秋透露存在异常文书，陆停舟提出需要重新整理死亡痕迹。"
+  },
+  {
+    "id": "1e8082c6-e5f2-4255-b7fe-b43d911cd477",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516059,
+    "updatedAt": 1784167516059,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "萧景珩收到入宫召见，重新靠近东宫",
+    "storyDate": "太子暴毙前4日",
+    "duration": "半日",
+    "narrativeOrder": 4,
+    "participantIds": [
+      "8b97fcb4-41d4-49fc-9a8a-aa1b37ef0eb6",
+      "919222df-b7c9-40b5-b5b4-61d409d8e697"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "萧景珩因宫中事务被召回京内，与魏承安短暂接触。两人言语克制，彼此都没有提及三年前旧事。萧景珩重新感受到东宫之死可能带来的权力变化，也意识到自己已经无法继续站在局外。"
+  },
+  {
+    "id": "2ef00eae-8055-49e0-ba88-904b49518cb0",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516060,
+    "updatedAt": 1784167516060,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "陆停舟接到宫外验伤委托，首次接近案件边缘",
+    "storyDate": "太子暴毙前2日",
+    "duration": "一日",
+    "narrativeOrder": 6,
+    "participantIds": [
+      "d0c63f88-529e-4f3a-b95a-6ae29ace90c5"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "陆停舟在市井中处理一桩普通验伤时，从旧识口中听闻宫中近期有人寻找特殊药材与旧验骨记录。他未将此事与太子联系，只在师父留下的札记中发现类似记载。"
+  },
+  {
+    "id": "53cbf929-cff1-4237-bb00-a3fc88a03ba0",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516058,
+    "updatedAt": 1784167516058,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "魏承安奉命巡视东宫内务",
+    "storyDate": "太子暴毙前5日",
+    "duration": "半日",
+    "narrativeOrder": 3,
+    "participantIds": [
+      "919222df-b7c9-40b5-b5b4-61d409d8e697",
+      "919222df-b7c9-40b5-b5b4-61d409d8e697"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "魏承安以检查宫规为由进入东宫，核对人员名册与物品出入记录。他表现得一如往常恭谨，却特别留意太子书房与内侍交接情况。离开前，他将一部分杂乱记录重新归档，使后续查验时出现需要重新辨认的空间。"
+  },
+  {
+    "id": "579af955-2666-4354-9889-0063443022e7",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516056,
+    "updatedAt": 1784167516056,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "太子夜阅旧札，东宫灯火迟熄",
+    "storyDate": "太子暴毙前7日",
+    "duration": "当夜约两个时辰",
+    "narrativeOrder": 1,
+    "participantIds": [
+      "8b97fcb4-41d4-49fc-9a8a-aa1b37ef0eb6",
+      "b05be09d-6426-4aee-9537-a7e739a42c32"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "太子萧景珩在东宫文华殿整理旧日文书，与顾怀章讨论近来发现的几处档案疑点。太子没有说明全部缘由，只将一份旧札重新封存，并留下准备再次查阅的痕迹。顾怀章察觉太子心事沉重，却未追问到底。此事之后，东宫内开始出现文书调阅频繁的迹象。"
+  },
+  {
+    "id": "63df0637-a1ae-4e4a-9bda-f2a660247b80",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516060,
+    "updatedAt": 1784167516060,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "陆停舟初验尸发现死亡细节不合常理",
+    "storyDate": "太子暴毙后1日",
+    "duration": "半日",
+    "narrativeOrder": 8,
+    "participantIds": [
+      "d0c63f88-529e-4f3a-b95a-6ae29ace90c5",
+      "8b97fcb4-41d4-49fc-9a8a-aa1b37ef0eb6"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "陆停舟奉命参与验看太子遗体，在表面没有明显伤痕的情况下发现舌下残留异香异常。他没有立即判断死亡原因，只提出需要进一步核验。萧景珩因此开始怀疑宫中定论并非完整事实。"
+  },
+  {
+    "id": "a2aefbdb-d09f-4c5c-ad2c-2cb6e17a3c75",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516061,
+    "updatedAt": 1784167516061,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "顾怀章与魏承安分别试探调查方向",
+    "storyDate": "太子暴毙后3日",
+    "duration": "一日",
+    "narrativeOrder": 10,
+    "participantIds": [
+      "b05be09d-6426-4aee-9537-a7e739a42c32",
+      "919222df-b7c9-40b5-b5b4-61d409d8e697",
+      "8b97fcb4-41d4-49fc-9a8a-aa1b37ef0eb6"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "顾怀章提醒萧景珩查案不可只看死因，也要考虑朝局承受力；魏承安则试探沈砚秋掌握的文书范围。双方都没有说明自己知道的全部内容，东宫之死开始从单纯死亡事件变成牵动各方利益的暗局。"
+  },
+  {
+    "id": "a846f2bd-d040-4d6a-b676-97e896e61497",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516060,
+    "updatedAt": 1784167516060,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "初雪夜太子暴毙，东宫封闭",
+    "storyDate": "太子暴毙当日",
+    "duration": "夜半至次日清晨",
+    "narrativeOrder": 7,
+    "participantIds": [
+      "8b97fcb4-41d4-49fc-9a8a-aa1b37ef0eb6",
+      "919222df-b7c9-40b5-b5b4-61d409d8e697",
+      "b05be09d-6426-4aee-9537-a7e739a42c32"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "初雪之夜，太子在东宫寝殿被发现身亡。宫中迅速以旧疾突发定调，并依礼封闭东宫。萧景珩因身份特殊被召入宫，魏承安负责维持内廷秩序，顾怀章守在文华殿处理善后。所有人在案发后的最初时刻都因职责不同停留在不同位置。"
+  },
+  {
+    "id": "d6a1008d-f865-45bd-81e8-c2e532563cd0",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516059,
+    "updatedAt": 1784167516059,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "太子与沈砚秋最后一次正式交谈",
+    "storyDate": "太子暴毙前3日",
+    "duration": "一刻钟",
+    "narrativeOrder": 5,
+    "participantIds": [
+      "8b97fcb4-41d4-49fc-9a8a-aa1b37ef0eb6",
+      "a5991203-0c5f-4ecc-a31c-9db5717600e7",
+      "a5991203-0c5f-4ecc-a31c-9db5717600e7"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "太子以校对旧文为由召见沈砚秋，将一封私人手札交给她保管。谈话中太子只提到有人正在改变过去的记录，没有说明具体对象。沈砚秋收下手札后察觉其中夹有焦绢残角，却未能判断其意义。"
+  },
+  {
+    "id": "f93523de-12fc-4356-a92e-79e39fc413b3",
+    "projectId": "2dc151db-759c-429a-b09b-a067b0e040ae",
+    "schemaVersion": 8,
+    "revision": 1,
+    "createdAt": 1784167516057,
+    "updatedAt": 1784167516057,
+    "createdBy": "local-user",
+    "updatedBy": "local-user",
+    "title": "沈砚秋发现东宫旧档出现异常调阅",
+    "storyDate": "太子暴毙前6日",
+    "duration": "一日",
+    "narrativeOrder": 2,
+    "participantIds": [
+      "a5991203-0c5f-4ecc-a31c-9db5717600e7",
+      "a5991203-0c5f-4ecc-a31c-9db5717600e7"
+    ],
+    "causeIds": [],
+    "consequenceIds": [],
+    "description": "沈砚秋在整理宫档时发现东宫近月记录中有数次不合规的取阅痕迹，调阅人和归还时间均留下模糊空缺。她没有立即上报，而是私下抄录相关页码，以免原档再次被动手脚。"
+  }
+]

@@ -110,13 +110,6 @@ export async function prepareManuscriptChanges(params: {
   const revision = document.approvedRevisionId ? await novelDb.revisions.get(document.approvedRevisionId) : undefined;
   const baseContentHash = documentContentHash(document);
   const sourceContentHash = manuscriptTextHash(params.proposedText);
-  const existing = await novelDb.manuscriptChanges.where("documentId").equals(document.id).filter((change) =>
-    change.sourceArtifactId === params.sourceArtifactId
-    && change.baseDocumentRevision === document.revision
-    && change.baseContentHash === baseContentHash
-    && change.sourceContentHash === sourceContentHash).toArray();
-  if (existing.length) return existing.sort((a, b) => a.order - b.order);
-
   const planned = planManuscriptChanges(revisionBlocks(document, revision), params.proposedText);
   const now = Date.now();
   const records: ManuscriptChange[] = planned.changes.map((change) => ({
@@ -131,12 +124,18 @@ export async function prepareManuscriptChanges(params: {
     sourceContentHash,
     status: "pending",
   }));
-  await novelDb.transaction("rw", novelDb.manuscriptChanges, async () => {
+  return novelDb.transaction("rw", novelDb.manuscriptChanges, async () => {
+    const existing = await novelDb.manuscriptChanges.where("documentId").equals(document.id).filter((change) =>
+      change.sourceArtifactId === params.sourceArtifactId
+      && change.baseDocumentRevision === document.revision
+      && change.baseContentHash === baseContentHash
+      && change.sourceContentHash === sourceContentHash).toArray();
+    if (existing.length) return existing.sort((a, b) => a.order - b.order);
     const stale = await novelDb.manuscriptChanges.where("documentId").equals(document.id).filter((change) => change.status === "pending" && change.sourceArtifactId !== params.sourceArtifactId).toArray();
     if (stale.length) await novelDb.manuscriptChanges.where("id").anyOf(stale.map((change) => change.id)).modify({ status: "rejected", decidedAt: now, updatedAt: now });
     if (records.length) await novelDb.manuscriptChanges.bulkAdd(records);
+    return records;
   });
-  return records;
 }
 
 export async function updateManuscriptChangeText(changeId: string, afterText: string) {

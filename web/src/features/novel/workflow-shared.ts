@@ -30,8 +30,8 @@ export const BUILTIN_CHAPTER_WORKFLOW: WorkflowDefinition = {
   updatedBy: "system",
   workflowId: CHAPTER_WORKFLOW_ID,
   name: "标准章节创作",
-  description: "蓝图审批、正文生成、五类审校、定向修订、正文审批和事实回写。",
-  stages: ["context", "blueprint", "blueprint-approval", "draft", "deterministic-check", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit", "character-enrichment"],
+  description: "蓝图审批、正文生成、规则与五类专业审校、定向修订、正文审批和事实回写。",
+  stages: ["context", "blueprint", "blueprint-approval", "draft", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit", "character-enrichment"],
   requiredSkillIds: ["story-facts-invariant", "chapter-blueprint", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
   maxAutoRevisions: 2,
   qualityThreshold: 3.7,
@@ -61,8 +61,8 @@ export const reviewerSchema = {
   type: "object", additionalProperties: false, required: ["scores", "issues"],
   properties: {
     scores: { type: "object", additionalProperties: false, properties: Object.fromEntries(qualityDimensions.map((item) => [item, { type: "number", minimum: 0, maximum: 5 }])) },
-    issues: { type: "array", items: { type: "object", additionalProperties: false, required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion"], properties: {
-      dimension: { enum: qualityDimensions }, severity: { enum: ["blocker", "major", "warning"] }, title: { type: "string" }, description: { type: "string" }, excerpt: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, revisionRanges: { type: "array", items: { type: "object", additionalProperties: false, required: ["start", "end"], properties: { start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 } } } }, rule: { type: "string" }, sourceId: { type: "string" }, suggestion: { type: "string" }, rewriteExample: { type: "string" },
+    issues: { type: "array", items: { type: "object", additionalProperties: false, required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion", "rewriteExample"], properties: {
+      dimension: { enum: qualityDimensions }, severity: { enum: ["blocker", "major", "warning"] }, title: { type: "string" }, description: { type: "string" }, excerpt: { type: "string" }, paragraph: { type: "integer", minimum: 1 }, revisionRanges: { type: "array", items: { type: "object", additionalProperties: false, required: ["start", "end"], properties: { start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 } } } }, rule: { type: "string" }, sourceId: { type: "string" }, suggestion: { type: "string" }, rewriteExample: { type: "string", minLength: 1 },
     } } },
   },
 };
@@ -131,6 +131,10 @@ export async function latestArtifact(runId: string, kinds: WorkflowArtifact["kin
 }
 
 export async function transition(run: WorkflowRun, stage: WorkflowStage, status: WorkflowRun["status"] = "running", changes: Partial<WorkflowRun> = {}) {
+  const current = await novelDb.workflowRuns.get(run.id);
+  if (current && current.revision !== run.revision && ["paused", "cancelled"].includes(current.status)) {
+    return current;
+  }
   const next: WorkflowRun = { ...run, ...changes, currentStage: stage, stageIndex: BUILTIN_CHAPTER_WORKFLOW.stages.indexOf(stage), status, revision: run.revision + 1, updatedAt: Date.now() };
   await novelDb.workflowRuns.put(next);
   return next;

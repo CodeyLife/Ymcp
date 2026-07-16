@@ -3,9 +3,9 @@ import { App, Button, Checkbox, Empty, Input, Modal, Progress, Spin, Tag, Toolti
 import { CheckOutlined, CloseOutlined, PauseOutlined, PlayCircleOutlined, PoweroffOutlined, ReloadOutlined, StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import { novelDb } from "./db";
-import { bulkSetFactCandidateStatus, filterAcceptableFactIds, filterSafeAcceptableFactIds, setFactCandidateStatus } from "./facts";
+import { bulkSetFactCandidateStatus, filterAcceptableFactIds, filterSafeAcceptableFactIds, formatFactCandidateValue, setFactCandidateStatus } from "./facts";
 import { QUALITY_DIMENSION_LABELS } from "./quality";
-import { approveWorkflowStage, BUILTIN_CHAPTER_WORKFLOW, cancelWorkflow, pauseWorkflow, resumeWorkflow, startChapterWorkflow } from "./workflow";
+import { approveWorkflowStage, BUILTIN_CHAPTER_WORKFLOW, cancelWorkflow, listDocumentWorkflowRuns, pauseWorkflow, resumeWorkflow, startChapterWorkflow } from "./workflow";
 import type { FactCandidate, ManuscriptDocument, QualityReport, WorkflowArtifact, WorkflowStage } from "./types";
 import { MarkdownContent } from "./AIWorkbench";
 import { prepareManuscriptChanges, updateManuscriptChangeText } from "./manuscript-review";
@@ -25,7 +25,10 @@ function artifactForStage(run: { currentStage: WorkflowStage; blueprintArtifactI
 
 export default function WorkflowCenter({ projectId, document }: { projectId: string; document?: ManuscriptDocument }) {
   const { message } = App.useApp();
-  const runs = useLiveQuery(() => novelDb.workflowRuns.where("projectId").equals(projectId).reverse().sortBy("createdAt"), [projectId]) ?? [];
+  const runs = useLiveQuery(
+    () => document ? listDocumentWorkflowRuns(projectId, document.id) : Promise.resolve([]),
+    [projectId, document?.id],
+  ) ?? [];
   const run = runs[0];
   const queriedArtifacts = useLiveQuery(async (): Promise<WorkflowArtifact[]> => run ? await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).sortBy("createdAt") : [], [run?.id]);
   const artifacts: WorkflowArtifact[] = queriedArtifacts ?? [];
@@ -33,8 +36,8 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
   const queriedFacts = useLiveQuery(async (): Promise<FactCandidate[]> => run ? await novelDb.factCandidates.where("workflowRunId").equals(run.id).toArray() : [], [run?.id]);
   const facts: FactCandidate[] = queriedFacts ?? [];
   const queriedManuscriptChanges = useLiveQuery(async () => run?.draftArtifactId
-    ? novelDb.manuscriptChanges.where("workflowRunId").equals(run.id).filter((change) => change.sourceArtifactId === run.draftArtifactId).sortBy("order")
-    : [], [run?.id, run?.draftArtifactId]);
+    ? novelDb.manuscriptChanges.where("workflowRunId").equals(run.id).filter((change) => change.documentId === document?.id && change.sourceArtifactId === run.draftArtifactId).sortBy("order")
+    : [], [document?.id, run?.id, run?.draftArtifactId]);
   const manuscriptChanges = queriedManuscriptChanges ?? [];
   const [conversationThread, setConversationThread] = useState<NovelConversationThread>();
   const [creativeBrief, setCreativeBrief] = useState<CreativeBrief>();
@@ -157,7 +160,7 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
               </Tooltip>
             </div>
           </div>
-          <div className="novel-fact-list">{facts.map((fact) => <article key={fact.id} className={fact.status}><div><Tag color={fact.conflict ? "red" : fact.status === "accepted" ? "green" : fact.status === "rejected" ? "default" : fact.risk === "high" ? "orange" : "gold"}>{fact.conflict ? "冲突" : fact.status === "accepted" && fact.decisionSource === "auto-policy" ? "自动采纳" : fact.status}</Tag><Tag color={fact.risk === "high" ? "orange" : "blue"}>{fact.risk === "high" ? "高风险" : "安全更新"}</Tag><strong>{fact.targetTable}.{fact.field}</strong><p>{String(fact.after)}</p><blockquote>{fact.evidence}</blockquote><small>置信度 {Math.round(fact.confidence * 100)}% · {fact.novelty} · {fact.riskReason}</small></div><div><Button type={fact.status === "accepted" ? "primary" : "default"} icon={<CheckOutlined />} disabled={fact.conflict} onClick={() => void setFactCandidateStatus(fact.id, "accepted")}>采纳</Button><Button icon={<CloseOutlined />} onClick={() => void setFactCandidateStatus(fact.id, "rejected")}>排除</Button></div></article>)}</div>
+          <div className="novel-fact-list">{facts.map((fact) => <article key={fact.id} className={fact.status}><div><Tag color={fact.conflict ? "red" : fact.status === "accepted" ? "green" : fact.status === "rejected" ? "default" : fact.risk === "high" ? "orange" : "gold"}>{fact.conflict ? "冲突" : fact.status === "accepted" && fact.decisionSource === "auto-policy" ? "自动采纳" : fact.status}</Tag><Tag color={fact.risk === "high" ? "orange" : "blue"}>{fact.risk === "high" ? "高风险" : "安全更新"}</Tag><strong>{fact.targetTable}.{fact.field}</strong><p>{formatFactCandidateValue(fact)}</p><blockquote>{fact.evidence}</blockquote><small>置信度 {Math.round(fact.confidence * 100)}% · {fact.novelty} · {fact.riskReason}</small></div><div><Button type={fact.status === "accepted" ? "primary" : "default"} icon={<CheckOutlined />} disabled={fact.conflict} onClick={() => void setFactCandidateStatus(fact.id, "accepted")}>采纳</Button><Button icon={<CloseOutlined />} onClick={() => void setFactCandidateStatus(fact.id, "rejected")}>排除</Button></div></article>)}</div>
         </>}
         {run.currentStage !== "fact-approval" && <Input.TextArea rows={3} value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="退回时填写具体修改要求；批准可留空。" />}
         <footer><Button icon={<PoweroffOutlined />} disabled={busy} onClick={() => void perform(() => pauseWorkflow(run.id), "已暂停审核，可在控制区恢复")}>关闭</Button><Button danger icon={<CloseOutlined />} loading={busy} onClick={() => void perform(() => submitApproval(false), "已退回流程")}>{run.currentStage === "fact-approval" ? "全部不提交" : "退回修改"}</Button><Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={(run.currentStage === "fact-approval" && pendingFacts > 0) || (run.currentStage === "manuscript-approval" && manuscriptChanges.length > 0 && selectedManuscriptChanges.length === 0)} onClick={() => void perform(() => submitApproval(true), "审批已提交")}>{run.currentStage === "fact-approval" ? `提交已采纳事实${pendingFacts ? `（尚有 ${pendingFacts} 项未决定）` : ""}` : run.currentStage === "manuscript-approval" ? `采纳所选段落（${selectedManuscriptChanges.length}）` : "批准并继续"}</Button></footer>

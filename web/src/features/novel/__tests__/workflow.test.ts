@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createChapter, createNovelProject, novelDb, recordBase } from "../db";
-import { approveWorkflowStage, BUILTIN_CHAPTER_WORKFLOW, shouldAutoRevise } from "../workflow";
-import { asBlueprint, blueprintMarkdown, blueprintSchema } from "../workflow-shared";
+import { approveWorkflowStage, assertPrecedingChaptersFinal, BUILTIN_CHAPTER_WORKFLOW, listDocumentWorkflowRuns, shouldAutoRevise } from "../workflow";
+import { asBlueprint, blueprintMarkdown, blueprintSchema, transition } from "../workflow-shared";
 import type { WorkflowRun } from "../types";
 
 beforeEach(async () => {
@@ -39,6 +39,8 @@ describe("chapter workflow policy", () => {
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-extraction")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-approval"));
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("fact-approval")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("commit"));
     expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("commit")).toBeLessThan(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("character-enrichment"));
+    expect(BUILTIN_CHAPTER_WORKFLOW.stages).not.toContain("deterministic-check");
+    expect(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("draft") + 1).toBe(BUILTIN_CHAPTER_WORKFLOW.stages.indexOf("review"));
   });
 
   it("stops after the configured limit or when improvement plateaus", () => {
@@ -46,6 +48,39 @@ describe("chapter workflow policy", () => {
     expect(shouldAutoRevise({ passed: false, iteration: 1, maxIterations: 2, previousScore: 3.1, currentScore: 3.2 })).toBe(false);
     expect(shouldAutoRevise({ passed: false, iteration: 2, maxIterations: 2, previousScore: 3.1, currentScore: 3.6 })).toBe(false);
     expect(shouldAutoRevise({ passed: true, iteration: 0, maxIterations: 2, currentScore: 4.1 })).toBe(false);
+  });
+
+  it("isolates workflow history by chapter", async () => {
+    const project = await createNovelProject({ title: "长篇隔离", genre: ["古风"], premise: "每章必须拥有独立工作流。" });
+    const first = await createChapter(project.id, "第一章");
+    const second = await createChapter(project.id, "第二章");
+    const firstRun: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: first.id, status: "waiting-approval", currentStage: "blueprint-approval", stageIndex: 2, revisionIteration: 0, factCandidateIds: [], startedAt: Date.now() };
+    const secondRun: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: second.id, status: "running", currentStage: "context", stageIndex: 0, revisionIteration: 0, factCandidateIds: [], startedAt: Date.now() };
+    await novelDb.workflowRuns.bulkAdd([firstRun, secondRun]);
+
+    expect((await listDocumentWorkflowRuns(project.id, second.id)).map((run) => run.id)).toEqual([secondRun.id]);
+  });
+
+  it("blocks chapter production until every preceding chapter is formally committed", async () => {
+    const project = await createNovelProject({ title: "连续生产", genre: ["古风"], premise: "后章不得猜测未定稿前章。" });
+    const first = await createChapter(project.id, "第一章");
+    const second = await createChapter(project.id, "第二章");
+
+    await expect(assertPrecedingChaptersFinal(project.id, second.id)).rejects.toThrow(/第一章.*前章正文与事实未定稿/);
+    await novelDb.documents.update(first.id, { status: "final" });
+    await expect(assertPrecedingChaptersFinal(project.id, second.id)).resolves.toBeUndefined();
+  });
+
+  it("does not let a stale model stage resurrect an externally cancelled run", async () => {
+    const project = await createNovelProject({ title: "取消竞态", genre: ["悬疑"], premise: "取消后旧调用不得继续推进。" });
+    const chapter = await createChapter(project.id, "第一章");
+    const stale: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: chapter.id, status: "running", currentStage: "review", stageIndex: 4, revisionIteration: 0, factCandidateIds: [], startedAt: Date.now() };
+    await novelDb.workflowRuns.add(stale);
+    await novelDb.workflowRuns.update(stale.id, { status: "cancelled", revision: stale.revision + 1 });
+
+    const result = await transition(stale, "revision", "running");
+    expect(result.status).toBe("cancelled");
+    expect((await novelDb.workflowRuns.get(stale.id))?.status).toBe("cancelled");
   });
 
   it("cannot pass fact approval while any candidate remains undecided", async () => {

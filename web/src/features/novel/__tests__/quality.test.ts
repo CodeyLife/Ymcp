@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { aggregateQuality, runDeterministicQualityChecks } from "../quality";
+import { aggregateQuality, countNovelWords, runDeterministicQualityChecks } from "../quality";
 
 describe("novel quality gates", () => {
+  it("counts Chinese characters and alphanumeric words with the production metric", () => {
+    expect(countNovelWords("归乡 route 2026。" )).toBe(4);
+  });
   it("creates blockers for forbidden content but not for missing mandatory beats", () => {
     const result = runDeterministicQualityChecks({
       text: "主角忽然获得无代价的读心能力。\n\n他立刻离开现场。",
@@ -9,7 +12,10 @@ describe("novel quality gates", () => {
     });
     // mustHappen 确定性检查已移除（containsMeaning bigram 匹配对文学化措辞误报率过高）
     // forbidden 仍为 blocker
-    expect(result.issues.filter((item) => item.severity === "blocker")).toHaveLength(1);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "chapter-blueprint.forbidden", severity: "blocker" }),
+      expect.objectContaining({ rule: "chapter.minimum-length", severity: "blocker" }),
+    ]));
     expect(result.issues.some((item) => item.rule === "chapter-blueprint.mustHappen")).toBe(false);
   });
 
@@ -30,11 +36,77 @@ describe("novel quality gates", () => {
   });
 
   it("requires no blockers, a dimension floor and the weighted threshold", () => {
-    const deterministic = runDeterministicQualityChecks({ text: "足够具体的场景正文。".repeat(80) });
+    const deterministic = runDeterministicQualityChecks({ text: Array.from({ length: 80 }, (_, index) => `第${index + 1}次潮声漫过石阶，船工换了一种绳结，岸边等船的人也各自挪开半步。`).join("") });
     const passed = aggregateQuality({ deterministic, threshold: 3.7 });
     expect(passed.passed).toBe(true);
     const failed = aggregateQuality({ deterministic, threshold: 4.8 });
     expect(failed.passed).toBe(false);
+  });
+
+  it("uses 1000 words as the only hard length floor and keeps the target as a metric", () => {
+    const deterministic = runDeterministicQualityChecks({
+      text: "细雨落在河面，沈砚秋低头写完一张路引。".repeat(50),
+      blueprint: { objective: "建立水乡日常", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "守住生活", informationRelease: [], mustHappen: [], flexible: [], forbidden: [], targetWords: 5000 },
+    });
+
+    expect(deterministic.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "chapter.minimum-length", severity: "blocker" }),
+    ]));
+    expect(aggregateQuality({ deterministic, threshold: 3.7 }).passed).toBe(false);
+    const longEnough = runDeterministicQualityChecks({
+      text: "船工收紧缆绳，沈砚秋沿着湿石阶走回铺子。".repeat(90),
+      blueprint: { objective: "回到铺子", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "压下疑问", informationRelease: [], mustHappen: [], flexible: [], forbidden: [], targetWords: 5000 },
+    });
+    expect(longEnough.metrics.targetRatio).toBeLessThan(0.8);
+    expect(longEnough.issues.some((item) => item.rule === "chapter.minimum-length")).toBe(false);
+    expect(longEnough.issues.some((item) => item.rule === "chapter.target-length")).toBe(false);
+  });
+
+  it("does not claim a complete quality pass when a reviewer is unavailable", () => {
+    const deterministic = runDeterministicQualityChecks({ text: "足够具体的场景正文。".repeat(150) });
+    const result = aggregateQuality({
+      deterministic,
+      threshold: 3.7,
+      reviewers: [{
+        role: "style-reviewer",
+        scores: {},
+        issues: [{ dimension: "specificity", severity: "warning", title: "style-reviewer 审校不可用", description: "调用超时", rule: "reviewer.unavailable", suggestion: "重试或人工审阅" }],
+      }],
+    });
+
+    expect(result.weightedScore).toBeGreaterThanOrEqual(3.7);
+    expect(result.passed).toBe(false);
+  });
+
+  it("promotes reviewer POV boundary warnings and blocks every major issue", () => {
+    const deterministic = runDeterministicQualityChecks({ text: "渡口的人依次收船，少年站在雨里听他们说话。".repeat(100) });
+    const result = aggregateQuality({
+      deterministic,
+      threshold: 3.7,
+      reviewers: [{
+        role: "continuity-reviewer",
+        scores: { continuity: 4.5 },
+        issues: [{ dimension: "continuity", severity: "warning", title: "叙述超出少年感知范围", description: "正文写了少年没有看见的沈砚秋内心。", rule: "pov.boundary", suggestion: "删除越界内容" }],
+      }],
+    });
+
+    expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ rule: "pov.boundary", severity: "major" })]));
+    expect(result.passed).toBe(false);
+  });
+
+  it("promotes direct explanations of another character's psychology to major", () => {
+    const deterministic = runDeterministicQualityChecks({ text: "少年看见罗渡停下手里的活，朝旧木桩望了一眼。".repeat(80) });
+    const result = aggregateQuality({
+      deterministic,
+      threshold: 3.7,
+      reviewers: [{
+        role: "style-reviewer",
+        scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 },
+        issues: [{ dimension: "continuity", severity: "warning", title: "视角中出现直接心理解释", description: "直接解释罗渡的心理判断，削弱当前第三人称限知。", rule: "review.pov-psychology", suggestion: "只保留可观察动作。" }],
+      }],
+    });
+    expect(result.issues.find((item) => item.rule === "review.pov-psychology")?.severity).toBe("major");
+    expect(result.passed).toBe(false);
   });
 
   it("preserves all revision ranges when duplicate reviewer issues are merged", () => {
@@ -113,7 +185,12 @@ describe("prose discipline checks", () => {
 
     const result = runDeterministicQualityChecks({ text });
 
-    expect(result.issues.some((item) => item.rule === "style.short-sentence-tic")).toBe(true);
+    const issue = result.issues.find((item) => item.rule === "style.short-sentence-tic");
+    expect(issue?.revisionRanges).toEqual([
+      { start: 1, end: 3 },
+      { start: 4, end: 6 },
+      { start: 7, end: 9 },
+    ]);
   });
 
   it("does not count dialogue-only paragraphs as short-sentence tic streaks", () => {

@@ -147,6 +147,47 @@ export interface ExtractedFact {
   conflict: boolean;
 }
 
+export interface PreparedFactCandidates {
+  facts: ExtractedFact[];
+  discardedDuplicateCharacterCount: number;
+  discardedMetaAbsenceCount: number;
+  discardedUnprojectableCount: number;
+  discardedDuplicateFactCount: number;
+}
+
+export function formatFactCandidateValue(fact: Pick<ExtractedFact, "after" | "humanReadable">): string {
+  const readable = fact.humanReadable?.trim();
+  if (readable) return readable;
+  if (typeof fact.after === "string") return fact.after;
+  if (fact.after === null || fact.after === undefined) return "（空）";
+  try {
+    return JSON.stringify(fact.after);
+  } catch {
+    return String(fact.after);
+  }
+}
+
+const META_ABSENCE_PATTERN = /(?:正文|本章|文本|原文)(?:中)?(?:尚未|未曾|未|没有)(?:明确)?(?:建立|说明|交代|揭示|提及|确认|给出|出现)/;
+
+function isMetaAbsenceFact(fact: ExtractedFact): boolean {
+  const text = [fact.humanReadable, fact.evidence, typeof fact.after === "string" ? fact.after : ""]
+    .filter(Boolean)
+    .join(" ");
+  return META_ABSENCE_PATTERN.test(text);
+}
+
+function stableFactValue(value: unknown): string {
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableFactValue).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableFactValue(item)}`).join(",")}}`;
+}
+
+function duplicateFactKey(fact: ExtractedFact): string | undefined {
+  const subjectId = fact.subject?.id ?? fact.targetId;
+  if (!subjectId) return undefined;
+  return [fact.targetTable, subjectId, fact.field, stableFactValue(fact.after), fact.polarity ?? "affirmed", fact.truthStatus ?? "objective"].join("|");
+}
+
 const MUTABLE_TABLES = new Set(["projects", "entities", "relations", "outlineNodes", "plotThreads", "foreshadowing", "timelineEvents"]);
 const SAFE_AUTO_UPDATE_FIELDS = new Map<string, Set<string>>([
   ["entities", new Set([
@@ -171,6 +212,12 @@ export function classifyFactRisk(fact: ExtractedFact): Pick<FactCandidate, "risk
       if (fact.confidence < 0.9) return { risk: "high", riskReason: "新人物提取置信度不足 90%" };
       return { risk: "safe", riskReason: "正文首次出现的重要人物新建" };
     }
+  }
+  // Loop 3 改进 #11：novelty=new 但 targetId 已指向已存在实体的"已有对象的新状态变化"
+  // 实测显示 80%+ 的 fact candidates 落入此类，全部判 high 会让 fact-approval 阶段形同虚设。
+  // 当 targetId 存在且字段属于 SAFE_AUTO_UPDATE_FIELDS 时，按 safe 处理（仍需通过 conflict 校验）。
+  if (fact.novelty === "new" && fact.targetId && fact.confidence >= 0.9 && SAFE_AUTO_UPDATE_FIELDS.get(fact.targetTable)?.has(fact.field)) {
+    return { risk: "safe", riskReason: "已有对象的明确状态变化（novelty=new 但 targetId 已存在）" };
   }
   if (fact.novelty !== "update" || !fact.targetId) return { risk: "high", riskReason: "新对象或无法定位的事实必须人工确认" };
   if (fact.confidence < 0.9) return { risk: "high", riskReason: "模型置信度不足 90%" };
@@ -404,11 +451,69 @@ export async function dedupeCharacterFactCandidates(projectId: string, facts: Ex
   return { facts: kept, discardedCount };
 }
 
+export async function prepareFactCandidates(projectId: string, facts: ExtractedFact[]): Promise<PreparedFactCandidates> {
+  const characterResult = await dedupeCharacterFactCandidates(projectId, facts);
+  let discardedMetaAbsenceCount = 0;
+  let discardedUnprojectableCount = 0;
+  let discardedDuplicateFactCount = 0;
+  const indexesByKey = new Map<string, number>();
+  const prepared: ExtractedFact[] = [];
+
+  for (const fact of characterResult.facts) {
+    if (isMetaAbsenceFact(fact)) {
+      discardedMetaAbsenceCount += 1;
+      continue;
+    }
+    if (!fact.targetId && fact.field !== "record") {
+      discardedUnprojectableCount += 1;
+      continue;
+    }
+    const key = duplicateFactKey(fact);
+    const existingIndex = key ? indexesByKey.get(key) : undefined;
+    if (existingIndex === undefined) {
+      if (key) indexesByKey.set(key, prepared.length);
+      prepared.push(fact);
+      continue;
+    }
+
+    discardedDuplicateFactCount += 1;
+    const existing = prepared[existingIndex];
+    const existingRank = Number(Boolean(existing.targetId)) + Number(existing.novelty === "update");
+    const incomingRank = Number(Boolean(fact.targetId)) + Number(fact.novelty === "update");
+    if (incomingRank > existingRank || (incomingRank === existingRank && fact.confidence > existing.confidence)) {
+      prepared[existingIndex] = fact;
+    }
+  }
+
+  return {
+    facts: prepared,
+    discardedDuplicateCharacterCount: characterResult.discardedCount,
+    discardedMetaAbsenceCount,
+    discardedUnprojectableCount,
+    discardedDuplicateFactCount,
+  };
+}
+
 export async function commitAcceptedFacts(projectId: string, workflowRunId: string) {
   const candidates = await novelDb.factCandidates.where("workflowRunId").equals(workflowRunId).and((item) => item.status === "accepted" && !item.conflict && item.novelty !== "duplicate" && !item.committedAt).toArray();
   const committed: string[] = [];
   for (const candidate of candidates) {
     if (!MUTABLE_TABLES.has(candidate.targetTable)) continue;
+
+    if (candidate.field === "knowledgeDeltas") {
+      const assertion = candidateToFactAssertion(candidate, candidate.targetId);
+      delete assertion.projection;
+      const knowledgeAssertions = knowledgeAssertionsForCandidate(candidate, assertion.id);
+      const committedAt = Date.now();
+      await novelDb.transaction("rw", novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.factCandidates, async () => {
+        await novelDb.factAssertions.put(assertion);
+        if (knowledgeAssertions.length) await novelDb.knowledgeAssertions.bulkPut(knowledgeAssertions);
+        await novelDb.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
+      });
+      committed.push(candidate.id);
+      continue;
+    }
+
     const table = novelDb.table(candidate.targetTable);
 
     if (candidate.novelty === "new" && !candidate.targetId) {

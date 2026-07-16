@@ -1,12 +1,18 @@
 import type { ProposalItem, ProposalTargetTable } from "./types";
 
-type ReferenceKind = "entity" | "character" | "plotThread" | "foreshadowing";
+type ReferenceKind = "entity" | "character" | "plotThread" | "foreshadowing" | "timelineEvent" | "outlineNode" | "location";
 
 export interface ProjectReferenceCatalog {
   entityIds: Set<string>;
   characterIds: Set<string>;
   plotThreadIds: Set<string>;
   foreshadowingIds: Set<string>;
+  /** 所有 timelineEvent 的 ID 集合，用于校验 causeIds/consequenceIds。 */
+  timelineEventIds: Set<string>;
+  /** 所有 outlineNode 的 ID 集合，用于校验 plotThreads.startNodeId/targetNodeId 与 foreshadowing.seededNodeId/targetNodeId。 */
+  outlineNodeIds: Set<string>;
+  /** kind="location" 的 entity ID 子集，用于校验 scenes.locationId 与 timelineEvents.locationId。 */
+  locationEntityIds: Set<string>;
 }
 
 type ReferenceRecord = { id?: unknown; projectId?: unknown; kind?: unknown };
@@ -17,6 +23,9 @@ export function emptyReferenceCatalog(): ProjectReferenceCatalog {
     characterIds: new Set(),
     plotThreadIds: new Set(),
     foreshadowingIds: new Set(),
+    timelineEventIds: new Set(),
+    outlineNodeIds: new Set(),
+    locationEntityIds: new Set(),
   };
 }
 
@@ -24,6 +33,8 @@ export function buildProjectReferenceCatalogs(
   entities: ReferenceRecord[],
   plotThreads: ReferenceRecord[],
   foreshadowing: ReferenceRecord[],
+  timelineEvents: ReferenceRecord[] = [],
+  outlineNodes: ReferenceRecord[] = [],
 ) {
   const catalogs = new Map<string, ProjectReferenceCatalog>();
   const get = (projectId: unknown) => {
@@ -40,6 +51,7 @@ export function buildProjectReferenceCatalogs(
     const catalog = get(entity.projectId);
     catalog.entityIds.add(id);
     if (entity.kind === "character") catalog.characterIds.add(id);
+    if (entity.kind === "location") catalog.locationEntityIds.add(id);
   }
   for (const thread of plotThreads) {
     const id = String(thread.id ?? "");
@@ -49,6 +61,14 @@ export function buildProjectReferenceCatalogs(
     const id = String(clue.id ?? "");
     if (id) get(clue.projectId).foreshadowingIds.add(id);
   }
+  for (const event of timelineEvents) {
+    const id = String(event.id ?? "");
+    if (id) get(event.projectId).timelineEventIds.add(id);
+  }
+  for (const node of outlineNodes) {
+    const id = String(node.id ?? "");
+    if (id) get(node.projectId).outlineNodeIds.add(id);
+  }
   return catalogs;
 }
 
@@ -56,6 +76,9 @@ function idsFor(catalog: ProjectReferenceCatalog, kind: ReferenceKind) {
   if (kind === "entity") return catalog.entityIds;
   if (kind === "character") return catalog.characterIds;
   if (kind === "plotThread") return catalog.plotThreadIds;
+  if (kind === "timelineEvent") return catalog.timelineEventIds;
+  if (kind === "outlineNode") return catalog.outlineNodeIds;
+  if (kind === "location") return catalog.locationEntityIds;
   return catalog.foreshadowingIds;
 }
 
@@ -83,6 +106,7 @@ export function sanitizeReferenceRecordInPlace(
     if ("plotThreadIds" in record) record.plotThreadIds = uniqueValidIds(record.plotThreadIds, catalog.plotThreadIds, preserveTemporaryRefs);
     if ("foreshadowingIds" in record) record.foreshadowingIds = uniqueValidIds(record.foreshadowingIds, catalog.foreshadowingIds, preserveTemporaryRefs);
     if ("povCharacterId" in record) record.povCharacterId = validOptionalId(record.povCharacterId, catalog.characterIds, preserveTemporaryRefs);
+    if ("locationId" in record) record.locationId = validOptionalId(record.locationId, catalog.locationEntityIds, preserveTemporaryRefs);
   }
   if (table === "documents" && record.blueprint && typeof record.blueprint === "object" && !Array.isArray(record.blueprint)) {
     const blueprint = { ...(record.blueprint as Record<string, unknown>) };
@@ -92,8 +116,22 @@ export function sanitizeReferenceRecordInPlace(
     if ("povCharacterId" in blueprint) blueprint.povCharacterId = validOptionalId(blueprint.povCharacterId, catalog.characterIds, preserveTemporaryRefs);
     record.blueprint = blueprint;
   }
-  if ((table === "plotThreads" || table === "timelineEvents") && "participantIds" in record) {
-    record.participantIds = uniqueValidIds(record.participantIds, catalog.entityIds, preserveTemporaryRefs);
+  if (table === "plotThreads") {
+    if ("participantIds" in record) record.participantIds = uniqueValidIds(record.participantIds, catalog.characterIds, preserveTemporaryRefs);
+    if ("startNodeId" in record) record.startNodeId = validOptionalId(record.startNodeId, catalog.outlineNodeIds, preserveTemporaryRefs);
+    if ("targetNodeId" in record) record.targetNodeId = validOptionalId(record.targetNodeId, catalog.outlineNodeIds, preserveTemporaryRefs);
+  }
+  if (table === "foreshadowing") {
+    if ("seededNodeId" in record) record.seededNodeId = validOptionalId(record.seededNodeId, catalog.outlineNodeIds, preserveTemporaryRefs);
+    if ("targetNodeId" in record) record.targetNodeId = validOptionalId(record.targetNodeId, catalog.outlineNodeIds, preserveTemporaryRefs);
+  }
+  if (table === "timelineEvents") {
+    // Bug A 修复：participantIds 必须是 character ID，不是任意 entity ID（避免混入 location ID）
+    if ("participantIds" in record) record.participantIds = uniqueValidIds(record.participantIds, catalog.characterIds, preserveTemporaryRefs);
+    // Bug B 修复：causeIds/consequenceIds 必须是已存在的 timelineEvent ID（或同提案内 tempId）
+    if ("causeIds" in record) record.causeIds = uniqueValidIds(record.causeIds, catalog.timelineEventIds, preserveTemporaryRefs);
+    if ("consequenceIds" in record) record.consequenceIds = uniqueValidIds(record.consequenceIds, catalog.timelineEventIds, preserveTemporaryRefs);
+    if ("locationId" in record) record.locationId = validOptionalId(record.locationId, catalog.locationEntityIds, preserveTemporaryRefs);
   }
   return record;
 }
@@ -121,9 +159,12 @@ function referenceKindsForItem(item: ProposalItem) {
   if (item.targetTable === "entities") {
     kinds.add("entity");
     if (payload.kind === "character") kinds.add("character");
+    if (payload.kind === "location") kinds.add("location");
   }
   if (item.targetTable === "plotThreads") kinds.add("plotThread");
   if (item.targetTable === "foreshadowing") kinds.add("foreshadowing");
+  if (item.targetTable === "timelineEvents") kinds.add("timelineEvent");
+  if (item.targetTable === "outlineNodes") kinds.add("outlineNode");
   return kinds;
 }
 
@@ -204,7 +245,9 @@ function assertPayloadReferences(
     assertOptionalField(item, blueprint, "povCharacterId", "character", catalog, tempRefs, aliases);
   }
   if (item.targetTable === "plotThreads" || item.targetTable === "timelineEvents") {
-    assertArrayField(item, payload, "participantIds", "entity", catalog, tempRefs, aliases);
+    // Loop 2 (novel-e2e-deepening) Bug A 修复：participantIds 必须是 character ID 而非任意 entity ID。
+    // repairProposalCharacterReferences 已在 assert 之前剔除非角色 entity ID，故此处用 character 校验。
+    assertArrayField(item, payload, "participantIds", "character", catalog, tempRefs, aliases);
   }
 }
 
@@ -230,6 +273,9 @@ export function catalogWithResolvedProposalItems(
     characterIds: new Set(catalog.characterIds),
     plotThreadIds: new Set(catalog.plotThreadIds),
     foreshadowingIds: new Set(catalog.foreshadowingIds),
+    timelineEventIds: new Set(catalog.timelineEventIds),
+    outlineNodeIds: new Set(catalog.outlineNodeIds),
+    locationEntityIds: new Set(catalog.locationEntityIds),
   };
   for (const item of items) {
     if (item.operation !== "create" || !item.tempId) continue;
@@ -240,6 +286,9 @@ export function catalogWithResolvedProposalItems(
     if (kinds.has("character")) extended.characterIds.add(id);
     if (kinds.has("plotThread")) extended.plotThreadIds.add(id);
     if (kinds.has("foreshadowing")) extended.foreshadowingIds.add(id);
+    if (kinds.has("timelineEvent")) extended.timelineEventIds.add(id);
+    if (kinds.has("outlineNode")) extended.outlineNodeIds.add(id);
+    if (kinds.has("location")) extended.locationEntityIds.add(id);
   }
   return extended;
 }
@@ -268,7 +317,6 @@ export function repairProposalCharacterReferences(
   catalog: ProjectReferenceCatalog,
   characterNameToIdMap: Map<string, string>,
 ): { repaired: number; dropped: number } {
-  if (!characterNameToIdMap.size) return { repaired: 0, dropped: 0 };
   // 按角色名长度降序匹配，避免短名（如"青衫"）匹配到长名（如"沈青衫"）的子串
   const sortedNames = [...characterNameToIdMap.keys()].sort((a, b) => b.length - a.length);
   let repaired = 0;
@@ -349,17 +397,19 @@ export function repairProposalCharacterReferences(
     }
 
     // Loop 6 修复 #12：处理 participantIds 数组字段（plotThreads / timelineEvents）
-    // participantIds 接受 entity ID（角色是 entity 的子集），LLM 可能凭空生成不存在的 UUID
+    // Loop 2 (novel-e2e-deepening) Bug A 修复：participantIds 必须是 character ID，
+    // 不是任意 entity ID（避免 LLM 把 location ID 当作参与者塞进来）。
+    // 此处用 catalog.characterIds 校验，非角色 entity ID（含 location/organization/item 等）会被剔除。
     if (table === "plotThreads" || table === "timelineEvents") {
       if (Array.isArray(payload.participantIds)) {
         const fixedParticipants: string[] = [];
         for (const idRaw of payload.participantIds) {
           const id = String(idRaw);
-          if (id.startsWith("ref:") || catalog.entityIds.has(id)) {
+          if (id.startsWith("ref:") || catalog.characterIds.has(id)) {
             fixedParticipants.push(id);
             continue;
           }
-          // 尝试按角色名匹配（角色是 entity 的子集，participantIds 接受 entity ID）
+          // 尝试按角色名匹配（只匹配 character 实体，不匹配 location/organization）
           const resolved = resolveByName(item);
           if (resolved) {
             fixedParticipants.push(resolved);
@@ -493,4 +543,124 @@ export function repairUnresolvableTempRefs(
   items.push(...survivingItems);
 
   return { repaired, dropped, droppedItems };
+}
+
+/**
+ * Loop 2 (novel-e2e-deepening) Bug B 修复：清理 timeline/outline 节点引用。
+ *
+ * LLM 在生成 timelineEvents / plotThreads / foreshadowing 时会凭空发明 ID 填入：
+ * - timelineEvents.causeIds / consequenceIds：LLM 自造形如 "event_day_minus5_pei_warning" 的 string ID
+ * - timelineEvents.locationId：填入非 location kind 的 entity ID
+ * - scenes.locationId：同上
+ * - plotThreads.startNodeId / targetNodeId：填入非 outlineNode 的 ID
+ * - foreshadowing.seededNodeId / targetNodeId：同上
+ *
+ * 这些字段是 advisory（叙事辅助），不是硬约束。throw 会阻断整个生成流程。
+ * 此函数在 assertProposalReferences 之前执行，对每个无效引用：
+ * - 数组字段：剔除无效 ID（保留有效 ID 与 ref: tempId）
+ * - 单值字段：删除该字段（设为 undefined）
+ *
+ * 同时收集同 proposal 内的 timelineEvent / outlineNode tempId，允许同 proposal 内的前向引用。
+ */
+export function repairTimelineAndOutlineNodeReferences(
+  items: ProposalItem[],
+  catalog: ProjectReferenceCatalog,
+): { repaired: number; dropped: number } {
+  // 收集同 proposal 内已定义的 timelineEvent / outlineNode tempId
+  const timelineEventTempIds = new Set<string>();
+  const outlineNodeTempIds = new Set<string>();
+  for (const item of items) {
+    if (!item.tempId) continue;
+    const kinds = referenceKindsForItem(item);
+    if (kinds.has("timelineEvent")) timelineEventTempIds.add(item.tempId);
+    if (kinds.has("outlineNode")) outlineNodeTempIds.add(item.tempId);
+  }
+
+  const isValidTimelineEventId = (id: string): boolean => {
+    if (id.startsWith("ref:")) return timelineEventTempIds.has(id.slice(4));
+    return catalog.timelineEventIds.has(id);
+  };
+  const isValidOutlineNodeId = (id: string): boolean => {
+    if (id.startsWith("ref:")) return outlineNodeTempIds.has(id.slice(4));
+    return catalog.outlineNodeIds.has(id);
+  };
+  const isValidLocationId = (id: string): boolean => {
+    if (id.startsWith("ref:")) return false; // location 没有前向引用场景
+    return catalog.locationEntityIds.has(id);
+  };
+
+  let repaired = 0;
+  let dropped = 0;
+
+  const filterArray = (arr: unknown[], isValid: (id: string) => boolean): string[] => {
+    const fixed: string[] = [];
+    for (const idRaw of arr) {
+      const id = String(idRaw);
+      if (isValid(id)) {
+        fixed.push(id);
+      } else {
+        dropped++;
+      }
+    }
+    return fixed;
+  };
+
+  for (const item of items) {
+    if (item.operation === "delete") continue;
+    const payload = item.after ?? item.payload;
+    if (!payload || typeof payload !== "object") continue;
+    const table = item.targetTable;
+
+    if (table === "timelineEvents") {
+      // Bug B: 清理凭空发明的 causeIds/consequenceIds
+      if (Array.isArray(payload.causeIds)) {
+        const before = payload.causeIds.length;
+        const filtered = filterArray(payload.causeIds, isValidTimelineEventId);
+        payload.causeIds = filtered;
+        if (filtered.length < before) repaired++;
+      }
+      if (Array.isArray(payload.consequenceIds)) {
+        const before = payload.consequenceIds.length;
+        const filtered = filterArray(payload.consequenceIds, isValidTimelineEventId);
+        payload.consequenceIds = filtered;
+        if (filtered.length < before) repaired++;
+      }
+      // 清理非 location 的 locationId
+      if (typeof payload.locationId === "string" && payload.locationId && !isValidLocationId(payload.locationId)) {
+        delete payload.locationId;
+        dropped++;
+      }
+    }
+
+    if (table === "scenes") {
+      if (typeof payload.locationId === "string" && payload.locationId && !isValidLocationId(payload.locationId)) {
+        delete payload.locationId;
+        dropped++;
+      }
+    }
+
+    if (table === "plotThreads") {
+      if (typeof payload.startNodeId === "string" && payload.startNodeId && !isValidOutlineNodeId(payload.startNodeId)) {
+        delete payload.startNodeId;
+        dropped++;
+      }
+      if (typeof payload.targetNodeId === "string" && payload.targetNodeId && !isValidOutlineNodeId(payload.targetNodeId)) {
+        delete payload.targetNodeId;
+        dropped++;
+      }
+    }
+
+    if (table === "foreshadowing") {
+      if (typeof payload.seededNodeId === "string" && payload.seededNodeId && !isValidOutlineNodeId(payload.seededNodeId)) {
+        delete payload.seededNodeId;
+        dropped++;
+      }
+      if (typeof payload.targetNodeId === "string" && payload.targetNodeId && !isValidOutlineNodeId(payload.targetNodeId)) {
+        delete payload.targetNodeId;
+        dropped++;
+      }
+    }
+  }
+
+  return { repaired, dropped };
 }

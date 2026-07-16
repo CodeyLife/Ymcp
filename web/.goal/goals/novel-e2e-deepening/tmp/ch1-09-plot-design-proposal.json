@@ -1,0 +1,450 @@
+{
+  "id": "1d8d54ef-f099-4262-878d-1793fa7544ce",
+  "projectId": "06480200-6cd3-44aa-b431-3d14657de429",
+  "schemaVersion": 8,
+  "revision": 1,
+  "createdAt": 1784165598098,
+  "updatedAt": 1784165598098,
+  "createdBy": "local-user",
+  "updatedBy": "local-user",
+  "title": "剧情段与章节设计",
+  "operation": "structured:plot-design",
+  "taskKey": "plot-design",
+  "scope": "plot-design",
+  "targetId": "phase_001",
+  "status": "pending",
+  "previewMarkdown": "# 剧情段与章节设计\n\n围绕初雪夜东宫死亡事件展开的首个剧情段规划，建立萧承渊、沈砚秋、顾长安三条视角线，并逐步铺开宫档异常、尸身疑点与三人初次交集。\n\n## 1. 雪夜灯灭，三人初见死局\n\n创建首个剧情段节点，承载初雪夜东宫事件的整体铺垫。\n\n- 操作：新增\n- 类型：outlineNodes\n\n### 内容\n**所属幕**：phase_001\n**剧情段标题**：雪夜灯灭，三人初见死局\n**剧情段摘要**：初雪覆盖京城，东宫失去主人。萧承渊、沈砚秋、顾长安因太子之死交汇，开始面对留下异样信息的尸身，死亡从意外转为需要重新审视的疑案。\n\n## 2. 初雪夜，东宫三盏未熄的灯\n\n创建首章文档，保持死亡事件与异常信息的首次呈现。\n\n- 操作：新增\n- 类型：documents\n\n### 内容\n**所属剧情段**：ref:plot_0_0_plot_segment_001_first_snow_east_palace\n**章节标题**：初雪夜，东宫三盏未熄的灯\n**章节摘要**：本章以暴毙之夜的多视角切片展开，让三位主角分别与太子事件产生关联，最终汇聚于东宫死亡现场，出现第一道异常信息但不揭露真相。\n**章节蓝图**：{\n  \"objective\": \"描绘初雪夜中宫廷表面秩序与暗中裂痕并存的氛围，通过不同身份视角积累死亡发生前后的压迫感。\",\n  \"povCharacterId\": \"8992e71e-764a-4b4b-9a8a-bd1f887c8775\",\n  \"locationIds\": [\n    \"1a07b10b-51c8-405e-8811-d369fbab43b0\",\n    \"38308aed-c222-480a-814e-18fc5d90bdc8\"\n  ],\n  \"characterIds\": [\n    \"8992e71e-764a-4b4b-9a8a-bd1f887c8775\",\n    \"f46c8661-29f5-433b-b7c2-2bd104a61fe0\",\n    \"e2adc989-aff1-4b90-8d50-d3140819435d\",\n    \"3458db78-f714-43ea-8162-97250c2c2ff5\"\n  ],\n  \"plotThreadIds\": [\n    \"47a24816-02e9-4571-a2d6-c6f2331c50c9\",\n    \"4d2f5dea-d873-48b1-b983-5baddef55e41\",\n    \"d1be8374-af38-48a5-84d7-897f7c7be8ef\"\n  ],\n  \"foreshadowingIds\": [\n    \"42087d41-816e-4ae1-ac79-3510f21bafad\",\n    \"58f39f8b-fab7-487d-812a-5e590174b92e\"\n  ],\n  \"conflict\": \"皇室礼制要求接受太子暴毙的表面解释，但三位主角分别感受到不协调之处。\",\n  \"informationRelease\": [\n    \"展示太子死亡后的异常气氛，出现死亡现场留下的第一句信息，但不确定其含义与来源。\"\n  ],\n  \"mustHappen\": [\n    \"萧承渊、沈砚秋、顾长安在同一夜分别与东宫事件产生关联。\",\n    \"三人的视角最终汇合于太子死亡现场。\",\n    \"太子留下的第一道死亡相关信息出现。\"\n  ],\n  \"flexible\": [\n    \"三人接近东宫的具体路径与先后顺序。\",\n    \"第一句信息的具体载体形式。\",\n    \"太子死亡前最后一次公开接触的细节。\"\n  ],\n  \"forbidden\": [\n    \"揭示真凶身份。\",\n    \"揭示太子死亡核心动机。\",\n    \"确定死亡后改变现场痕迹的人。\",\n    \"完成三人之间的信任建立。\"\n  ]\n}\n\n## 3. 东宫封灯，旧档里的空白\n\n创建档案线铺陈章节，承接死亡后的文字异常。\n\n- 操作：新增\n- 类型：documents\n\n### 内容\n**所属剧情段**：ref:plot_0_0_plot_segment_001_first_snow_east_palace\n**章节标题**：东宫封灯，旧档里的空白\n**章节摘要**：本章转向沈砚秋的宫廷文书视角，通过整理东宫记录与面对封锁限制，展现档案异常与被遮掩的痕迹。\n**章节蓝图**：{\n  \"objective\": \"探索沈砚秋掌握的宫档世界，让东宫死亡扩展为需要辨认的文字异常。\",\n  \"povCharacterId\": \"f46c8661-29f5-433b-b7c2-2bd104a61fe0\",\n  \"locationIds\": [\n    \"38308aed-c222-480a-814e-18fc5d90bdc8\",\n    \"1a07b10b-51c8-405e-8811-d369fbab43b0\"\n  ],\n  \"characterIds\": [\n    \"f46c8661-29f5-433b-b7c2-2bd104a61fe0\",\n    \"0571eb84-26f0-4d43-8275-11ad06b3e281\",\n    \"8992e71e-764a-4b4b-9a8a-bd1f887c8775\"\n  ],\n  \"plotThreadIds\": [\n    \"47a24816-02e9-4571-a2d6-c6f2331c50c9\",\n    \"46299628-09e7-437c-8496-7006e17fae1d\"\n  ],\n  \"foreshadowingIds\": [\n    \"58f39f8b-fab7-487d-812a-5e590174b92e\",\n    \"c0e1dd13-46f7-4b79-a575-0f1fade387ab\"\n  ],\n  \"conflict\": \"沈砚秋需要在遵守内廷秩序与保护记录真实性之间寻找平衡。\",\n  \"informationRelease\": [\n    \"发现东宫相关档案存在不自然的缺失与整理痕迹。\"\n  ],\n  \"mustHappen\": [\n    \"沈砚秋确认东宫文书记录存在异常。\",\n    \"她决定进一步关注太子死亡前后的档案变化。\"\n  ],\n  \"flexible\": [\n    \"异常档案的具体形式。\",\n    \"她发现异常时接触到的宫人或内廷人物。\"\n  ],\n  \"forbidden\": [\n    \"揭露档案背后的完整秘密。\",\n    \"说明谁修改了档案。\",\n    \"提前揭开三年前旧案。\"\n  ]\n}\n\n## 4. 尸身无言，仵作第一次开口\n\n创建尸检线章节，建立案件第一层疑点。\n\n- 操作：新增\n- 类型：documents\n\n### 内容\n**所属剧情段**：ref:plot_0_0_plot_segment_001_first_snow_east_palace\n**章节标题**：尸身无言，仵作第一次开口\n**章节摘要**：本章由顾长安视角进入第一次实质查验，通过验尸发现太子死亡不符合表面急病，但只留下初步疑问。\n**章节蓝图**：{\n  \"objective\": \"通过顾长安的验尸视角建立案件第一层疑点，使死亡从宫廷传言变为需要重新判断的事实。\",\n  \"povCharacterId\": \"e2adc989-aff1-4b90-8d50-d3140819435d\",\n  \"locationIds\": [\n    \"1a07b10b-51c8-405e-8811-d369fbab43b0\"\n  ],\n  \"characterIds\": [\n    \"e2adc989-aff1-4b90-8d50-d3140819435d\",\n    \"f46c8661-29f5-433b-b7c2-2bd104a61fe0\",\n    \"8992e71e-764a-4b4b-9a8a-bd1f887c8775\"\n  ],\n  \"plotThreadIds\": [\n    \"47a24816-02e9-4571-a2d6-c6f2331c50c9\",\n    \"d1be8374-af38-48a5-84d7-897f7c7be8ef\"\n  ],\n  \"foreshadowingIds\": [\n    \"42087d41-816e-4ae1-ac79-3510f21bafad\"\n  ],\n  \"conflict\": \"顾长安的专业判断与宫廷希望维持的体面结论发生冲突。\",\n  \"informationRelease\": [\n    \"尸身出现异常征兆，初步推翻急病死亡的可能。\"\n  ],\n  \"mustHappen\": [\n    \"顾长安完成第一次验看太子尸身。\",\n    \"他提出死亡原因存在疑点。\"\n  ],\n  \"flexible\": [\n    \"验查过程中的具体细节。\",\n    \"顾长安与宫廷人物第一次交锋方式。\"\n  ],\n  \"forbidden\": [\n    \"确定毒物来源。\",\n    \"确定凶手。\",\n    \"解释死亡背后的政治目的。\"\n  ]\n}\n\n## 5. 第一句话落在雪里\n\n创建剧情段收束章节，保留后续调查与关系发展的空间。\n\n- 操作：新增\n- 类型：documents\n\n### 内容\n**所属剧情段**：ref:plot_0_0_plot_segment_001_first_snow_east_palace\n**章节标题**：第一句话落在雪里\n**章节摘要**：本章完成剧情段收束，三人因各自发现暂时站到同一处，尚未互相信任，却共同意识到死亡现场并不完整。\n**章节蓝图**：{\n  \"objective\": \"积累三人首次合作的关系压力，让不同身份的人因同一异常信息产生短暂交集。\",\n  \"povCharacterId\": \"8992e71e-764a-4b4b-9a8a-bd1f887c8775\",\n  \"locationIds\": [\n    \"1a07b10b-51c8-405e-8811-d369fbab43b0\"\n  ],\n  \"characterIds\": [\n    \"8992e71e-764a-4b4b-9a8a-bd1f887c8775\",\n    \"f46c8661-29f5-433b-b7c2-2bd104a61fe0\",\n    \"e2adc989-aff1-4b90-8d50-d3140819435d\"\n  ],\n  \"plotThreadIds\": [\n    \"47a24816-02e9-4571-a2d6-c6f2331c50c9\",\n    \"4d2f5dea-d873-48b1-b983-5baddef55e41\"\n  ],\n  \"foreshadowingIds\": [\n    \"58f39f8b-fab7-487d-812a-5e590174b92e\",\n    \"42087d41-816e-4ae1-ac79-3510f21bafad\"\n  ],\n  \"conflict\": \"三人无法确认谁值得相信，只能围绕同一遗留信息暂时合作。\",\n  \"informationRelease\": [\n    \"出现太子死亡后留下的第一句话，形成共同追查目标。\"\n  ],\n  \"mustHappen\": [\n    \"三人第一次共同面对东宫死亡现场。\",\n    \"形成临时代查关系的雏形。\",\n    \"确认有人需要重新审视死亡经过。\"\n  ],\n  \"flexible\": [\n    \"第一句话呈现方式。\",\n    \"三人第一次交流中的距离感与试探方式。\"\n  ],\n  \"forbidden\": [\n    \"揭示第一句话完整含义。\",\n    \"建立完全信任关系。\",\n    \"回收任何核心伏笔。\"\n  ]\n}",
+  "patches": [],
+  "items": [
+    {
+      "id": "02e71df2-1635-4396-b4e6-217f9df0431b",
+      "label": "雪夜灯灭，三人初见死局",
+      "operation": "create",
+      "targetTable": "outlineNodes",
+      "tempId": "plot_0_0_plot_segment_001_first_snow_east_palace",
+      "status": "pending",
+      "payload": {
+        "phaseId": "phase_001",
+        "title": "雪夜灯灭，三人初见死局",
+        "summary": "初雪覆盖京城，东宫失去主人。萧承渊、沈砚秋、顾长安因太子之死交汇，开始面对留下异样信息的尸身，死亡从意外转为需要重新审视的疑案。",
+        "order": 0
+      },
+      "after": {
+        "phaseId": "phase_001",
+        "title": "雪夜灯灭，三人初见死局",
+        "summary": "初雪覆盖京城，东宫失去主人。萧承渊、沈砚秋、顾长安因太子之死交汇，开始面对留下异样信息的尸身，死亡从意外转为需要重新审视的疑案。",
+        "order": 0
+      },
+      "rationale": "创建首个剧情段节点，承载初雪夜东宫事件的整体铺垫。",
+      "dependencies": []
+    },
+    {
+      "id": "5ab6a01f-b0ea-4aa5-9d23-1a2a4c5ec3b8",
+      "label": "初雪夜，东宫三盏未熄的灯",
+      "operation": "create",
+      "targetTable": "documents",
+      "status": "pending",
+      "payload": {
+        "order": 0,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "初雪夜，东宫三盏未熄的灯",
+        "summary": "本章以暴毙之夜的多视角切片展开，让三位主角分别与太子事件产生关联，最终汇聚于东宫死亡现场，出现第一道异常信息但不揭露真相。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "描绘初雪夜中宫廷表面秩序与暗中裂痕并存的氛围，通过不同身份视角积累死亡发生前后的压迫感。",
+          "povCharacterId": "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "locationIds": [
+            "1a07b10b-51c8-405e-8811-d369fbab43b0",
+            "38308aed-c222-480a-814e-18fc5d90bdc8"
+          ],
+          "characterIds": [
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "e2adc989-aff1-4b90-8d50-d3140819435d",
+            "3458db78-f714-43ea-8162-97250c2c2ff5"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "4d2f5dea-d873-48b1-b983-5baddef55e41",
+            "d1be8374-af38-48a5-84d7-897f7c7be8ef"
+          ],
+          "foreshadowingIds": [
+            "42087d41-816e-4ae1-ac79-3510f21bafad",
+            "58f39f8b-fab7-487d-812a-5e590174b92e"
+          ],
+          "conflict": "皇室礼制要求接受太子暴毙的表面解释，但三位主角分别感受到不协调之处。",
+          "informationRelease": [
+            "展示太子死亡后的异常气氛，出现死亡现场留下的第一句信息，但不确定其含义与来源。"
+          ],
+          "mustHappen": [
+            "萧承渊、沈砚秋、顾长安在同一夜分别与东宫事件产生关联。",
+            "三人的视角最终汇合于太子死亡现场。",
+            "太子留下的第一道死亡相关信息出现。"
+          ],
+          "flexible": [
+            "三人接近东宫的具体路径与先后顺序。",
+            "第一句信息的具体载体形式。",
+            "太子死亡前最后一次公开接触的细节。"
+          ],
+          "forbidden": [
+            "揭示真凶身份。",
+            "揭示太子死亡核心动机。",
+            "确定死亡后改变现场痕迹的人。",
+            "完成三人之间的信任建立。"
+          ]
+        }
+      },
+      "after": {
+        "order": 0,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "初雪夜，东宫三盏未熄的灯",
+        "summary": "本章以暴毙之夜的多视角切片展开，让三位主角分别与太子事件产生关联，最终汇聚于东宫死亡现场，出现第一道异常信息但不揭露真相。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "描绘初雪夜中宫廷表面秩序与暗中裂痕并存的氛围，通过不同身份视角积累死亡发生前后的压迫感。",
+          "povCharacterId": "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "locationIds": [
+            "1a07b10b-51c8-405e-8811-d369fbab43b0",
+            "38308aed-c222-480a-814e-18fc5d90bdc8"
+          ],
+          "characterIds": [
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "e2adc989-aff1-4b90-8d50-d3140819435d",
+            "3458db78-f714-43ea-8162-97250c2c2ff5"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "4d2f5dea-d873-48b1-b983-5baddef55e41",
+            "d1be8374-af38-48a5-84d7-897f7c7be8ef"
+          ],
+          "foreshadowingIds": [
+            "42087d41-816e-4ae1-ac79-3510f21bafad",
+            "58f39f8b-fab7-487d-812a-5e590174b92e"
+          ],
+          "conflict": "皇室礼制要求接受太子暴毙的表面解释，但三位主角分别感受到不协调之处。",
+          "informationRelease": [
+            "展示太子死亡后的异常气氛，出现死亡现场留下的第一句信息，但不确定其含义与来源。"
+          ],
+          "mustHappen": [
+            "萧承渊、沈砚秋、顾长安在同一夜分别与东宫事件产生关联。",
+            "三人的视角最终汇合于太子死亡现场。",
+            "太子留下的第一道死亡相关信息出现。"
+          ],
+          "flexible": [
+            "三人接近东宫的具体路径与先后顺序。",
+            "第一句信息的具体载体形式。",
+            "太子死亡前最后一次公开接触的细节。"
+          ],
+          "forbidden": [
+            "揭示真凶身份。",
+            "揭示太子死亡核心动机。",
+            "确定死亡后改变现场痕迹的人。",
+            "完成三人之间的信任建立。"
+          ]
+        }
+      },
+      "rationale": "创建首章文档，保持死亡事件与异常信息的首次呈现。",
+      "dependencies": []
+    },
+    {
+      "id": "6956334f-e376-4bc1-865c-8753b0b901e4",
+      "label": "东宫封灯，旧档里的空白",
+      "operation": "create",
+      "targetTable": "documents",
+      "status": "pending",
+      "payload": {
+        "order": 1,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "东宫封灯，旧档里的空白",
+        "summary": "本章转向沈砚秋的宫廷文书视角，通过整理东宫记录与面对封锁限制，展现档案异常与被遮掩的痕迹。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "探索沈砚秋掌握的宫档世界，让东宫死亡扩展为需要辨认的文字异常。",
+          "povCharacterId": "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "locationIds": [
+            "38308aed-c222-480a-814e-18fc5d90bdc8",
+            "1a07b10b-51c8-405e-8811-d369fbab43b0"
+          ],
+          "characterIds": [
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "0571eb84-26f0-4d43-8275-11ad06b3e281",
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "46299628-09e7-437c-8496-7006e17fae1d"
+          ],
+          "foreshadowingIds": [
+            "58f39f8b-fab7-487d-812a-5e590174b92e",
+            "c0e1dd13-46f7-4b79-a575-0f1fade387ab"
+          ],
+          "conflict": "沈砚秋需要在遵守内廷秩序与保护记录真实性之间寻找平衡。",
+          "informationRelease": [
+            "发现东宫相关档案存在不自然的缺失与整理痕迹。"
+          ],
+          "mustHappen": [
+            "沈砚秋确认东宫文书记录存在异常。",
+            "她决定进一步关注太子死亡前后的档案变化。"
+          ],
+          "flexible": [
+            "异常档案的具体形式。",
+            "她发现异常时接触到的宫人或内廷人物。"
+          ],
+          "forbidden": [
+            "揭露档案背后的完整秘密。",
+            "说明谁修改了档案。",
+            "提前揭开三年前旧案。"
+          ]
+        }
+      },
+      "after": {
+        "order": 1,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "东宫封灯，旧档里的空白",
+        "summary": "本章转向沈砚秋的宫廷文书视角，通过整理东宫记录与面对封锁限制，展现档案异常与被遮掩的痕迹。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "探索沈砚秋掌握的宫档世界，让东宫死亡扩展为需要辨认的文字异常。",
+          "povCharacterId": "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+          "locationIds": [
+            "38308aed-c222-480a-814e-18fc5d90bdc8",
+            "1a07b10b-51c8-405e-8811-d369fbab43b0"
+          ],
+          "characterIds": [
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "0571eb84-26f0-4d43-8275-11ad06b3e281",
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "46299628-09e7-437c-8496-7006e17fae1d"
+          ],
+          "foreshadowingIds": [
+            "58f39f8b-fab7-487d-812a-5e590174b92e",
+            "c0e1dd13-46f7-4b79-a575-0f1fade387ab"
+          ],
+          "conflict": "沈砚秋需要在遵守内廷秩序与保护记录真实性之间寻找平衡。",
+          "informationRelease": [
+            "发现东宫相关档案存在不自然的缺失与整理痕迹。"
+          ],
+          "mustHappen": [
+            "沈砚秋确认东宫文书记录存在异常。",
+            "她决定进一步关注太子死亡前后的档案变化。"
+          ],
+          "flexible": [
+            "异常档案的具体形式。",
+            "她发现异常时接触到的宫人或内廷人物。"
+          ],
+          "forbidden": [
+            "揭露档案背后的完整秘密。",
+            "说明谁修改了档案。",
+            "提前揭开三年前旧案。"
+          ]
+        }
+      },
+      "rationale": "创建档案线铺陈章节，承接死亡后的文字异常。",
+      "dependencies": []
+    },
+    {
+      "id": "d15f6705-0baf-4d0a-97d1-84b7d6a8258d",
+      "label": "尸身无言，仵作第一次开口",
+      "operation": "create",
+      "targetTable": "documents",
+      "status": "pending",
+      "payload": {
+        "order": 2,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "尸身无言，仵作第一次开口",
+        "summary": "本章由顾长安视角进入第一次实质查验，通过验尸发现太子死亡不符合表面急病，但只留下初步疑问。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "通过顾长安的验尸视角建立案件第一层疑点，使死亡从宫廷传言变为需要重新判断的事实。",
+          "povCharacterId": "e2adc989-aff1-4b90-8d50-d3140819435d",
+          "locationIds": [
+            "1a07b10b-51c8-405e-8811-d369fbab43b0"
+          ],
+          "characterIds": [
+            "e2adc989-aff1-4b90-8d50-d3140819435d",
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "d1be8374-af38-48a5-84d7-897f7c7be8ef"
+          ],
+          "foreshadowingIds": [
+            "42087d41-816e-4ae1-ac79-3510f21bafad"
+          ],
+          "conflict": "顾长安的专业判断与宫廷希望维持的体面结论发生冲突。",
+          "informationRelease": [
+            "尸身出现异常征兆，初步推翻急病死亡的可能。"
+          ],
+          "mustHappen": [
+            "顾长安完成第一次验看太子尸身。",
+            "他提出死亡原因存在疑点。"
+          ],
+          "flexible": [
+            "验查过程中的具体细节。",
+            "顾长安与宫廷人物第一次交锋方式。"
+          ],
+          "forbidden": [
+            "确定毒物来源。",
+            "确定凶手。",
+            "解释死亡背后的政治目的。"
+          ]
+        }
+      },
+      "after": {
+        "order": 2,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "尸身无言，仵作第一次开口",
+        "summary": "本章由顾长安视角进入第一次实质查验，通过验尸发现太子死亡不符合表面急病，但只留下初步疑问。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "通过顾长安的验尸视角建立案件第一层疑点，使死亡从宫廷传言变为需要重新判断的事实。",
+          "povCharacterId": "e2adc989-aff1-4b90-8d50-d3140819435d",
+          "locationIds": [
+            "1a07b10b-51c8-405e-8811-d369fbab43b0"
+          ],
+          "characterIds": [
+            "e2adc989-aff1-4b90-8d50-d3140819435d",
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "d1be8374-af38-48a5-84d7-897f7c7be8ef"
+          ],
+          "foreshadowingIds": [
+            "42087d41-816e-4ae1-ac79-3510f21bafad"
+          ],
+          "conflict": "顾长安的专业判断与宫廷希望维持的体面结论发生冲突。",
+          "informationRelease": [
+            "尸身出现异常征兆，初步推翻急病死亡的可能。"
+          ],
+          "mustHappen": [
+            "顾长安完成第一次验看太子尸身。",
+            "他提出死亡原因存在疑点。"
+          ],
+          "flexible": [
+            "验查过程中的具体细节。",
+            "顾长安与宫廷人物第一次交锋方式。"
+          ],
+          "forbidden": [
+            "确定毒物来源。",
+            "确定凶手。",
+            "解释死亡背后的政治目的。"
+          ]
+        }
+      },
+      "rationale": "创建尸检线章节，建立案件第一层疑点。",
+      "dependencies": []
+    },
+    {
+      "id": "ffa8751a-96b2-4e94-81f3-094e7dc22d42",
+      "label": "第一句话落在雪里",
+      "operation": "create",
+      "targetTable": "documents",
+      "status": "pending",
+      "payload": {
+        "order": 3,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "第一句话落在雪里",
+        "summary": "本章完成剧情段收束，三人因各自发现暂时站到同一处，尚未互相信任，却共同意识到死亡现场并不完整。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "积累三人首次合作的关系压力，让不同身份的人因同一异常信息产生短暂交集。",
+          "povCharacterId": "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "locationIds": [
+            "1a07b10b-51c8-405e-8811-d369fbab43b0"
+          ],
+          "characterIds": [
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "e2adc989-aff1-4b90-8d50-d3140819435d"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "4d2f5dea-d873-48b1-b983-5baddef55e41"
+          ],
+          "foreshadowingIds": [
+            "58f39f8b-fab7-487d-812a-5e590174b92e",
+            "42087d41-816e-4ae1-ac79-3510f21bafad"
+          ],
+          "conflict": "三人无法确认谁值得相信，只能围绕同一遗留信息暂时合作。",
+          "informationRelease": [
+            "出现太子死亡后留下的第一句话，形成共同追查目标。"
+          ],
+          "mustHappen": [
+            "三人第一次共同面对东宫死亡现场。",
+            "形成临时代查关系的雏形。",
+            "确认有人需要重新审视死亡经过。"
+          ],
+          "flexible": [
+            "第一句话呈现方式。",
+            "三人第一次交流中的距离感与试探方式。"
+          ],
+          "forbidden": [
+            "揭示第一句话完整含义。",
+            "建立完全信任关系。",
+            "回收任何核心伏笔。"
+          ]
+        }
+      },
+      "after": {
+        "order": 3,
+        "plotSegmentId": "ref:plot_0_0_plot_segment_001_first_snow_east_palace",
+        "title": "第一句话落在雪里",
+        "summary": "本章完成剧情段收束，三人因各自发现暂时站到同一处，尚未互相信任，却共同意识到死亡现场并不完整。",
+        "status": "outline",
+        "blueprint": {
+          "objective": "积累三人首次合作的关系压力，让不同身份的人因同一异常信息产生短暂交集。",
+          "povCharacterId": "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+          "locationIds": [
+            "1a07b10b-51c8-405e-8811-d369fbab43b0"
+          ],
+          "characterIds": [
+            "8992e71e-764a-4b4b-9a8a-bd1f887c8775",
+            "f46c8661-29f5-433b-b7c2-2bd104a61fe0",
+            "e2adc989-aff1-4b90-8d50-d3140819435d"
+          ],
+          "plotThreadIds": [
+            "47a24816-02e9-4571-a2d6-c6f2331c50c9",
+            "4d2f5dea-d873-48b1-b983-5baddef55e41"
+          ],
+          "foreshadowingIds": [
+            "58f39f8b-fab7-487d-812a-5e590174b92e",
+            "42087d41-816e-4ae1-ac79-3510f21bafad"
+          ],
+          "conflict": "三人无法确认谁值得相信，只能围绕同一遗留信息暂时合作。",
+          "informationRelease": [
+            "出现太子死亡后留下的第一句话，形成共同追查目标。"
+          ],
+          "mustHappen": [
+            "三人第一次共同面对东宫死亡现场。",
+            "形成临时代查关系的雏形。",
+            "确认有人需要重新审视死亡经过。"
+          ],
+          "flexible": [
+            "第一句话呈现方式。",
+            "三人第一次交流中的距离感与试探方式。"
+          ],
+          "forbidden": [
+            "揭示第一句话完整含义。",
+            "建立完全信任关系。",
+            "回收任何核心伏笔。"
+          ]
+        }
+      },
+      "rationale": "创建剧情段收束章节，保留后续调查与关系发展的空间。",
+      "dependencies": []
+    }
+  ],
+  "contextPacketId": "5a26cac4-7f92-459c-aac8-a6501d4ad45e",
+  "agentRunId": "35ef93c8-40c8-49fc-9b9d-39f42cbba5d3",
+  "model": "auto",
+  "outlineGenerationMode": "plot-segment-append",
+  "architecturePhaseId": "phase_001",
+  "architecturePhaseOrder": 0
+}

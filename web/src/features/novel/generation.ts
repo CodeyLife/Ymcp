@@ -5,7 +5,7 @@ import { compileNovelContext, formatContextPacket } from "./context";
 import { appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, emptyChapterBlueprint, normalizeArchitecturePayload, normalizeChapterOrderByPlanning, novelDb, recordBase, retireChapterDependencies } from "./db";
 import { sanitizeApprovalMetaInPlace } from "./db-schema";
 import { resolveTaskEvidence } from "./memory-service";
-import { assertProposalReferences, assertResolvedPayloadReferences, buildProjectReferenceCatalogs, catalogWithResolvedProposalItems, emptyReferenceCatalog, repairProposalCharacterReferences, repairUnresolvableTempRefs } from "./reference-integrity";
+import { assertProposalReferences, assertResolvedPayloadReferences, buildProjectReferenceCatalogs, catalogWithResolvedProposalItems, emptyReferenceCatalog, repairProposalCharacterReferences, repairTimelineAndOutlineNodeReferences, repairUnresolvableTempRefs } from "./reference-integrity";
 import { compileNovelStagePrompt, resolveNovelSkills } from "./skills";
 import type {
   AIProposal,
@@ -35,17 +35,17 @@ export interface GenerationTaskDefinition {
 
 const TASKS: GenerationTaskDefinition[] = [
   { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。", refinable: true },
-  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成可支撑数百万字铺陈的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。", refinable: true },
-  { key: "plot-design", label: "设计剧情段与章节", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "documents"], defaultInstruction: "在选中的幕下设计一个剧情段及其章节。" },
+  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成可支撑数百万字铺陈的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。每个阶段的 turningPoint 字段必须用文学化叙事书写：写出此阶段结束时人物与世界已无可挽回地改变了什么（处境的不可逆与心境的拐弯），不得用\"X 发现 Y\"\"X 获得 Z 机会\"\"X 建立 Y\"等编剧指令腔。turningPoint 不是\"接下来会发生什么\"的事件预告，而是\"此阶段结束时已回不去\"的文学定格——删除该句后，读者仍能从字里行间感受到该阶段的不可逆变化。", refinable: true },
+  { key: "plot-design", label: "设计剧情段与章节", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "documents"], defaultInstruction: "在选中的幕下设计一个剧情段及其章节。长篇剧情段建议生成 3-4 章（最低 2 章仅在该剧情段是低强度过渡时使用）。章节之间应形成张弛呼吸：行动章（推进主线、爆发冲突）+ 余波章（消化后果、深化人物关系）+ 蓄势章（积累压力、埋设线索、深化世界）+ 兑现章（伏笔回收、阶段转折）的至少三种功能组合。全部章节都是行动章或都是兑现章属于节奏问题——长篇需要呼吸感来支撑数百万字铺陈，连续高强度的章节会让读者疲惫，连续低强度的章节会让读者失去期待。建议在生成时显式标注每章的节奏功能（行动/余波/蓄势/兑现），便于后续章节规划阶段校验节奏多样性。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。", refinable: true },
-  { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "设计有明确欲望、恐惧、错误信念、秘密、人物弧和差异化声音的角色。", refinable: true },
+  { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "设计有明确欲望、恐惧、错误信念、秘密、人物弧和差异化声音的角色。角色名不得与作品设定中的地名、朝代名、年号、官职、典章制度重名——古风/历史/架空题材尤其要避免用都城名（长安、洛阳、汴梁、建康等）作人名，因为读者会先想到城市而非人物。每个角色必须给出完整的初始 state：state.location 引用世界观中已有的 location 实体名（不可写\"未指定\"），state.physical 是角色此刻的具体身体状态（健康/疲劳/受伤等，不可写\"未指定\"），state.emotional 是角色此刻的情绪基调（用具体描述如\"压抑的悲痛\"，不可写\"未指定\"或\"平静\"），state.objective 是角色即时目标，state.inventory 是随身关键物品（可为空数组）。\"未指定\"不得作为任何 state 字段的值。", refinable: true },
   { key: "relations", label: "设计人物关系", scope: "relations", role: "architect", skillStage: "foundation", allowedTables: ["relations"], defaultInstruction: "根据现有角色设计会推动选择和冲突的人物关系。", refinable: true },
   { key: "timeline", label: "规划时间线", scope: "timeline", role: "architect", skillStage: "planning", allowedTables: ["timelineEvents"], defaultInstruction: "生成有明确先后、持续时间、原因和后果的故事时间线。", refinable: true },
   { key: "worldview", label: "完善世界观", scope: "worldview", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "完善地点、组织、阵营、物品、物种、规则、能力与术语，并保持世界设定之间的关系一致。", refinable: true },
   { key: "plot-threads", label: "规划剧情线", scope: "threads", role: "architect", skillStage: "planning", allowedTables: ["plotThreads"], defaultInstruction: "规划主线和支线，明确参与者、当前状态、优先级与下一步推进。", refinable: true },
   { key: "foreshadowing", label: "规划伏笔", scope: "foreshadowing", role: "architect", skillStage: "planning", allowedTables: ["foreshadowing"], defaultInstruction: "规划线索、真相、误导、提醒与回收节点。", refinable: true },
   { key: "story-control", label: "生成剧情控制资料", scope: "review", role: "architect", skillStage: "planning", allowedTables: ["plotThreads", "foreshadowing", "timelineEvents"], defaultInstruction: "根据已批准架构、大纲和资料库生成剧情线、伏笔和时间线控制资料。", refinable: true },
-  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "结合已批准架构、故事大纲和当前写作进度，确定本章唯一的主导叙事功能与兑现边界；允许本章主要用于背景、人物、关系、情感、蓄势或余波。", refinable: true },
+  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "结合已批准架构、故事大纲和当前写作进度，确定本章唯一的主导叙事功能与兑现边界；允许本章主要用于背景、人物、关系、情感、蓄势或余波。若本章 povCharacterId 是单一角色（第三人称限知 POV），则 mustHappen 中的所有动作必须是该 POV 角色亲自可观察、可推断或可被告知的事项，或该 POV 角色自身的内心动作——不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等）。如需呈现多角色内心：方案 A 保持单 POV，把他人内心外化为 POV 角色可观察的行动；方案 B 显式标注本章为\"多视角切片\"，povCharacterId 留空，characterIds 列出全部视角人物，beats 中标注每个节拍的 POV。", refinable: true },
   { key: "scene-design", label: "设计场景", scope: "scenes", role: "architect", skillStage: "planning", allowedTables: ["scenes"], defaultInstruction: "为当前章节规划场景顺序、功能、冲突、结果、角色和行动节拍。", refinable: true },
   { key: "chapter-draft", label: "生成章节正文", scope: "writing", role: "writer", skillStage: "drafting", allowedTables: ["documents"], defaultInstruction: "依据当前章节蓝图和场景计划生成完整正文。" },
   { key: "review", label: "审校并提出修订", scope: "review", role: "quality-editor", skillStage: "review", allowedTables: ["documents"], defaultInstruction: "检查故事与正文的因果、人物、连续性、节奏和文风，并提供可选择采纳的定向修订。" },
@@ -279,12 +279,14 @@ async function existingInventory(projectId: string, tables: ProposalTargetTable[
 }
 
 async function projectReferenceCatalog(projectId: string) {
-  const [entities, threads, clues] = await Promise.all([
+  const [entities, threads, clues, timelineEvents, outlineNodes] = await Promise.all([
     novelDb.entities.where("projectId").equals(projectId).toArray(),
     novelDb.plotThreads.where("projectId").equals(projectId).toArray(),
     novelDb.foreshadowing.where("projectId").equals(projectId).toArray(),
+    novelDb.timelineEvents.where("projectId").equals(projectId).toArray(),
+    novelDb.outlineNodes.where("projectId").equals(projectId).toArray(),
   ]);
-  return buildProjectReferenceCatalogs(entities, threads, clues).get(projectId) ?? emptyReferenceCatalog();
+  return buildProjectReferenceCatalogs(entities, threads, clues, timelineEvents, outlineNodes).get(projectId) ?? emptyReferenceCatalog();
 }
 
 async function projectCharacterNameToIdMap(projectId: string): Promise<Map<string, string>> {
@@ -537,7 +539,11 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
   await novelDb.agentRuns.add(agent);
   const basePrompt = `# 任务\n在幕“${phase.title}”下设计下一个剧情段，并把剧情段拆成可直接进入创作流程的章节。\n\n# 作者要求\n${instruction}\n\n# 当前规划上下文\n${plotDesignContext(phase, segments, documents)}\n\n# 结构要求\n1. 只创建 1 个 outlineNodes 剧情段，phaseId 必须为 ${phase.id}，order 必须为 ${segmentOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾、需要积累的体验和结束时允许发生的变化。\n3. 创建 2-4 个 documents 章节，plotSegmentId 必须使用 ref:剧情段tempId，order 从 ${chapterOrder} 连续排列。\n4. documents.title 就是正式章节标题；summary 说明本章主导叙事功能与结束状态；blueprint 写入探索或积累方向、本章兑现边界，以及相关 characterIds、plotThreadIds、foreshadowingIds。\n5. 每章只承担一个清晰的主导叙事功能；可以推进事件，也可以建立背景与常态、深化人物关系、积累情感压力或消化后果。章节之间必须可连续写作，不得把后续节点提前压入当前章节。\n6. 同一剧情段内至少安排一种低强度功能章，与行动或兑现章形成张弛；不得让所有章节都以冲突升级和强钩子结束。\n7. 不得创建幕、场景、时间线事件或其它资料表，也不得更新已有资料。\n8. 每章目标字数由系统统一设为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字，不得返回 targetWords。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
   try {
-    const skillPrompt = compileNovelStagePrompt(skills.skills, "planning");
+    const characterNameMap = await projectCharacterNameToIdMap(params.projectId);
+    const characterReferenceContract = characterNameMap.size
+      ? `角色引用只能使用以下真实 ID，不得填写角色名或自造 ID：\n${[...characterNameMap.entries()].map(([name, id]) => `- ${name}: ${id}`).join("\n")}`
+      : "当前没有角色时必须省略该字段；povCharacterId 不得返回空字符串，characterIds 必须为空数组。";
+    const skillPrompt = `${compileNovelStagePrompt(skills.skills, "planning")}\n\n## 内部引用契约\n${characterReferenceContract}`;
     let lastError = "";
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const result = await callStructuredNovelModel<Record<string, unknown>>({ model: project.settings.textModel, temperature: attempt ? 0.3 : 0.55, role: "architect", skillPrompt, schema: proposalSchema(task.allowedTables), prompt: attempt ? `${basePrompt}\n\n# 上次结构校验失败\n${lastError}\n请只修复结构和长度问题。` : basePrompt, signal: params.signal, maxTokens: 8192 });
@@ -554,7 +560,8 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
         }
         validatePlotDesignItems(items, phase.id, segmentOrder, chapterOrder);
         const catalog = await projectReferenceCatalog(params.projectId);
-        repairProposalCharacterReferences(items, catalog, await projectCharacterNameToIdMap(params.projectId));
+        repairProposalCharacterReferences(items, catalog, characterNameMap);
+        repairTimelineAndOutlineNodeReferences(items, catalog);
         repairUnresolvableTempRefs(items, acceptedRefs, await projectEntityNameToIdMap(params.projectId));
         assertProposalReferences(items, catalog, acceptedRefs);
         const proposal: AIProposal = { ...recordBase(params.projectId), title: "剧情段与章节设计", operation: "structured:plot-design", taskKey: "plot-design", scope: "plot-design", targetId: phase.id, status: "pending", previewMarkdown: proposalMarkdown("剧情段与章节设计", String(result.data.summary || "新的剧情段与章节"), items), patches: [], items, contextPacketId: packet.id, agentRunId: agent.id, model: project.settings.textModel, outlineGenerationMode: "plot-segment-append", architecturePhaseId: phase.id, architecturePhaseOrder: phase.order };
@@ -672,6 +679,7 @@ export async function runGenerationTask(params: {
         projectEntityNameToIdMap(params.projectId),
       ]);
       repairProposalCharacterReferences(items, catalog, nameMap);
+      repairTimelineAndOutlineNodeReferences(items, catalog);
       repairUnresolvableTempRefs(items, acceptedRefs, entityNameMap);
       assertProposalReferences(items, catalog, acceptedRefs);
     }
@@ -855,6 +863,7 @@ export async function runRefinementTask(params: {
         projectEntityNameToIdMap(params.projectId),
       ]);
       repairProposalCharacterReferences(items, catalog, nameMap);
+      repairTimelineAndOutlineNodeReferences(items, catalog);
       repairUnresolvableTempRefs(items, acceptedRefs, entityNameMap);
       assertProposalReferences(items, catalog, acceptedRefs);
     }
@@ -1153,7 +1162,7 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
     ? novelDb.tables
     : [...new Set([
       ...initialSelected.map((item) => novelDb.table(item.targetTable)),
-      novelDb.architectures, novelDb.documents, novelDb.outlineNodes, novelDb.entities, novelDb.plotThreads, novelDb.foreshadowing, novelDb.operations, novelDb.proposals, novelDb.embeddings,
+      novelDb.architectures, novelDb.documents, novelDb.outlineNodes, novelDb.entities, novelDb.plotThreads, novelDb.foreshadowing, novelDb.timelineEvents, novelDb.operations, novelDb.proposals, novelDb.embeddings,
     ])];
   const embeddings: Array<{ table: ProposalTargetTable; id: string; record: Record<string, unknown> }> = [];
   const collaborativeDeletes: Array<{ projectId: string; documentId: string }> = [];

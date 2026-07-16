@@ -353,7 +353,13 @@ export default function NovelStudio() {
   const [aiCollapsed, setAiCollapsed] = useState(() => window.matchMedia("(max-width: 1600px)").matches);
   const [mobileNav, setMobileNav] = useState(false);
   const selectedDocument = documents.find((item) => item.id === selectedDocumentId) ?? documents[0];
-  useEffect(() => { if (!selectedDocumentId && documents[0]) setSelectedDocumentId(documents[0].id); }, [documents, selectedDocumentId]);
+  useEffect(() => {
+    const routeDocumentId = searchParams.get("document") ?? undefined;
+    if (routeDocumentId && routeDocumentId !== selectedDocumentId) setSelectedDocumentId(routeDocumentId);
+  }, [searchParams, selectedDocumentId]);
+  useEffect(() => {
+    if (!selectedDocumentId && documents[0]) selectDocument(documents[0].id);
+  }, [documents, selectedDocumentId]);
   const exportItems: MenuProps["items"] = (["json", "markdown", "txt", "docx", "epub"] as const).map((format) => ({ key: format, label: format === "json" ? "完整项目备份" : `导出 ${format.toUpperCase()}`, onClick: () => void exportNovel(projectId, format) }));
   const groups = useMemo(() => [...new Set(VIEW_ITEMS.map((item) => item.group))], []);
   if (project === undefined) return <div className="novel-studio-loading"><Spin /><span>打开故事工作区</span></div>;
@@ -362,13 +368,22 @@ export default function NovelStudio() {
     setSearchParams({ view: next, ...(panel ? { panel } : {}), ...(documentId ? { document: documentId } : {}) });
     setMobileNav(false);
   }
+  function selectDocument(documentId: string) {
+    setSelectedDocumentId(documentId || undefined);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (documentId) next.set("document", documentId);
+      else next.delete("document");
+      return next;
+    }, { replace: true });
+  }
   function renderView() {
     if (view === "dashboard") return <DashboardView projectId={projectId} onWrite={() => setView("writing")} onAI={() => setAiCollapsed(false)} onWorkflow={() => setView("writing", "workflow")} />;
     if (view === "planning") return <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载规划工作区</span></div>}><PlanningWorkspace projectId={projectId} onOpenChapter={(documentId, panel) => { setSelectedDocumentId(documentId); setView("writing", panel, documentId); }} /></Suspense>;
     if (view === "writing") {
       const panel = searchParams.get("panel");
       const initialMode = panel === "workflow" ? "workflow" : panel === "plan" ? "plan" : "manuscript";
-      return <WritingWorkspace projectId={projectId} documents={documents} selectedDocument={selectedDocument} onSelectDocument={setSelectedDocumentId} initialMode={initialMode} />;
+      return <WritingWorkspace projectId={projectId} documents={documents} selectedDocument={selectedDocument} onSelectDocument={selectDocument} initialMode={initialMode} />;
     }
     if (view === "library") return <LibraryWorkspace projectId={projectId} />;
     if (view === "review") return <ReviewWorkspace projectId={projectId} />;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { addEntity, createChapter, createNovelProject, novelDb, recordBase } from "../db";
-import { autoAcceptSafeFactCandidates, bulkSetFactCandidateStatus, classifyFactRisk, commitAcceptedFacts, dedupeCharacterFactCandidates, filterAcceptableFactIds, filterSafeAcceptableFactIds, findExistingCharacter, listFactAssertionsWithMeta, listKnowledgeAssertionsWithMeta, setFactCandidateStatus, storeFactCandidates } from "../facts";
+import { autoAcceptSafeFactCandidates, bulkSetFactCandidateStatus, classifyFactRisk, commitAcceptedFacts, dedupeCharacterFactCandidates, filterAcceptableFactIds, filterSafeAcceptableFactIds, findExistingCharacter, formatFactCandidateValue, listFactAssertionsWithMeta, listKnowledgeAssertionsWithMeta, prepareFactCandidates, setFactCandidateStatus, storeFactCandidates } from "../facts";
 import type { FactAssertion, WorkflowRun } from "../types";
 import type { ExtractedFact } from "../facts";
 
@@ -526,5 +526,68 @@ describe("dedupeCharacterFactCandidates - 预去重", () => {
     const { facts: kept, discardedCount } = await dedupeCharacterFactCandidates(project.id, facts);
     expect(kept).toHaveLength(2);
     expect(discardedCount).toBe(0);
+  });
+});
+
+describe("prepareFactCandidates - 可提交边界", () => {
+  it("filters meta absence notes and unprojectable field updates", async () => {
+    const { project, charA } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      { targetTable: "entities", targetId: charA.id, field: "character.state.knowledge", after: "正文未建立其来历原因", humanReadable: "正文未建立其来历原因", evidence: "正文未说明角色为何来此。", confidence: 0.8, novelty: "new", conflict: false },
+      { targetTable: "entities", field: "character.state.location", after: "北港", humanReadable: "陆沉位于北港", evidence: "陆沉站在北港。", confidence: 0.95, novelty: "new", conflict: false },
+      { targetTable: "relations", field: "bond", after: "互相照应", humanReadable: "陆沉与苏黎互相照应", evidence: "两人互相照应。", confidence: 0.95, novelty: "update", conflict: false },
+    ]);
+
+    expect(result.facts).toEqual([]);
+    expect(result.discardedMetaAbsenceCount).toBe(1);
+    expect(result.discardedUnprojectableCount).toBe(2);
+  });
+
+  it("commits knowledge deltas to the truth ledger without adding ad-hoc entity fields", async () => {
+    const { project, charA } = await seedProjectWithCharacters();
+    const run = makeRun(project.id);
+    await novelDb.workflowRuns.add(run);
+    const [candidate] = await storeFactCandidates({
+      projectId: project.id,
+      workflowRunId: run.id,
+      sourceArtifactId: "artifact-knowledge",
+      facts: [{
+        targetTable: "entities",
+        targetId: charA.id,
+        field: "knowledgeDeltas",
+        after: "陆沉得知北港封航",
+        humanReadable: "陆沉得知北港封航",
+        evidence: "报信人说北港今日封航。",
+        confidence: 0.98,
+        novelty: "new",
+        conflict: false,
+        knowledgeDeltas: [{ characterId: charA.id, stance: "known" }],
+      }],
+    });
+    await setFactCandidateStatus(candidate.id, "accepted");
+
+    expect(await commitAcceptedFacts(project.id, run.id)).toEqual([candidate.id]);
+    const entity = await novelDb.entities.get(charA.id) as unknown as Record<string, unknown>;
+    expect(entity.knowledgeDeltas).toBeUndefined();
+    const assertion = await novelDb.factAssertions.get(`fact:${candidate.id}`);
+    expect(assertion?.projection).toBeUndefined();
+    expect(await novelDb.knowledgeAssertions.where("factAssertionId").equals(`fact:${candidate.id}`).count()).toBe(1);
+  });
+
+  it("deduplicates the same subject field and value, preferring the stronger update", async () => {
+    const { project, charA } = await seedProjectWithCharacters();
+    const common = { targetTable: "entities", field: "character.state.location", subject: { kind: "entity" as const, id: charA.id }, after: "北港", humanReadable: "陆沉位于北港", evidence: "陆沉站在北港。", confidence: 0.95, conflict: false };
+    const result = await prepareFactCandidates(project.id, [
+      { ...common, targetId: charA.id, novelty: "update", confidence: 0.9 },
+      { ...common, targetId: charA.id, novelty: "update", confidence: 0.99 },
+    ]);
+
+    expect(result.facts).toHaveLength(1);
+    expect(result.facts[0]).toMatchObject({ targetId: charA.id, novelty: "update", confidence: 0.99 });
+    expect(result.discardedDuplicateFactCount).toBe(1);
+  });
+
+  it("uses the human-readable description for structured values", () => {
+    expect(formatFactCandidateValue({ after: { fromEntityId: "a", toEntityId: "b" }, humanReadable: "陆沉与苏黎建立同伴关系" })).toBe("陆沉与苏黎建立同伴关系");
   });
 });

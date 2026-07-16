@@ -13,7 +13,8 @@ import { callStructuredNovelModel, streamNovelModel } from "../ai";
 import { addEntity, createChapter, createNovelProject, novelDb, recordBase, saveApprovedDocumentRevision } from "../db";
 import type { NovelContextPacket, QualityIssue, QualityReport, WorkflowArtifact, WorkflowRun } from "../types";
 import { advanceChapterWorkflow } from "../workflow";
-import { collectRevisionParagraphs, findIssueParagraph, isRevisionRefusal } from "../workflow-stages/revision-stage";
+import { applyRevisionWindows, collectRevisionParagraphs, findIssueParagraph, isBlueprintCoverageIssue, isRevisionRefusal, planRevisionWindows, selectRevisionIssuesForFeedback } from "../workflow-stages/revision-stage";
+import { isQualityRegression } from "../workflow-stages/review-stage";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -32,6 +33,49 @@ function packet(projectId: string): NovelContextPacket {
 }
 
 describe("chapter workflow regressions", () => {
+  it("merges adjacent revision ranges and only replaces their paragraph window", () => {
+    const paragraphs = ["第一段", "第二段", "第三段", "第四段"];
+    const first = { id: "a", dimension: "pacing", severity: "major", title: "碎片", description: "碎片", revisionRanges: [{ start: 2, end: 2 }], rule: "style.short", suggestion: "合并", deterministic: false } satisfies QualityIssue;
+    const second = { ...first, id: "b", revisionRanges: [{ start: 3, end: 3 }] } satisfies QualityIssue;
+
+    const planned = planRevisionWindows([first, second], paragraphs);
+    expect(planned.windows).toHaveLength(1);
+    expect(planned.windows[0]).toMatchObject({ start: 1, end: 2 });
+    expect(applyRevisionWindows(paragraphs, [{ ...planned.windows[0], replacement: ["第二、三段局部改写"] }])).toEqual(["第一段", "第二、三段局部改写", "第四段"]);
+  });
+
+  it("keeps deterministic deletions out of revision windows and gives deletion precedence", () => {
+    const paragraphs = ["第一段", "重复段", "需要局部改写的第三段", "第四段"];
+    const issue = { id: "overlap", dimension: "pacing", severity: "major", title: "重叠问题", description: "第二、三段需要处理", revisionRanges: [{ start: 2, end: 3 }], rule: "style.overlap", suggestion: "局部修订", deterministic: false } satisfies QualityIssue;
+    const deleted = new Set([1]);
+
+    const planned = planRevisionWindows([issue], paragraphs, deleted);
+    expect(planned.windows).toMatchObject([{ start: 2, end: 2 }]);
+    expect(planned.windows[0].issues[0].revisionRanges).toEqual([{ start: 3, end: 3 }]);
+    expect(applyRevisionWindows(paragraphs, [{ start: 1, end: 2, issues: [issue], replacement: ["不应采用的重叠替换"] }], deleted))
+      .toEqual(["第一段", "需要局部改写的第三段", "第四段"]);
+  });
+
+  it("keeps unlocatable revision issues out of automatic rewrite windows", () => {
+    const issue = { id: "missing", dimension: "plot", severity: "major", title: "无法定位", description: "无原文证据", rule: "plot.unknown", suggestion: "人工判断", deterministic: false } satisfies QualityIssue;
+    const planned = planRevisionWindows([issue], ["原文第一段", "原文第二段"]);
+    expect(planned.windows).toEqual([]);
+    expect(planned.unlocated).toEqual([issue]);
+  });
+
+  it("limits an explicit POV revision request to POV-related issues", () => {
+    const issue = (id: string, title: string): QualityIssue => ({ id, dimension: "continuity", severity: "major", title, description: title, rule: id, suggestion: title, deterministic: false });
+    const pov = issue("pov", "视角越界进入他人心理");
+    const prose = issue("prose", "短句碎片过多");
+    const repetition = issue("repeat", "意象重复");
+    expect(selectRevisionIssuesForFeedback([pov, prose, repetition], "只修限知视角和罗渡心理解释")).toEqual([pov]);
+  });
+
+  it("recognizes a missing final blueprint beat as a completion issue", () => {
+    const issue = { id: "coverage", dimension: "plot", severity: "blocker", title: "最后节拍未完成", description: "正文在对白开头截断，章尾驱动力缺失。", rule: "chapter.incomplete-blueprint", suggestion: "补完末节拍", deterministic: false } satisfies QualityIssue;
+    expect(isBlueprintCoverageIssue(issue)).toBe(true);
+  });
+
   it("locates review excerpts despite punctuation and whitespace differences", () => {
     const issue = {
       id: "fuzzy",
@@ -96,11 +140,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "draft", stageIndex: 3, revisionIteration: 0, contextPacketId: context.id, blueprintArtifactId: "blueprint-draft-repair", factCandidateIds: [], startedAt: Date.now() };
     const blueprint = artifact(run, { id: "blueprint-draft-repair", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "目标：进入废弃驿站。", structuredData: { title: "第一章", objective: "进入驿站", startingState: "官道", beats: [], endingHook: "门后有脚步", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
     const invalid = ["以下是正文：", "风停了。", "他抬起头。", "远处有人走来。"].join("\n\n");
-    // 全文修订模式：draft 生成后 workflow 继续到 review→revision，因正文 <300 字触发
-    // chapter.minimum-substance (major)，revision 阶段会再次调用 streamNovelModel
-    vi.mocked(streamNovelModel)
-      .mockResolvedValueOnce({ content: invalid, promptHash: "draft-invalid" })
-      .mockResolvedValueOnce({ content: "风停了。他抬起头。远处有人走来。", promptHash: "revision-short" });
+    vi.mocked(streamNovelModel).mockResolvedValueOnce({ content: invalid, promptHash: "draft-invalid" });
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.add(blueprint);
@@ -109,8 +149,8 @@ describe("chapter workflow regressions", () => {
 
     const draft = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "draft").first();
     // repairDraftStructureOnce 确定性合并+移除格式标记，不调用 LLM 修复
-    // streamNovelModel 被调用 2 次：1=draft 生成，2=revision 全文修订（chapter.minimum-substance 触发）
-    expect(streamNovelModel).toHaveBeenCalledTimes(2);
+    // 最低篇幅问题没有安全局部范围，不得再用第二次模型调用重写全文
+    expect(streamNovelModel).toHaveBeenCalledTimes(1);
     // "以下是正文："被移除，3 个短叙事段合并为 1 段
     expect(draft?.contentMarkdown).toBe("风停了。他抬起头。远处有人走来。");
   });
@@ -124,8 +164,7 @@ describe("chapter workflow regressions", () => {
     const blueprint = artifact(run, { id: "blueprint-format-revision", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图", structuredData: { title: "第一章", objective: "守住屋门", startingState: "屋内", beats: [], endingHook: "门外来人", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
     const report: QualityReport = { ...recordBase(project.id), id: "report-format-revision", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 2, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, weightedScore: 3.5, blockerCount: 0, passed: false, issues: [{ id: "revise-range", dimension: "plot", severity: "major", title: "动作结果不清", description: "补足人物应对结果。", revisionRanges: [{ start: 1, end: 2 }], rule: "plot.action-result", suggestion: "在原范围内补足结果。", deterministic: false }], metrics: {}, reviewerRoles: [] };
     const invalid = ["以下是修订后的正文：", "风停了。", "灯暗了。", "脚步来到门外。"].join("\n\n");
-    // 全文修订模式：revision 生成后 workflow 继续到 review→revision，因正文 <300 字触发
-    // chapter.minimum-substance (major)，revision 阶段会再次调用 streamNovelModel
+    // 修订输出不足 1000 字时直接保留原文并转人工，不再浪费一轮审校调用。
     vi.mocked(streamNovelModel)
       .mockResolvedValueOnce({ content: invalid, promptHash: "revision-invalid" })
       .mockResolvedValueOnce({ content: "风停了。灯暗了。脚步来到门外。", promptHash: "revision-short" });
@@ -137,10 +176,9 @@ describe("chapter workflow regressions", () => {
     await advanceChapterWorkflow(run.id);
 
     const revision = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "revision").first();
-    // repairDraftStructureOnce 确定性移除"以下是修订后的正文："并合并短段
-    // streamNovelModel 被调用 2 次：1=revision 生成，2=revision 全文修订（chapter.minimum-substance 触发）
-    expect(streamNovelModel).toHaveBeenCalledTimes(2);
-    expect(revision?.contentMarkdown).toBe("风停了。灯暗了。脚步来到门外。");
+    expect(streamNovelModel).toHaveBeenCalledTimes(1);
+    expect(revision?.contentMarkdown).toBe(draft.contentMarkdown);
+    expect((await novelDb.workflowRuns.get(run.id))?.currentStage).toBe("manuscript-approval");
   });
 
   it("continues from fact extraction through commit", async () => {
@@ -250,16 +288,14 @@ describe("chapter workflow regressions", () => {
     expect(streamNovelModel).not.toHaveBeenCalled();
   });
 
-  it("triggers full-text revision for major issues without paragraph location", async () => {
-    const project = await createNovelProject({ title: "全文修订", genre: ["悬疑"], premise: "无法定位段落时仍进行全文修订。" });
+  it("preserves the manuscript for major issues without paragraph location", async () => {
+    const project = await createNovelProject({ title: "安全修订", genre: ["悬疑"], premise: "无法定位段落时保留正文。" });
     const document = await createChapter(project.id, "第一章");
     const context = packet(project.id);
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft", blueprintArtifactId: "blueprint", qualityReportId: "report", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft", stage: "draft", kind: "draft", title: "正文", contentMarkdown: "第一段。\n\n第二段。" });
     const blueprint = artifact(run, { id: "blueprint", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
     const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, pacing: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "major", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
-    // 全文修订模式：major 问题即使无法定位到具体段落，也触发 LLM 全文修订
-    vi.mocked(streamNovelModel).mockResolvedValue({ content: "第一段修订内容。\n\n第二段修订内容。", promptHash: "revision" });
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
@@ -267,15 +303,14 @@ describe("chapter workflow regressions", () => {
 
     const waiting = await advanceChapterWorkflow(run.id);
 
-    // 全文修订模式：streamNovelModel 被调用（major 问题触发 LLM 全文修订）
-    expect(streamNovelModel).toHaveBeenCalled();
+    expect(streamNovelModel).not.toHaveBeenCalled();
     expect(waiting).toMatchObject({ status: "waiting-approval", currentStage: "manuscript-approval" });
     // 修订产物存在
     const revisions = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "revision").toArray();
     expect(revisions.length).toBeGreaterThan(0);
   });
 
-  it("falls back to deterministic deletion when revision output is too similar to original (R10)", async () => {
+  it("preserves the manuscript when a local revision fails fidelity checks", async () => {
     const project = await createNovelProject({ title: "相似度回退", genre: ["悬疑"], premise: "LLM 返回与原文实质相同时回退到确定性删除。" });
     const document = await createChapter(project.id, "第一章");
     const context = packet(project.id);
@@ -294,14 +329,28 @@ describe("chapter workflow regressions", () => {
 
     const waiting = await advanceChapterWorkflow(run.id);
 
-    // R10: similarity > 0.92 触发回退——major issue 对应段落被确定性删除
+    // 局部修订未形成安全替换时，不得删除非重复问题对应的原文
     expect(streamNovelModel).toHaveBeenCalled();
     expect(waiting).toMatchObject({ status: "waiting-approval", currentStage: "manuscript-approval" });
     const revision = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "revision").first();
-    // 第一段（含"门人录"）应被删除
-    expect(revision?.contentMarkdown).not.toContain("门人录");
-    // 后续段落保留
+    expect(revision?.contentMarkdown).toContain("门人录");
     expect(revision?.contentMarkdown).toContain("佩剑客从佛像旁走出");
+  });
+
+  it("does not regress a revision that removes major issues despite a slightly lower score", () => {
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, blockerCount: 0, passed: false, metrics: {}, reviewerRoles: [] };
+    const major = { id: "major", dimension: "plot", severity: "major", title: "主要问题", description: "问题", rule: "plot.test", suggestion: "修订", deterministic: false } satisfies QualityIssue;
+    const previous = { ...base, weightedScore: 4.2, issues: [major] } satisfies QualityReport;
+    const current = { ...base, id: "current", weightedScore: 4.1, issues: [] } satisfies QualityReport;
+    expect(isQualityRegression({ previous, current })).toBe(false);
+  });
+
+  it("regresses a higher-scoring revision that introduces a blocker", () => {
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, pacing: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, passed: false, metrics: {}, reviewerRoles: [] };
+    const blocker = { id: "blocker", dimension: "continuity", severity: "blocker", title: "事实冲突", description: "冲突", rule: "continuity.test", suggestion: "恢复事实", deterministic: false } satisfies QualityIssue;
+    const previous = { ...base, weightedScore: 3.8, blockerCount: 0, issues: [] } satisfies QualityReport;
+    const current = { ...base, id: "current-blocked", weightedScore: 4.3, blockerCount: 1, issues: [blocker] } satisfies QualityReport;
+    expect(isQualityRegression({ previous, current })).toBe(true);
   });
 
   it("restores the previous draft when a revision scores lower", async () => {

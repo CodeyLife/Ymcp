@@ -1,0 +1,91 @@
+{
+  "loop": 2,
+  "goalId": "novel-e2e-deepening",
+  "plan": "基于 Loop 1 的 findings.md（6 项通用提示词改进 + 2 个工作流 bug），落地代码修改：① 扩展 ProjectReferenceCatalog 增加 timelineEventIds/outlineNodeIds/locationEntityIds；② 修复 Bug A（plotThreads/timelineEvents 的 participantIds 混入 location ID）；③ 修复 Bug B（timelineEvents causeIds/consequenceIds 自造 ID）；④ 扩展 buildProjectReferenceCatalogs/sanitizeReferenceRecordInPlace 覆盖 foreshadowing、outlineNodes 新字段；⑤ 在 generation.ts 引入 repairTimelineAndOutlineNodeReferences 修复调用；⑥ 3 处 skills.ts 提示词改进（hierarchical-outline 文学化 turningPoint、character-desire-engine 初始 state 必填、chapter-blueprint POV 与 mustHappen 一致性）；⑦ 4 处 generation.ts defaultInstruction 扩展（architecture 文学化 turningPoint、plot-design 张弛呼吸节奏、characters state 必填、chapter-plan POV/mustHappen）。最后跑完整 novel 测试套件验证不破坏现有逻辑。",
+  "actions": [
+    "扩展 reference-integrity.ts：ProjectReferenceCatalog 新增 timelineEventIds/outlineNodeIds/locationEntityIds；ReferenceKind 新增 timelineEvent/outlineNode/location；buildProjectReferenceCatalogs 增加 timelineEvents/outlineNodes 参数并填充新集合；sanitizeReferenceRecordInPlace 覆盖 plotThreads.startNodeId/targetNodeId→outlineNodeIds、foreshadowing.seededNodeId/targetNodeId→outlineNodeIds、scenes.locationId→locationEntityIds、timelineEvents.participantIds 改用 characterIds（Bug A 修复）、timelineEvents.causeIds/consequenceIds→timelineEventIds（Bug B 修复）、timelineEvents.locationId→locationEntityIds；referenceKindsForItem/catalogWithResolvedProposalItems/assertPayloadReferences 同步扩展；新增 repairTimelineAndOutlineNodeReferences 静默丢弃无效引用并收集同提案前向引用。",
+    "扩展 db-schema.ts：cleanupReferenceIntegrity 同时抓取 timelineEvents/outlineNodes、调用扩展版 buildProjectReferenceCatalogs、并行 sanitize 包含 foreshadowing 表（先前漏处理）；cleanOutlineRecord 不变。",
+    "扩展 generation.ts：imports 增加 repairTimelineAndOutlineNodeReferences；projectReferenceCatalog 增加抓取 timelineEvents/outlineNodes；TASKS 中 architecture 增加\"每个阶段的 turningPoint 字段必须用文学化叙事书写\"约束+示例，plot-design 增加 3-4 章节奏呼吸建议（行动/余波/蓄势/兑现）+ 显式标注节奏功能，characters 增加角色名不得与地名重名约束 + state 必填约束，chapter-plan 增加 POV/mustHappen 一致性约束 + 方案 A/B；refineProposal 与 runGenerationTask 在 repairProposalCharacterReferences 后插入 repairTimelineAndOutlineNodeReferences 调用。",
+    "扩展 skills.ts：hierarchical-outline 增加 phase.turningPoint 文学化叙事要求与正反例；character-desire-engine 增加【初始 state 必填】约束；chapter-blueprint 增加【POV 与 mustHappen 一致性】约束与方案 A/B。",
+    "修复 applyProposalItems 受限 transaction 表清单（line 1165）：补充 novelDb.timelineEvents，避免受限 transaction 内调用 projectReferenceCatalog 查询 timelineEvents 时抛 NotFoundError。",
+    "运行完整 novel 测试套件（不含 e2e-foundation 与 real-llm-generation）：31 个测试文件、244 个测试全部通过；bootstrap.test.ts 4/4 通过（先前 3 失败的 schemaRequires/NotFoundError/completedStages 三类失败全部消除）。"
+  ],
+  "verification": [
+    "PASS：bootstrap.test.ts 4/4 —— positioning+architecture schema 校验、auto-apply、resume、abort 全部通过",
+    "PASS：generation.test.ts 全部通过（包括 reference-integrity、proposal apply、refine）",
+    "PASS：完整 novel 测试套件 31 文件 244/244 通过（不含 e2e-foundation/real-llm-generation）"
+  ],
+  "errors": [
+    "首次跑测试发现 7 处失败（3 bootstrap + 3 generation + 1 e2e-foundation 排除失败）：根因是 applyProposalItems 受限 transaction 表清单缺 timelineEvents，导致在 transaction 内调用扩展后的 projectReferenceCatalog 查询 timelineEvents 抛 NotFoundError，进而引发 cascade 失败（schemaRequires 因 architecture 调用未发生返回 false、completedStages 因 positioning 应用失败为空）。修复方法：将 novelDb.timelineEvents 加入 line 1165 的 tables 清单。"
+  ],
+  "selfReflection": "Loop 1 的 6 项提示词改进与 2 个工作流 bug 修复全部落地。新扩展的 reference-integrity 引入新表查询（timelineEvents/outlineNodes）必须同步更新所有受限 transaction 的 tables 清单 —— 这是 Dexie 受限 transaction 的硬约束，未来扩展 projectReferenceCatalog 时要审计所有调用点的事务表清单。本次发现 applyProposalItems 是唯一在受限 transaction 内调用 projectReferenceCatalog 的位置，已修复。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "Loop 1 发现的问题已在 Loop 2 完成代码落地与测试验证，工作流基础设施更稳：catalog 引用校验更全面、提示词约束更具体。下一步 Loop 3 可以跑真实第 1 章完整 workflow 来检验提示词改进的实际效果。",
+    "confidence": 0.75,
+    "needsStrategyChange": false
+  },
+  "strategyUpdate": "维持原策略：先地基阶段产物分析→再做通用提示词改进→再跑章节。Loop 1→2 已完成\"地基阶段→提示词改进\"循环；Loop 3 进入章节级验证，预计在第 1 章真实 workflow 中暴露章节级提示词与流程的新问题。",
+  "progressDelta": 0.2,
+  "successSignalUpdates": [
+    {
+      "action": "satisfy",
+      "id": "workflow-bug-fixed",
+      "evidenceRefs": ["reference-integrity.ts 修复 Bug A/B", "generation.ts applyProposalItems 修复 transaction 表清单"]
+    },
+    {
+      "action": "satisfy",
+      "id": "general-prompt-iter",
+      "evidenceRefs": ["skills.ts 3 处改进", "generation.ts 4 处 defaultInstruction 改进"]
+    },
+    {
+      "action": "observe",
+      "id": "step-analysis",
+      "evidenceRefs": ["findings.md 中 6 项改进 + 2 个 bug 已完成代码落地"]
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 3：用真实 LLM 跑第 1 章完整 workflow（context→blueprint→draft→review→revision→fact-extract→commit）。重点观察：① 新加的 POV/mustHappen 一致性约束是否真的减少了多视角误用；② 文学化 turningPoint 约束是否在 architecture 阶段就被遵守；③ chapter-blueprint 是否产出有效 blueprint；④ draft 是否达到 8 维度评分 ≥3.8。预计通过 e2e-foundation.test.ts 已有的项目继续走 chapter-plan→scene-design→chapter-draft→review→revision→fact-extract→commit 链路，或新建 e2e-chapter1.test.ts 专门测试章节 workflow。",
+  "artifactRefs": [
+    {
+      "id": "loop2-ref-integrity-extension",
+      "successSignalId": "workflow-bug-fixed",
+      "kind": "code",
+      "path": "src/features/novel/reference-integrity.ts",
+      "evidence": "ProjectReferenceCatalog 扩展 3 字段，修复 Bug A/B，新增 repairTimelineAndOutlineNodeReferences 函数",
+      "status": "verified"
+    },
+    {
+      "id": "loop2-db-schema-extension",
+      "successSignalId": "workflow-bug-fixed",
+      "kind": "code",
+      "path": "src/features/novel/db-schema.ts",
+      "evidence": "cleanupReferenceIntegrity 覆盖 foreshadowing 表并抓取 timelineEvents/outlineNodes",
+      "status": "verified"
+    },
+    {
+      "id": "loop2-generation-prompts",
+      "successSignalId": "general-prompt-iter",
+      "kind": "code",
+      "path": "src/features/novel/generation.ts",
+      "evidence": "4 处 defaultInstruction 改进 + 3 处 repair 调用插入 + transaction 表清单修复",
+      "status": "verified"
+    },
+    {
+      "id": "loop2-skills-prompts",
+      "successSignalId": "general-prompt-iter",
+      "kind": "code",
+      "path": "src/features/novel/skills.ts",
+      "evidence": "3 处 skill 提示词改进（hierarchical-outline/character-desire-engine/chapter-blueprint）",
+      "status": "verified"
+    },
+    {
+      "id": "loop2-test-results",
+      "successSignalId": "step-analysis",
+      "kind": "test",
+      "path": "vitest 输出",
+      "evidence": "31 文件 244/244 测试通过（不含 e2e-foundation/real-llm-generation）",
+      "status": "verified"
+    }
+  ]
+}

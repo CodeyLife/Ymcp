@@ -39,6 +39,18 @@ describe("paragraph manuscript review", () => {
     expect(plan.proposedBlocks.map((block) => block.id)).toEqual(["a", "b"]);
   });
 
+  it("returns one shared change set when review preparation races", async () => {
+    const project = await createNovelProject({ title: "并发审批", genre: ["悬疑"], premise: "同一产物只能准备一次。" });
+    const chapter = await createChapter(project.id, "第一章");
+    const params = { projectId: project.id, documentId: chapter.id, proposedText: "第一段。\n\n第二段。", sourceArtifactId: "artifact-race", workflowRunId: "run-race" };
+
+    const [first, second] = await Promise.all([prepareManuscriptChanges(params), prepareManuscriptChanges(params)]);
+
+    expect(first).toHaveLength(2);
+    expect(second.map((change) => change.id)).toEqual(first.map((change) => change.id));
+    expect(await novelDb.manuscriptChanges.where("sourceArtifactId").equals("artifact-race").count()).toBe(2);
+  });
+
   it("applies only selected paragraph changes and records the rejected remainder", async () => {
     const project = await createNovelProject({ title: "逐段审批", genre: ["悬疑"], premise: "记录会留下版本。" });
     const chapter = await createChapter(project.id, "第一章");
