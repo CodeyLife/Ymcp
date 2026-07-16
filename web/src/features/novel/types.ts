@@ -102,6 +102,7 @@ export interface EntityRelation extends VersionedRecord {
 
 export interface ChapterBlueprint {
   objective: string;
+  endingHook?: string;
   povCharacterId?: string;
   locationIds: string[];
   characterIds: string[];

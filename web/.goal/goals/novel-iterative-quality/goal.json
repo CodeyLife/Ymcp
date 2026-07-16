@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "id": "novel-iterative-quality",
+  "objective": "通过 bench-draft + bench-review 快速切片测试（每轮 3-8 分钟）实际运行小说创作工作流生成章节 draft 与 8 维质量报告，逐次读取结果用 LLM 审视质量问题、分析根因，迭代优化 prose-prompts.ts 与 skills.ts 的提示词与 skill 定义，反复循环直到产出的章节在 LLM 自评与人工抽检下达到参考作品（雪中悍刀行/剑来/庆余年）的可比文学质感水平。边界：仅修改 prose-prompts.ts 与 skills.ts，不动 stage handler 控制流；不新增 quality.ts 正则规则；每轮产物存档 tmp/；测试脚本 bench-draft.test.ts + bench-review.test.ts。停止条件（LLM 自评 + 人工抽检，无硬阈值）：LLM 审视 draft 产物确认无明显 AI 腔、无 POV 越界、无作者式心理结论句；8 维报告中 pacing/characterVoice/sceneEmbodiment 三项均 >=4.0 且 0 blockers；人工抽检确认新技巧点（器物隐喻/画面感公式/去情绪化/双声部/伏笔延迟回收）在 draft 产物中可观察内化。",
+  "status": "in_progress",
+  "createdAt": "2026-07-16T05:02:10.037Z",
+  "updatedAt": "2026-07-16T16:42:00.000Z",
+  "loopCount": 12,
+  "lastDecision": "continue",
+  "lastCheckpoint": "Loop 16 达历史最佳: weighted=4.13, 0 blockers, 3项精修约束(隐喻式心理总结禁令/汇合场景立场碰撞/线索披露对白)全部可观察内化。各维度全面提升: dialogue 3.73→3.92, pacing 3.75→3.98, hookPayoff 4.00→4.5, continuity 4.01→4.76。停止条件接近达成: sceneEmbodiment=4.01✓ characterVoice=3.94(差0.06) pacing=3.98(差0.02)。剩余4个major问题(短句排比机械预检/萧承晏与魏成礼对白区分度/POV越界/封存动作重复)可进一步精修。",
+  "completionEvidence": null,
+  "blocker": null,
+  "successSignals": [
+    {
+      "id": "intent-preserved",
+      "text": "The refined goal brief preserves the user's stated intent and boundaries.",
+      "status": "pending",
+      "weight": 1,
+      "evidenceRefs": []
+    },
+    {
+      "id": "evidence-reviewed",
+      "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
+      "status": "pending",
+      "weight": 1,
+      "evidenceRefs": []
+    },
+    {
+      "id": "no-open-required-work",
+      "text": "No known required work remains for the refined goal brief.",
+      "status": "pending",
+      "weight": 1,
+      "evidenceRefs": []
+    },
+    {
+      "id": "draft-slice-pass",
+      "text": "bench-draft 切片测试成功生成 chapter draft 产物（output.md 与 metrics.json 存在且非空）。",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "loop1-draft-output",
+        "loop1-draft-metrics"
+      ]
+    },
+    {
+      "id": "review-slice-pass",
+      "text": "bench-review 切片测试成功生成 8 维质量报告（quality-report.json 含 8 维分数与 issues 列表）。",
+      "status": "satisfied",
+      "weight": 2,
+      "evidenceRefs": [
+        "loop1-quality-report"
+      ]
+    },
+    {
+      "id": "no-ai-tells",
+      "text": "Loop 16 验证: 0 blockers, 隐喻式心理总结禁令生效(无'规矩像被人挪动过位置'类句子), 但仍有1处POV越界('各自守着一处不肯越过的距离')和2处抽象总结句需进一步约束。",
+      "status": "observed",
+      "weight": 3,
+      "evidenceRefs": ["loop16-draft", "loop16-review"]
+    },
+    {
+      "id": "quality-threshold-met",
+      "text": "Loop 16 验证: weighted=4.13历史最高, 0 blockers, sceneEmbodiment=4.01✓ characterVoice=3.94(差0.06) pacing=3.98(差0.02) hookPayoff=4.5✓ continuity=4.76✓; 接近停止条件(pacing/characterVoice/sceneEmbodiment三项均>=4.0)但characterVoice和pacing略低。",
+      "status": "observed",
+      "weight": 3,
+      "evidenceRefs": ["loop16-draft", "loop16-review"]
+    },
+    {
+      "id": "techniques-internalized",
+      "text": "Loop 15-16 验证: 8类技巧点(人物入场差异化/汇合冲突/环境承担信息/视角人物取舍/对白身份化/隐喻式心理总结禁令/汇合场景立场碰撞/线索披露对白约束)全部可观察内化; 原有技巧点(器物隐喻/画面感公式/去情绪化)保持。",
+      "status": "satisfied",
+      "weight": 3,
+      "evidenceRefs": ["loop15-draft", "loop15-review", "loop16-draft", "loop16-review"]
+    }
+  ],
+  "strategy": {
+    "current": "精修Loop 15剩余3项问题：隐喻式心理总结禁令/汇合场景禁止轮流展示线索模式/线索披露对白约束。保持Loop 13-15的所有累积改动。",
+    "lastChangeReason": "Loop 15 review 暴露3项剩余问题: (1)1处隐喻式心理总结('那些规矩忽然像被人挪动过位置'); (2)汇合场景人物目的碰撞不足(轮流展示线索); (3)对白偏向线索说明。用户选择'继续精修迭代'。",
+    "updatedAtLoop": 12
+  },
+  "progressEstimate": 0.90625
+}

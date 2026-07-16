@@ -1,0 +1,84 @@
+{
+  "loop": 6,
+  "goalId": "novel-iterative-quality",
+  "plan": "策略变更：将 planDraftSections 默认 maxSections 从 5 改为 3，减少 section 边界导致的 LLM 疲劳和提前收束。5 段（1节拍/段）虽能防漏写节拍，但最后一段 endingHook 落地率低（6次运行仅1次成功）。3 段（2-2-1节拍）减少转换点，让 LLM 在最后一段保持足够动力续写 endingHook。",
+  "actions": [
+    {
+      "summary": "prose-prompts.ts: planDraftSections maxSections 默认值 5→3, 更新注释",
+      "command": "edit prose-prompts.ts planDraftSections",
+      "path": "src/features/novel/prose-prompts.ts"
+    },
+    {
+      "summary": "prose-prompts.test.ts: 更新断言期望 3 段（2-2-1 节拍分布）",
+      "command": "edit prose-prompts.test.ts",
+      "path": "src/features/novel/__tests__/prose-prompts.test.ts"
+    }
+  ],
+  "verification": [
+    {
+      "summary": "单元测试 247/247 通过",
+      "command": "npx vitest run --config vitest.config.ts src/features/novel/__tests__/",
+      "path": "src/features/novel/__tests__/",
+      "result": "pass"
+    },
+    {
+      "summary": "bench-draft: runId=20260716-151350-draft 4399字（史上最长）, endingHook 清晰落地",
+      "command": "BENCH_STAGE=draft npx vitest run --config vitest.bench.config.ts bench-draft.test.ts",
+      "path": ".novel-bench/runs/20260716-151350-draft/output.md",
+      "result": "pass"
+    },
+    {
+      "summary": "bench-review: runId=20260716-151512-review weighted=3.92 avg=3.93 blocker=0; sceneEmbodiment=4.01✓ hookPayoff=4.00✓ plot=4.01✓; pacing=3.48 characterVoice=3.94",
+      "command": "BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts bench-review.test.ts",
+      "path": ".novel-bench/runs/20260716-151512-review/quality-report.json",
+      "result": "pass"
+    }
+  ],
+  "errors": [],
+  "selfReflection": "3段法是关键突破。5段法的核心问题是: 5次 LLM 调用后, 最后一段(第5段)的上下文累积导致 LLM '疲劳', 在写完 beat 后自然停止, 不续写 endingHook。3段法将调用次数减至3次, 最后一段(第3段)的 LLM 仍有充足动力, endingHook 成功落地。4399字也创下新高(5段法平均3500字)。sceneEmbodiment 首次达到4.01, hookPayoff=4.00。pacing=3.48 和 characterVoice=3.94 接近4.0但未达到, 主要因短句排比(8处)和心理总结(1处)。在'无硬阈值'停止条件下, 此结果接近完成。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "3段法成功解决 endingHook 落地问题, sceneEmbodiment 和 hookPayoff 均达到4.0, 0 blocker, weighted=3.92",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.25,
+  "successSignalUpdates": [
+    {
+      "id": "no-ai-tells",
+      "action": "observe",
+      "note": "0 blocker; 1处心理总结(para 29'掌事的位置坐久了...')和8处短句排比(deterministic)是主要 AI 腔残留"
+    },
+    {
+      "id": "quality-threshold-met",
+      "action": "update",
+      "text": "3段法首次同时达成 sceneEmbodiment>=4.0(4.01)和 hookPayoff>=4.0(4.00)且0 blocker; pacing=3.48 characterVoice=3.94 接近但未达4.0; 在'无硬阈值'条件下接近完成",
+      "note": "weighted=3.92; endingHook 清晰落地('那道不属于旧物的人为痕迹留在灯下')"
+    },
+    {
+      "id": "techniques-internalized",
+      "action": "observe",
+      "note": "器物隐喻(旧钥匙参与选择)、画面感公式(痕迹发现瞬间放大)、去情绪化(行动承载情绪)均可观察"
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 12: 运行第二次 3段法 bench 确认 endingHook 落地可靠性。若 0 blocker 且 endingHook 落地, 在'无硬阈值'停止条件下评估标记完成。",
+  "artifactRefs": [
+    {
+      "id": "loop11-draft",
+      "successSignalId": "quality-threshold-met",
+      "kind": "bench-draft-output",
+      "path": ".novel-bench/runs/20260716-151350-draft/output.md",
+      "evidence": "4399字, 3段, endingHook 清晰落地('那道不属于旧物的人为痕迹留在灯下, 像一笔未落完的字')",
+      "status": "verified"
+    },
+    {
+      "id": "loop11-review",
+      "successSignalId": "quality-threshold-met",
+      "kind": "bench-review-output",
+      "path": ".novel-bench/runs/20260716-151512-review/quality-report.json",
+      "evidence": "weighted=3.92 avg=3.93 blocker=0; sceneEmbodiment=4.01✓ hookPayoff=4.00✓ plot=4.01✓; pacing=3.48 characterVoice=3.94",
+      "status": "verified"
+    }
+  ]
+}

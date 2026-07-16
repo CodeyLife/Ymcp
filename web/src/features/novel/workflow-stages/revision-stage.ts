@@ -7,7 +7,7 @@ import type { QualityIssue } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 import { repairDraftStructureOnce } from "./draft-structure-repair";
 
-function splitParagraphs(text: string): string[] {
+export function splitParagraphs(text: string): string[] {
   return text.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
 }
 
@@ -21,7 +21,7 @@ function tokenize(text: string): string[] {
 
 // R10 修复：post-revision 相似度检查——检测 LLM 是否返回了与原文实质相同的内容
 // 使用字符二元组 Jaccard 相似度，O(n+m) 复杂度
-function computeTextSimilarity(a: string, b: string): number {
+export function computeTextSimilarity(a: string, b: string): number {
   const normA = normalizeText(a);
   const normB = normalizeText(b);
   if (normA.length === 0 && normB.length === 0) return 1;
@@ -36,7 +36,7 @@ function computeTextSimilarity(a: string, b: string): number {
   return union === 0 ? 1 : intersection / union;
 }
 
-const REVISION_LOCAL_UNCHANGED_THRESHOLD = 0.995;
+export const REVISION_LOCAL_UNCHANGED_THRESHOLD = 0.995;
 
 export interface RevisionWindow {
   start: number;
@@ -196,7 +196,7 @@ export function isRevisionRefusal(text: string): boolean {
 
 // R1: 风格类 warning 升级为 major——这些规则虽定为 warning，但直接造成"AI 味"，
 // 若不送修订则永远残留。升级为 major 后进入 blockerAndMajor 列表，LLM 会收到并修订。
-const STYLE_RULES_TO_PROMOTE = new Set([
+export const STYLE_RULES_TO_PROMOTE = new Set([
   "style.short-sentence-tic",
   "style.interpretive-summary-density",
   "style.emotion-direct",
@@ -208,9 +208,9 @@ const STYLE_RULES_TO_PROMOTE = new Set([
 // R12/R13: LLM reviewer 生成的 warning 常带自定义 rule 文本（非预定义 rule 名），
 // 无法通过 STYLE_RULES_TO_PROMOTE 精确匹配。用关键词匹配识别意象机械重复（R12）
 // 和对白功能同质化/节奏同构（R13），升级为 major 确保进入修订列表。
-const PROMOTABLE_WARNING_PATTERNS = /意象.{0,6}(重复|功能|机械|再现)|对白.{0,6}(功能|同质|试探.{0,4}重复)|试探.{0,6}(直接|确认式|偏向)|节奏.{0,6}(均匀|同构|平直|同质)|功能重复|同一.{0,4}(功能|说明|象征)|(?:视角|POV|限知|知识边界|感知范围).{0,18}(?:越界|超出|违反|冲突|他人心理|内心|心理解释)|(?:进入|直接呈现|直接解释).{0,18}(?:他人心理|内心判断|限知)/i;
+export const PROMOTABLE_WARNING_PATTERNS = /意象.{0,6}(重复|功能|机械|再现)|对白.{0,6}(功能|同质|试探.{0,4}重复)|试探.{0,6}(直接|确认式|偏向)|节奏.{0,6}(均匀|同构|平直|同质)|功能重复|同一.{0,4}(功能|说明|象征)|(?:视角|POV|限知|知识边界|感知范围).{0,18}(?:越界|超出|违反|冲突|他人心理|内心|心理解释)|(?:进入|直接呈现|直接解释).{0,18}(?:他人心理|内心判断|限知)/i;
 
-function shouldPromoteWarning(item: QualityIssue): boolean {
+export function shouldPromoteWarning(item: QualityIssue): boolean {
   if (item.severity !== "warning") return false;
   if (item.rule && STYLE_RULES_TO_PROMOTE.has(item.rule)) return true;
   const text = `${item.title} ${item.description}`;

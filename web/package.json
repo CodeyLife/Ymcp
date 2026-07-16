@@ -8,7 +8,15 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:bench:bootstrap": "BENCH_BOOTSTRAP=true npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-bootstrap.test.ts",
+    "test:bench:draft": "BENCH_STAGE=draft npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-draft.test.ts",
+    "test:bench:review": "BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-review.test.ts",
+    "test:bench:revision": "BENCH_STAGE=revision npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-revision.test.ts",
+    "test:bench:smoke": "BENCH_SMOKE=true npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-smoke.test.ts",
+    "test:e2e:foundation": "npx vitest run src/features/novel/__tests__/e2e-foundation.test.ts",
+    "test:e2e:chapter1": "npx vitest run src/features/novel/__tests__/e2e-chapter1.test.ts",
+    "bench:compare": "node scripts/novel-bench/compare.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",

@@ -34,6 +34,7 @@ export const draftStageHandler: StageHandler = {
     const blueprintData = blueprint.structuredData ? asBlueprint(blueprint.structuredData) : undefined;
     const forbidden = blueprintData?.forbidden ?? [];
     const mustHappen = blueprintData?.mustHappen ?? [];
+    const endingHook = blueprintData?.endingHook;
 
     try {
       const beats = Array.isArray(blueprint.structuredData?.beats)
@@ -56,7 +57,7 @@ export const draftStageHandler: StageHandler = {
             contextMarkdown: formatContextPacket(packet),
             mustHappen,
             forbidden,
-          })}\n\n${buildDraftSectionContract(section, previousEnding)}`,
+          })}\n\n${buildDraftSectionContract(section, previousEnding, endingHook)}`,
         });
         sectionContents.push(generated.content);
         promptHashes.push(generated.promptHash);

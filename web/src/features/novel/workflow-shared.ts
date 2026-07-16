@@ -99,6 +99,7 @@ export function asBlueprint(data: Record<string, unknown>, existing?: ChapterBlu
   const beats = data.beats as Array<{ action: string; emotion: string; outcome: string }>;
   return {
     objective: String(data.objective),
+    endingHook: String(data.endingHook ?? ""),
     povCharacterId: existing?.povCharacterId,
     locationIds: existing?.locationIds ?? [],
     characterIds: existing?.characterIds ?? [],

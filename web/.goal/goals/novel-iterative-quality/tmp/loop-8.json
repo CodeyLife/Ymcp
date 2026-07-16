@@ -1,0 +1,99 @@
+{
+  "loop": 3,
+  "goalId": "novel-iterative-quality",
+  "plan": "修复'缺失最后节拍'根因：blueprint 的 endingHook（章尾驱动力）不在 beats 中，planDraftSections 不为它创建分段，最后一段 contract 说'可以完成章尾余韵'反而诱导 LLM 提前收束。方案：给 buildDraftSectionContract 增加可选 endingHook 参数，最后一段在节拍之后追加'章尾落点'内容块；同时修复 asBlueprint 未映射 endingHook 字段的 bug，给 ChapterBlueprint 类型补 endingHook?: string。",
+  "actions": [
+    {
+      "summary": "prose-prompts.ts: buildDraftSectionContract 增加 endingHook 参数，最后一段追加章尾落点块",
+      "command": "edit prose-prompts.ts buildDraftSectionContract",
+      "path": "src/features/novel/prose-prompts.ts"
+    },
+    {
+      "summary": "types.ts: ChapterBlueprint 增加 endingHook?: string 字段",
+      "command": "edit types.ts ChapterBlueprint",
+      "path": "src/features/novel/types.ts"
+    },
+    {
+      "summary": "workflow-shared.ts: asBlueprint 映射 endingHook 字段",
+      "command": "edit workflow-shared.ts asBlueprint",
+      "path": "src/features/novel/workflow-shared.ts"
+    },
+    {
+      "summary": "bench-draft.test.ts + draft-stage.ts: 传入 endingHook",
+      "command": "edit bench-draft.test.ts + draft-stage.ts",
+      "path": "src/features/novel/__tests__/bench/bench-draft.test.ts"
+    },
+    {
+      "summary": "prose-prompts.test.ts: 修复 stale 断言 + 新增 endingHook 测试",
+      "command": "edit prose-prompts.test.ts",
+      "path": "src/features/novel/__tests__/prose-prompts.test.ts"
+    }
+  ],
+  "verification": [
+    {
+      "summary": "单元测试 247/247 通过（含新增 endingHook 测试）",
+      "command": "npx vitest run --config vitest.config.ts src/features/novel/__tests__/",
+      "path": "src/features/novel/__tests__/",
+      "result": "pass"
+    },
+    {
+      "summary": "bench-draft: runId=20260716-142009-draft, 3791字, endingHook 落地（发现异常痕迹）",
+      "command": "BENCH_STAGE=draft npx vitest run --config vitest.bench.config.ts bench-draft.test.ts",
+      "path": ".novel-bench/runs/20260716-142009-draft/output.md",
+      "result": "pass"
+    },
+    {
+      "summary": "bench-review: runId=20260716-142152-review, weighted=4.02 avg=4.02 blocker=0",
+      "command": "BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts bench-review.test.ts",
+      "path": ".novel-bench/runs/20260716-142152-review/quality-report.json",
+      "result": "pass"
+    }
+  ],
+  "errors": [],
+  "selfReflection": "Loop 2-7 的核心教训是'加约束导致输出缩短'，但根因并非约束本身，而是 endingHook 从未进入 section contract。asBlueprint 未映射 endingHook 字段是隐藏 bug——前几次 loop 的 endingHook 参数始终为 undefined。修复后 LLM 在最后一段节拍完成后自然续写章尾落点，不再提前收束。pacing=3.44 仍低于 4.0，主要因 section 边界产生'重复收束'（段73 vs 段72），需在 Loop 9 处理。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "endingHook 修复首次实现 0 blockers 和 weighted>=4.0，characterVoice=4.44 达标，章尾驱动力落地",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.28,
+  "successSignalUpdates": [
+    {
+      "id": "no-ai-tells",
+      "action": "observe",
+      "note": "0 blocker, POV 硬约束生效，但仍有 5 处短句排比（deterministic warning）"
+    },
+    {
+      "id": "quality-threshold-met",
+      "action": "update",
+      "text": "8维报告中 characterVoice>=4.0 且 0 blockers 已达成；pacing/sceneEmbodiment 仍需提升到4.0",
+      "note": "weighted=4.02 首次>=4.0, 0 blockers 首次达成; characterVoice=4.44>=4.0 ✓; sceneEmbodiment=3.92 接近; pacing=3.44 仍需提升"
+    },
+    {
+      "id": "techniques-internalized",
+      "action": "observe",
+      "note": "器物隐喻（旧钥匙参与选择）、画面感公式（关键瞬间放大）、去情绪化（行动承载情绪）可观察"
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 9: 修复 pacing——section 边界重复收束问题。修改非末段 contract 的结尾指令，从'不得总结主题、制造结尾'改为更具体的'停在动作进行中或新信息出现处'，同时保持输出长度不回退。",
+  "artifactRefs": [
+    {
+      "id": "loop8-draft",
+      "successSignalId": "quality-threshold-met",
+      "kind": "bench-draft-output",
+      "path": ".novel-bench/runs/20260716-142009-draft/output.md",
+      "evidence": "3791字, endingHook(发现异常痕迹)落地, 5段全部完成",
+      "status": "verified"
+    },
+    {
+      "id": "loop8-review",
+      "successSignalId": "quality-threshold-met",
+      "kind": "bench-review-output",
+      "path": ".novel-bench/runs/20260716-142152-review/quality-report.json",
+      "evidence": "weighted=4.02 avg=4.02 blocker=0; characterVoice=4.44 sceneEmbodiment=3.92 pacing=3.44",
+      "status": "verified"
+    }
+  ]
+}

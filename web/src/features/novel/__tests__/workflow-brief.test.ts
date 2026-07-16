@@ -4,7 +4,7 @@ import type { ChapterBlueprint, CreativeBrief } from "../types";
 
 describe("creative brief workflow contract", () => {
   it("overrides model drift with author-confirmed POV, length and boundaries", () => {
-    const blueprint: ChapterBlueprint = { objective: "相遇", povCharacterId: "wrong", locationIds: [], characterIds: ["wrong"], plotThreadIds: [], foreshadowingIds: [], conflict: "观察", informationRelease: [], mustHappen: ["模型节拍"], flexible: [], forbidden: ["模型禁写"], targetWords: 2000 };
+    const blueprint: ChapterBlueprint = { objective: "相遇", endingHook: "少年看见她收起油布", povCharacterId: "wrong", locationIds: [], characterIds: ["wrong"], plotThreadIds: [], foreshadowingIds: [], conflict: "观察", informationRelease: [], mustHappen: ["模型节拍"], flexible: [], forbidden: ["模型禁写"], targetWords: 2000 };
     const brief = { povCharacterId: "boy", goal: "陌生少年进入渡口", tone: "克制", languageRequirements: ["限知"], mustHappen: ["少年出现"], forbidden: ["解释来历"], targetWords: 5000 } as CreativeBrief;
 
     const result = applyCreativeBriefToBlueprint(blueprint, brief);

@@ -1,0 +1,87 @@
+{
+  "loop": 5,
+  "goalId": "novel-iterative-quality",
+  "plan": "在 endingHookBlock 中修改已有句子措辞（不新增约束块），将'可由视角人物当下观察到的物事或痕迹'改为'视角人物当下亲自观察到的一处具体异常——不是看到某物存在，而是看到某物上不该出现的细节'，以提升 endingHook 落地一致性。",
+  "actions": [
+    {
+      "summary": "prose-prompts.ts: endingHookBlock 句子措辞修改（同句替换，不新增约束）",
+      "command": "edit prose-prompts.ts endingHookBlock",
+      "path": "src/features/novel/prose-prompts.ts"
+    },
+    {
+      "summary": "测试断言新增'不是看到某物存在'",
+      "command": "edit prose-prompts.test.ts",
+      "path": "src/features/novel/__tests__/prose-prompts.test.ts"
+    },
+    {
+      "summary": "bench-draft+bench-review 后 endingHook 仍未落地, 回退措辞修改到 Loop 9c 状态",
+      "command": "edit prose-prompts.ts revert endingHookBlock",
+      "path": "src/features/novel/prose-prompts.ts"
+    }
+  ],
+  "verification": [
+    {
+      "summary": "单元测试 5/5 通过（含措辞回退后）",
+      "command": "npx vitest run --config vitest.config.ts src/features/novel/__tests__/prose-prompts.test.ts",
+      "path": "src/features/novel/__tests__/prose-prompts.test.ts",
+      "result": "pass"
+    },
+    {
+      "summary": "bench-draft: runId=20260716-145712-draft 4272字 0 blocker 2 warning（机械预检）",
+      "command": "BENCH_STAGE=draft npx vitest run --config vitest.bench.config.ts bench-draft.test.ts",
+      "path": ".novel-bench/runs/20260716-145712-draft/output.md",
+      "result": "pass"
+    },
+    {
+      "summary": "bench-review: runId=20260716-145940-review weighted=3.33 blocker=1（章尾驱动力尚未形成——endingHook 未落地）",
+      "command": "BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts bench-review.test.ts",
+      "path": ".novel-bench/runs/20260716-145940-review/quality-report.json",
+      "result": "fail"
+    }
+  ],
+  "errors": [
+    "endingHook 措辞修改未能提升落地一致性——LLM 仍在最后一段提前终止（停在'顾长安停步，回头。'）"
+  ],
+  "selfReflection": "endingHook 落地问题是 LLM 行为模式, 不是提示词清晰度问题。Loop 8 成功落地, Loop 9c/10 未落地, 概率约 50%。措辞修改（更具体的'不是看到某物存在'）无法改变此行为——LLM 不是不理解什么是'落地', 而是在写完节拍后自然停止, 不再续写章尾落点。根因可能是: (1)LLM 在最后一段写完 beat 后认为章节已完成; (2)token 预算虽够但 LLM 选择停止; (3)5 段分写累积的上下文导致最后一段'疲劳'。此问题无法通过修改 prose-prompts.ts 解决（受限于'不动 stage handler 控制流'的边界）。",
+  "selfAssessment": {
+    "strategyWorking": false,
+    "reason": "endingHook 落地一致性无法通过 prose-prompts.ts 修改解决, 需要修改 stage handler（超出目标边界）或接受概率性落地",
+    "confidence": 0.7,
+    "needsStrategyChange": true
+  },
+  "strategyUpdate": {
+    "previous": "在 endingHookBlock 中修改措辞以提升落地一致性",
+    "current": "接受 endingHook 概率性落地（约50%成功率）。保持 Loop 9c 状态（Loop 8 + previousEnding 加强）为最终提示词状态。运行最后一次 bench 确认最佳状态, 然后评估是否可标记完成",
+    "reason": "endingHook 落地是 LLM 行为模式, 非提示词问题。受限于目标边界（仅改 prose-prompts.ts/skills.ts, 不动 stage handler）, 无法通过 post-completion check 强制续写。最佳策略是接受当前状态。",
+    "updatedAtLoop": 5
+  },
+  "progressDelta": -0.05,
+  "successSignalUpdates": [
+    {
+      "id": "quality-threshold-met",
+      "action": "update",
+      "text": "endingHook 落地一致性受 LLM 方差影响（约50%成功率）, 无法通过提示词修改解决。Loop 8 最佳单次结果(weighted=4.02, 0 blocker)仍为参考基线。previousEnding 加强修复了重复收束问题。",
+      "note": "Loop 10 weighted=3.33 blocker=1 (endingHook 未落地); 已回退措辞修改到 Loop 9c 状态"
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 11: 运行最后一次 bench-draft+bench-review 确认 Loop 9c 状态（Loop 8 + previousEnding 加强）的基线表现。若 0 blocker 且 endingHook 落地, 评估标记完成；若 endingHook 未落地但其他维度达标, 评估是否可在'无硬阈值'停止条件下标记完成。",
+  "artifactRefs": [
+    {
+      "id": "loop10-draft",
+      "successSignalId": "quality-threshold-met",
+      "kind": "bench-draft-output",
+      "path": ".novel-bench/runs/20260716-145712-draft/output.md",
+      "evidence": "4272字, endingHook 未落地（停在'顾长安停步，回头。'）",
+      "status": "failed"
+    },
+    {
+      "id": "loop10-review",
+      "successSignalId": "quality-threshold-met",
+      "kind": "bench-review-output",
+      "path": ".novel-bench/runs/20260716-145940-review/quality-report.json",
+      "evidence": "weighted=3.33 blocker=1 (章尾驱动力尚未形成); endingHook 措辞修改无效",
+      "status": "failed"
+    }
+  ]
+}

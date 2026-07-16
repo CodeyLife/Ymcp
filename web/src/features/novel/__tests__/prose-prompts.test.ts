@@ -25,8 +25,7 @@ describe("production prose prompts", () => {
     expect(prompt).toContain("主角拒绝交易");
     expect(prompt).toContain("解释幕后真相");
     expect(prompt).toContain("参考目标约 2400 个中文字符");
-    expect(prompt).toContain("不是必须凑齐的指标");
-    expect(prompt).toContain("完整成稿须超过 1000 字");
+    expect(prompt).toContain("完整成稿须超过 3000 字");
     expect(prompt).not.toMatch(/剑来|雪中悍刀行|我在风花雪月里等你|烽火戏诸侯/);
   });
 
@@ -41,11 +40,35 @@ describe("production prose prompts", () => {
     const beats = Array.from({ length: 5 }, (_, index) => ({ action: `行动${index + 1}`, emotion: `情绪${index + 1}`, outcome: `结果${index + 1}` }));
     const sections = planDraftSections(beats, 5000);
 
-    expect(sections.map((section) => section.beats.map((beat) => beat.action))).toEqual([["行动1"], ["行动2"], ["行动3"], ["行动4"], ["行动5"]]);
-    expect(sections.every((section) => section.targetWords === 1000)).toBe(true);
+    expect(sections.map((section) => section.beats.map((beat) => beat.action))).toEqual([["行动1", "行动2"], ["行动3", "行动4"], ["行动5"]]);
+    expect(sections.every((section) => section.targetWords === 1667)).toBe(true);
     expect(buildDraftSectionContract(sections[1], "上一段结尾")).toContain("第一句必须自然承接");
     expect(buildDraftSectionContract(sections[1], "上一段结尾")).toContain("不得总结主题、制造结尾");
-    expect(buildDraftSectionContract(sections[4], "上一段结尾")).toContain("可以完成章尾余韵");
+    expect(buildDraftSectionContract(sections[1], "上一段结尾")).toContain("不得以相同句式");
+    expect(buildDraftSectionContract(sections[2], "上一段结尾")).toContain("可以完成章尾余韵");
+  });
+
+  it("appends endingHook as a synthetic beat in the last section contract when provided", () => {
+    const beats = Array.from({ length: 5 }, (_, index) => ({ action: `行动${index + 1}`, emotion: `情绪${index + 1}`, outcome: `结果${index + 1}` }));
+    const sections = planDraftSections(beats, 5000);
+    const endingHook = "他在封存遗物时看到一处不该出现的人为痕迹。";
+    const lastContract = buildDraftSectionContract(sections[2], "上一段结尾", endingHook);
+    const middleContract = buildDraftSectionContract(sections[1], "上一段结尾", endingHook);
+
+    // endingHook 作为合成节拍出现在 beat 列表中
+    expect(lastContract).toContain("章尾落点");
+    expect(lastContract).toContain(endingHook);
+    expect(lastContract).toContain("不得在最后节拍落地前结束本段");
+    expect(lastContract).toContain("必须写完上述所有节拍");
+    expect(lastContract).toContain("不得跳过最后节拍");
+    expect(lastContract).not.toContain("可以完成章尾余韵");
+    // 中间段不追加合成节拍
+    expect(middleContract).not.toContain("章尾落点");
+    expect(middleContract).toContain("这不是章尾");
+    // 确认 endingHook 是最后一个节拍（在"行动5"之后）
+    const lastBeatIndex = lastContract.indexOf(endingHook);
+    const action5Index = lastContract.indexOf("行动5");
+    expect(lastBeatIndex).toBeGreaterThan(action5Index);
   });
 
   it("gives reviewers production score anchors and role-specific anti-mechanical checks", () => {

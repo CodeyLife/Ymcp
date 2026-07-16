@@ -5,3 +5,7 @@ dist-ssr
 *.tsbuildinfo
 .vite
 .DS_Store
+
+# novel bench 历史基线与 fixture（本地生成，不入库）
+.novel-bench/
+src/features/novel/__tests__/bench/fixtures/*.json

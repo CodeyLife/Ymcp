@@ -1,0 +1,115 @@
+{
+  "loop": 1,
+  "goalId": "novel-iterative-quality",
+  "plan": "Loop 1：建立 baseline。运行 bench-bootstrap（生成 foundation+blueprint+context fixture）→ bench-draft（生成第 1 章 draft）→ bench-review（5 reviewer 生成 8 维质量报告）。读取 draft 与 quality-report，用 LLM 审视 AI 腔/POV 越界/作者式心理结论句，对照新技巧点清单检查内化情况，识别最严重问题与根因。",
+  "actions": [
+    "运行 bench-bootstrap（FORCE_REGEN=true，~356s）：生成 foundation.json + ch1-blueprint.json + ch1-context-packet.json，章节标题'初雪夜，东宫无灯'，POV=魏成礼（掌事宦官）",
+    "运行 bench-draft（~66s）：5 个分段生成 4421 字 draft，机械预检发现 1 major + 1 warning，runId=20260716-131317-draft",
+    "首次运行 bench-review 失败：5 个 reviewer 全部降级，因 bench-helpers writeOutput 不创建子目录导致 prompts/role.md 写入失败",
+    "修复 bench-helpers.ts writeOutput：添加 sep 导入 + mkdirSync(parentDir, {recursive:true}) 创建子目录",
+    "重跑 bench-review（~65s）：5 个 reviewer 成功执行，runId=20260716-131533-review，weighted=3.5 avg=3.51 blocker=0 issues=21（5 major + 16 warning）",
+    "读取 quality-report.json：8 维分数 plot=3.13 characterVoice=3.88 sceneEmbodiment=3.88 dialogue=3.38 pacing=3.01 specificity=3.83 hookPayoff=3.12 continuity=3.88",
+    "读取 draft output.md（152 段 4421 字）：LLM 自评识别 4 处作者式心理结论句、2 处 POV 越界、6 处短句排比、章尾提前推进调查",
+    "对照新技巧点清单检查内化：器物隐喻✓（名册/钥匙/玉佩/木匣参与行动）、伏笔延迟回收✓（折痕/玉佩/换人无标榜）、画面感公式部分✓（太子薨逝消息有五元素雏形，但打开木匣未放大）、去情绪化部分✓（4处泄露）、双声部部分✓（顾长安区分明显，沈知微与魏成礼区分不足）"
+  ],
+  "verification": [
+    {
+      "result": "pass",
+      "summary": "bench-bootstrap 成功生成全部 fixture（355710ms）",
+      "command": "BENCH_BOOTSTRAP=true FORCE_REGEN=true npx vitest run --config vitest.bench.config.ts bench-bootstrap.test.ts",
+      "exitCode": 0
+    },
+    {
+      "result": "pass",
+      "summary": "bench-draft 成功生成 4421 字 draft（66316ms），runId=20260716-131317-draft",
+      "command": "BENCH_STAGE=draft npx vitest run --config vitest.bench.config.ts bench-draft.test.ts",
+      "exitCode": 0
+    },
+    {
+      "result": "pass",
+      "summary": "bench-review 成功生成 8 维质量报告（65030ms），weighted=3.5 avg=3.51 blocker=0 issues=21",
+      "command": "BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts bench-review.test.ts",
+      "exitCode": 0
+    },
+    {
+      "result": "pass",
+      "summary": "LLM 自评 draft 产物：AI 腔评分 3/5（4处作者式心理结论句），POV 越界 2 处（第281/293段），新技巧内化部分确认（器物✓ 伏笔✓ 画面感部分✓ 去情绪化部分✓ 双声部部分✓）",
+      "path": ".novel-bench/runs/20260716-131317-draft/output.md"
+    },
+    {
+      "result": "pass",
+      "summary": "8 维质量报告生成：pacing=3.01 / characterVoice=3.88 / sceneEmbodiment=3.88 / dialogue=3.38 / plot=3.13 / hookPayoff=3.12 / specificity=3.83 / continuity=3.88，0 blockers",
+      "path": ".novel-bench/runs/20260716-131533-review/quality-report.json"
+    }
+  ],
+  "errors": [
+    "bench-review 首次运行全部 5 reviewer 降级：bench-helpers writeOutput 用 writeFileSync(join(outputDir, filename)) 不创建子目录，导致 prompts/role.md 写入失败。已修复 writeOutput 添加 mkdirSync(parentDir, {recursive:true})。",
+    "bench-bootstrap 首次运行在 plot-threads 阶段失败：AI 未返回有效内容（API 返回空）。重试成功。"
+  ],
+  "selfReflection": "Loop 1 成功建立 baseline。weighted=3.5 低于 novel-e2e-deepening Loop 3 的 4.05 baseline，主要拖后腿的是 pacing=3.01（短句排比6处+人物进入段落功能重复）和 hookPayoff=3.12（章尾提前推进调查+开放压力不足）。但 characterVoice=3.88 和 sceneEmbodiment=3.88 已接近 4.0 阈值。新技巧点部分内化：器物隐喻与伏笔延迟回收表现良好，画面感公式与去情绪化有泄露。最严重问题是 POV 越界（recurring，novel-e2e-deepening Loop 3 也有）和作者式心理结论句（4处），这两类是 AI 腔的核心特征，必须在 Loop 2 重点修复。",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "切片测试基础设施工作正常，能生成真实 draft 与 8 维质量报告，LLM 自评能识别具体问题与根因。baseline 已建立，迭代方向明确。",
+    "confidence": 0.85,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.15,
+  "successSignalUpdates": [
+    {
+      "action": "satisfy",
+      "id": "draft-slice-pass",
+      "evidenceRefs": ["loop1-draft-output", "loop1-draft-metrics"]
+    },
+    {
+      "action": "satisfy",
+      "id": "review-slice-pass",
+      "evidenceRefs": ["loop1-quality-report"]
+    },
+    {
+      "action": "observe",
+      "id": "no-ai-tells",
+      "evidenceRefs": [],
+      "note": "LLM 自评 AI 腔 3/5（4处作者式心理结论句），POV 越界 2 处，未达 ≥4/5 阈值"
+    },
+    {
+      "action": "observe",
+      "id": "quality-threshold-met",
+      "evidenceRefs": [],
+      "note": "pacing=3.01 <4.0，characterVoice=3.88 <4.0，sceneEmbodiment=3.88 <4.0，三项均未达标"
+    },
+    {
+      "action": "observe",
+      "id": "techniques-internalized",
+      "evidenceRefs": [],
+      "note": "器物✓ 伏笔✓ 画面感部分✓ 去情绪化部分✓ 双声部部分✓，5 项中 2 项完全内化 3 项部分内化，未达全部可观察标准"
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 2：针对 5 个最严重问题优化 prose-prompts.ts。(1) 在 buildChapterDraftPrompt 追加 POV 硬约束段（单 POV 章不得进入其他角色内心，只通过可观察动作呈现）；(2) 在 buildDraftSectionContract 追加 section 级别 POV + 作者式心理结论句 + 短句排比上限提醒（避免长 prompt 中约束被遗忘）；(3) 追加引子章边界约束（不完成调查启动动作：打开关键物/展示内容/确认异常，停留在共同压力形成位置）；(4) 追加避免重复推进结构约束。优化后重跑 bench-draft + bench-review 验证改进。",
+  "artifactRefs": [
+    {
+      "id": "loop1-draft-output",
+      "successSignalId": "draft-slice-pass",
+      "kind": "test-output",
+      "path": ".novel-bench/runs/20260716-131317-draft/output.md",
+      "evidence": "bench-draft 成功生成 4421 字 draft，output.md 非空",
+      "status": "verified"
+    },
+    {
+      "id": "loop1-draft-metrics",
+      "successSignalId": "draft-slice-pass",
+      "kind": "test-output",
+      "path": ".novel-bench/runs/20260716-131317-draft/metrics.json",
+      "evidence": "metrics.json 含 wordCount=4421 majorCount=1 blockerCount=0",
+      "status": "verified"
+    },
+    {
+      "id": "loop1-quality-report",
+      "successSignalId": "review-slice-pass",
+      "kind": "test-output",
+      "path": ".novel-bench/runs/20260716-131533-review/quality-report.json",
+      "evidence": "8 维质量报告生成，weighted=3.5 avg=3.51 blocker=0 issues=21",
+      "status": "verified"
+    }
+  ]
+}

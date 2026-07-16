@@ -1,0 +1,111 @@
+{
+  "loop": 2,
+  "goalId": "novel-iterative-quality",
+  "plan": "针对 Loop 1 识别的 5 个根因优化 prose-prompts.ts：(1) 追加 POV 硬约束段（单 POV 章不得进入他人内心）；(2) 追加章节边界约束（引子章不完成调查启动动作）；(3) 追加避免重复推进结构约束；(4) 在 buildDraftSectionContract 追加 section 级别 POV/作者式心理结论句/短句排比提醒。重跑 bench-draft + bench-review 验证。",
+  "actions": [
+    "在 prose-prompts.ts 硬约束段追加 ### 4 单 POV 视角硬约束：禁止'像是在提醒自己/像是在回忆'式越界，他人心理只能通过可见动作外化呈现",
+    "在 prose-prompts.ts 长篇叙事轴后追加 ## 章节边界（引子/铺陈章特别约束）：禁止完成调查启动动作链（不打开关键物证/不展示内容/不确认异常/不安排验看尸身）",
+    "在 prose-prompts.ts 追加 ## 避免重复推进结构：同一章不得多次使用相同'事件→询问→记录'推进链，程序性动作全章不得超过 3 次显式书写",
+    "在 buildDraftSectionContract 追加 ## 本段硬约束提醒：section 级别复述 POV/作者式心理结论句/短句排比/避免重复推进四项约束",
+    "运行 bench-draft（第一次超时 350s，第二次成功 156s）：runId=20260716-132853-draft，字数=1925",
+    "运行 bench-review（71s）：runId=20260716-133148-review，weighted=3.26 avg=3.27 blocker=2 issues=19"
+  ],
+  "verification": [
+    {
+      "type": "test-output",
+      "label": "bench-draft Loop 2",
+      "result": "pass",
+      "summary": "bench-draft 通过，5 段生成成功，结构修复+机械预检通过",
+      "command": "BENCH_STAGE=draft npx vitest run --config vitest.bench.config.ts bench-draft.test.ts",
+      "path": ".novel-bench/runs/20260716-132853-draft/output.md",
+      "evidence": "runId=20260716-132853-draft, 字数=1925, 5 段生成成功, 结构修复+机械预检通过"
+    },
+    {
+      "type": "test-output",
+      "label": "bench-review Loop 2",
+      "result": "pass",
+      "summary": "bench-review 通过，5 reviewer 完成评分",
+      "command": "BENCH_STAGE=review npx vitest run --config vitest.bench.config.ts bench-review.test.ts",
+      "path": ".novel-bench/runs/20260716-133148-review/quality-report.json",
+      "evidence": "runId=20260716-133148-review, weighted=3.26, avg=3.27, 2 blockers, 19 issues"
+    },
+    {
+      "type": "manual-inspection",
+      "label": "Loop 2 vs Loop 1 对比",
+      "result": "pass",
+      "summary": "weighted 3.5→3.26(-0.24), hookPayoff 3.12→2.25(-0.87), plot 3.13→2.79(-0.34), pacing 3.01→2.75(-0.26), specificity 3.83→3.98(+0.15), blockers 0→2。POV越界消除✓, 短句排比消除✓, 但章节截断导致 2 个 incomplete-blueprint blocker",
+      "path": ".novel-bench/runs/20260716-133148-review/quality-report.json",
+      "evidence": "8 维评分对比：6 项回退，1 项改善(specificity)，1 项微降(characterVoice -0.07)"
+    }
+  ],
+  "errors": [
+    "bench-draft 第一次运行超时（350s，300000ms LLM 调用超时），重试第二次成功（156s）",
+    "章节边界约束被 LLM 过度解读：原文'让人物停留在共同压力形成的位置'被理解为'三人名字并列出现即可'，实际应完成暴毙消息+封锁+三人到场+共同压力形成，仅不打开物证"
+  ],
+  "selfReflection": {
+    "summary": "Loop 2 的 4 项约束中，POV 硬约束和 section 级提醒成功消除了 POV 越界和短句排比（Loop 1 的 2 个 major 问题）。但章节边界约束措辞过于激进，LLM 在'东宫灯灭'处停止，未完成 mustHappen 节拍（暴毙消息+封锁+三人汇合），导致 2 个 blocker 和 hookPayoff 崩盘。问题不在约束方向，而在约束精度：必须区分'必须完成的章节节拍'与'不得提前消费的后续节点'。",
+    "rootCause": "章节边界约束'让人物停留在共同压力形成的位置'语义模糊。'共同压力形成'应指三人因暴毙事件进入同一空间面对同一物证，但 LLM 理解为三人名字在同一夜出现于记录中（暴毙前），导致章节在暴毙发生前停止。约束应明确：必须完成 mustHappen 全部节拍（含暴毙消息+封锁+三人到场），仅不得打开物证/展示内容/确认异常来源/验看尸身。"
+  },
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "POV 硬约束和 section 级提醒策略有效（消除 Loop 1 的 POV 越界和短句排比），仅需精修章节边界约束措辞。不需要改变策略方向。",
+    "confidence": 0.7,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.0625,
+  "successSignalUpdates": [
+    {
+      "id": "draft-slice-pass",
+      "action": "satisfy",
+      "evidence": "bench-draft 通过，5 段生成成功，结构修复+机械预检通过"
+    },
+    {
+      "id": "review-slice-pass",
+      "action": "satisfy",
+      "evidence": "bench-review 通过，5 reviewer 完成评分"
+    },
+    {
+      "id": "no-ai-tells",
+      "action": "observe",
+      "evidence": "POV 越界消除✓，短句排比消除✓，但仍有'三份不同来处的消息落在同一夜里，已经超出了普通宫务的范围'式判断过早问题"
+    },
+    {
+      "id": "quality-threshold-met",
+      "action": "observe",
+      "evidence": "pacing=2.75(<4.0), characterVoice=3.81(<4.0), sceneEmbodiment=3.67(<4.0)，未达阈值，且 2 blockers"
+    },
+    {
+      "id": "techniques-internalized",
+      "action": "observe",
+      "evidence": "器物（钥匙）出现但只作象征未参与选择；画面感公式未明显使用；去情绪化部分改善；双声部不足（所有角色同一书面腔）"
+    }
+  ],
+  "decision": "continue",
+  "nextDirection": "Loop 3：精修章节边界约束措辞。(1) 将'章节边界'段改写为区分'必须完成的节拍'与'不得提前消费的节点'：必须完成 mustHappen 全部节拍（含暴毙消息+封锁+三人到场+共同压力形成），仅不得打开物证/展示内容/确认异常来源/验看尸身；(2) 追加明确正例：章节应结束在三人面对未开启物证的位置，而非暴毙前；(3) 可选：在 section 级提醒中追加'本段必须完成 assigned beats，不得因约束而提前停止'。重跑 bench-draft + bench-review 验证章节完整性恢复且 POV/短句排比改善保持。",
+  "artifactRefs": [
+    {
+      "id": "loop2-draft-output",
+      "successSignalId": "draft-slice-pass",
+      "kind": "test-output",
+      "path": ".novel-bench/runs/20260716-132853-draft/output.md",
+      "evidence": "1925 字，章节在东宫灯灭处结束，未完成暴毙消息+封锁+三人汇合",
+      "status": "produced"
+    },
+    {
+      "id": "loop2-quality-report",
+      "successSignalId": "review-slice-pass",
+      "kind": "test-output",
+      "path": ".novel-bench/runs/20260716-133148-review/quality-report.json",
+      "evidence": "weighted=3.26 avg=3.27 2 blockers 19 issues，hookPayoff=2.25 崩盘",
+      "status": "produced"
+    },
+    {
+      "id": "loop2-prose-prompts",
+      "successSignalId": "no-ai-tells",
+      "kind": "code-change",
+      "path": "src/features/novel/prose-prompts.ts",
+      "evidence": "追加 POV 硬约束+章节边界+避免重复推进+section 级提醒，POV 越界和短句排比消除",
+      "status": "produced"
+    }
+  ]
+}
