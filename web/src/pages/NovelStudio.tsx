@@ -44,7 +44,7 @@ import {
   updateEntity,
   updateProject,
 } from "@/features/novel/db";
-import { exportNovel } from "@/features/novel/export";
+import { exportNovel, exportNovelEvaluationSnapshot } from "@/features/novel/export";
 import { openCollaborativeDocument, resolveStoredManuscriptHtml, seedEmptyCollaborativeDocument } from "@/features/novel/collaboration";
 import { createManuscriptPersistenceGuard, requestDurableBrowserStorage, shouldApplyStoredManuscriptContent, type ManuscriptSaveState } from "@/features/novel/persistence";
 import { DB_VERSION } from "@/features/novel/db-schema";
@@ -360,7 +360,11 @@ export default function NovelStudio() {
   useEffect(() => {
     if (!selectedDocumentId && documents[0]) selectDocument(documents[0].id);
   }, [documents, selectedDocumentId]);
-  const exportItems: MenuProps["items"] = (["json", "markdown", "txt", "docx", "epub"] as const).map((format) => ({ key: format, label: format === "json" ? "完整项目备份" : `导出 ${format.toUpperCase()}`, onClick: () => void exportNovel(projectId, format) }));
+  const exportItems: MenuProps["items"] = [
+    ...(["json", "markdown", "txt", "docx", "epub"] as const).map((format) => ({ key: format, label: format === "json" ? "完整项目备份" : `导出 ${format.toUpperCase()}`, onClick: () => void exportNovel(projectId, format) })),
+    { type: "divider" },
+    { key: "evaluation-snapshot", label: "导出评测快照", onClick: () => void exportNovelEvaluationSnapshot(projectId) },
+  ];
   const groups = useMemo(() => [...new Set(VIEW_ITEMS.map((item) => item.group))], []);
   if (project === undefined) return <div className="novel-studio-loading"><Spin /><span>打开故事工作区</span></div>;
   if (!project) return <div className="novel-studio-loading"><Empty description="项目不存在" /><Button onClick={() => navigate("/novels")}>返回项目中心</Button></div>;

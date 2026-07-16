@@ -114,8 +114,8 @@ export class NovelDatabase extends Dexie {
   retrievalRuns!: EntityTable<NovelRetrievalRun, "id">;
   memoryJobs!: EntityTable<NovelMemoryJob, "id">;
 
-  constructor() {
-    super("ymcp-novel-db-v4");
+  constructor(databaseName = "ymcp-novel-db-v4") {
+    super(databaseName);
     this.version(4).stores(V4_STORES);
     this.version(5).stores(V5_STORES).upgrade(async (transaction) => {
       await transaction.table("proposals").toCollection().modify(migrateLegacyProposal);
