@@ -37,6 +37,8 @@ const SCENE_SUMMARY_TAIL_PATTERNS = [
 ];
 const ACTION_MARKER_RE = /[“「『][^”」』]{2,}[”」』]|(?:他|她|它|那人|此人|[\u3400-\u9fff]{2,4})(?:走|抬|放|握|转|看|听|停|推|拉|翻|查|封|记|写|说|问|答|低头|垂手|攥紧|松开)/;
 const REVIEW_WARNING_MAJOR_PATTERN = /(?:视角|POV|限知|知识边界|感知范围).{0,18}(?:越界|超出|违反|冲突|他人心理|内心|心理解释)|(?:越过|超出|违反|进入|直接呈现|直接解释).{0,18}(?:视角|POV|限知|知识边界|感知范围|他人心理|内心判断)|第二个(?:结尾|开场)|重复(?:推进|事件链|收束)/i;
+const CONDITIONAL_INTERPRETATION_RE = /(?:若|如果|假如|倘若|一旦).{0,24}(?:理解|解读|推断|视为|意味着)/;
+const INTERNAL_STATE_EVIDENCE_RE = /(?:意识到|知道|明白|觉得|认为|想到|想起|决定|判断|确信|察觉|盘算|权衡|内心|心想)/;
 
 export interface ReviewerFinding {
   role: NovelAgentRole;
@@ -157,7 +159,8 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   const shortSentenceRanges: Array<{ start: number; end: number }> = [];
   for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
     const block = blocks[blockIndex];
-    if (isDialogueOnlyParagraph(block)) {
+    // 对白的短促轮次是人物交流节奏，不属于叙事短句 tic；带说话标签的混合段也应隔断序列。
+    if (isDialogueOnlyParagraph(block) || /[“「『][^”」』]+[”」』]/.test(block)) {
       shortSentenceParagraphs = [];
       continue;
     }
@@ -244,11 +247,12 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     }));
   }
 
-  // 章尾钩子压力检测：末段若缺乏开放问题信号或未行动指向，可能停在封闭画面。
-  // 开放信号 = 问号/省略号/转折连词/未行动指向词；任一出现即视为章尾携带未解压力。
+  // 章尾钩子常由“压力出现 -> 人物暂不回应 -> 意象收束”跨段完成，不能只检查最后一个意象段。
   const OPEN_HOOK_MARKERS = ["？", "……", "然而", "可是", "只是", "尚未", "还没", "且看", "即将", "将要", "忽然", "突然", "蓦地", "陡然", "倏地", "身影", "转身", "停步", "回头", "没说", "没动", "没走", "但", "却", "竟"];
   const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : "";
-  const lastBlockHasOpenSignal = OPEN_HOOK_MARKERS.some((marker) => lastBlock.includes(marker));
+  const endingWindow = blocks.slice(-3).join("\n").slice(-800);
+  const pendingDecisionSignal = /(?:没有|未|尚未|还没)[^。！？]{0,16}(?:回答|答应|拒绝|决定|选择|行动|动身|离开|交出|打开|喝下)|(?:等着|等待|等候)[^。！？]{0,12}(?:回答|回话|决定|选择)|(?:是否|可愿|要不要|去不去)/.test(endingWindow);
+  const lastBlockHasOpenSignal = OPEN_HOOK_MARKERS.some((marker) => endingWindow.includes(marker)) || pendingDecisionSignal;
   if (totalChars >= 600 && lastBlock.length > 0 && !lastBlockHasOpenSignal) {
     issues.push(issue({
       dimension: "hookPayoff",
@@ -304,6 +308,9 @@ function titleSimilarity(a: string, b: string): number {
 const SEVERITY_RANK: Record<QualityIssue["severity"], number> = { blocker: 3, major: 2, warning: 1 };
 
 function isDuplicateIssue(existing: QualityIssue, candidate: Omit<QualityIssue, "id" | "deterministic">): boolean {
+  const rangesOverlap = (existing.revisionRanges ?? []).some((left) =>
+    (candidate.revisionRanges ?? []).some((right) => left.start <= right.end && right.start <= left.end));
+  if (existing.dimension === candidate.dimension && rangesOverlap) return true;
   if (existing.rule && candidate.rule && existing.rule === candidate.rule && existing.rule !== "reviewer.unavailable") return titleSimilarity(existing.title, candidate.title) >= 0.5;
   return titleSimilarity(existing.title, candidate.title) >= 0.75;
 }
@@ -335,7 +342,13 @@ export function aggregateQuality(params: { deterministic: ReturnType<typeof runD
     reviewerRoles.push(reviewer.role);
     for (const [dimension, score] of Object.entries(reviewer.scores) as Array<[QualityDimension, number]>) scores[dimension] = Number(((scores[dimension] + Math.max(0, Math.min(5, score))) / 2).toFixed(2));
     for (const found of reviewer.issues) {
-      const normalized = found.severity === "warning" && REVIEW_WARNING_MAJOR_PATTERN.test(`${found.title} ${found.description}`)
+      const claim = `${found.title} ${found.description}`;
+      const conditionalClaimWithoutEvidence = Boolean(found.excerpt)
+        && CONDITIONAL_INTERPRETATION_RE.test(claim)
+        && !INTERNAL_STATE_EVIDENCE_RE.test(found.excerpt ?? "");
+      const normalized = conditionalClaimWithoutEvidence
+        ? { ...found, severity: "warning" as const }
+        : found.severity === "warning" && REVIEW_WARNING_MAJOR_PATTERN.test(claim)
         ? { ...found, severity: "major" as const }
         : found;
       issues = deduplicateReviewerIssues(issues, normalized);

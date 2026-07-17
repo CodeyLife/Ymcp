@@ -210,3 +210,23 @@ Loop 3 的 P1 机械修复（relaxStaccatoSentences）已验证有效（major→
 - 若重跑后仍生成不足，则调整生成长度保障（如减少 section 数量从 3 降到 2，或增加 maxTokens）。
 - 目标：ch1 场景 weighted ≥4.0 且 0 blocker 且 major ≤1，然后跑第 2 场景验证泛化性。
 
+## Completion audit (authoritative goal loop 3, 2026-07-17)
+
+### Root causes and general fixes
+
+- Treating `endingHook` as an appended synthetic beat caused one semantic result to be performed twice. The drafting and blueprint contracts now make the hook the concrete presentation of the final beat, with one fulfillment across `mustHappen`, beat outcome, and hook.
+- Local revision windows received the whole chapter's `mustHappen` list as writable work, so a narrow edit could inject a chapter recap. The list is now read-only preservation context: a window may preserve only requirements already carried by its source text.
+- Successful HTTP responses with empty SSE content were not retryable, an unterminated final SSE event was discarded, and fallback transport had no equal retry budget. The shared AI layer now flushes the final decoder buffer, diagnoses empty completions, retries them, and falls back to retried non-streaming chat for both prose and structured review calls.
+- Deterministic hook checking inspected only the final image paragraph, misclassifying multi-paragraph pending decisions. It now examines the ending window and recognizes unresolved action/choice signals. Reviewer aggregation also prevents conditional POV hypotheticals with only observable quoted evidence from becoming majors.
+- Bench context is scoped to the selected blueprint so the second scenario cannot inherit stale chapter-one task state. Chapter selection and saved artifacts are parameterized by `BENCH_CHAPTER`.
+
+### Current evidence
+
+- Scenario A, opening/investigation chapter, Wei Chengli POV: `.novel-bench/runs/20260717-021440-review/quality-report.json`, weighted 4.71, reviewer coverage 4, 0 blocker, 0 major.
+- Scenario B, continuation/autopsy chapter, Gu Changan POV: draft `.novel-bench/runs/20260717-031327-draft/output.md`; review `.novel-bench/runs/20260717-032531-review/quality-report.json`, weighted 4.19, reviewer coverage 4, 0 blocker, 0 major, passed. The invitation occurs once at the ending and the POV neither accepts nor refuses it.
+- Refreshed anonymous prose comparison: `.goal/goals/novel-top-tier-iter/tmp/prose-blind-eval.json`. Sample A has 6/7 and sample B 5/7 `near` or `same` dimensions; overall verdict `near`. Shared remaining gaps are supporting-character voice differentiation and some overlapping process/environment functions.
+- `npm test`: 39 files, 333 tests passed. `npm run lint` and `npm run build` passed. Build emitted only existing chunk-size/static+dynamic-import warnings.
+
+### Completion decision
+
+Both required chapter functions and POVs independently exceed weighted 4.0 with full reviewer coverage and no blocker/major issues. Both current artifacts exceed the four-dimension blind-comparison requirement. The observed failures were addressed at shared workflow, transport, prompt-contract, and evidence-normalization layers rather than by title/name matching or score-threshold tuning.

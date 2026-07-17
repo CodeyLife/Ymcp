@@ -45,6 +45,7 @@ import {
   resetDb,
   runBench,
   saveFixture,
+  scopeBenchContextToBlueprint,
   type FoundationSnapshot,
 } from "./bench-helpers";
 
@@ -119,7 +120,7 @@ describeOrSkip("bench-draft: 切片测试", { timeout: 1_800_000 }, () => {
       const fullPrompt = buildChapterDraftPrompt({
         targetWords: blueprintFixture.targetWords,
         blueprintMarkdown: blueprintFixture.contentMarkdown,
-        contextMarkdown: contextFixture.formattedContext,
+        contextMarkdown: scopeBenchContextToBlueprint(contextFixture.formattedContext, blueprintFixture.contentMarkdown),
         mustHappen,
         forbidden,
       });
@@ -132,7 +133,7 @@ describeOrSkip("bench-draft: 切片测试", { timeout: 1_800_000 }, () => {
         const previousEnding = sectionContents.join("\n\n").slice(-1200);
         const sectionPrompt = `${fullPrompt}\n\n${buildDraftSectionContract(section, previousEnding, endingHook)}`;
         ctx.writeOutput(`prompt-section-${section.index + 1}.md`, sectionPrompt);
-        log("draft", `→ 生成第 ${section.index + 1}/${sections.total} 段`);
+        log("draft", `→ 生成第 ${section.index + 1}/${sections.length} 段`);
         const generated = await streamNovelModel({
           model: blueprintFixture.model,
           temperature: blueprintFixture.temperature,

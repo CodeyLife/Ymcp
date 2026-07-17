@@ -2,13 +2,13 @@
   "version": 1,
   "id": "novel-top-tier-iter",
   "objective": "通过测试分析产出文章内容，迭代优化小说创作模块（单章 prose / 多章节结构 / 工作流环节 context/blueprint/draft/review/revision/fact 任一）的提示词或流程，目标是产出文章在多场景稳定通过顶尖网络小说水平判据。迭代视角覆盖 prose/structure/voice/hooks/imagery/plot 多维度，可触及 novel 生成栈中任一需要的文件（prose-prompts.ts / skills.ts / generation.ts / quality.ts / blueprint-stage.ts / draft-stage.ts / review-stage.ts / revision-stage.ts / context.ts / fact-* 等）。聚焦实际文案与结构质量提升，而非追逐评分阈值。",
-  "status": "active",
+  "status": "complete",
   "createdAt": "2026-07-16T16:09:29.489Z",
-  "updatedAt": "2026-07-16T16:28:49.378Z",
-  "loopCount": 2,
-  "lastDecision": "continue",
-  "lastCheckpoint": "修复 Loop 1 定位的 CRITICAL 回归：truncateTrailingSecondEnding 模式二短序列阈值 0.15 过低导致章节正体被误截断。提高阈值并重跑 bench-draft + bench-review 验证 3 blockers 消除，建立真实基线。 在 draft-structure-repair.ts 中将 truncateTrailingSecondEnding 模式二短序列相似度阈值从 0.15 提高到 0.30 曾尝试新增'新内容比例护栏'（tail 中 >40% bigram 为新内容则不截断），但 draf...",
-  "completionEvidence": null,
+  "updatedAt": "2026-07-16T19:31:14.201Z",
+  "loopCount": 3,
+  "lastDecision": "complete",
+  "lastCheckpoint": "Diagnose the remaining prose/workflow failures at their shared ownership layers, validate two materially different chapter functions and POVs with real generation/review runs, then refresh the anonymous top-tier prose comparison. Made endingHook the concrete presentation of the ...",
+  "completionEvidence": "result=pass Scenario A independent review: weighted 4.71, reviewer coverage 4, 0 blockers, 0 majors. path .novel-bench/runs/20260717-021440-review/quality-report.json; result=pass Scenario B real draft contains one ending invitation and preserves the unanswered choice; independent review: weighted 4.19, reviewer coverage 4, 0 blockers, 0 majors, passed. path .novel-bench/runs/20260717-032531-review/quality-report.json; result=pass Anonymous current-artifact comparison: A 6/7 and B 5/7 dimensions near or same, overall near. path .goal/goals/novel-top-tier-iter/tmp/prose-blind-eval.json; result=pass npm test passed 39 files / 333 tests; npm run lint and npm run build passed; git diff --check passed. path src/features/novel/__tests__",
   "blocker": null,
   "successSignals": [
     {
@@ -17,46 +17,54 @@
       "status": "satisfied",
       "weight": 1,
       "evidenceRefs": [
-        "findings-md-loop-1"
+        "findings-md-loop-1",
+        "intent-preserved-current"
       ]
     },
     {
       "id": "evidence-reviewed",
       "text": "Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.",
-      "status": "observed",
+      "status": "satisfied",
       "weight": 1,
       "evidenceRefs": [
         "loop1-draft-001059",
         "loop1-review-001230",
         "loop2-draft-002507",
-        "loop2-review-002631"
+        "loop2-review-002631",
+        "scenario-b-draft-031327"
       ]
     },
     {
       "id": "no-open-required-work",
       "text": "No known required work remains for the refined goal brief.",
-      "status": "pending",
+      "status": "satisfied",
       "weight": 1,
-      "evidenceRefs": []
+      "evidenceRefs": [
+        "full-regression-333",
+        "completion-audit-findings"
+      ]
     },
     {
       "id": "multi-scenario-stable-pass",
       "text": "至少 2 个不同章节功能（如开篇/承接/转折）+ 至少 2 个不同 POV 角色下，bench/e2e 验证 weighted ≥4.0 且 0 blocker 且 major ≤1，证明优化具泛化性而非过拟合单切片。每个场景需有独立 quality-report 作为证据。",
-      "status": "observed",
+      "status": "satisfied",
       "weight": 2,
       "evidenceRefs": [
         "loop1-review-001230",
-        "loop2-review-002631"
+        "loop2-review-002631",
+        "scenario-a-review-021440",
+        "scenario-b-review-032531"
       ]
     },
     {
       "id": "top-tier-prose-verified",
       "text": "在上述多场景中，LLM 与顶尖网络小说参考作品（雪中悍刀行/剑来/庆余年/我在风花雪月里等你等）做 prose 级盲抽检对比时，至少 4 个维度（句式节奏/文白双声部/器物隐喻/群像声音区分/去情绪化/章尾钩子/场景在场感）稳定判定为接近或同级。",
-      "status": "observed",
+      "status": "satisfied",
       "weight": 2,
       "evidenceRefs": [
         "loop1-review-001230",
-        "loop2-review-002631"
+        "loop2-review-002631",
+        "blind-eval-current"
       ]
     }
   ],
@@ -65,5 +73,5 @@
     "lastChangeReason": "Initial strategy.",
     "updatedAtLoop": 0
   },
-  "progressEstimate": 0.5
+  "progressEstimate": 1
 }

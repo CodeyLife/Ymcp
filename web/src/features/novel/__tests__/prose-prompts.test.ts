@@ -23,10 +23,15 @@ describe("production prose prompts", () => {
     expect(prompt).toContain("普通交流也能积累关系和人物质地");
     expect(prompt).toContain("不要每句话或每轮对白都另起空行");
     expect(prompt).toContain("主角拒绝交易");
+    expect(prompt).toContain("验收条件，不是要在节拍之外再写一次的附加场景");
+    expect(prompt).toContain("同一结果若同时出现在条目、蓝图节拍和章尾落点中，只兑现一次");
     expect(prompt).toContain("解释幕后真相");
     expect(prompt).toContain("参考目标约 2400 个中文字符");
     expect(prompt).toContain("完整成稿须超过 3000 字");
     expect(prompt).toContain("只使用已批准蓝图和正文已经建立");
+    expect(prompt).toContain("一个与人物身份、经验或当下责任直接相关的可见触发");
+    expect(prompt).toContain("开放选择不能只停在看景、沉默或泛化情绪");
+    expect(prompt).toContain("不得为了制造结果替人物答应、拒绝或完成选择");
     expect(prompt).not.toMatch(/魏成礼|魏公公|东宫|皇子|宦官|仵作|史官|具体不可能的物证细节/);
     expect(prompt).not.toMatch(/剑来|雪中悍刀行|我在风花雪月里等你|烽火戏诸侯/);
   });
@@ -50,16 +55,18 @@ describe("production prose prompts", () => {
     expect(buildDraftSectionContract(sections[2], "上一段结尾")).toContain("可以完成章尾余韵");
   });
 
-  it("appends endingHook as a synthetic beat in the last section contract when provided", () => {
+  it("integrates endingHook into the final beat instead of creating a second event", () => {
     const beats = Array.from({ length: 5 }, (_, index) => ({ action: `行动${index + 1}`, emotion: `情绪${index + 1}`, outcome: `结果${index + 1}` }));
     const sections = planDraftSections(beats, 5000);
     const endingHook = "她听见门外有人叫出自己从未公开的名字。";
     const lastContract = buildDraftSectionContract(sections[2], "上一段结尾", endingHook);
     const middleContract = buildDraftSectionContract(sections[1], "上一段结尾", endingHook);
 
-    // endingHook 作为合成节拍出现在 beat 列表中
     expect(lastContract).toContain("章尾落点");
     expect(lastContract).toContain(endingHook);
+    expect(lastContract).toContain("两者若描述相同事件，该事件只发生一次");
+    expect(lastContract).toContain("章尾呈现是同类结果的唯一兑现时机");
+    expect(lastContract).toContain("不得另造一个承担相同悬念、选择或关系功能的预热钩子");
     expect(lastContract).toContain("不得在最后节拍完整落地前结束本段");
     expect(lastContract).toContain("不得为了增强钩子另造异常、危险、物证或角色");
     expect(lastContract).toContain("每个段落都必须推进尚未完成的叙事功能");
@@ -67,10 +74,11 @@ describe("production prose prompts", () => {
     expect(lastContract).toContain("必须写完上述所有节拍");
     expect(lastContract).toContain("不得跳过最后节拍");
     expect(lastContract).not.toContain("可以完成章尾余韵");
-    // 中间段不追加合成节拍
+    expect(lastContract).not.toContain("6. 行动");
+    // 中间段不合并章尾呈现
     expect(middleContract).not.toContain("章尾落点");
     expect(middleContract).toContain("这不是章尾");
-    // 确认 endingHook 是最后一个节拍（在"行动5"之后）
+    // endingHook 位于最后节拍内部（在行动5之后），而不是第六个事件。
     const lastBeatIndex = lastContract.indexOf(endingHook);
     const action5Index = lastContract.indexOf("行动5");
     expect(lastBeatIndex).toBeGreaterThan(action5Index);
@@ -97,6 +105,8 @@ describe("production prose prompts", () => {
     expect(plotPrompt).toContain("铺陈、相处和余波章不要求不可逆结果");
     expect(plotPrompt).toContain("背景展开、人物内省、情感抒发、文学意象和日常过程可以是章节主体");
     expect(plotPrompt).toContain("revisionRanges");
+    expect(plotPrompt).toContain("禁止用\"如果后续这样写\"");
+    expect(plotPrompt).toContain("blocker/major 的 excerpt 必须引用触发判断的原文");
     expect(`${stylePrompt}\n${plotPrompt}`).not.toMatch(/魏公公|东宫|皇子|宦官|仵作|史官|封存命令/);
   });
 });

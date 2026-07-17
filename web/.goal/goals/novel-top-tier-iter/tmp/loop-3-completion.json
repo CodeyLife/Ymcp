@@ -1,0 +1,138 @@
+{
+  "loop": 3,
+  "goalId": "novel-top-tier-iter",
+  "plan": "Diagnose the remaining prose/workflow failures at their shared ownership layers, validate two materially different chapter functions and POVs with real generation/review runs, then refresh the anonymous top-tier prose comparison.",
+  "actions": [
+    "Made endingHook the concrete presentation of the final beat rather than an appended event, and added a blueprint-level single-fulfillment contract across mustHappen, beats, and hook.",
+    "Changed revision mustHappen context into a read-only preservation list so local windows cannot inject whole-chapter recaps or advance unrelated requirements.",
+    "Hardened shared AI transport handling: retry successful empty completions, flush unterminated final SSE events, retain non-content diagnostics, and use retried non-streaming fallback for prose and structured calls.",
+    "Changed deterministic hook evidence from final-paragraph keyword matching to an ending-window pending-choice check, and prevented conditional POV hypotheses without quoted inner-state evidence from becoming majors.",
+    "Scoped bench context and chapter fixtures by selected blueprint, then generated and reviewed a different continuation/autopsy chapter under a second POV.",
+    "Refreshed anonymous seven-dimension prose comparison against mature Chinese web-fiction technique standards using the two current artifacts.",
+    "Ran full unit tests, TypeScript validation, production build, and diff whitespace validation."
+  ],
+  "verification": [
+    {
+      "result": "pass",
+      "summary": "Scenario A independent review: weighted 4.71, reviewer coverage 4, 0 blockers, 0 majors.",
+      "path": ".novel-bench/runs/20260717-021440-review/quality-report.json"
+    },
+    {
+      "result": "pass",
+      "summary": "Scenario B real draft contains one ending invitation and preserves the unanswered choice; independent review: weighted 4.19, reviewer coverage 4, 0 blockers, 0 majors, passed.",
+      "path": ".novel-bench/runs/20260717-032531-review/quality-report.json"
+    },
+    {
+      "result": "pass",
+      "summary": "Anonymous current-artifact comparison: A 6/7 and B 5/7 dimensions near or same, overall near.",
+      "path": ".goal/goals/novel-top-tier-iter/tmp/prose-blind-eval.json"
+    },
+    {
+      "result": "pass",
+      "summary": "npm test passed 39 files / 333 tests; npm run lint and npm run build passed; git diff --check passed.",
+      "path": "src/features/novel/__tests__"
+    }
+  ],
+  "errors": [
+    "Real runs exposed repeated successful-but-empty SSE completions. Diagnostic evidence showed finish=stop and outputTokens=0; the shared transport now retries and falls back across both prose and structured calls.",
+    "One review promoted a hypothetical POV interpretation even though its excerpt contained only observable action. Evidence-aware normalization now keeps such conditional claims at warning severity."
+  ],
+  "selfReflection": "The decisive improvement came from treating generated samples and scores as evidence rather than specifications. Duplicate invitations originated in conflicting blueprint/draft contracts, revision corruption originated in a local-window ownership violation, and incomplete reviews originated in shared transport behavior. Fixing those mechanisms produced a clean second scenario without character-name or fixture-specific production rules. The blind comparison still identifies supporting-character voice differentiation and overlapping environmental/process functions as useful future quality work, but they are warnings rather than unmet success criteria.",
+  "selfAssessment": {
+    "strategyWorking": true,
+    "reason": "Shared-layer fixes now pass two different chapter functions and POVs with full reviewer coverage, and both current artifacts independently meet the blind prose threshold.",
+    "confidence": 0.94,
+    "needsStrategyChange": false
+  },
+  "progressDelta": 0.5,
+  "progressRationale": "All remaining success signals are now backed by current real-artifact, independent-review, blind-comparison, and full-regression evidence.",
+  "successSignalUpdates": [
+    {
+      "action": "satisfy",
+      "id": "intent-preserved",
+      "status": "satisfied",
+      "evidenceRefs": ["intent-preserved-current"],
+      "note": "The completed work retains the requested top-tier prose objective and generalization boundary."
+    },
+    {
+      "action": "satisfy",
+      "id": "evidence-reviewed",
+      "status": "satisfied",
+      "evidenceRefs": ["scenario-b-draft-031327"],
+      "note": "Completion claims use current generated artifacts, independent reports, blind evaluation, and command results."
+    },
+    {
+      "action": "satisfy",
+      "id": "multi-scenario-stable-pass",
+      "status": "satisfied",
+      "evidenceRefs": ["scenario-a-review-021440", "scenario-b-review-032531"],
+      "note": "Opening/investigation Wei Chengli POV scored 4.71; continuation/autopsy Gu Changan POV scored 4.19; both have coverage 4, 0 blockers, 0 majors."
+    },
+    {
+      "action": "satisfy",
+      "id": "top-tier-prose-verified",
+      "status": "satisfied",
+      "evidenceRefs": ["blind-eval-current"],
+      "note": "Current samples reached 6/7 and 5/7 near-or-same dimensions, overall near."
+    },
+    {
+      "action": "satisfy",
+      "id": "no-open-required-work",
+      "status": "satisfied",
+      "evidenceRefs": ["full-regression-333", "completion-audit-findings"],
+      "note": "Required thresholds, cross-scenario evidence, blind comparison, and regressions are complete; remaining prose observations are non-blocking future improvements."
+    }
+  ],
+  "decision": "complete",
+  "nextDirection": "Future optional iteration can target supporting-character voice differentiation and reduce overlapping environment/process functions using new scenarios, not the completed fixtures.",
+  "artifactRefs": [
+    {
+      "id": "intent-preserved-current",
+      "successSignalId": "intent-preserved",
+      "path": ".goal/goals/novel-top-tier-iter/findings.md",
+      "kind": "completion-audit",
+      "status": "verified",
+      "evidence": "Completion audit preserves the objective and explicitly verifies shared-layer, cross-scenario improvements rather than fixture-specific tuning."
+    },
+    {
+      "id": "scenario-a-review-021440",
+      "successSignalId": "multi-scenario-stable-pass",
+      "path": ".novel-bench/runs/20260717-021440-review/quality-report.json",
+      "kind": "quality-report",
+      "status": "verified",
+      "evidence": "Weighted 4.71, coverage 4, 0 blockers, 0 majors."
+    },
+    {
+      "id": "scenario-b-draft-031327",
+      "successSignalId": "evidence-reviewed",
+      "path": ".novel-bench/runs/20260717-031327-draft/output.md",
+      "kind": "generated-draft",
+      "status": "verified",
+      "evidence": "Second POV continuation chapter; one invitation at the ending and no premature answer."
+    },
+    {
+      "id": "scenario-b-review-032531",
+      "successSignalId": "multi-scenario-stable-pass",
+      "path": ".novel-bench/runs/20260717-032531-review/quality-report.json",
+      "kind": "quality-report",
+      "status": "verified",
+      "evidence": "Weighted 4.19, coverage 4, 0 blockers, 0 majors, passed."
+    },
+    {
+      "id": "blind-eval-current",
+      "successSignalId": "top-tier-prose-verified",
+      "path": ".goal/goals/novel-top-tier-iter/tmp/prose-blind-eval.json",
+      "kind": "blind-evaluation",
+      "status": "verified",
+      "evidence": "A 6/7 and B 5/7 near or same; overall near."
+    },
+    {
+      "id": "full-regression-333",
+      "successSignalId": "no-open-required-work",
+      "path": "src/features/novel/__tests__",
+      "kind": "test-suite",
+      "status": "verified",
+      "evidence": "39 files / 333 tests passed; lint and production build passed."
+    }
+  ]
+}

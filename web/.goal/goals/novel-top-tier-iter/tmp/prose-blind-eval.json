@@ -1,0 +1,95 @@
+{
+  "evaluations": [
+    {
+      "sample": "A",
+      "dimensions": {
+        "sentenceRhythm": {
+          "verdict": "near",
+          "evidence": "大量使用短句停顿制造宫廷秩序感，如“少了两筐”“先验牌，再放人”“记下”等。",
+          "rationale": "节奏控制接近成熟章节水准，但中段连续记录流程较多，变化不足。"
+        },
+        "registerControl": {
+          "verdict": "near",
+          "evidence": "叙述语体稳定，宫廷事务词汇自然，如“内廷章程”“入宫名册”等。",
+          "rationale": "语体层次保持统一，但人物语言之间差异主要依靠身份称谓，个体化表达有限。"
+        },
+        "objectImagery": {
+          "verdict": "near",
+          "evidence": "铜漏、牌票、簿册、钥匙、木匣等均承担剧情功能，如木匣与细小痕迹关联线索。",
+          "rationale": "器物具有功能性，但部分环境意象承担重复氛围作用。"
+        },
+        "characterVoices": {
+          "verdict": "below",
+          "evidence": "魏成礼、萧承晏、沈知微、顾长安虽身份不同，但有效对白较少，功能性表达占主导。",
+          "rationale": "角色语言风格区分不足，尚未达到成熟群像中明显可辨的语言风格。"
+        },
+        "emotionalRestraint": {
+          "verdict": "same",
+          "evidence": "通过行动留白表达人物状态，如“没有立即下令”“没有回应，只道：我奉父皇之命来查看”。",
+          "rationale": "克制度和信息保留达到成熟章节常规水平。"
+        },
+        "endingHook": {
+          "verdict": "near",
+          "evidence": "以“是人为留下的”“东宫外的灯一盏未亮”等悬念收束。",
+          "rationale": "具备案件推进牵引力，但核心疑点已提前多次铺陈，爆点集中度仍可提升。"
+        },
+        "scenePresence": {
+          "verdict": "same",
+          "evidence": "宫廷空间细节完整，如禁卫换岗、檐外雪落等环境与动作描写。",
+          "rationale": "环境、制度和动作形成较强沉浸感。"
+        }
+      },
+      "nearOrSameCount": 6
+    },
+    {
+      "sample": "B",
+      "dimensions": {
+        "sentenceRhythm": {
+          "verdict": "near",
+          "evidence": "顾长安等待入宫的长段铺陈节奏稳定，如“候着便是候着”“顾长安也不急”。",
+          "rationale": "能形成人物状态，但部分过程描写持续同一节拍，转折层次略少。"
+        },
+        "registerControl": {
+          "verdict": "near",
+          "evidence": "市井仵作与宫廷环境的语言差异清楚，如“死者未验清，算不得辛苦”。",
+          "rationale": "体现顾长安职业性格，但配角语言仍偏任务化。"
+        },
+        "objectImagery": {
+          "verdict": "near",
+          "evidence": "验尸箱、小刀、银针、丹砂等物件推动剧情，如丹砂存放细节与秘密关联。",
+          "rationale": "器物与剧情关联明确，但部分宫门、石板描写主要承担氛围。"
+        },
+        "characterVoices": {
+          "verdict": "below",
+          "evidence": "多数角色围绕顾长安行动，内侍、禁卫语言以规训和引导为主，裴观澜仅留下简短回应。",
+          "rationale": "多数角色语言辨识度不足，尚未形成鲜明人物声线。"
+        },
+        "emotionalRestraint": {
+          "verdict": "same",
+          "evidence": "关键发现通过动作保留判断空间，如“顾长安没有立刻起身”“他的手指停在帕边”。",
+          "rationale": "达到成熟章节常见留白效果。"
+        },
+        "endingHook": {
+          "verdict": "near",
+          "evidence": "结尾以太傅邀约制造下一步行动，如“多了一盏还未喝下的茶”。",
+          "rationale": "具备后续牵引力，但悬念更多依靠人物关系展开，冲击强度尚可增强。"
+        },
+        "scenePresence": {
+          "verdict": "same",
+          "evidence": "宫门、偏殿、验尸过程均有连续感官细节，如香炉、灯芯等描写。",
+          "rationale": "空间和动作结合成熟。"
+        }
+      },
+      "nearOrSameCount": 5
+    }
+  ],
+  "sharedStrengths": [
+    "两个样本均具备稳定的叙述语体和较强场景在场感。",
+    "两个样本均能通过器物细节推动剧情，并保持较好的情绪克制。"
+  ],
+  "sharedGaps": [
+    "两个样本的角色语言区分度不足，部分配角表达偏功能化。",
+    "部分流程描写和环境意象存在功能接近的问题。"
+  ],
+  "overallVerdict": "near"
+}

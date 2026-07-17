@@ -63,9 +63,17 @@ class NovelHttpError extends Error {
   }
 }
 
+class NovelEmptyResponseError extends Error {
+  constructor(message = "AI 未返回有效内容") {
+    super(message);
+    this.name = "NovelEmptyResponseError";
+  }
+}
+
 function isRetryableError(error: unknown): boolean {
   if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) return false;
   if (isTimeoutAbort(error)) return false;
+  if (error instanceof NovelEmptyResponseError) return true;
   if (error instanceof NovelHttpError) return error.status === 429 || error.status >= 500;
   if (error instanceof TypeError) return true;
   const message = error instanceof Error ? error.message : String(error);
@@ -74,6 +82,63 @@ function isRetryableError(error: unknown): boolean {
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function parseSseEvent(line: string): Record<string, unknown> | undefined {
+  const raw = line.replace(/^data:\s*/, "").trim();
+  if (!raw || raw === "[DONE]") return undefined;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractMessageContent(payload: Record<string, unknown>): string {
+  const choices = payload.choices as Array<{ message?: { content?: string | Array<{ text?: string }> } }> | undefined;
+  const content = choices?.[0]?.message?.content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) return content.map((part) => part.text ?? "").join("").trim();
+  return "";
+}
+
+async function fetchNonStreamingContent(params: {
+  baseUrl: string;
+  apiKey: string;
+  body: Record<string, unknown>;
+  signal?: AbortSignal;
+}) {
+  const response = await fetch(`${endpoint(params.baseUrl)}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${params.apiKey}` },
+    signal: params.signal,
+    body: JSON.stringify({ ...params.body, stream: false }),
+  });
+  const responseText = await response.text().catch(() => "");
+  if (!response.ok) throw new NovelHttpError(response.status, responseText);
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(responseText) as Record<string, unknown>;
+  } catch {
+    throw new NovelEmptyResponseError("AI 非流式降级响应不是有效 JSON");
+  }
+  const content = extractMessageContent(payload);
+  if (!content) throw new NovelEmptyResponseError("AI 流式与非流式请求均未返回有效内容");
+  return content;
+}
+
+async function fetchNonStreamingContentWithRetry(params: Parameters<typeof fetchNonStreamingContent>[0]) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+    try {
+      return await fetchNonStreamingContent(params);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
+      await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
+    }
+  }
+  throw lastError;
 }
 
 async function fetchAccumulated(params: {
@@ -96,26 +161,28 @@ async function fetchAccumulated(params: {
   let result = "";
   let inputTokens = 0;
   let outputTokens = 0;
+  const consumeLine = (line: string) => {
+    const chunk = parseSseEvent(line);
+    if (!chunk) return;
+    const choices = chunk.choices as Array<{ delta?: { content?: string } }> | undefined;
+    result += choices?.[0]?.delta?.content ?? "";
+    const usage = chunk.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+    if (usage) {
+      inputTokens = usage.prompt_tokens ?? 0;
+      outputTokens = usage.completion_tokens ?? 0;
+    }
+  };
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const raw = line.replace(/^data:\s*/, "").trim();
-      if (!raw || raw === "[DONE]") continue;
-      try {
-        const chunk = JSON.parse(raw);
-        result += chunk?.choices?.[0]?.delta?.content ?? "";
-        if (chunk?.usage) {
-          inputTokens = chunk.usage.prompt_tokens ?? 0;
-          outputTokens = chunk.usage.completion_tokens ?? 0;
-        }
-      } catch { /* vendor keepalive */ }
-    }
+    for (const line of lines) consumeLine(line);
   }
-  if (!result.trim()) throw new Error("AI 未返回有效内容");
+  buffer += decoder.decode();
+  for (const line of buffer.split("\n")) consumeLine(line);
+  if (!result.trim()) throw new NovelEmptyResponseError();
   return { content: result.trim(), usage: { inputTokens, outputTokens } };
 }
 
@@ -148,6 +215,10 @@ async function requestChat(params: {
       }
     } catch (error) {
       lastError = error;
+      if (error instanceof NovelEmptyResponseError && attempt === MAX_RETRIES - 1) {
+        const content = await fetchNonStreamingContentWithRetry({ baseUrl: config.baseUrl, apiKey: config.apiKey, body, signal: params.signal });
+        return { content, usage: { inputTokens: 0, outputTokens: 0 } };
+      }
       if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
       await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
     }
@@ -196,22 +267,52 @@ export async function streamNovelModel(params: {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let eventCount = 0;
+      let reportedOutputTokens = 0;
+      const finishReasons = new Set<string>();
+      const deltaFields = new Set<string>();
+      const consumeLine = (line: string) => {
+        const chunk = parseSseEvent(line);
+        if (!chunk) return;
+        eventCount += 1;
+        const choices = chunk.choices as Array<{ delta?: Record<string, unknown>; finish_reason?: string | null }> | undefined;
+        const choice = choices?.[0];
+        if (choice?.finish_reason) finishReasons.add(choice.finish_reason);
+        for (const field of Object.keys(choice?.delta ?? {})) deltaFields.add(field);
+        const usage = chunk.usage as { completion_tokens?: number } | undefined;
+        reportedOutputTokens = usage?.completion_tokens ?? reportedOutputTokens;
+        const token = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
+        if (!token) return;
+        result += token;
+        params.onToken?.(result);
+      };
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const raw = line.replace(/^data:\s*/, "").trim();
-          if (!raw || raw === "[DONE]") continue;
-          try { const token = JSON.parse(raw)?.choices?.[0]?.delta?.content ?? ""; result += token; params.onToken?.(result); } catch { /* vendor keepalive */ }
-        }
+        for (const line of lines) consumeLine(line);
       }
-      if (!result.trim()) throw new Error("AI 未返回有效内容");
+      buffer += decoder.decode();
+      for (const line of buffer.split("\n")) consumeLine(line);
+      if (!result.trim()) {
+        throw new NovelEmptyResponseError(`AI 未返回有效内容（SSE events=${eventCount}, finish=${[...finishReasons].join("|") || "none"}, delta=${[...deltaFields].join("|") || "none"}, outputTokens=${reportedOutputTokens}）`);
+      }
       return { content: result.trim(), promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
     } catch (error) {
       lastError = error;
+      if (error instanceof NovelEmptyResponseError && attempt === MAX_RETRIES - 1) {
+        const requestBody: Record<string, unknown> = {
+          model: params.model,
+          temperature: params.temperature,
+          messages: [{ role: "system", content: system }, { role: "user", content: params.prompt }],
+        };
+        if (params.maxTokens && params.maxTokens > 0) requestBody.max_tokens = params.maxTokens;
+        const content = await fetchNonStreamingContentWithRetry({ baseUrl: config.baseUrl, apiKey: config.apiKey, body: requestBody, signal });
+        params.onToken?.(content);
+        return { content, promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
+      }
       if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
       await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
     }

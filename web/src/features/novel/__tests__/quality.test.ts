@@ -124,6 +124,29 @@ describe("novel quality gates", () => {
     expect(result.passed).toBe(false);
   });
 
+  it("does not promote a conditional POV interpretation when the quoted evidence is only observable action", () => {
+    const deterministic = runDeterministicQualityChecks({ text: "内侍停住声音，将头低下。".repeat(100) });
+    const result = aggregateQuality({
+      deterministic,
+      threshold: 3.7,
+      reviewers: [{
+        role: "continuity-reviewer",
+        scores: { continuity: 4 },
+        issues: [{
+          dimension: "continuity",
+          severity: "major",
+          title: "可能确认了他人意图",
+          description: "若进一步理解为双方刻意隐瞒，则属于替视角人物确认他人心理。",
+          excerpt: "旁边的内侍停住了声音，将头低下。",
+          rule: "pov.conditional-interpretation",
+          suggestion: "只保留可观察动作。",
+        }],
+      }],
+    });
+
+    expect(result.issues.find((item) => item.rule === "pov.conditional-interpretation")?.severity).toBe("warning");
+  });
+
   it("preserves all revision ranges when duplicate reviewer issues are merged", () => {
     const deterministic = runDeterministicQualityChecks({ text: "足够具体的场景正文。".repeat(80) });
     const baseIssue = {
@@ -162,6 +185,19 @@ describe("novel quality gates", () => {
 });
 
 describe("prose discipline checks", () => {
+  it("recognizes a pending decision across the final scene instead of judging only the last image", () => {
+    const body = "宫门次第合拢，长街上的人声渐渐近了。".repeat(40);
+    const ending = [
+      "来人问他可愿赴约，他看着帖子，没有伸手。",
+      "那人仍站在原地，等着他的回话。",
+      "从前回去只有一条熟路，如今前方多了一盏还未喝下的茶。",
+    ].join("\n\n");
+
+    const result = runDeterministicQualityChecks({ text: `${body}\n\n${ending}` });
+
+    expect(result.issues.some((item) => item.rule === "style.chapter-ending-hook")).toBe(false);
+  });
+
   it("promotes draft structure violations into deterministic quality issues", () => {
     const text = ["风停了。", "他抬起头。", "远处有人走来。", "脚步越来越近。"].join("\n\n");
 
@@ -213,6 +249,47 @@ describe("prose discipline checks", () => {
     const text = [...dialogue, "门外的脚步声越过长廊，最后停在半掩的木门前。屋里的人都握紧武器，没有继续交谈。"].join("\n\n");
 
     const result = runDeterministicQualityChecks({ text });
+
+    expect(result.issues.some((item) => item.rule === "style.short-sentence-tic")).toBe(false);
+  });
+
+  it("merges reviewer issues in the same dimension when their edit ranges overlap", () => {
+    const deterministic = runDeterministicQualityChecks({ text: "工程师收好扳手，沿检修梯返回气闸。".repeat(100) });
+    const result = aggregateQuality({
+      deterministic,
+      threshold: 3.7,
+      reviewers: [
+        {
+          role: "plot-reviewer",
+          scores: { hookPayoff: 3 },
+          issues: [{ dimension: "hookPayoff", severity: "major", title: "章尾选择压力不足", description: "章尾没有形成后续压力。", rule: "review.hook-pressure", suggestion: "补足后果。", revisionRanges: [{ start: 100, end: 102 }] }],
+        },
+        {
+          role: "character-reviewer",
+          scores: { hookPayoff: 3 },
+          issues: [{ dimension: "hookPayoff", severity: "major", title: "人物状态转折未落地", description: "最后动作没有改变人物处境。", rule: "review.character-turn", suggestion: "落实状态变化。", revisionRanges: [{ start: 101, end: 102 }] }],
+        },
+      ],
+    });
+
+    expect(result.issues.filter((item) => item.dimension === "hookPayoff" && !item.deterministic)).toHaveLength(1);
+    expect(result.issues.find((item) => item.dimension === "hookPayoff" && !item.deterministic)?.revisionRanges).toEqual([
+      { start: 100, end: 102 },
+      { start: 101, end: 102 },
+    ]);
+  });
+
+  it("does not count short dialogue with speaker tags as narrative staccato", () => {
+    const dialogue = [
+      "“开门。”值班员说。",
+      "“证件。”林澈递过去。",
+      "“进去吧。”对方让开。",
+      "“等等。”林澈停下。",
+      "“怎么？”值班员抬头。",
+      "“警报响了。”林澈回身。",
+    ];
+
+    const result = runDeterministicQualityChecks({ text: dialogue.join("\n\n") });
 
     expect(result.issues.some((item) => item.rule === "style.short-sentence-tic")).toBe(false);
   });

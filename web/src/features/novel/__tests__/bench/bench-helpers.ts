@@ -119,6 +119,14 @@ export interface BenchResult<T> {
   durationMs: number;
 }
 
+/** Keep stable project facts while replacing stale chapter-specific fixture instructions. */
+export function scopeBenchContextToBlueprint(formattedContext: string, blueprintMarkdown: string): string {
+  const projectMarker = "## 项目定位与文风";
+  const stableContextIndex = formattedContext.indexOf(projectMarker);
+  const stableContext = stableContextIndex >= 0 ? formattedContext.slice(stableContextIndex) : formattedContext;
+  return `## 当前基准章节（本次任务唯一权威）\n${blueprintMarkdown}\n\n${stableContext}`;
+}
+
 interface IndexEntry {
   id: string;
   label: string;

@@ -42,6 +42,7 @@ import {
   resetDb,
   runBench,
   saveFixture,
+  scopeBenchContextToBlueprint,
   type FoundationSnapshot,
 } from "./bench-helpers";
 
@@ -122,7 +123,7 @@ describeOrSkip("bench-review: 切片测试", { timeout: 1_800_000 }, () => {
           role,
           blueprintMarkdown: blueprintFixture.contentMarkdown,
           numberedDraft,
-          reviewerContext: contextFixture.formattedReviewerContext,
+          reviewerContext: scopeBenchContextToBlueprint(contextFixture.formattedReviewerContext, blueprintFixture.contentMarkdown),
         });
         ctx.writeOutput(`prompts/${role}.md`, prompt);
         log("review", `→ ${role}`);

@@ -15,6 +15,7 @@ import type { StageContext, StageHandler, StageResult } from "../workflow-stages
 // 强制 draft 阶段不得直接描写非 POV 角色内心，必须通过 POV 可观察的外部行为呈现。
 const INTERNAL_VERBS = ["发现", "察觉", "意识到", "判断", "明白", "懂得", "看穿", "看透", "领悟", "惊觉", "想到", "看清", "感到", "觉得", "理解", "醒悟", "省悟", "察觉到", "意识到"];
 const MAX_NAME_TAIL_SCAN = 10;
+const ENDING_HOOK_UNIQUENESS_CONTRACT = `章尾驱动力是最后一个节拍结果的具体呈现，不是额外追加的一场戏。若同一个邀约、警告、发现、决定或关系变化同时出现在 mustHappen 与 endingHook，mustHappen 必须明确它只在 endingHook 指定的时机和形式下兑现；最后一个节拍只能铺垫该结果，不得改换时间、地点、传话人或场景再提前兑现一次。`;
 
 function sanitizePovConsistencyInPlace(data: Record<string, unknown>, povName: string | undefined, otherCharacterNames: string[]): { violations: string[] } {
   if (!povName || otherCharacterNames.length === 0) return { violations: [] };
@@ -56,7 +57,7 @@ export const blueprintStageHandler: StageHandler = {
     if (!packet) throw new Error("章节上下文不存在");
     if (!brief || brief.status !== "confirmed" || brief.targetDocumentId !== document.id) throw new Error("已确认创作简报不存在或与章节不匹配");
     const pov = brief.povCharacterId ? await novelDb.entities.get(brief.povCharacterId) : undefined;
-    const briefContract = formatCreativeBriefContract(brief, pov?.name);
+    const briefContract = `${formatCreativeBriefContract(brief, pov?.name)}\n\n${ENDING_HOOK_UNIQUENESS_CONTRACT}`;
     const { agent } = await ctx.createAgentRecord({
       run,
       role: "architect",
@@ -77,7 +78,7 @@ export const blueprintStageHandler: StageHandler = {
       ...(brief.povCharacterId ? [brief.povCharacterId] : []),
     ]));
     const chapterCharacters = chapterCharacterIds.length > 0
-      ? (await novelDb.entities.bulkGet(chapterCharacterIds)).filter((e): e is StoryEntity => Boolean(e) && e.kind === "character")
+      ? (await novelDb.entities.bulkGet(chapterCharacterIds)).filter((e): e is StoryEntity => e?.kind === "character")
       : [];
     const otherCharacterNames = chapterCharacters
       .filter((e) => e.id !== brief.povCharacterId)

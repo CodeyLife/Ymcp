@@ -7,10 +7,10 @@
 ## Success Signals
 
 - [x] [intent-preserved] (satisfied) The refined goal brief preserves the user's stated intent and boundaries.
-- [ ] [evidence-reviewed] (observed) Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.
-- [ ] [no-open-required-work] (pending) No known required work remains for the refined goal brief.
-- [ ] [multi-scenario-stable-pass] (observed) 至少 2 个不同章节功能（如开篇/承接/转折）+ 至少 2 个不同 POV 角色下，bench/e2e 验证 weighted ≥4.0 且 0 blocker 且 major ≤1，证明优化具泛化性而非过拟合单切片。每个场景需有独立 quality-report 作为证据。
-- [ ] [top-tier-prose-verified] (observed) 在上述多场景中，LLM 与顶尖网络小说参考作品（雪中悍刀行/剑来/庆余年/我在风花雪月里等你等）做 prose 级盲抽检对比时，至少 4 个维度（句式节奏/文白双声部/器物隐喻/群像声音区分/去情绪化/章尾钩子/场景在场感）稳定判定为接近或同级。
+- [x] [evidence-reviewed] (satisfied) Completion claims are backed by direct evidence from artifacts, commands, runtime behavior, or user-confirmed external state.
+- [x] [no-open-required-work] (satisfied) No known required work remains for the refined goal brief.
+- [x] [multi-scenario-stable-pass] (satisfied) 至少 2 个不同章节功能（如开篇/承接/转折）+ 至少 2 个不同 POV 角色下，bench/e2e 验证 weighted ≥4.0 且 0 blocker 且 major ≤1，证明优化具泛化性而非过拟合单切片。每个场景需有独立 quality-report 作为证据。
+- [x] [top-tier-prose-verified] (satisfied) 在上述多场景中，LLM 与顶尖网络小说参考作品（雪中悍刀行/剑来/庆余年/我在风花雪月里等你等）做 prose 级盲抽检对比时，至少 4 个维度（句式节奏/文白双声部/器物隐喻/群像声音区分/去情绪化/章尾钩子/场景在场感）稳定判定为接近或同级。
 
 ## Current Strategy
 
@@ -18,8 +18,8 @@ Refine the broad goal only enough to choose the next evidence-seeking loop; avoi
 
 ## Next Loop Direction
 
-Loop 3：优先修复 P1 短句排比过多（deterministic major，机械可修复）——在 prose-prompts.ts 强化'短句排比上限'约束或在 draft-structure-repair 增加机械后处理；同时评估 P2 POV 越界（'守着/护着'）是否可在 draft 阶段增加机械后校验。目标：将 ch1 场景 majorCount 从 4 降至 ≤1，然后跑第 2 场景（不同章节功能/不同 POV）验证泛化性。
-Progress signal estimate: 50%.
+Future optional iteration can target supporting-character voice differentiation and reduce overlapping environment/process functions using new scenarios, not the completed fixtures.
+Progress signal estimate: 100%.
 Do not expand this into a durable task list; choose only the next evidence-seeking loop.
 
 ## Notes

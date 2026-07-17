@@ -5,7 +5,7 @@
  * 默认 skip，通过 BENCH_STAGE=revision 启用：
  *   BENCH_STAGE=revision npx vitest run --config vitest.bench.config.ts bench-revision.test.ts
  *
- * 前置依赖：foundation.json + ch1-blueprint.json + ch1-draft.json + ch1-quality-report.json
+ * 前置依赖：foundation.json + 选定章节的 blueprint/draft/quality-report fixture
  * 输出：.novel-bench/runs/{ts}-revision/ 目录（output.md / diff.md / rejected-windows.json / prompts/*.md / metrics.json）
  * 预期耗时：3-6 分钟
  */
@@ -51,11 +51,13 @@ import {
   requireFixture,
   resetDb,
   runBench,
+  saveFixture,
   type FoundationSnapshot,
 } from "./bench-helpers";
 
 const SHOULD_RUN = process.env.BENCH_STAGE === "revision";
 const describeOrSkip = SHOULD_RUN ? describe : describe.skip;
+const BENCH_CHAPTER = process.env.BENCH_CHAPTER === "ch2" ? "ch2" : "ch1";
 
 interface BlueprintFixture {
   contentMarkdown: string;
@@ -92,11 +94,11 @@ describeOrSkip("bench-revision: 切片测试", { timeout: 1_800_000 }, () => {
       const foundation = loadFixture<FoundationSnapshot>("foundation.json");
       await loadFoundationIntoDb(foundation);
 
-      const blueprintFixture = loadFixture<BlueprintFixture>("ch1-blueprint.json");
-      requireFixture("ch1-draft.json", "npm run test:bench:draft");
-      requireFixture("ch1-quality-report.json", "npm run test:bench:review");
-      const draftFixture = loadFixture<DraftFixture>("ch1-draft.json");
-      const reportFixture = loadFixture<QualityReportFixture>("ch1-quality-report.json");
+      const blueprintFixture = loadFixture<BlueprintFixture>(`${BENCH_CHAPTER}-blueprint.json`);
+      requireFixture(`${BENCH_CHAPTER}-draft.json`, "npm run test:bench:draft");
+      requireFixture(`${BENCH_CHAPTER}-quality-report.json`, "npm run test:bench:review");
+      const draftFixture = loadFixture<DraftFixture>(`${BENCH_CHAPTER}-draft.json`);
+      const reportFixture = loadFixture<QualityReportFixture>(`${BENCH_CHAPTER}-quality-report.json`);
 
       // 2. 解析 skills + blueprint（复刻 revision-stage.ts）
       const skills = await resolveNovelSkills({
@@ -127,7 +129,7 @@ describeOrSkip("bench-revision: 切片测试", { timeout: 1_800_000 }, () => {
       const { windows, unlocated } = planRevisionWindows(blockerAndMajor, originalParagraphs, paragraphsToDelete);
 
       const mustHappenBlock = blueprintData?.mustHappen?.length
-        ? `\n\n## 本章已批准的兑现项（硬约束，不可省略）\n${blueprintData.mustHappen.map((i) => `- ${i}`).join("\n")}\n修订后正文必须保留这些兑现项，但不得由此扩写或提前完成未列入此处的后续大纲节点。`
+        ? `\n\n## 本章已批准的兑现项（整章只读防丢清单）\n${blueprintData.mustHappen.map((i) => `- ${i}`).join("\n")}\n这些条目只用于防止局部修订删除原窗口已经承载的整章内容，不是当前窗口的新增任务。若待替换原文没有承载某条兑现项，修订输出不得新增、概述或提前完成该条目；不得把其它段落或未来事件压缩进当前窗口。`
         : "";
       const forbiddenBlock = blueprintData?.forbidden?.length
         ? `\n\n## 禁止事项（硬约束，不可触犯）\n${blueprintData.forbidden.map((i) => `- ${i}`).join("\n")}`
@@ -177,10 +179,10 @@ ${after}
 ## 修订时声音与视角硬约束（违反即重写）
 1. 单 POV 视角：修订不得引入全知判断或替视角人物总结他人心理。他人内在状态只能通过可见动作、神态、对白、呼吸、停顿外化呈现。禁止"他知道X不会无故Y""像是在提醒自己""他心中……"式越界——改写为视角人物可观察的具体动作或记录。判定标准：把描述他人状态的句子改写为"视角人物能看到/听到的具体动作"后若信息丢失，则该句子越界，必须改写。
 2. 禁止作者式心理结论句：修订不得新增"她第一次知道/她忽然懂得/这意味着/不是……而是……"式心理总结，也不得新增格言式训诫（如"宫里最不值钱的是时间"）。禁止"若X，日后无人能说清；若Y，又难保有人Z"式二选一心理权衡总结——改写为视角人物当下可观察的动作、物件状态或具体反应（如"指尖停在名册最后一行，停了片刻，才取印按下"）。
-3. 对白声线区分（硬约束）：修订新增或改写对白时，任何两个不同身份角色的对白交换名字后若读起来一样，则违规。权力上位者（皇子）克制=问句代替陈述+点到即止+不解释目的；掌事宦官克制=规矩回避+推制度+答非所问；专业身份者（仵作/文献官）克制=术语精准+指向物证+只陈述观察不解释意义；市井人物进入宫廷场合保留俚俗句法，不得被场景同化为标准书面腔。**交锋场景硬约束**：皇子与宦官对白交锋时，皇子必须用追问制造压力（如"若我今日没有这道门，你会拦我；若我有了这道门，你又会替谁开？"），宦官必须用规避和制度语言防守（如"殿下问的是门，奴才守的是规矩。门该开不开，不在奴才一句话里"）——禁止两人都用直接判断式陈述（如"没有手令，所以你才验"vs"奴才只按章办事"）。
+3. 对白声线区分：只从冻结上下文中的年龄、职业、关系距离、目标、知识边界和既有表达习惯推导声部，不得套用固定身份模板。修订不得让蓝图未安排开口的角色新增对白，也不得为了制造交锋改变角色立场。
 4. 生成时自检：写到对白时立即检查——这句换成另一角色说是否一样？若一样，立即改写使其符合自身声部。写到他人心理时立即改为可观察动作。写到环境意象时检查它是否改变了人物判断或引发新行动——若只承担氛围，删除或改写为可驱动判断的细节。
-5. 禁止因果总结句：修订不得新增"他才发现X、Y、Z三人，皆因……被牵到一处""原本各自循着身份而来的几道踪迹，此刻都留在了……""随着……一同压向……"式作者级因果总结——这类句子把多个角色的入场、关注、命运关联压缩为一句全知归纳，违反限知视角。改写路径：把因果总结拆解为视角人物当下能直接观察到的具体场景——视线交汇、动作碰撞、声音叠加、案上物证并置，让读者从具体场景中感知汇合，而非被告知因果。
-6. 章尾收束分层：章尾只保留一个**信息揭示型**收束动作（如物证发现），但必须保留一个**行动牵引型**收尾（如封存命令/调度命令/留下未解问题）。删除"众人停顿"等冗余收束动作，但保留"封存命令"等行动牵引——让最后一句话指向"接下来会发生什么"而非"当前画面已关闭"。
+5. 禁止作者把多个角色、事件或关系压缩成一句全知因果总结。需要表达汇合或影响时，只写视角人物能够观察、回忆或合理推断的具体变化，让读者自行建立联系。
+6. 章尾必须服从已批准蓝图。蓝图若明确保留未回答、未决定或未完成的选择，修订不得替人物答应、拒绝或完成选择；只能通过原有行动被打断、可用选项收窄或外部关系继续施压来落实处境变化。不能只停在看景、沉默或泛化情绪，也不得另造新事件强行制造压力。
 `;
 
         ctx.writeOutput(`prompts/window-${window.start + 1}-${window.end + 1}.md`, prompt);
@@ -243,6 +245,10 @@ ${after}
       ctx.writeOutput("output.md", repaired.content);
       ctx.writeOutput("diff.md", `# 修订前\n\n${draftFixture.contentMarkdown}\n\n---\n\n# 修订后\n\n${repaired.content}`);
       ctx.writeOutput("rejected-windows.json", rejectedWindows);
+      saveFixture(`${BENCH_CHAPTER}-draft.json`, {
+        contentMarkdown: repaired.content,
+        promptHash: repaired.promptHash ?? (promptHashes.join("+") || draftFixture.promptHash),
+      });
       ctx.setMetrics({
         wordCount: countNovelWords(repaired.content),
         revisionWordCount: countNovelWords(repaired.content),

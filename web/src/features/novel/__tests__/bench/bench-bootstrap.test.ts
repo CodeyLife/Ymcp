@@ -9,7 +9,7 @@
  * 一次性成本约 15 分钟，之后所有切片测试秒级加载。
  */
 import { describe, expect, it, vi } from "vitest";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { DEFAULT_API_KEY } from "@/config/defaults";
 
 // DEV 代理绕过：让 getEffectiveApiConfig 返回带显式 :443 端口的等价 URL
@@ -33,7 +33,7 @@ import {
   runGenerationTask,
   runPlotDesignTask,
 } from "../../generation";
-import { approveWorkflowStage, startChapterWorkflow } from "../../workflow";
+import { startChapterWorkflow } from "../../workflow";
 import { novelMemoryService } from "../../memory-service";
 import { formatContextPacket, formatReviewerContext } from "../../context";
 import {
@@ -42,7 +42,6 @@ import {
   saveFixture,
   resetDb,
   log,
-  loadFoundationIntoDb,
 } from "./bench-helpers";
 
 const SHOULD_RUN = process.env.BENCH_BOOTSTRAP === "true";
