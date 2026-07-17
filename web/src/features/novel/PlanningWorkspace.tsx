@@ -8,7 +8,7 @@ import GenerationComposer from "./GenerationComposer";
 const OutlineDocView = lazy(() => import("./OutlineDocView"));
 
 type PlanningMode = "plan" | "matrix";
-type OpenChapterPanel = "plan" | "manuscript" | "workflow";
+type OpenChapterPanel = "manuscript" | "workflow";
 export const PLANNING_MODE_OPTIONS: Array<{ value: PlanningMode; label: string }> = [{ value: "plan", label: "全书规划" }, { value: "matrix", label: "章节矩阵" }];
 
 function SectionTitle({ title, description }: { title: string; description: string }) {

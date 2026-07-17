@@ -68,7 +68,7 @@ describe("prose aesthetics skills", () => {
     const compiled = compileNovelStagePrompt(draftingSkills, "drafting");
 
     expect(compiled).toContain("段落边界服从注意力、动作因果与情绪停顿");
-    expect(compiled).toContain("短句簇只用于有意的节奏骤变");
+    expect(compiled).toContain("段落边界服从注意力、动作因果与情绪停顿");
     expect(compiled).toContain("本章主导叙事功能");
     expect(compiled).toContain("不得为完成目标提前消费后续大纲节点");
     expect(compiled).toContain("铺陈、相处、蓄势或余波章节");

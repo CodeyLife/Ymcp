@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createChapter, createNovelProject, novelDb, saveApprovedDocumentRevision, saveDocument, saveDocumentContent } from "../db";
-import { applyManuscriptChanges, planManuscriptChanges, prepareManuscriptChanges } from "../manuscript-review";
+import { createChapter, createNovelProject, novelDb, recordBase, saveApprovedDocumentRevision, saveDocument, saveDocumentContent } from "../db";
+import { applyManuscriptChanges, planManuscriptChanges, prepareManuscriptChanges, replacePreparedManuscriptText } from "../manuscript-review";
 import type { ManuscriptBlock } from "../types";
 
 beforeEach(async () => {
@@ -49,6 +49,29 @@ describe("paragraph manuscript review", () => {
     expect(first).toHaveLength(2);
     expect(second.map((change) => change.id)).toEqual(first.map((change) => change.id));
     expect(await novelDb.manuscriptChanges.where("sourceArtifactId").equals("artifact-race").count()).toBe(2);
+  });
+
+  it("rebuilds pending changes when the full manuscript is edited", async () => {
+    const project = await createNovelProject({ title: "整章编辑", genre: ["悬疑"], premise: "审批前允许调整正文。" });
+    const chapter = await createChapter(project.id, "第一章");
+    await novelDb.workflowArtifacts.add({
+      ...recordBase(project.id),
+      id: "artifact-edit",
+      workflowRunId: "run-edit",
+      stage: "revision",
+      kind: "revision",
+      title: "正文修订稿",
+      contentMarkdown: "第一段。\n\n第二段。",
+      skillRefs: [],
+    });
+    const original = await prepareManuscriptChanges({ projectId: project.id, documentId: chapter.id, proposedText: "第一段。\n\n第二段。", sourceArtifactId: "artifact-edit", workflowRunId: "run-edit" });
+
+    const rebuilt = await replacePreparedManuscriptText({ projectId: project.id, documentId: chapter.id, proposedText: "改写第一段。\n\n新增第二段。\n\n第三段。", sourceArtifactId: "artifact-edit", workflowRunId: "run-edit" });
+
+    expect(rebuilt).toHaveLength(3);
+    expect(rebuilt.map((change) => change.id)).not.toEqual(original.map((change) => change.id));
+    expect(await novelDb.manuscriptChanges.where("sourceArtifactId").equals("artifact-edit").count()).toBe(3);
+    expect((await novelDb.workflowArtifacts.get("artifact-edit"))?.contentMarkdown).toBe("改写第一段。\n\n新增第二段。\n\n第三段。");
   });
 
   it("applies only selected paragraph changes and records the rejected remainder", async () => {

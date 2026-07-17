@@ -138,7 +138,7 @@ describe("generation task ownership", () => {
     const { proposal: generated } = await runGenerationTask({ projectId: project.id, taskKey: "chapter-draft", instruction: "生成第一章正文", targetId: chapter.id });
 
     expect(streamNovelModel).not.toHaveBeenCalled();
-    expect(generated.items[0].payload.plainText).toBe("风停了。他抬起头。远处有人走来。\n\n脚步越来越近。");
+    expect(generated.items[0].payload.plainText).toBe("风停了。\n\n他抬起头。\n\n远处有人走来。\n\n脚步越来越近。");
   });
 
   it("generates, edits, and accepts project positioning", async () => {

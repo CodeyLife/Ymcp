@@ -21,7 +21,7 @@ describe("production prose prompts", () => {
     expect(prompt).toContain("不要替人物总结“这意味着什么”");
     expect(prompt).toContain("试探、陪伴、闲谈、礼俗或共同劳动");
     expect(prompt).toContain("普通交流也能积累关系和人物质地");
-    expect(prompt).toContain("不要每句话或每轮对白都另起空行");
+    expect(prompt).toContain("按动作因果、注意力变化和情绪停顿组织段落");
     expect(prompt).toContain("主角拒绝交易");
     expect(prompt).toContain("验收条件，不是要在节拍之外再写一次的附加场景");
     expect(prompt).toContain("同一结果若同时出现在条目、蓝图节拍和章尾落点中，只兑现一次");
@@ -68,7 +68,7 @@ describe("production prose prompts", () => {
     expect(lastContract).toContain("章尾呈现是同类结果的唯一兑现时机");
     expect(lastContract).toContain("不得另造一个承担相同悬念、选择或关系功能的预热钩子");
     expect(lastContract).toContain("不得在最后节拍完整落地前结束本段");
-    expect(lastContract).toContain("不得为了增强钩子另造异常、危险、物证或角色");
+    expect(lastContract).toContain("不得为了制造钩子发明新人物、新物证或新事件");
     expect(lastContract).toContain("每个段落都必须推进尚未完成的叙事功能");
     expect(lastContract).not.toMatch(/封存\/查验|多次封存|多次查看|萧承晏|沈知微|顾长安/);
     expect(lastContract).toContain("必须写完上述所有节拍");
@@ -108,5 +108,50 @@ describe("production prose prompts", () => {
     expect(plotPrompt).toContain("禁止用\"如果后续这样写\"");
     expect(plotPrompt).toContain("blocker/major 的 excerpt 必须引用触发判断的原文");
     expect(`${stylePrompt}\n${plotPrompt}`).not.toMatch(/魏公公|东宫|皇子|宦官|仵作|史官|封存命令/);
+  });
+
+  it("materially different counter-example: prompt fixes generalize across genres and scenes", () => {
+    // 反例场景：宫廷权谋（与基准的荒野流民题材 materially different）
+    // 验证修复点（意象回声尾句 + 观察否定概括句）在共享层的指导是题材无关的
+    const courtIntriguePrompt = buildChapterDraftPrompt({
+      targetWords: 5000,
+      blueprintMarkdown: "## 蓝图\n宫廷夜宴，主角发现毒酒",
+      contextMarkdown: "## 冻结上下文\n主角：史官沈知微",
+      mustHappen: ["主角发现酒中有异"],
+      forbidden: ["解释幕后真凶"],
+    });
+
+    // 修复点：观察否定概括句指导（sceneEmbodiment fix）须出现在任意题材的 prompt 中
+    expect(courtIntriguePrompt).toContain("观察否定概括句");
+    expect(courtIntriguePrompt).toContain("没有X，没有Y，只是Z");
+    // 验证指导中包含跨题材示例（江湖/宫廷/市井），不限于基准的荒野题材
+    expect(courtIntriguePrompt).toContain("宫廷场景");
+    expect(courtIntriguePrompt).toContain("江湖场景");
+    expect(courtIntriguePrompt).toContain("市井场景");
+    // 验证宫廷题材本身的词汇不出现在通用指导中（避免过拟合）
+    expect(courtIntriguePrompt).not.toMatch(/荒野|流民|沈砚|木车|旧金属物件/);
+
+    // 修复点：意象回声尾句指导（hookPayoff fix）须出现在任意题材的章尾契约中
+    const courtBeats = [
+      { action: "史官入宴", emotion: "警惕", outcome: "入座" },
+      { action: "发现酒色异常", emotion: "压抑", outcome: "确认有毒" },
+      { action: "选择是否揭发", emotion: "权衡", outcome: "按兵不动" },
+    ];
+    const courtSections = planDraftSections(courtBeats, 5000);
+    const courtEndingHook = "他端起酒杯，却没有饮下。殿外的更鼓正好敲了三声。";
+    const courtLastContract = buildDraftSectionContract(
+      courtSections[2],
+      "上一段结尾",
+      courtEndingHook,
+    );
+
+    expect(courtLastContract).toContain("意象回声尾句");
+    expect(courtLastContract).toContain("第二次收束");
+    expect(courtLastContract).toContain("删掉最后一句后");
+    // 验证宫廷题材的 endingHook 正确合并到最后节拍
+    expect(courtLastContract).toContain(courtEndingHook);
+    expect(courtLastContract).toContain("这是最后一段");
+    // 验证宫廷题材词汇不出现在通用章尾指导中
+    expect(courtLastContract).not.toMatch(/荒野|流民|沈砚|旧路/);
   });
 });

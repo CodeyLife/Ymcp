@@ -54,7 +54,6 @@ import type {
   NovelWorkspaceView,
   PlotThread,
   StoryEntity,
-  StoryScene,
   TimelineEvent,
 } from "@/features/novel/types";
 import GenerationComposer from "@/features/novel/GenerationComposer";
@@ -386,7 +385,7 @@ export default function NovelStudio() {
     if (view === "planning") return <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载规划工作区</span></div>}><PlanningWorkspace projectId={projectId} onOpenChapter={(documentId, panel) => { setSelectedDocumentId(documentId); setView("writing", panel, documentId); }} /></Suspense>;
     if (view === "writing") {
       const panel = searchParams.get("panel");
-      const initialMode = panel === "workflow" ? "workflow" : panel === "plan" ? "plan" : "manuscript";
+      const initialMode = panel === "workflow" ? "workflow" : "manuscript";
       return <WritingWorkspace projectId={projectId} documents={documents} selectedDocument={selectedDocument} onSelectDocument={selectDocument} initialMode={initialMode} />;
     }
     if (view === "library") return <LibraryWorkspace projectId={projectId} />;
@@ -425,40 +424,9 @@ export default function NovelStudio() {
 }
 
 
-function ChapterPlanEditor({ document }: { document?: ManuscriptDocument }) {
-  const { message } = App.useApp();
-  if (!document) return <EmptyPanel title="选择一个章节" description="创建或选择章节后规划本章。" />;
-  const save = async (changes: Partial<ManuscriptDocument>) => {
-    const next = { ...document, ...changes, revision: document.revision + 1, updatedAt: Date.now() };
-    await novelDb.documents.put(next);
-    await appendOperation(document.projectId, "documents", document.id, "update", { value: { before: document, after: next } });
-  };
-  const blueprint = document.blueprint;
-  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="chapters" targetId={document.id} taskKeys={["chapter-plan"]} actionLabel="生成章节蓝图" compact /><SectionTitle eyebrow="本章蓝图" title={document.title} description="章节蓝图承接所属剧情段，并约束本章写作。" action={<Tag>{DOCUMENT_STATUS_LABEL[document.status]}</Tag>} />
-    <div className="novel-architecture-form"><label>章节标题<Input value={document.title} onChange={(event) => void save({ title: event.target.value })} /></label><label>章节摘要<Input.TextArea rows={3} value={document.summary} onChange={(event) => void save({ summary: event.target.value })} /></label><label>本章目标<Input.TextArea rows={2} value={blueprint.objective} onChange={(event) => void save({ blueprint: { ...blueprint, objective: event.target.value } })} /></label><label>冲突<Input.TextArea rows={2} value={blueprint.conflict} onChange={(event) => void save({ blueprint: { ...blueprint, conflict: event.target.value } })} /></label><label>目标字数<InputNumber min={100} max={50000} value={blueprint.targetWords} onChange={(value) => void save({ blueprint: { ...blueprint, targetWords: value ?? 3000 } })} /></label></div>
-    <Button icon={<SaveOutlined />} onClick={() => message.success("章节规划实时保存")}>确认规划</Button>
-  </div>;
-}
-
-function ScenePlanner({ document }: { document?: ManuscriptDocument }) {
+function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocument, initialMode }: { projectId: string; documents: ManuscriptDocument[]; selectedDocument?: ManuscriptDocument; onSelectDocument: (id: string) => void; initialMode: "manuscript" | "workflow" }) {
   const { modal } = App.useApp();
-  const scenes = useLiveQuery<StoryScene[]>(async () => document ? await novelDb.scenes.where("chapterId").equals(document.id).sortBy("order") : [], [document?.id]) ?? [];
-  const [selectedId, setSelectedId] = useState<string>();
-  const selected = scenes.find((item) => item.id === selectedId) ?? scenes[0];
-  if (!document) return <EmptyPanel title="选择一个章节" description="场景属于章节，请先创建或选择章节。" />;
-  async function addScene() {
-    const scene = { ...recordBase(document!.projectId), chapterId: document!.id, title: `场景 ${scenes.length + 1}`, order: scenes.length, status: "idea" as const, characterIds: [], plotThreadIds: [], foreshadowingIds: [], purpose: "", conflict: "", outcome: "", wordTarget: 800, beats: [] };
-    await novelDb.scenes.add(scene); setSelectedId(scene.id);
-  }
-  async function updateScene(changes: Record<string, unknown>) { if (selected) await novelDb.scenes.update(selected.id, { ...changes, revision: selected.revision + 1, updatedAt: Date.now() }); }
-  return <div className="novel-chapter-plan"><GenerationComposer projectId={document.projectId} scope="scenes" targetId={document.id} taskKeys={["scene-design"]} actionLabel="生成场景方案" compact /><SectionTitle eyebrow="场景设计" title={`${document.title} · 场景`} description="按目标、阻碍、结果和行动节拍设计本章内部推进。" action={<Button type="primary" icon={<PlusOutlined />} onClick={() => void addScene()}>添加场景</Button>} />
-    <div className="novel-scene-layout"><aside>{scenes.map((scene) => <button key={scene.id} className={selected?.id === scene.id ? "active" : ""} onClick={() => setSelectedId(scene.id)}><strong>{scene.title}</strong><small>{scene.purpose || "等待定义场景功能"}</small></button>)}</aside>{selected ? <div className="novel-scene-detail"><div className="novel-scene-title-row"><Input value={selected.title} onChange={(event) => void updateScene({ title: event.target.value })} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${selected.title}”？`, okButtonProps: { danger: true }, onOk: async () => { await novelDb.scenes.delete(selected.id); setSelectedId(undefined); } })} /></div><Input.TextArea rows={2} placeholder="场景功能" value={selected.purpose} onChange={(event) => void updateScene({ purpose: event.target.value })} /><Input.TextArea rows={2} placeholder="目标与阻碍" value={selected.conflict} onChange={(event) => void updateScene({ conflict: event.target.value })} /><Input.TextArea rows={2} placeholder="结果、代价或新决定" value={selected.outcome} onChange={(event) => void updateScene({ outcome: event.target.value })} /><div className="novel-scene-beats"><header><strong>行动节拍</strong><Button type="text" icon={<PlusOutlined />} onClick={() => void updateScene({ beats: [...(selected.beats ?? []), { id: crypto.randomUUID(), text: "", order: selected.beats?.length ?? 0 }] })}>添加</Button></header>{(selected.beats ?? []).map((beat, index) => <div key={beat.id}><i>{index + 1}</i><Input value={beat.text} onChange={(event) => void updateScene({ beats: (selected.beats ?? []).map((item) => item.id === beat.id ? { ...item, text: event.target.value } : item) })} /><Button danger type="text" icon={<DeleteOutlined />} onClick={() => void updateScene({ beats: (selected.beats ?? []).filter((item) => item.id !== beat.id).map((item, order) => ({ ...item, order })) })} /></div>)}</div></div> : <Empty description="添加一个场景" />}</div>
-  </div>;
-}
-
-function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocument, initialMode }: { projectId: string; documents: ManuscriptDocument[]; selectedDocument?: ManuscriptDocument; onSelectDocument: (id: string) => void; initialMode: "plan" | "manuscript" | "workflow" }) {
-  const { modal } = App.useApp();
-  const [mode, setMode] = useState<"plan" | "scenes" | "manuscript" | "workflow">(initialMode);
+  const [mode, setMode] = useState<"manuscript" | "workflow">(initialMode);
   const [draggedId, setDraggedId] = useState<string>();
   useEffect(() => setMode(initialMode), [initialMode]);
   async function moveChapter(document: ManuscriptDocument, direction: -1 | 1) {
@@ -478,8 +446,8 @@ function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocu
     setDraggedId(undefined);
   }
   const chapterList = <aside className="novel-chapter-list"><header><div><span>章节</span><strong>章节管理</strong><small>{documents.length} 章 · 拖动可排序</small></div><Tooltip title="新增待整理章节"><Button aria-label="新增章节" type="text" icon={<PlusOutlined />} onClick={async () => { const chapter = await createChapter(projectId); onSelectDocument(chapter.id); }} /></Tooltip></header>{documents.map((doc) => <div className={`novel-chapter-row${selectedDocument?.id === doc.id ? " active" : ""}`} key={doc.id} draggable onDragStart={() => setDraggedId(doc.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void dropChapter(doc.id)}><button onClick={() => onSelectDocument(doc.id)}><span>{String(doc.order + 1).padStart(2, "0")}</span><div><strong>{doc.title}</strong><small>{doc.wordCount.toLocaleString()} 字 · {DOCUMENT_STATUS_LABEL[doc.status]}</small></div></button><div><Tooltip title="上移章节"><Button aria-label="上移章节" type="text" icon={<ArrowUpOutlined />} onClick={() => void moveChapter(doc, -1)} /></Tooltip><Tooltip title="下移章节"><Button aria-label="下移章节" type="text" icon={<ArrowDownOutlined />} onClick={() => void moveChapter(doc, 1)} /></Tooltip><Tooltip title="删除章节"><Button aria-label="删除章节" danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${doc.title}”？`, content: "本章场景、正文版本和章节流程将一并删除，所属剧情段会保留。", okButtonProps: { danger: true }, onOk: async () => { if (selectedDocument?.id === doc.id) { onSelectDocument(documents.find((item) => item.id !== doc.id)?.id ?? ""); await new Promise((resolve) => setTimeout(resolve, 0)); } await deleteChapter(doc.id); } })} /></Tooltip></div></div>)}{!documents.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无章节，请在全书规划中建立剧情段与章节" />}</aside>;
-  const content = mode === "plan" ? <ChapterPlanEditor document={selectedDocument} /> : mode === "scenes" ? <ScenePlanner document={selectedDocument} /> : mode === "manuscript" ? <div className="novel-manuscript-with-command"><GenerationComposer projectId={projectId} scope="writing" targetId={selectedDocument?.id} taskKeys={["chapter-draft"]} actionLabel="生成正文草稿" compact /><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div> : <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载章节流程</span></div>}><WorkflowCenter projectId={projectId} document={selectedDocument} /></Suspense>;
-  return <div className="novel-writing-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "plan", label: "章节规划" }, { value: "scenes", label: "场景设计" }, { value: "manuscript", label: "正文编辑" }, { value: "workflow", label: "自动流程" }]} /></div><div className="novel-writing-body">{chapterList}{content}</div></div>;
+  const content = mode === "manuscript" ? <div className="novel-manuscript-with-command"><GenerationComposer projectId={projectId} scope="writing" targetId={selectedDocument?.id} taskKeys={["chapter-draft"]} actionLabel="生成正文草稿" compact /><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div> : <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载章节流程</span></div>}><WorkflowCenter projectId={projectId} document={selectedDocument} /></Suspense>;
+  return <div className="novel-writing-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "manuscript", label: "正文编辑" }, { value: "workflow", label: "自动流程" }]} /></div><div className="novel-writing-body">{chapterList}{content}</div></div>;
 }
 
 function LibraryWorkspace({ projectId }: { projectId: string }) {

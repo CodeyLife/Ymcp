@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { App, Button, Checkbox, Empty, Input, Modal, Progress, Spin, Tag, Tooltip } from "antd";
-import { CheckOutlined, CloseOutlined, PauseOutlined, PlayCircleOutlined, PoweroffOutlined, ReloadOutlined, StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { App, Button, Empty, Input, Modal, Progress, Spin, Tag, Tooltip } from "antd";
+import { CheckOutlined, CloseOutlined, EditOutlined, EyeOutlined, FileTextOutlined, PauseOutlined, PlayCircleOutlined, PoweroffOutlined, ReloadOutlined, SaveOutlined, StopOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import { novelDb } from "./db";
 import { bulkSetFactCandidateStatus, filterAcceptableFactIds, filterSafeAcceptableFactIds, formatFactCandidateValue, setFactCandidateStatus } from "./facts";
@@ -8,7 +8,7 @@ import { qualityDimensionLabel } from "./quality";
 import { approveWorkflowStage, BUILTIN_CHAPTER_WORKFLOW, cancelWorkflow, listDocumentWorkflowRuns, pauseWorkflow, resumeWorkflow, startChapterWorkflow } from "./workflow";
 import type { FactCandidate, ManuscriptDocument, QualityReport, WorkflowArtifact, WorkflowStage } from "./types";
 import { MarkdownContent } from "./AIWorkbench";
-import { prepareManuscriptChanges, updateManuscriptChangeText } from "./manuscript-review";
+import { prepareManuscriptChanges, replacePreparedManuscriptText } from "./manuscript-review";
 import ChapterCollaboration from "./ChapterCollaboration";
 import type { CreativeBrief, NovelConversationThread } from "./types";
 
@@ -43,8 +43,8 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
   const [creativeBrief, setCreativeBrief] = useState<CreativeBrief>();
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
-  const [selectedManuscriptChanges, setSelectedManuscriptChanges] = useState<string[]>([]);
-  const [manuscriptDrafts, setManuscriptDrafts] = useState<Record<string, string>>({});
+  const [manuscriptModal, setManuscriptModal] = useState<"preview" | "edit" | null>(null);
+  const [manuscriptDraft, setManuscriptDraft] = useState("");
   const [previewArtifact, setPreviewArtifact] = useState<WorkflowArtifact | null>(null);
   const approvalArtifact = run ? artifactForStage(run, artifacts) : undefined;
   const active = run && !["completed", "cancelled"].includes(run.status);
@@ -54,7 +54,9 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
   const conflictFacts = facts.filter((item) => item.conflict).length;
   const acceptedFacts = facts.filter((item) => item.status === "accepted").length;
   const rejectedFacts = facts.filter((item) => item.status === "rejected").length;
-  const manuscriptChangeKey = manuscriptChanges.map((change) => `${change.id}:${change.status}`).join("|");
+  const pendingManuscriptChanges = manuscriptChanges.filter((change) => change.status === "pending");
+  const manuscriptParagraphCount = approvalArtifact?.contentMarkdown.trim().split(/\n\s*\n/).filter(Boolean).length ?? 0;
+  const manuscriptCharacterCount = approvalArtifact?.contentMarkdown.replace(/\s/g, "").length ?? 0;
 
   useEffect(() => {
     if (run?.status !== "waiting-approval" || run.currentStage !== "manuscript-approval" || !approvalArtifact || !document) return;
@@ -67,12 +69,6 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
     }).catch((error) => message.error(error instanceof Error ? error.message : "逐段审阅准备失败"));
   }, [approvalArtifact?.id, document?.id, projectId, run?.currentStage, run?.id, run?.status]);
 
-  useEffect(() => {
-    const pending = manuscriptChanges.filter((change) => change.status === "pending");
-    setSelectedManuscriptChanges(pending.map((change) => change.id));
-    setManuscriptDrafts(Object.fromEntries(pending.map((change) => [change.id, change.afterText ?? ""])));
-  }, [manuscriptChangeKey]);
-
   async function perform(action: () => Promise<unknown>, success?: string) {
     setBusy(true);
     try { await action(); if (success) message.success(success); }
@@ -82,19 +78,29 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
 
   async function submitApproval(approved: boolean) {
     if (!run) return;
-    if (approved && run.currentStage === "manuscript-approval") {
-      for (const change of manuscriptChanges) {
-        const draft = manuscriptDrafts[change.id];
-        if (change.status === "pending" && change.operation !== "delete" && draft !== undefined && draft !== change.afterText) {
-          await updateManuscriptChangeText(change.id, draft);
-        }
-      }
-    }
     return approveWorkflowStage(run.id, {
       approved,
       feedback,
-      manuscriptChangeIds: run.currentStage === "manuscript-approval" ? selectedManuscriptChanges : undefined,
     });
+  }
+
+  function openManuscriptModal(mode: "preview" | "edit") {
+    setManuscriptDraft(approvalArtifact?.contentMarkdown ?? "");
+    setManuscriptModal(mode);
+  }
+
+  async function saveManuscriptDraft() {
+    if (!run || !document || !approvalArtifact) return;
+    await perform(async () => {
+      await replacePreparedManuscriptText({
+        projectId,
+        documentId: document.id,
+        proposedText: manuscriptDraft,
+        workflowRunId: run.id,
+        sourceArtifactId: approvalArtifact.id,
+      });
+      setManuscriptModal(null);
+    }, "正文修改已保存");
   }
 
   async function bulkFactAction(action: "accept-safe" | "accept-all" | "reject-all") {
@@ -129,15 +135,16 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
       {report && <section className="novel-quality-report"><header><div><span>QUALITY GATE</span><h3>{report.passed ? "质量门禁通过" : "需要修订或人工决策"}</h3></div><div className="novel-quality-score"><strong>{report.weightedScore}</strong><span>/ 5</span></div></header><div className="novel-quality-dimensions">{Object.entries(report.scores).map(([dimension, score]) => <div key={dimension}><label><span>{qualityDimensionLabel(dimension)}</span><b>{score.toFixed(1)}</b></label><Progress percent={score / 5 * 100} showInfo={false} strokeColor={score < 3 ? "#b5483a" : "#7d9c8b"} trailColor="#292b2e" /></div>)}</div><div className="novel-quality-issues">{report.issues.slice(0, 12).map((issue) => <article key={issue.id} className={issue.severity}><Tag color={issue.severity === "blocker" ? "red" : issue.severity === "major" ? "orange" : undefined}>{issue.severity}</Tag><div><strong>{issue.title}</strong><p>{issue.description}</p>{issue.excerpt && <blockquote>{issue.excerpt}</blockquote>}<small>{issue.rule} · {issue.deterministic ? "确定性检查" : "独立审校"}</small></div></article>)}</div></section>}
 
       {run.status === "waiting-approval" && <section className="novel-approval-desk"><header><span>HUMAN GATE</span><h3>{STAGE_LABELS[run.currentStage]}</h3></header>{approvalArtifact && run.currentStage !== "manuscript-approval" && <MarkdownContent content={approvalArtifact.contentMarkdown} />}
-        {run.currentStage === "manuscript-approval" && <div className="novel-manuscript-review">
-          <header><Checkbox checked={manuscriptChanges.length > 0 && selectedManuscriptChanges.length === manuscriptChanges.length} indeterminate={selectedManuscriptChanges.length > 0 && selectedManuscriptChanges.length < manuscriptChanges.length} onChange={(event) => setSelectedManuscriptChanges(event.target.checked ? manuscriptChanges.map((change) => change.id) : [])}>全部段落</Checkbox><span>{manuscriptChanges.length} 项变更</span></header>
-          {!queriedManuscriptChanges ? <Spin size="small" /> : manuscriptChanges.length === 0 ? <Tag color="green">正文无段落差异</Tag> : manuscriptChanges.map((change) => <article key={change.id} className={`novel-manuscript-change ${change.operation}`}>
-            <Checkbox checked={selectedManuscriptChanges.includes(change.id)} disabled={change.status !== "pending"} onChange={(event) => setSelectedManuscriptChanges((current) => event.target.checked ? Array.from(new Set([...current, change.id])) : current.filter((id) => id !== change.id))} />
-            <div><Tag color={change.operation === "insert" ? "green" : change.operation === "delete" ? "red" : "gold"}>{change.operation === "insert" ? "新增" : change.operation === "delete" ? "删除" : "替换"}</Tag><small>段落 {change.order + 1}</small>
-              {change.beforeText && <blockquote>{change.beforeText}</blockquote>}
-              {change.operation !== "delete" && <Input.TextArea autoSize={{ minRows: 2, maxRows: 10 }} value={manuscriptDrafts[change.id] ?? change.afterText ?? ""} onChange={(event) => setManuscriptDrafts((current) => ({ ...current, [change.id]: event.target.value }))} />}
-            </div>
-          </article>)}
+        {run.currentStage === "manuscript-approval" && <div className="novel-manuscript-review-entry">
+          <div className="novel-manuscript-review-icon"><FileTextOutlined /></div>
+          <div className="novel-manuscript-review-summary">
+            <strong>{approvalArtifact?.title ?? document?.title ?? "章节正文"}</strong>
+            {!queriedManuscriptChanges ? <span><Spin size="small" /> 正在准备正文</span> : <span>{manuscriptParagraphCount} 个段落 · {manuscriptCharacterCount.toLocaleString("zh-CN")} 字符 · {pendingManuscriptChanges.length} 项待应用变更</span>}
+          </div>
+          <div className="novel-manuscript-review-actions">
+            <Button icon={<EyeOutlined />} disabled={!approvalArtifact} onClick={() => openManuscriptModal("preview")}>预览正文</Button>
+            <Button icon={<EditOutlined />} disabled={!approvalArtifact} onClick={() => openManuscriptModal("edit")}>编辑正文</Button>
+          </div>
         </div>}
         {run.currentStage === "fact-approval" && <>
           <div className="novel-fact-bulk-bar">
@@ -163,7 +170,7 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
           <div className="novel-fact-list">{facts.map((fact) => <article key={fact.id} className={fact.status}><div><Tag color={fact.conflict ? "red" : fact.status === "accepted" ? "green" : fact.status === "rejected" ? "default" : fact.risk === "high" ? "orange" : "gold"}>{fact.conflict ? "冲突" : fact.status === "accepted" && fact.decisionSource === "auto-policy" ? "自动采纳" : fact.status}</Tag><Tag color={fact.risk === "high" ? "orange" : "blue"}>{fact.risk === "high" ? "高风险" : "安全更新"}</Tag><strong>{fact.targetTable}.{fact.field}</strong><p>{formatFactCandidateValue(fact)}</p><blockquote>{fact.evidence}</blockquote><small>置信度 {Math.round(fact.confidence * 100)}% · {fact.novelty} · {fact.riskReason}</small></div><div><Button type={fact.status === "accepted" ? "primary" : "default"} icon={<CheckOutlined />} disabled={fact.conflict} onClick={() => void setFactCandidateStatus(fact.id, "accepted")}>采纳</Button><Button icon={<CloseOutlined />} onClick={() => void setFactCandidateStatus(fact.id, "rejected")}>排除</Button></div></article>)}</div>
         </>}
         {run.currentStage !== "fact-approval" && <Input.TextArea rows={3} value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="退回时填写具体修改要求；批准可留空。" />}
-        <footer><Button icon={<PoweroffOutlined />} disabled={busy} onClick={() => void perform(() => pauseWorkflow(run.id), "已暂停审核，可在控制区恢复")}>关闭</Button><Button danger icon={<CloseOutlined />} loading={busy} onClick={() => void perform(() => submitApproval(false), "已退回流程")}>{run.currentStage === "fact-approval" ? "全部不提交" : "退回修改"}</Button><Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={(run.currentStage === "fact-approval" && pendingFacts > 0) || (run.currentStage === "manuscript-approval" && manuscriptChanges.length > 0 && selectedManuscriptChanges.length === 0)} onClick={() => void perform(() => submitApproval(true), "审批已提交")}>{run.currentStage === "fact-approval" ? `提交已采纳事实${pendingFacts ? `（尚有 ${pendingFacts} 项未决定）` : ""}` : run.currentStage === "manuscript-approval" ? `采纳所选段落（${selectedManuscriptChanges.length}）` : "批准并继续"}</Button></footer>
+        <footer><Button icon={<PoweroffOutlined />} disabled={busy} onClick={() => void perform(() => pauseWorkflow(run.id), "已暂停审核，可在控制区恢复")}>关闭</Button><Button danger icon={<CloseOutlined />} loading={busy} onClick={() => void perform(() => submitApproval(false), "已退回流程")}>{run.currentStage === "fact-approval" ? "全部不提交" : "退回修改"}</Button><Button type="primary" icon={<CheckOutlined />} loading={busy} disabled={(run.currentStage === "fact-approval" && pendingFacts > 0) || (run.currentStage === "manuscript-approval" && !queriedManuscriptChanges)} onClick={() => void perform(() => submitApproval(true), "审批已提交")}>{run.currentStage === "fact-approval" ? `提交已采纳事实${pendingFacts ? `（尚有 ${pendingFacts} 项未决定）` : ""}` : run.currentStage === "manuscript-approval" ? `采纳正文（${pendingManuscriptChanges.length} 项变更）` : "批准并继续"}</Button></footer>
       </section>}
 
       <section className="novel-artifact-ledger"><header><span>ARTIFACT LEDGER</span><h3>工作产物</h3></header>{artifacts.map((artifact) => <article key={artifact.id} className="clickable" role="button" tabIndex={0} onClick={() => setPreviewArtifact(artifact)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPreviewArtifact(artifact); } }}><i>{artifact.kind.slice(0, 2).toUpperCase()}</i><div><strong>{artifact.title}</strong><p>{artifact.contentMarkdown.slice(0, 140)}</p><small>{STAGE_LABELS[artifact.stage]} · {artifact.skillRefs.length} Skills · {new Date(artifact.createdAt).toLocaleTimeString("zh-CN")}</small></div></article>)}</section>
@@ -174,6 +181,22 @@ export default function WorkflowCenter({ projectId, document }: { projectId: str
         <div className="novel-artifact-detail-meta"><Tag color="gold">{STAGE_LABELS[previewArtifact.stage]}</Tag><Tag>{previewArtifact.kind}</Tag><small>{new Date(previewArtifact.createdAt).toLocaleString("zh-CN")}{previewArtifact.skillRefs.length > 0 ? ` · ${previewArtifact.skillRefs.length} Skills` : ""}{previewArtifact.model ? ` · ${previewArtifact.model}` : ""}</small></div>
         <MarkdownContent content={previewArtifact.contentMarkdown} />
       </div>}
+    </Modal>
+    <Modal
+      open={!!manuscriptModal}
+      title={manuscriptModal === "edit" ? "编辑章节正文" : "预览章节正文"}
+      onCancel={() => setManuscriptModal(null)}
+      width={900}
+      className="novel-manuscript-modal"
+      destroyOnClose
+      footer={manuscriptModal === "edit" ? [
+        <Button key="cancel" onClick={() => setManuscriptModal(null)}>取消</Button>,
+        <Button key="save" type="primary" icon={<SaveOutlined />} loading={busy} onClick={() => void saveManuscriptDraft()}>保存正文</Button>,
+      ] : [<Button key="close" onClick={() => setManuscriptModal(null)}>关闭</Button>]}
+    >
+      {manuscriptModal === "edit"
+        ? <Input.TextArea className="novel-manuscript-editor" value={manuscriptDraft} onChange={(event) => setManuscriptDraft(event.target.value)} spellCheck={false} />
+        : <div className="novel-manuscript-preview"><MarkdownContent content={approvalArtifact?.contentMarkdown ?? ""} /></div>}
     </Modal>
   </div>;
 }

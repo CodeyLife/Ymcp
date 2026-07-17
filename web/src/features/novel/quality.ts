@@ -1,5 +1,5 @@
 import { novelDb, recordBase } from "./db";
-import { analyzeDraftStructure, isDialogueOnlyParagraph } from "./draft-structure";
+import { analyzeDraftStructure } from "./draft-structure";
 import type { ChapterBlueprint, NovelAgentRole, QualityDimension, QualityIssue, QualityReport } from "./types";
 
 const DIMENSIONS: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity"];
@@ -154,29 +154,6 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   for (const phrase of EMOTION_DIRECT_WORDS) {
     if (text.includes(phrase)) issues.push(issue({ dimension: "sceneEmbodiment", severity: "warning", title: "情绪直说", description: `检测到“${phrase}”，情绪被直接宣告而非通过行动或意象承载。`, excerpt: phrase, rule: "style.emotion-direct", suggestion: "用一个反常动作、环境意象变化或没说完的话来承载该情绪。" }));
   }
-  let shortSentenceStreaks = 0;
-  let shortSentenceParagraphs: number[] = [];
-  const shortSentenceRanges: Array<{ start: number; end: number }> = [];
-  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
-    const block = blocks[blockIndex];
-    // 对白的短促轮次是人物交流节奏，不属于叙事短句 tic；带说话标签的混合段也应隔断序列。
-    if (isDialogueOnlyParagraph(block) || /[“「『][^”」』]+[”」』]/.test(block)) {
-      shortSentenceParagraphs = [];
-      continue;
-    }
-    const sentences = block.split(/[。！？\n]/).map((s) => s.trim()).filter(Boolean);
-    for (const s of sentences) {
-      // R5: 阈值从 ≤6 放宽到 ≤10，覆盖"里面没有尸体。""也没有打斗痕迹。"等 7-10 字短句排比
-      if (s.length > 0 && s.length <= 10) shortSentenceParagraphs.push(blockIndex + 1);
-      else shortSentenceParagraphs = [];
-      if (shortSentenceParagraphs.length >= 3) {
-        shortSentenceStreaks += 1;
-        shortSentenceRanges.push({ start: Math.min(...shortSentenceParagraphs), end: Math.max(...shortSentenceParagraphs) });
-        shortSentenceParagraphs = [];
-      }
-    }
-  }
-  if (shortSentenceStreaks > 2) issues.push(issue({ dimension: "specificity", severity: shortSentenceStreaks > 5 ? "major" : "warning", title: "短句排比过多", description: `检测到 ${shortSentenceStreaks} 处连续短句排比，超过单章 2 处上限。`, revisionRanges: shortSentenceRanges, rule: "style.short-sentence-tic", suggestion: "将部分排比融入完整句式，仅在极度紧张或决断瞬间保留短句。" }));
   let aphorismEndings = 0;
   for (const block of blocks) {
     const trimmedBlock = block.trim();
@@ -280,8 +257,6 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       paragraphs: blocks.length,
       dialogueRatio: totalChars ? Number((dialogueChars / totalChars).toFixed(3)) : 0,
       paragraphVariation: Number(paragraphVariation.toFixed(3)),
-      singleSentenceNarrativeRatio: Number(structure.singleSentenceNarrativeRatio.toFixed(3)),
-      maxConsecutiveSingleSentenceNarrative: structure.maxConsecutiveSingleSentenceNarrative,
       templateHits,
       imageryDensity: imageryHits,
       interpretiveSummaryHits,

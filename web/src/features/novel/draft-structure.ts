@@ -11,9 +11,6 @@ export interface DraftStructureIssue {
 export interface DraftStructureReport {
   paragraphCount: number;
   narrativeParagraphCount: number;
-  singleSentenceNarrativeCount: number;
-  singleSentenceNarrativeRatio: number;
-  maxConsecutiveSingleSentenceNarrative: number;
   issues: DraftStructureIssue[];
 }
 
@@ -23,10 +20,6 @@ export function splitDraftParagraphs(text: string): string[] {
 
 export function isDialogueOnlyParagraph(paragraph: string): boolean {
   return /^(?:[“「『][\s\S]*[”」』][。！？!?]?|["'][\s\S]*["'][。！？!?]?)$/.test(paragraph.trim());
-}
-
-function sentenceCount(paragraph: string): number {
-  return paragraph.split(/[。！？!?]+/).map((value) => value.trim()).filter(Boolean).length;
 }
 
 function formattingIssue(paragraph: string, index: number): DraftStructureIssue | undefined {
@@ -74,35 +67,8 @@ export function analyzeDraftStructure(text: string): DraftStructureReport {
   const paragraphs = splitDraftParagraphs(text);
   const formattingIssues = paragraphs.map(formattingIssue).filter((item): item is DraftStructureIssue => Boolean(item));
   const formattingParagraphs = new Set(formattingIssues.map((item) => item.paragraph! - 1));
-  const classifiedParagraphs = paragraphs.map((paragraph, index) => ({
-    index,
-    singleSentence: !isDialogueOnlyParagraph(paragraph) && sentenceCount(paragraph) === 1,
-    dialogueOnly: isDialogueOnlyParagraph(paragraph),
-    formatting: formattingParagraphs.has(index),
-  }));
-  const narrative = classifiedParagraphs.filter((item) => !item.dialogueOnly && !item.formatting);
-  const singleSentenceNarrativeCount = narrative.filter((item) => item.singleSentence).length;
-  const singleSentenceNarrativeRatio = narrative.length > 0
-    ? singleSentenceNarrativeCount / narrative.length
-    : 0;
-  let currentStreak = 0;
-  let maxConsecutiveSingleSentenceNarrative = 0;
-  for (const item of classifiedParagraphs) {
-    currentStreak = !item.dialogueOnly && !item.formatting && item.singleSentence ? currentStreak + 1 : 0;
-    maxConsecutiveSingleSentenceNarrative = Math.max(maxConsecutiveSingleSentenceNarrative, currentStreak);
-  }
-
+  const narrativeParagraphCount = paragraphs.filter((paragraph, index) => !isDialogueOnlyParagraph(paragraph) && !formattingParagraphs.has(index)).length;
   const issues: DraftStructureIssue[] = [...formattingIssues];
-  if (narrative.length >= 3 && (singleSentenceNarrativeRatio > 0.3 || maxConsecutiveSingleSentenceNarrative >= 3)) {
-    issues.push({
-      rule: "style.fragmented-paragraphs",
-      severity: "major",
-      title: "叙事段落过度碎片化",
-      description: `单句叙事段占 ${(singleSentenceNarrativeRatio * 100).toFixed(0)}%，最长连续 ${maxConsecutiveSingleSentenceNarrative} 段。`,
-      revisionRanges: paragraphs.length > 0 ? [{ start: 1, end: paragraphs.length }] : undefined,
-      repairable: true,
-    });
-  }
 
   const firstParagraphByContent = new Map<string, number>();
   paragraphs.forEach((paragraph, index) => {
@@ -152,10 +118,7 @@ export function analyzeDraftStructure(text: string): DraftStructureReport {
 
   return {
     paragraphCount: paragraphs.length,
-    narrativeParagraphCount: narrative.length,
-    singleSentenceNarrativeCount,
-    singleSentenceNarrativeRatio,
-    maxConsecutiveSingleSentenceNarrative,
+    narrativeParagraphCount,
     issues,
   };
 }

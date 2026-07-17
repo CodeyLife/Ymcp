@@ -151,8 +151,8 @@ describe("chapter workflow regressions", () => {
     // repairDraftStructureOnce 确定性合并+移除格式标记，不调用 LLM 修复
     // 最低篇幅问题没有安全局部范围，不得再用第二次模型调用重写全文
     expect(streamNovelModel).toHaveBeenCalledTimes(1);
-    // "以下是正文："被移除，3 个短叙事段合并为 1 段
-    expect(draft?.contentMarkdown).toBe("风停了。他抬起头。远处有人走来。");
+    // "以下是正文："被移除，正文段落边界保持不变
+    expect(draft?.contentMarkdown).toBe("风停了。\n\n他抬起头。\n\n远处有人走来。");
   });
 
   it("repairs structural wrappers in a directed revision before saving the revision artifact", async () => {

@@ -197,7 +197,6 @@ export function isRevisionRefusal(text: string): boolean {
 // R1: 风格类 warning 升级为 major——这些规则虽定为 warning，但直接造成"AI 味"，
 // 若不送修订则永远残留。升级为 major 后进入 blockerAndMajor 列表，LLM 会收到并修订。
 export const STYLE_RULES_TO_PROMOTE = new Set([
-  "style.short-sentence-tic",
   "style.interpretive-summary-density",
   "style.emotion-direct",
   "style.emphasis-devaluation",
@@ -219,7 +218,7 @@ export function shouldPromoteWarning(item: QualityIssue): boolean {
 
 const REVISION_FEEDBACK_CATEGORIES = [
   /视角|POV|限知|心理|感知边界/,
-  /短句|碎片|句式|段落/,
+  /碎片|句式|段落/,
   /重复|收束|第二个结尾|事件链/,
   /意象|比喻|象征/,
   /对白|台词|声音辨识/,

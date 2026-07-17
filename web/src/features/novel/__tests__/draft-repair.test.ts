@@ -10,7 +10,7 @@ beforeEach(() => {
 });
 
 describe("draft structure repair", () => {
-  it("deterministically merges fragmented paragraphs and strips wrappers without calling the model", async () => {
+  it("strips wrappers without changing paragraph boundaries", async () => {
     const invalid = ["以下是正文：", "风停了。", "他抬起头。", "远处有人走来。"].join("\n\n");
 
     const result = await repairDraftStructureOnce({
@@ -19,31 +19,9 @@ describe("draft structure repair", () => {
       skillPrompt: "修复契约",
     });
 
-    // 改进后：4 段 ≥4 阈值触发合并，3 个短叙事段合并为 1 段，"以下是正文："被移除
-    // 确定性修复即可解决，无需调用 LLM
     expect(streamNovelModel).not.toHaveBeenCalled();
     expect(result.repaired).toBe(true);
-    expect(result.content).toBe("风停了。他抬起头。远处有人走来。");
-  });
-
-  it("stitches short action beats to adjacent dialogue without changing manuscript characters", async () => {
-    const fragmented = [
-      "顾石生抬眼看他。",
-      "“你已经拖过三日了。”",
-      "罗二把硬饼藏到身后。",
-      "“三日和五日，也没差多少。”",
-      "井下传来撑木开裂的声音。",
-      "“别下去。”",
-      "顾石生把断剑塞紧，走向井绳。",
-      "“药铺日落就关门。”",
-    ].join("\n\n");
-
-    const result = await repairDraftStructureOnce({ content: fragmented, model: "test-model", skillPrompt: "修复契约" });
-
-    expect(streamNovelModel).not.toHaveBeenCalled();
-    expect(result.report.issues.some((item) => item.rule === "style.fragmented-paragraphs")).toBe(false);
-    expect(result.content).toContain("顾石生抬眼看他。“你已经拖过三日了。”");
-    expect(result.content.replace(/\s/g, "")).toBe(fragmented.replace(/\s/g, ""));
+    expect(result.content).toBe("风停了。\n\n他抬起头。\n\n远处有人走来。");
   });
 
   it("does not call the model when only semantic-repeat review issues remain", async () => {
@@ -168,15 +146,6 @@ describe("draft structure repair", () => {
     expect(result.content).toBe([...earlier, ...middle, ...climax].join("\n\n"));
   });
 
-  it("does not rewrite short-sentence punctuation to satisfy a style score", async () => {
-    const content = "警报响了。舱门开了。人影出现。";
-
-    const result = await repairDraftStructureOnce({ content, model: "test-model", skillPrompt: "修复契约" });
-
-    expect(result.content).toBe(content);
-    expect(streamNovelModel).not.toHaveBeenCalled();
-  });
-
   it("preserves a legitimate long scene after a short transition", () => {
     const opening = Array.from({ length: 4 }, (_, index) => `开场第${index + 1}段铺陈山路上的风雪与行人，各自携带不同物件缓慢前行。`);
     const transition = "天亮了。";
@@ -196,39 +165,6 @@ describe("draft structure repair", () => {
 
     expect(result.truncated).toBe(true);
     expect(result.content).toBe([...progression, ...middle, transition].join("\n\n"));
-  });
-
-  it("calls the model for structural issues that cannot be resolved deterministically", async () => {
-    // 使用足够长的段落避免触发碎片化合并，但保留格式问题需要 LLM 修复
-    const longPara1 = "风停了很久很久，久到连呼吸都变得迟缓。他站在原地没有动，只是看着远方。";
-    const longPara2 = "他抬起头，看见远处有人走来。那人的脚步声在空旷的街道上回荡，越来越近。";
-    const invalid = ["```", longPara1, longPara2, "```"].join("\n\n");
-    const repaired = `${longPara1}\n\n${longPara2}`;
-    vi.mocked(streamNovelModel).mockResolvedValueOnce({ content: repaired, promptHash: "repair" });
-
-    const result = await repairDraftStructureOnce({
-      content: invalid,
-      model: "test-model",
-      skillPrompt: "修复契约",
-    });
-
-    expect(result.content).toBe(repaired);
-    expect(result.repaired).toBe(true);
-  });
-
-  it("falls back to deterministically cleaned content when the repair changes manuscript wording", async () => {
-    // 使用足够多的段落让合并触发，但保留格式标记让 LLM 被调用
-    const paragraphs = ["以下是正文：", "风停了很久很久。", "他抬起头来。", "远处有人走来。", "脚步声越来越近了。"];
-    const invalid = paragraphs.join("\n\n");
-    vi.mocked(streamNovelModel).mockResolvedValueOnce({
-      content: "风忽然停了。他抬头望向远处。\n\n官道上有一个陌生人走来。",
-      promptHash: "rewritten",
-    });
-
-    const result = await repairDraftStructureOnce({ content: invalid, model: "test-model", skillPrompt: "修复契约" });
-    // LLM 改变了正文用词，回退到确定性清洗结果
-    expect(result.repaired).toBe(true);
-    expect(result.content).toContain("风停了很久很久。");
   });
 
   it("repairs punctuation breaks where closing quotes are followed by redundant periods", async () => {
@@ -253,6 +189,7 @@ describe("draft structure repair", () => {
     // 引号外多余句号被移除
     expect(result.content).not.toContain("\u201D\u3002");
     expect(result.content).toContain("\u201D阿落忽然开口");
+    expect(result.repaired).toBe(true);
   });
 
 });

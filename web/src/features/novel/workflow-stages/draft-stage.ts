@@ -65,7 +65,7 @@ export const draftStageHandler: StageHandler = {
       const combined = sectionContents.join("\n\n");
       const repaired = await repairDraftStructureOnce({ content: combined, model: project.settings.textModel, skillPrompt });
       // 改进 #8：mechanical pre-review（draft 落库前跑 runDeterministicQualityChecks 预检）
-      // 目的：在 draft 落库前快速识别"短句排比过多/解释性总结偏多/模板化表达/章尾缺开放压力"等机械可检测的模式，
+      // 目的：在 draft 落库前快速识别解释性总结、模板化表达和章尾缺开放压力等机械模式，
       // 让 review-stage 能在 deterministic findings 基础上聚焦语义层面问题。本预检不阻塞 draft-stage，
       // 仅打印警告。最终聚合发生在 review-stage 的 aggregateQuality（与 reviewer findings 合并去重）。
       try {

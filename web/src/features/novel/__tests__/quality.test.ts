@@ -198,21 +198,6 @@ describe("prose discipline checks", () => {
     expect(result.issues.some((item) => item.rule === "style.chapter-ending-hook")).toBe(false);
   });
 
-  it("promotes draft structure violations into deterministic quality issues", () => {
-    const text = ["风停了。", "他抬起头。", "远处有人走来。", "脚步越来越近。"].join("\n\n");
-
-    const result = runDeterministicQualityChecks({ text });
-
-    expect(result.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        rule: "style.fragmented-paragraphs",
-        severity: "major",
-        dimension: "specificity",
-        revisionRanges: [{ start: 1, end: 4 }],
-      }),
-    ]));
-  });
-
   it("flags emphasis word devaluation when a word exceeds 2 occurrences", () => {
     const text = "他第一次意识到危险。\n\n第一次，他选择了沉默。\n\n这是他第一次真正感到恐惧。";
     const result = runDeterministicQualityChecks({ text });
@@ -223,34 +208,6 @@ describe("prose discipline checks", () => {
     const text = "他站在原地，他很悲伤，没有说话。\n\n风继续吹着。";
     const result = runDeterministicQualityChecks({ text });
     expect(result.issues.some((item) => item.rule === "style.emotion-direct" && item.excerpt?.includes("他很悲伤"))).toBe(true);
-  });
-
-  it("flags excessive short-sentence streaks beyond 2 occurrences", () => {
-    const text = "速度。力量。变化。\n\n停下。风停。灯灭。\n\n关门。锁门。走人。";
-    const result = runDeterministicQualityChecks({ text });
-    expect(result.issues.some((item) => item.rule === "style.short-sentence-tic")).toBe(true);
-  });
-
-  it("keeps short-sentence streaks continuous across paragraph boundaries", () => {
-    const text = ["风停。", "灯灭。", "门响。", "人来。", "刀出。", "血落。", "雨落。", "车停。", "马嘶。", "他终于向后退了一步。"].join("\n\n");
-
-    const result = runDeterministicQualityChecks({ text });
-
-    const issue = result.issues.find((item) => item.rule === "style.short-sentence-tic");
-    expect(issue?.revisionRanges).toEqual([
-      { start: 1, end: 3 },
-      { start: 4, end: 6 },
-      { start: 7, end: 9 },
-    ]);
-  });
-
-  it("does not count dialogue-only paragraphs as short-sentence tic streaks", () => {
-    const dialogue = ["“走。”", "“等等。”", "“快点。”", "“有人。”", "“在哪？”", "“门外。”", "“别动。”", "“听着。”", "“来了。”"];
-    const text = [...dialogue, "门外的脚步声越过长廊，最后停在半掩的木门前。屋里的人都握紧武器，没有继续交谈。"].join("\n\n");
-
-    const result = runDeterministicQualityChecks({ text });
-
-    expect(result.issues.some((item) => item.rule === "style.short-sentence-tic")).toBe(false);
   });
 
   it("merges reviewer issues in the same dimension when their edit ranges overlap", () => {
@@ -277,21 +234,6 @@ describe("prose discipline checks", () => {
       { start: 100, end: 102 },
       { start: 101, end: 102 },
     ]);
-  });
-
-  it("does not count short dialogue with speaker tags as narrative staccato", () => {
-    const dialogue = [
-      "“开门。”值班员说。",
-      "“证件。”林澈递过去。",
-      "“进去吧。”对方让开。",
-      "“等等。”林澈停下。",
-      "“怎么？”值班员抬头。",
-      "“警报响了。”林澈回身。",
-    ];
-
-    const result = runDeterministicQualityChecks({ text: dialogue.join("\n\n") });
-
-    expect(result.issues.some((item) => item.rule === "style.short-sentence-tic")).toBe(false);
   });
 
   it("flags aphorism density when exceeding 3 endings", () => {

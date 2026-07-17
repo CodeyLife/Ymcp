@@ -2,26 +2,6 @@ import { describe, expect, it } from "vitest";
 import { analyzeDraftStructure } from "../draft-structure";
 
 describe("draft structure analysis", () => {
-  it("flags fragmented narration even when every short sentence is separated by a blank line", () => {
-    const text = [
-      "风停了。",
-      "他抬起头。",
-      "远处有人走来。",
-      "脚步越来越近。",
-      "他握紧手里的木棍。",
-      "那人却停在路边。",
-    ].join("\n\n");
-
-    const report = analyzeDraftStructure(text);
-
-    expect(report.paragraphCount).toBe(6);
-    expect(report.singleSentenceNarrativeRatio).toBe(1);
-    expect(report.maxConsecutiveSingleSentenceNarrative).toBe(6);
-    expect(report.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ rule: "style.fragmented-paragraphs", severity: "major" }),
-    ]));
-  });
-
   it("blocks response wrappers, markdown headings, code fences, and horizontal rules", () => {
     const text = [
       "以下是正文：",
@@ -98,38 +78,6 @@ describe("draft structure analysis", () => {
         repairable: false,
       }),
     ]));
-  });
-
-  it("allows dialogue-only paragraphs and a limited narrative impact beat", () => {
-    const text = [
-      "雨下了一夜，院中的石阶泛着冷光。守门人缩在檐下，不时看向街口。",
-      "“谁在那里？”",
-      "没有人回答。",
-      "沈砚沿墙走到后门。他先摸了摸生锈的门闩，又俯身检查泥地上的脚印。",
-      "“门外没人，脚印却是新的。”",
-      "守门人终于站直身体。他提起灯笼，和沈砚一起绕向院墙外侧。",
-    ].join("\n\n");
-
-    const report = analyzeDraftStructure(text);
-
-    expect(report.issues.some((item) => item.rule === "style.fragmented-paragraphs")).toBe(false);
-  });
-
-  it("treats dialogue paragraphs as boundaries between narrative impact beats", () => {
-    const impactAndDialogue = [
-      "门响了。",
-      "“谁？”",
-      "灯灭了。",
-      "“别出声。”",
-      "脚步停了。",
-    ];
-    const normalNarration = Array.from({ length: 7 }, (_, index) => `第${index + 1}盏灯沿着长廊依次亮起。守夜人检查门窗后，继续向前巡查。`);
-
-    const report = analyzeDraftStructure([...impactAndDialogue, ...normalNarration].join("\n\n"));
-
-    expect(report.singleSentenceNarrativeRatio).toBe(0.3);
-    expect(report.maxConsecutiveSingleSentenceNarrative).toBe(1);
-    expect(report.issues.some((item) => item.rule === "style.fragmented-paragraphs")).toBe(false);
   });
 
   it("does not mistake a recurring image for repeated progression", () => {

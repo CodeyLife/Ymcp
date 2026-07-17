@@ -144,6 +144,36 @@ export async function updateManuscriptChangeText(changeId: string, afterText: st
   await novelDb.manuscriptChanges.update(changeId, { afterText, revision: change.revision + 1, updatedAt: Date.now(), updatedBy: "local-user" });
 }
 
+export async function replacePreparedManuscriptText(params: {
+  projectId: string;
+  documentId: string;
+  proposedText: string;
+  workflowRunId: string;
+  sourceArtifactId: string;
+}) {
+  const proposedText = params.proposedText.replace(/\r\n/g, "\n").trim();
+  if (!proposedText) throw new Error("正文不能为空");
+  const artifact = await novelDb.workflowArtifacts.get(params.sourceArtifactId);
+  if (!artifact || artifact.projectId !== params.projectId || artifact.workflowRunId !== params.workflowRunId) {
+    throw new Error("正文产物不存在");
+  }
+
+  await novelDb.transaction("rw", novelDb.workflowArtifacts, novelDb.manuscriptChanges, async () => {
+    const superseded = await novelDb.manuscriptChanges.where("documentId").equals(params.documentId)
+      .filter((change) => change.sourceArtifactId === params.sourceArtifactId && change.status === "pending")
+      .toArray();
+    if (superseded.length) await novelDb.manuscriptChanges.bulkDelete(superseded.map((change) => change.id));
+    await novelDb.workflowArtifacts.update(artifact.id, {
+      contentMarkdown: proposedText,
+      revision: artifact.revision + 1,
+      updatedAt: Date.now(),
+      updatedBy: "local-user",
+    });
+  });
+
+  return prepareManuscriptChanges({ ...params, proposedText });
+}
+
 // Loop 8 修复 #14：导出 toHtml 供 commit-stage 同步 contentHtml
 export function toHtml(text: string) {
   const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
