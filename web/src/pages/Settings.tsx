@@ -26,7 +26,7 @@ export default function Settings() {
   const setGreenscreenPrompt = useUIStore((s) => s.setGreenscreenPrompt);
   const setSpritesheetPrompt = useUIStore((s) => s.setSpritesheetPrompt);
   const setImageGenAdapter = useUIStore((s) => s.setImageGenAdapter);
-  const { hasOwnKey, usesDefaultBaseUrl } = getEffectiveApiConfig();
+  const { hasOwnKey, hasDefaultKey, usesDefaultBaseUrl } = getEffectiveApiConfig();
 
   function onSave(values: {
     api_base_url: string;
@@ -56,7 +56,7 @@ export default function Settings() {
       />
 
       <Card style={{ background: "#18181b", borderColor: "#27272a", maxWidth: 640 }} styles={{ body: { padding: 20 } }}>
-        {!hasOwnKey && usesDefaultBaseUrl && (
+        {!hasOwnKey && usesDefaultBaseUrl && hasDefaultKey && (
           <Alert
             type="info"
             showIcon
@@ -64,11 +64,13 @@ export default function Settings() {
             style={{ marginBottom: 16 }}
           />
         )}
-        {!hasOwnKey && !usesDefaultBaseUrl && (
+        {!hasOwnKey && (!usesDefaultBaseUrl || !hasDefaultKey) && (
           <Alert
             type="warning"
             showIcon
-            message="当前使用自定义接口地址，请填写该接口对应的 API Key。"
+            message={usesDefaultBaseUrl
+              ? "当前部署未提供默认 API Key，请填写可用的 API Key。"
+              : "当前使用自定义接口地址，请填写该接口对应的 API Key。"}
             style={{ marginBottom: 16 }}
           />
         )}
@@ -88,7 +90,15 @@ export default function Settings() {
           <Form.Item label="API Base URL" name="api_base_url" help="留空使用默认接口地址">
             <Input placeholder="https://api.openai.com/v1" />
           </Form.Item>
-          <Form.Item label="API Key" name="api_key" help={apiKey ? "使用自有 Key" : "留空使用默认 Key（不显示）"}>
+          <Form.Item
+            label="API Key"
+            name="api_key"
+            help={apiKey
+              ? "使用自有 Key"
+              : usesDefaultBaseUrl && hasDefaultKey
+                ? "留空使用部署提供的默认 Key（不显示）"
+                : "当前没有可用的默认 Key，请填写"}
+          >
             <Input.Password placeholder="sk-..." />
           </Form.Item>
           <Form.Item label="对话模型" name="chat_model" help="新配置默认 gpt-5-5；仍可选择 auto 由接口自动选择可用模型">

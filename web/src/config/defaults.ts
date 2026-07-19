@@ -1,6 +1,7 @@
 // 默认 API 配置
 export const DEFAULT_BASE_URL = "https://gpt.eromaa.com/v1";
-export const DEFAULT_API_KEY = "sk-ziQCyGrdbsldbmTcdFuDMrAJ_P_5jrZd";
+// 可选的部署级共享 Key。VITE_* 会进入浏览器产物，不应把它当作服务端秘密。
+export const DEFAULT_API_KEY = String(import.meta.env.VITE_DEFAULT_API_KEY ?? "").trim();
 
 // 默认提示词模板：用户未配置（留空）时使用
 export const DEFAULT_GREENSCREEN_PROMPT =

@@ -121,7 +121,19 @@ export function getEffectiveApiConfig() {
   const defaultBaseUrl = normalizeApiBaseUrl(DEFAULT_BASE_URL);
   const baseUrl = customBaseUrl || defaultBaseUrl;
   const usesDefaultBaseUrl = baseUrl === defaultBaseUrl;
-  const apiKey = state.apiKey.trim() || (usesDefaultBaseUrl ? DEFAULT_API_KEY : "");
-  const hasOwnKey = !!state.apiKey.trim();
-  return { baseUrl, apiKey, hasOwnKey, usesDefaultBaseUrl, modelContextWindow: state.modelContextWindow };
+  const ownApiKey = state.apiKey.trim();
+  const defaultApiKey = DEFAULT_API_KEY.trim();
+  const apiKey = ownApiKey || (usesDefaultBaseUrl ? defaultApiKey : "");
+  const hasOwnKey = Boolean(ownApiKey);
+  const hasDefaultKey = Boolean(defaultApiKey);
+  const hasEffectiveKey = Boolean(apiKey);
+  return {
+    baseUrl,
+    apiKey,
+    hasOwnKey,
+    hasDefaultKey,
+    hasEffectiveKey,
+    usesDefaultBaseUrl,
+    modelContextWindow: state.modelContextWindow,
+  };
 }

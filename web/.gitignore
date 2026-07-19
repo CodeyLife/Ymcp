@@ -2,9 +2,13 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
 *.tsbuildinfo
 .vite
 .DS_Store
+.goal/
 
 # novel bench 历史基线与 fixture（本地生成，不入库）
 .novel-bench/
