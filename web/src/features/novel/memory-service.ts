@@ -1,6 +1,6 @@
 import { callStructuredNovelModel } from "./ai";
 import { compileNovelContext } from "./context";
-import { invalidateRevisionDependents, novelDb, recordBase } from "./db";
+import { invalidateRevisionDependents, novelDb, recordBase, type NovelDatabase } from "./db";
 import { splitSemanticUnits, upsertEmbedding, vectorSearch } from "./retrieval";
 import { rankLexicalUnits } from "./retrieval-evaluation";
 import { CONTEXT_SOURCE_KINDS } from "./types";
@@ -109,7 +109,7 @@ export interface NovelMemoryService {
   approveMemory(memoryId: string): Promise<void>;
   revokeMemory(memoryId: string): Promise<void>;
   setSourceOverride(threadId: string, sourceId: string, mode: "pin" | "exclude" | "clear"): Promise<void>;
-  compileStageContext(params: { threadId: string; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string; skillStage?: NovelSkillStage }): Promise<NovelContextPacket>;
+  compileStageContext(params: { threadId: string; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string; skillStage?: NovelSkillStage; db?: NovelDatabase }): Promise<NovelContextPacket>;
 }
 
 function uniqueStrings(values: string[] | undefined) {
@@ -130,23 +130,24 @@ function exactEntityRank(query: string, candidate: RetrievalCandidate) {
   return index >= 0 ? index + 1 : undefined;
 }
 
-async function buildCandidates(params: { projectId: string; targetDocumentId?: string; informationView: "author" | "reader" | "character"; factCutoffOrder?: number; threadId?: string; characterId?: string }) {
+async function buildCandidates(params: { projectId: string; targetDocumentId?: string; informationView: "author" | "reader" | "character"; factCutoffOrder?: number; threadId?: string; characterId?: string; db?: NovelDatabase }) {
   const { projectId, targetDocumentId, informationView } = params;
+  const db = params.db ?? novelDb;
   const [target, architecture, entities, relations, outline, documents, threads, clues, facts, knowledge, memories, conversationMemories] = await Promise.all([
-    targetDocumentId ? novelDb.documents.get(targetDocumentId) : Promise.resolve(undefined),
-    novelDb.architectures.where("projectId").equals(projectId).first(),
-    novelDb.entities.where("projectId").equals(projectId).toArray(),
-    novelDb.relations.where("projectId").equals(projectId).toArray(),
-    novelDb.outlineNodes.where("projectId").equals(projectId).toArray(),
-    novelDb.documents.where("projectId").equals(projectId).toArray(),
-    novelDb.plotThreads.where("projectId").equals(projectId).toArray(),
-    novelDb.foreshadowing.where("projectId").equals(projectId).toArray(),
-    novelDb.factAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
+    targetDocumentId ? db.documents.get(targetDocumentId) : Promise.resolve(undefined),
+    db.architectures.where("projectId").equals(projectId).first(),
+    db.entities.where("projectId").equals(projectId).toArray(),
+    db.relations.where("projectId").equals(projectId).toArray(),
+    db.outlineNodes.where("projectId").equals(projectId).toArray(),
+    db.documents.where("projectId").equals(projectId).toArray(),
+    db.plotThreads.where("projectId").equals(projectId).toArray(),
+    db.foreshadowing.where("projectId").equals(projectId).toArray(),
+    db.factAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
     informationView === "character" && params.characterId
-      ? novelDb.knowledgeAssertions.where("projectId").equals(projectId).and((item) => item.status === "active" && item.characterId === params.characterId).toArray()
+      ? db.knowledgeAssertions.where("projectId").equals(projectId).and((item) => item.status === "active" && item.characterId === params.characterId).toArray()
       : Promise.resolve([]),
-    novelDb.derivedMemories.where("projectId").equals(projectId).and((item) => item.status === "active" || item.status === "cold").toArray(),
-    novelDb.conversationMemories.where("projectId").equals(projectId).and((item) => item.status === "active" && (
+    db.derivedMemories.where("projectId").equals(projectId).and((item) => item.status === "active" || item.status === "cold").toArray(),
+    db.conversationMemories.where("projectId").equals(projectId).and((item) => item.status === "active" && (
       item.scope === "project"
        || (item.scope === "target" && Boolean(targetDocumentId) && item.targetId === targetDocumentId)
       || (item.scope === "task" && (item.scopeKey === `task:chapter-workflow:${targetDocumentId}` || item.scopeKey === `thread:${params.threadId}`))
@@ -251,12 +252,12 @@ async function buildCandidates(params: { projectId: string; targetDocumentId?: s
   return candidates.filter((candidate) => candidate.content.trim());
 }
 
-async function hybridRetrieve(params: { projectId: string; targetDocumentId?: string; informationView: "author" | "reader" | "character"; query: string; round: number; excludedIds: Set<string>; factCutoffOrder?: number; threadId?: string; characterId?: string; allowedKinds?: Set<NovelRetrievalHit["kind"]> }) {
+async function hybridRetrieve(params: { projectId: string; targetDocumentId?: string; informationView: "author" | "reader" | "character"; query: string; round: number; excludedIds: Set<string>; factCutoffOrder?: number; threadId?: string; characterId?: string; allowedKinds?: Set<NovelRetrievalHit["kind"]>; db?: NovelDatabase }) {
   const candidates = (await buildCandidates(params)).filter((candidate) => !params.excludedIds.has(candidate.sourceId) && (!params.allowedKinds || params.allowedKinds.has(candidate.kind)));
   if (!candidates.length) return [];
   const lexicalRanks = new Map(rankLexicalUnits(params.query, candidates.map((candidate) => ({ id: candidate.sourceId, title: candidate.title, content: candidate.content, aliases: candidate.aliases }))).map((id, index) => [id, index + 1]));
   const vectorRanks = new Map<string, number>();
-  await vectorSearch({ projectId: params.projectId, query: params.query, topK: 30 }).then((results) => results.forEach((item, index) => vectorRanks.set(`${item.targetId}:${item.chunkIndex ?? "root"}`, index + 1))).catch(() => undefined);
+  await vectorSearch({ projectId: params.projectId, query: params.query, topK: 30, db: params.db }).then((results) => results.forEach((item, index) => vectorRanks.set(`${item.targetId}:${item.chunkIndex ?? "root"}`, index + 1))).catch(() => undefined);
   const scored = candidates.map((candidate) => {
     const lexicalRank = lexicalRanks.get(candidate.sourceId);
     const vectorRank = vectorRanks.get(`${candidate.targetId ?? candidate.sourceId}:${candidate.targetChunkIndex ?? "root"}`);
@@ -400,12 +401,12 @@ async function savePreferenceMemory(params: { thread: NovelConversationThread; m
   return memory;
 }
 
-export async function scheduleMemoryJob(params: Pick<NovelMemoryJob, "projectId" | "jobType" | "idempotencyKey" | "payload">) {
-  return novelDb.transaction("rw", novelDb.memoryJobs, async () => {
-    const existing = await novelDb.memoryJobs.where("idempotencyKey").equals(params.idempotencyKey).first();
+export async function scheduleMemoryJob(params: Pick<NovelMemoryJob, "projectId" | "jobType" | "idempotencyKey" | "payload">, db: NovelDatabase = novelDb) {
+  return db.transaction("rw", db.memoryJobs, async () => {
+    const existing = await db.memoryJobs.where("idempotencyKey").equals(params.idempotencyKey).first();
     if (existing) return existing;
     const job: NovelMemoryJob = { ...recordBase(params.projectId), jobType: params.jobType, idempotencyKey: params.idempotencyKey, payload: params.payload, status: "pending", attempts: 0, availableAt: Date.now() };
-    await novelDb.memoryJobs.add(job);
+    await db.memoryJobs.add(job);
     return job;
   });
 }
@@ -484,10 +485,11 @@ const STAGE_RETRIEVAL_KINDS: Partial<Record<NovelAgentRole, Set<NovelRetrievalHi
   "character-enricher": new Set(["entity", "fact"]),
 };
 
-async function runStageRetrieval(params: { thread: NovelConversationThread; brief: CreativeBrief; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string }) {
+async function runStageRetrieval(params: { thread: NovelConversationThread; brief: CreativeBrief; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string; db?: NovelDatabase }) {
+  const db = params.db ?? novelDb;
   const [document, povEntity] = await Promise.all([
-    novelDb.documents.get(params.thread.targetId),
-    params.brief.povCharacterId ? novelDb.entities.get(params.brief.povCharacterId) : undefined,
+    db.documents.get(params.thread.targetId),
+    params.brief.povCharacterId ? db.entities.get(params.brief.povCharacterId) : undefined,
   ]);
   if (!document) throw new Error("目标章节不存在");
   const informationView = params.stage === "draft" && params.brief.povCharacterId ? "character" as const : "author" as const;
@@ -516,9 +518,10 @@ async function runStageRetrieval(params: { thread: NovelConversationThread; brie
     threadId: params.thread.id,
     characterId: informationView === "character" ? params.brief.povCharacterId : undefined,
     allowedKinds: params.role ? STAGE_RETRIEVAL_KINDS[params.role] : undefined,
+    db: params.db,
   });
   const selected = new Map<string, NovelRetrievalHit>(hits.map((hit) => [hit.sourceId, hit]));
-  const candidates = await buildCandidates({ projectId: params.thread.projectId, targetDocumentId: params.thread.targetId, informationView, factCutoffOrder: params.brief.factCutoffOrder, threadId: params.thread.id, characterId: informationView === "character" ? params.brief.povCharacterId : undefined });
+  const candidates = await buildCandidates({ projectId: params.thread.projectId, targetDocumentId: params.thread.targetId, informationView, factCutoffOrder: params.brief.factCutoffOrder, threadId: params.thread.id, characterId: informationView === "character" ? params.brief.povCharacterId : undefined, db: params.db });
   for (const pinnedId of params.thread.pinnedSourceIds) {
     const pinned = candidates.find((candidate) => candidate.sourceId === pinnedId && (!params.role || !STAGE_RETRIEVAL_KINDS[params.role] || STAGE_RETRIEVAL_KINDS[params.role]!.has(candidate.kind)));
     if (pinned) selected.set(pinnedId, { ...pinned, fusedScore: 1, round: 1 });
@@ -531,7 +534,7 @@ async function runStageRetrieval(params: { thread: NovelConversationThread; brie
     queries: [query], rounds: [{ index: 1, query, hitIds: hits.map((hit) => hit.sourceId), selectedIds: selectedHits.map((hit) => hit.sourceId), enoughEvidence: selectedHits.length > 0 }],
     hits: [...selected.values()], selectedSourceIds: selectedHits.map((hit) => hit.sourceId), pinnedSourceIds: [...params.thread.pinnedSourceIds], excludedSourceIds: [...params.thread.excludedSourceIds], status: "completed",
   };
-  await novelDb.retrievalRuns.add(run);
+  await db.retrievalRuns.add(run);
   return { run, selectedHits };
 }
 
@@ -708,12 +711,13 @@ export class DexieNovelMemoryService implements NovelMemoryService {
     await novelDb.conversationThreads.update(threadId, { pinnedSourceIds: [...pinned], excludedSourceIds: [...excluded], revision: thread.revision + 1, updatedAt: Date.now() });
   }
 
-  async compileStageContext(params: { threadId: string; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string; skillStage?: NovelSkillStage }) {
-    const thread = await novelDb.conversationThreads.get(params.threadId);
+  async compileStageContext(params: { threadId: string; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string; skillStage?: NovelSkillStage; db?: NovelDatabase }) {
+    const db = params.db ?? novelDb;
+    const thread = await db.conversationThreads.get(params.threadId);
     if (!thread) throw new Error("协作对话不存在");
-    const brief = (await novelDb.creativeBriefs.where("threadId").equals(thread.id).reverse().sortBy("updatedAt")).find((item) => item.status === "confirmed");
+    const brief = (await db.creativeBriefs.where("threadId").equals(thread.id).reverse().sortBy("updatedAt")).find((item) => item.status === "confirmed");
     if (!brief) throw new Error("请先确认本章创作简报");
-    const retrieval = await runStageRetrieval({ thread, brief, stage: params.stage, role: params.role, instruction: params.instruction, workflowRunId: params.workflowRunId });
+    const retrieval = await runStageRetrieval({ thread, brief, stage: params.stage, role: params.role, instruction: params.instruction, workflowRunId: params.workflowRunId, db: params.db });
     const stage = params.skillStage ?? (params.stage === "draft" ? "drafting" : params.stage === "review" ? "review" : params.stage === "revision" ? "revision" : params.stage === "fact-extraction" ? "fact-extraction" : "planning");
     return compileNovelContext({
       projectId: thread.projectId, task: `chapter-workflow:${params.stage}`, instruction: params.instruction, targetDocumentId: thread.targetId,
@@ -721,6 +725,7 @@ export class DexieNovelMemoryService implements NovelMemoryService {
       informationView: params.stage === "draft" && brief.povCharacterId ? "character" : "author", viewCharacterId: params.stage === "draft" ? brief.povCharacterId : undefined,
       threadId: thread.id, creativeBriefId: brief.id, retrievalRunId: retrieval.run.id, retrievalSourceIds: retrieval.run.selectedSourceIds, retrievalHits: retrieval.selectedHits, factCutoffOrder: brief.factCutoffOrder,
       consumer: { workflowRunId: params.workflowRunId, stage: params.stage, role: params.role },
+      db: params.db,
     });
   }
 }
@@ -808,9 +813,11 @@ export class HttpNovelMemoryService implements NovelMemoryService {
     }
   }
 
-  async compileStageContext(params: { threadId: string; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string; skillStage?: NovelSkillStage }) {
-    const packet = await this.request<NovelContextPacket>(`/novel-memory/threads/${params.threadId}/contexts:compile`, { method: "POST", body: JSON.stringify(params) });
-    await novelDb.contextPackets.put(packet);
+  async compileStageContext(params: { threadId: string; stage: WorkflowStage; role?: NovelAgentRole; instruction: string; workflowRunId?: string; skillStage?: NovelSkillStage; db?: NovelDatabase }) {
+    const { db: _db, ...rest } = params;
+    const packet = await this.request<NovelContextPacket>(`/novel-memory/threads/${params.threadId}/contexts:compile`, { method: "POST", body: JSON.stringify(rest) });
+    const db = params.db ?? novelDb;
+    await db.contextPackets.put(packet);
     return packet;
   }
 }

@@ -1,4 +1,4 @@
-import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb, recordBase } from "./db";
+import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb, recordBase, type NovelDatabase } from "./db";
 import type {
   AgentRun,
   ChapterBlueprint,
@@ -120,58 +120,58 @@ export function stableArtifactBase(run: WorkflowRun, stage: WorkflowStage, kind:
 
 export type ArtifactInput = Omit<WorkflowArtifact, "id" | "schemaVersion" | "revision" | "createdAt" | "updatedAt" | "createdBy" | "updatedBy" | "deletedAt">;
 
-export async function saveArtifact(run: WorkflowRun, input: ArtifactInput) {
+export async function saveArtifact(run: WorkflowRun, input: ArtifactInput, db: NovelDatabase = novelDb) {
   const artifact: WorkflowArtifact = { ...stableArtifactBase(run, input.stage, input.kind), ...input };
-  await novelDb.workflowArtifacts.put(artifact);
+  await db.workflowArtifacts.put(artifact);
   return artifact;
 }
 
-export async function latestArtifact(runId: string, kinds: WorkflowArtifact["kind"][]) {
-  const items = await novelDb.workflowArtifacts.where("workflowRunId").equals(runId).reverse().sortBy("createdAt");
+export async function latestArtifact(runId: string, kinds: WorkflowArtifact["kind"][], db: NovelDatabase = novelDb) {
+  const items = await db.workflowArtifacts.where("workflowRunId").equals(runId).reverse().sortBy("createdAt");
   return items.find((item) => kinds.includes(item.kind));
 }
 
-export async function transition(run: WorkflowRun, stage: WorkflowStage, status: WorkflowRun["status"] = "running", changes: Partial<WorkflowRun> = {}) {
-  const current = await novelDb.workflowRuns.get(run.id);
+export async function transition(run: WorkflowRun, stage: WorkflowStage, status: WorkflowRun["status"] = "running", changes: Partial<WorkflowRun> = {}, db: NovelDatabase = novelDb) {
+  const current = await db.workflowRuns.get(run.id);
   if (current && current.revision !== run.revision && ["paused", "cancelled"].includes(current.status)) {
     return current;
   }
   const next: WorkflowRun = { ...run, ...changes, currentStage: stage, stageIndex: BUILTIN_CHAPTER_WORKFLOW.stages.indexOf(stage), status, revision: run.revision + 1, updatedAt: Date.now() };
-  await novelDb.workflowRuns.put(next);
+  await db.workflowRuns.put(next);
   return next;
 }
 
-export async function createAgentRecord(params: { run: WorkflowRun; role: NovelAgentRole; goal: string; skillRefs: string[] }) {
-  const project = await novelDb.projects.get(params.run.projectId);
+export async function createAgentRecord(params: { run: WorkflowRun; role: NovelAgentRole; goal: string; skillRefs: string[] }, db: NovelDatabase = novelDb) {
+  const project = await db.projects.get(params.run.projectId);
   if (!project) throw new Error("项目不存在");
   const agent: AgentRun = { ...recordBase(params.run.projectId), workflowRunId: params.run.id, goal: params.goal, status: "running", model: project.settings.textModel, promptVersion: "novel-workflow-v2", role: params.role, skillRefs: params.skillRefs, artifactRefs: [], attempt: params.run.revisionIteration + 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: params.goal, tool: "model.chat", status: "running" }] };
-  await novelDb.agentRuns.add(agent);
+  await db.agentRuns.add(agent);
   return { project, agent };
 }
 
-export async function finishAgent(agent: AgentRun, params: { promptHash: string; usage?: { inputTokens: number; outputTokens: number }; artifactId?: string }) {
+export async function finishAgent(agent: AgentRun, params: { promptHash: string; usage?: { inputTokens: number; outputTokens: number }; artifactId?: string }, db: NovelDatabase = novelDb) {
   agent.status = "completed"; agent.finishedAt = Date.now(); agent.promptHash = params.promptHash; agent.usage = params.usage; agent.artifactRefs = params.artifactId ? [params.artifactId] : []; agent.steps[0].status = "completed";
-  await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
+  await db.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
 }
 
-export async function failAgent(agent: AgentRun, error: unknown) {
+export async function failAgent(agent: AgentRun, error: unknown, db: NovelDatabase = novelDb) {
   const message = error instanceof Error ? error.message : "未知错误";
   agent.status = "failed"; agent.finishedAt = Date.now(); agent.steps[0].status = "failed"; agent.steps[0].error = message;
-  await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
+  await db.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
 }
 
-export async function failRun(run: WorkflowRun, error: unknown) {
+export async function failRun(run: WorkflowRun, error: unknown, db: NovelDatabase = novelDb) {
   const message = error instanceof Error ? error.message : "未知工作流错误";
   const next = { ...run, status: "failed" as const, error: message, revision: run.revision + 1, updatedAt: Date.now() };
-  await novelDb.workflowRuns.put(next);
+  await db.workflowRuns.put(next);
   return next;
 }
 
-export async function createApprovalProposal(run: WorkflowRun, artifact: WorkflowArtifact, operation: string, title: string) {
-  const existing = await novelDb.proposals.where("projectId").equals(run.projectId).and((item) => item.targetId === run.id && item.operation === operation && item.status === "pending").first();
+export async function createApprovalProposal(run: WorkflowRun, artifact: WorkflowArtifact, operation: string, title: string, db: NovelDatabase = novelDb) {
+  const existing = await db.proposals.where("projectId").equals(run.projectId).and((item) => item.targetId === run.id && item.operation === operation && item.status === "pending").first();
   if (existing) return existing;
-  const project = await novelDb.projects.get(run.projectId);
+  const project = await db.projects.get(run.projectId);
   const proposal = { ...recordBase(run.projectId), title, operation, targetId: run.id, status: "pending" as const, previewMarkdown: artifact.contentMarkdown, patches: [], items: [], contextPacketId: run.contextPacketId ?? "", artifactId: artifact.id, model: project?.settings.textModel ?? "" };
-  await novelDb.proposals.add(proposal);
+  await db.proposals.add(proposal);
   return proposal;
 }

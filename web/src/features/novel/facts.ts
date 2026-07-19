@@ -1,4 +1,4 @@
-import { appendOperation, novelDb, recordBase } from "./db";
+import { appendOperation, novelDb, recordBase, type NovelDatabase } from "./db";
 import { normalizedCreate } from "./generation";
 import type { FactAssertion, FactKnowledgeDelta, FactObjectValue, FactSubjectKind, FactCandidate, FactTimeMode, FactTruthStatus, KnowledgeAssertion, ManuscriptDocument, ProposalTargetTable, StoryEntity, StoryPoint, StorySnapshot } from "./types";
 
@@ -227,10 +227,14 @@ export function classifyFactRisk(fact: ExtractedFact): Pick<FactCandidate, "risk
   return { risk: "safe", riskReason: "已有角色的明确状态变化" };
 }
 
-export async function storeFactCandidates(params: { projectId: string; workflowRunId: string; sourceArtifactId: string; sourceRevisionId?: string; defaultRevealedAt?: StoryPoint; facts: ExtractedFact[] }) {
-  const candidates: FactCandidate[] = params.facts.map((fact) => {
+export async function storeFactCandidates(params: { projectId: string; workflowRunId: string; sourceArtifactId: string; sourceRevisionId?: string; defaultRevealedAt?: StoryPoint; facts: ExtractedFact[] }, db: NovelDatabase = novelDb) {
+  const candidates: FactCandidate[] = [];
+  for (const fact of params.facts) {
     const normalized = { ...fact, confidence: Math.max(0, Math.min(1, fact.confidence)) };
-    return {
+    const target = normalized.targetId && MUTABLE_TABLES.has(normalized.targetTable)
+      ? await db.table(normalized.targetTable).get(normalized.targetId) as Record<string, unknown> | undefined
+      : undefined;
+    candidates.push({
       ...recordBase(params.projectId),
       workflowRunId: params.workflowRunId,
       sourceArtifactId: params.sourceArtifactId,
@@ -249,7 +253,7 @@ export async function storeFactCandidates(params: { projectId: string; workflowR
       revealedAt: params.defaultRevealedAt,
       humanReadable: normalized.humanReadable ?? `${normalized.targetTable}.${normalized.field}：${typeof normalized.after === "string" ? normalized.after : JSON.stringify(normalized.after)}`,
       knowledgeDeltas: normalized.knowledgeDeltas ?? [],
-      before: normalized.before,
+      before: normalized.before ?? readFactField(target, normalized.field),
       after: normalized.after,
       evidence: normalized.evidence,
       paragraph: normalized.paragraph,
@@ -258,18 +262,18 @@ export async function storeFactCandidates(params: { projectId: string; workflowR
       conflict: normalized.conflict,
       ...classifyFactRisk(normalized),
       status: "pending",
-    };
-  });
-  await novelDb.factCandidates.bulkAdd(candidates);
+    });
+  }
+  await db.factCandidates.bulkAdd(candidates);
   return candidates;
 }
 
-export async function setFactCandidateStatus(id: string, status: FactCandidate["status"]) {
-  const candidate = await novelDb.factCandidates.get(id);
+export async function setFactCandidateStatus(id: string, status: FactCandidate["status"], db: NovelDatabase = novelDb) {
+  const candidate = await db.factCandidates.get(id);
   if (!candidate) throw new Error("事实候选不存在");
   if (status === "accepted" && candidate.conflict) throw new Error("冲突事实不能直接采纳，请先修正或排除");
   const now = Date.now();
-  await novelDb.factCandidates.update(id, { status, decisionSource: "author", decidedAt: now, revision: candidate.revision + 1, updatedAt: now });
+  await db.factCandidates.update(id, { status, decisionSource: "author", decidedAt: now, revision: candidate.revision + 1, updatedAt: now });
 }
 
 /**
@@ -278,10 +282,15 @@ export async function setFactCandidateStatus(id: string, status: FactCandidate["
  * - 已是目标状态的候选会被跳过
  * - 返回成功变更的候选 id 列表
  */
-export async function bulkSetFactCandidateStatus(ids: string[], status: FactCandidate["status"]): Promise<string[]> {
+export async function bulkSetFactCandidateStatus(
+  ids: string[],
+  status: FactCandidate["status"],
+  db: NovelDatabase = novelDb,
+  decisionSource: NonNullable<FactCandidate["decisionSource"]> = "author",
+): Promise<string[]> {
   if (!ids.length) return [];
   const now = Date.now();
-  const candidates = await novelDb.factCandidates.bulkGet(ids);
+  const candidates = await db.factCandidates.bulkGet(ids);
   const updates: Array<{ key: string; changes: Partial<FactCandidate> }> = [];
   for (const candidate of candidates) {
     if (!candidate) continue;
@@ -291,14 +300,14 @@ export async function bulkSetFactCandidateStatus(ids: string[], status: FactCand
       key: candidate.id,
       changes: {
         status,
-        decisionSource: "author",
+        decisionSource,
         decidedAt: now,
         revision: candidate.revision + 1,
         updatedAt: now,
       },
     });
   }
-  if (updates.length) await novelDb.factCandidates.bulkUpdate(updates);
+  if (updates.length) await db.factCandidates.bulkUpdate(updates);
   return updates.map((item) => item.key);
 }
 
@@ -317,10 +326,10 @@ export function filterSafeAcceptableFactIds(facts: FactCandidate[]): string[] {
   return facts.filter((item) => item.status === "pending" && !item.conflict && item.risk === "safe").map((item) => item.id);
 }
 
-export async function autoAcceptSafeFactCandidates(candidates: FactCandidate[]) {
+export async function autoAcceptSafeFactCandidates(candidates: FactCandidate[], db: NovelDatabase = novelDb) {
   const safe = candidates.filter((candidate) => candidate.status === "pending" && candidate.risk === "safe" && !candidate.conflict);
   const now = Date.now();
-  await novelDb.factCandidates.bulkPut(safe.map((candidate) => ({
+  await db.factCandidates.bulkPut(safe.map((candidate) => ({
     ...candidate,
     status: "accepted" as const,
     decisionSource: "auto-policy" as const,
@@ -343,6 +352,19 @@ function applyField(record: Record<string, unknown>, path: string, value: unknow
   }
   cursor[segments.at(-1)!] = value;
   return clone;
+}
+
+export function readFactField(record: Record<string, unknown> | undefined, path: string): unknown {
+  let current: unknown = record;
+  for (const segment of path.split(".").filter(Boolean)) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return structuredClone(current);
+}
+
+export function factProjectionValuesEqual(left: unknown, right: unknown): boolean {
+  return stableFactValue(left) === stableFactValue(right);
 }
 
 function subjectKindForTable(table: string): FactSubjectKind {
@@ -381,7 +403,7 @@ export function candidateToFactAssertion(candidate: FactCandidate, projectionTar
     validTo: candidate.validTo,
     revealedAt: candidate.revealedAt,
     sourceRevisionId,
-    sourceArtifactId: candidate.sourceArtifactId,
+    sourceArtifactId: candidate.sourceRevisionId ? undefined : candidate.sourceArtifactId,
     provenance: candidate.sourceRevisionId ? "approved-revision" : "legacy-artifact",
     evidence: candidate.evidence,
     paragraph: candidate.paragraph,
@@ -410,11 +432,11 @@ function knowledgeAssertionsForCandidate(candidate: FactCandidate, factAssertion
  * 查找项目中与给定 name/aliases 匹配的已有 character 实体。
  * 匹配规则：name 完全相等，或 aliases 交集，或已有实体的 name 在新 aliases 中，或新 name 在已有 aliases 中。
  */
-export async function findExistingCharacter(projectId: string, name: string, aliases: string[]): Promise<StoryEntity | undefined> {
+export async function findExistingCharacter(projectId: string, name: string, aliases: string[], db: NovelDatabase = novelDb): Promise<StoryEntity | undefined> {
   const trimmedName = name.trim();
   const trimmedAliases = aliases.map((a) => String(a).trim()).filter(Boolean);
   if (!trimmedName) return undefined;
-  return novelDb.entities
+  return db.entities
     .where("projectId")
     .equals(projectId)
     .and((e) => {
@@ -433,7 +455,7 @@ export async function findExistingCharacter(projectId: string, name: string, ali
  * 若项目中已存在同名/同别名 character，则丢弃该候选（LLM 误判为新建）。
  * 返回剩余 facts 与被丢弃数量。
  */
-export async function dedupeCharacterFactCandidates(projectId: string, facts: ExtractedFact[]): Promise<{ facts: ExtractedFact[]; discardedCount: number }> {
+export async function dedupeCharacterFactCandidates(projectId: string, facts: ExtractedFact[], db: NovelDatabase = novelDb): Promise<{ facts: ExtractedFact[]; discardedCount: number }> {
   const kept: ExtractedFact[] = [];
   let discardedCount = 0;
   for (const fact of facts) {
@@ -442,7 +464,7 @@ export async function dedupeCharacterFactCandidates(projectId: string, facts: Ex
       if (payload && typeof payload === "object" && !Array.isArray(payload) && payload.kind === "character" && typeof payload.name === "string") {
         const name = String(payload.name).trim();
         const aliases = Array.isArray(payload.aliases) ? payload.aliases.map((a) => String(a).trim()).filter(Boolean) : [];
-        const existing = await findExistingCharacter(projectId, name, aliases);
+        const existing = await findExistingCharacter(projectId, name, aliases, db);
         if (existing) { discardedCount += 1; continue; }
       }
     }
@@ -451,8 +473,8 @@ export async function dedupeCharacterFactCandidates(projectId: string, facts: Ex
   return { facts: kept, discardedCount };
 }
 
-export async function prepareFactCandidates(projectId: string, facts: ExtractedFact[]): Promise<PreparedFactCandidates> {
-  const characterResult = await dedupeCharacterFactCandidates(projectId, facts);
+export async function prepareFactCandidates(projectId: string, facts: ExtractedFact[], db: NovelDatabase = novelDb): Promise<PreparedFactCandidates> {
+  const characterResult = await dedupeCharacterFactCandidates(projectId, facts, db);
   let discardedMetaAbsenceCount = 0;
   let discardedUnprojectableCount = 0;
   let discardedDuplicateFactCount = 0;
@@ -494,8 +516,8 @@ export async function prepareFactCandidates(projectId: string, facts: ExtractedF
   };
 }
 
-export async function commitAcceptedFacts(projectId: string, workflowRunId: string) {
-  const candidates = await novelDb.factCandidates.where("workflowRunId").equals(workflowRunId).and((item) => item.status === "accepted" && !item.conflict && item.novelty !== "duplicate" && !item.committedAt).toArray();
+export async function commitAcceptedFacts(projectId: string, workflowRunId: string, db: NovelDatabase = novelDb) {
+  const candidates = await db.factCandidates.where("workflowRunId").equals(workflowRunId).and((item) => item.status === "accepted" && !item.conflict && item.novelty !== "duplicate" && !item.committedAt).toArray();
   const committed: string[] = [];
   for (const candidate of candidates) {
     if (!MUTABLE_TABLES.has(candidate.targetTable)) continue;
@@ -505,16 +527,16 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
       delete assertion.projection;
       const knowledgeAssertions = knowledgeAssertionsForCandidate(candidate, assertion.id);
       const committedAt = Date.now();
-      await novelDb.transaction("rw", novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.factCandidates, async () => {
-        await novelDb.factAssertions.put(assertion);
-        if (knowledgeAssertions.length) await novelDb.knowledgeAssertions.bulkPut(knowledgeAssertions);
-        await novelDb.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
+      await db.transaction("rw", db.factAssertions, db.knowledgeAssertions, db.factCandidates, async () => {
+        await db.factAssertions.put(assertion);
+        if (knowledgeAssertions.length) await db.knowledgeAssertions.bulkPut(knowledgeAssertions);
+        await db.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
       });
       committed.push(candidate.id);
       continue;
     }
 
-    const table = novelDb.table(candidate.targetTable);
+    const table = db.table(candidate.targetTable);
 
     if (candidate.novelty === "new" && !candidate.targetId) {
       const payload = candidate.after as Record<string, unknown>;
@@ -523,7 +545,7 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
         const fromId = String(payload.fromEntityId ?? "");
         const toId = String(payload.toEntityId ?? "");
         if (!fromId || !toId) continue;
-        const existing = await novelDb.relations
+        const existing = await db.relations
           .where("projectId")
           .equals(projectId)
           .and((r) => r.fromEntityId === fromId && r.toEntityId === toId)
@@ -534,7 +556,7 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
         const name = String(payload.name ?? "").trim();
         const aliases = Array.isArray(payload.aliases) ? payload.aliases.map((a) => String(a).trim()).filter(Boolean) : [];
         if (!name) continue;
-        const existing = await findExistingCharacter(projectId, name, aliases);
+        const existing = await findExistingCharacter(projectId, name, aliases, db);
         if (existing) continue;
       }
       const id = `${candidate.targetTable.slice(0, 3)}:${crypto.randomUUID()}`;
@@ -542,12 +564,12 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
       const assertion = candidateToFactAssertion(candidate, id);
       const knowledgeAssertions = knowledgeAssertionsForCandidate(candidate, assertion.id);
       const committedAt = Date.now();
-      await novelDb.transaction("rw", table, novelDb.operations, novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.factCandidates, async () => {
+      await db.transaction("rw", table, db.operations, db.factAssertions, db.knowledgeAssertions, db.factCandidates, async () => {
         await table.put(record);
-        await appendOperation(projectId, candidate.targetTable, id, "create", { _create: { before: null, after: payload } });
-        await novelDb.factAssertions.put(assertion);
-        if (knowledgeAssertions.length) await novelDb.knowledgeAssertions.bulkPut(knowledgeAssertions);
-        await novelDb.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
+        await appendOperation(projectId, candidate.targetTable, id, "create", { _create: { before: null, after: payload } }, db);
+        await db.factAssertions.put(assertion);
+        if (knowledgeAssertions.length) await db.knowledgeAssertions.bulkPut(knowledgeAssertions);
+        await db.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
       });
       committed.push(candidate.id);
       continue;
@@ -564,23 +586,23 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
     const assertion = candidateToFactAssertion(candidate, targetId);
     const knowledgeAssertions = knowledgeAssertionsForCandidate(candidate, assertion.id);
     const committedAt = Date.now();
-    await novelDb.transaction("rw", table, novelDb.operations, novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.factCandidates, async () => {
+    await db.transaction("rw", table, db.operations, db.factAssertions, db.knowledgeAssertions, db.factCandidates, async () => {
       await table.put(next);
-      await appendOperation(projectId, candidate.targetTable, targetId, "update", { [candidate.field]: { before: candidate.before, after: candidate.after } });
-      await novelDb.factAssertions.put(assertion);
-      if (knowledgeAssertions.length) await novelDb.knowledgeAssertions.bulkPut(knowledgeAssertions);
-      await novelDb.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
+      await appendOperation(projectId, candidate.targetTable, targetId, "update", { [candidate.field]: { before: candidate.before, after: candidate.after } }, db);
+      await db.factAssertions.put(assertion);
+      if (knowledgeAssertions.length) await db.knowledgeAssertions.bulkPut(knowledgeAssertions);
+      await db.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
     });
     committed.push(candidate.id);
   }
   return committed;
 }
 
-export async function createWorkflowSnapshot(params: { projectId: string; documentId: string; label: string; summary: string }) {
+export async function createWorkflowSnapshot(params: { projectId: string; documentId: string; label: string; summary: string }, db: NovelDatabase = novelDb) {
   const [entities, threads, previous] = await Promise.all([
-    novelDb.entities.where("projectId").equals(params.projectId).toArray(),
-    novelDb.plotThreads.where("projectId").equals(params.projectId).toArray(),
-    novelDb.snapshots.where("projectId").equals(params.projectId).reverse().sortBy("createdAt").then((items) => items[0]),
+    db.entities.where("projectId").equals(params.projectId).toArray(),
+    db.plotThreads.where("projectId").equals(params.projectId).toArray(),
+    db.snapshots.where("projectId").equals(params.projectId).reverse().sortBy("createdAt").then((items) => items[0]),
   ]);
   const snapshot: StorySnapshot = {
     ...recordBase(params.projectId),
@@ -593,7 +615,7 @@ export async function createWorkflowSnapshot(params: { projectId: string; docume
     recentSummary: params.summary,
     sourceDocumentId: params.documentId,
   };
-  await novelDb.snapshots.add(snapshot);
-  await novelDb.projects.update(params.projectId, { currentSnapshotId: snapshot.id, updatedAt: Date.now() });
+  await db.snapshots.add(snapshot);
+  await db.projects.update(params.projectId, { currentSnapshotId: snapshot.id, updatedAt: Date.now() });
   return snapshot;
 }

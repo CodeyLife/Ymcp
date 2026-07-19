@@ -1,4 +1,4 @@
-import { invalidateRevisionDependents, novelDb, recordBase } from "./db";
+import { invalidateRevisionDependents, novelDb, recordBase, type NovelDatabase } from "./db";
 import type { DerivedMemory, DerivedMemoryContent, NarrativeUnit, NarrativeUnitKind, OutlineRealization } from "./types";
 import { scheduleMemoryJob } from "./memory-service";
 
@@ -68,7 +68,7 @@ export async function assignChapterToSequence(documentId: string, sequenceId?: s
   }
   await novelDb.documents.update(documentId, { primaryNarrativeUnitId: sequenceId, revision: document.revision + 1, updatedAt: Date.now() });
   const active = await novelDb.derivedMemories.where("documentId").equals(documentId).and((memory) => memory.status === "active" || memory.status === "cold").toArray();
-  if (active.length) await invalidateMemoryAncestors(document.projectId, active.map((memory) => memory.id));
+  if (active.length) await invalidateMemoryAncestors(document.projectId, active.map((memory) => memory.id), novelDb);
 }
 
 export async function linkOutlineRealization(params: { projectId: string; outlineNodeId: string; documentId: string; sceneId?: string; status?: OutlineRealization["status"]; note?: string }) {
@@ -86,8 +86,8 @@ export async function linkOutlineRealization(params: { projectId: string; outlin
   return realization;
 }
 
-async function invalidateMemoryAncestors(projectId: string, sourceIds: string[]) {
-  const all = await novelDb.derivedMemories.where("projectId").equals(projectId).toArray();
+async function invalidateMemoryAncestors(projectId: string, sourceIds: string[], db: NovelDatabase) {
+  const all = await db.derivedMemories.where("projectId").equals(projectId).toArray();
   const stale = new Set(sourceIds);
   let changed = true;
   while (changed) {
@@ -101,18 +101,18 @@ async function invalidateMemoryAncestors(projectId: string, sourceIds: string[])
   }
   const ancestors = all.filter((memory) => stale.has(memory.id) && !sourceIds.includes(memory.id) && memory.status !== "stale");
   const now = Date.now();
-  await novelDb.derivedMemories.bulkPut(ancestors.map((memory) => ({ ...memory, status: "stale" as const, validation: { passed: false, issues: ["下层来源已变化，需要重新整合"], checkedAt: now }, revision: memory.revision + 1, updatedAt: now })));
+  await db.derivedMemories.bulkPut(ancestors.map((memory) => ({ ...memory, status: "stale" as const, validation: { passed: false, issues: ["下层来源已变化，需要重新整合"], checkedAt: now }, revision: memory.revision + 1, updatedAt: now })));
   return ancestors.map((memory) => memory.id);
 }
 
-export async function invalidateDerivedMemoriesForRevision(projectId: string, sourceRevisionId: string) {
-  return invalidateRevisionDependents(projectId, [sourceRevisionId]);
+export async function invalidateDerivedMemoriesForRevision(projectId: string, sourceRevisionId: string, db: NovelDatabase = novelDb) {
+  return invalidateRevisionDependents(projectId, [sourceRevisionId], "来源正文修订已被取代", db);
 }
 
-export async function createChapterMemory(params: { projectId: string; documentId: string; sourceRevisionId: string; summary: string; content?: Partial<DerivedMemoryContent> }) {
-  const [document, revision] = await Promise.all([novelDb.documents.get(params.documentId), novelDb.revisions.get(params.sourceRevisionId)]);
+export async function createChapterMemory(params: { projectId: string; documentId: string; sourceRevisionId: string; summary: string; content?: Partial<DerivedMemoryContent> }, db: NovelDatabase = novelDb) {
+  const [document, revision] = await Promise.all([db.documents.get(params.documentId), db.revisions.get(params.sourceRevisionId)]);
   if (!document || !revision || document.projectId !== params.projectId || revision.projectId !== params.projectId || revision.documentId !== document.id || revision.approvalStatus !== "approved") throw new Error("章节记忆必须绑定当前有效的已批准正文修订");
-  const previous = await novelDb.derivedMemories.where("documentId").equals(document.id).and((memory) => memory.level === "chapter" && (memory.status === "active" || memory.status === "cold")).toArray();
+  const previous = await db.derivedMemories.where("documentId").equals(document.id).and((memory) => memory.level === "chapter" && (memory.status === "active" || memory.status === "cold")).toArray();
   const content = mergeContent(params.content);
   const now = Date.now();
   const memory: DerivedMemory = {
@@ -130,12 +130,12 @@ export async function createChapterMemory(params: { projectId: string; documentI
     tokenEstimate: estimateTokens(`${params.summary}\n${Object.values(content).flat().join("\n")}`),
     generatedAt: now,
   };
-  await novelDb.transaction("rw", novelDb.derivedMemories, async () => {
-    await novelDb.derivedMemories.bulkPut(previous.map((item) => ({ ...item, status: "superseded" as const, revision: item.revision + 1, updatedAt: now })));
-    await novelDb.derivedMemories.add(memory);
+  await db.transaction("rw", db.derivedMemories, async () => {
+    await db.derivedMemories.bulkPut(previous.map((item) => ({ ...item, status: "superseded" as const, revision: item.revision + 1, updatedAt: now })));
+    await db.derivedMemories.add(memory);
   });
-  if (previous.length) await invalidateMemoryAncestors(params.projectId, previous.map((item) => item.id));
-  await scheduleMemoryJob({ projectId: params.projectId, jobType: "embedding", idempotencyKey: `embedding:derivedMemories:${memory.id}:${memory.revision}`, payload: { targetTable: "derivedMemories", targetId: memory.id, content: `${memory.summary}\n${Object.values(memory.content).flat().join("\n")}` } });
+  if (previous.length) await invalidateMemoryAncestors(params.projectId, previous.map((item) => item.id), db);
+  await scheduleMemoryJob({ projectId: params.projectId, jobType: "embedding", idempotencyKey: `embedding:derivedMemories:${memory.id}:${memory.revision}`, payload: { targetTable: "derivedMemories", targetId: memory.id, content: `${memory.summary}\n${Object.values(memory.content).flat().join("\n")}` } }, db);
   return memory;
 }
 
@@ -182,7 +182,7 @@ export async function consolidateDerivedMemory(params: { projectId: string; leve
     }
     await novelDb.derivedMemories.add(memory);
   });
-  if (!issues.length && existing.length) await invalidateMemoryAncestors(params.projectId, existing.map((item) => item.id));
+  if (!issues.length && existing.length) await invalidateMemoryAncestors(params.projectId, existing.map((item) => item.id), novelDb);
   if (!issues.length) await scheduleMemoryJob({ projectId: params.projectId, jobType: "embedding", idempotencyKey: `embedding:derivedMemories:${memory.id}:${memory.revision}`, payload: { targetTable: "derivedMemories", targetId: memory.id, content: `${memory.summary}\n${Object.values(memory.content).flat().join("\n")}` } });
   return memory;
 }

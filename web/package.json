@@ -16,7 +16,8 @@
     "test:bench:smoke": "BENCH_SMOKE=true npx vitest run --config vitest.bench.config.ts src/features/novel/__tests__/bench/bench-smoke.test.ts",
     "test:e2e:foundation": "npx vitest run --config vitest.e2e.config.ts src/features/novel/__tests__/e2e-foundation.test.ts",
     "test:e2e:chapter1": "npx vitest run --config vitest.e2e.config.ts src/features/novel/__tests__/e2e-chapter1.test.ts",
-    "bench:compare": "node scripts/novel-bench/compare.mjs"
+    "bench:compare": "node scripts/novel-bench/compare.mjs",
+    "novel:closed-loop": "node scripts/novel-bench/run-closed-loop.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",

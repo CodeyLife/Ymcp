@@ -569,7 +569,7 @@ export interface AgentRun extends VersionedRecord {
 export type NovelSkillSource = "builtin" | "user" | "project";
 export type NovelSkillCategory = "ideation" | "character-world" | "long-plan" | "chapter" | "drafting" | "serial" | "review" | "memory";
 export type NovelSkillStage = "foundation" | "planning" | "drafting" | "review" | "revision" | "fact-extraction" | "character-enrichment";
-export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher" | "conversation-assistant" | "memory-curator";
+export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher" | "conversation-assistant" | "memory-curator" | "skill-iterator";
 
 export interface NovelSkillManifest extends VersionedRecord {
   skillId: string;
@@ -599,6 +599,35 @@ export interface ProjectSkillBinding extends VersionedRecord {
   enabled: boolean;
   priorityOverride?: number;
   config: Record<string, string | number | boolean | string[]>;
+}
+
+/**
+ * 实验库中 LLM 自动迭代后的 skill prompt 记录。
+ *
+ * 表示"将 skillId 的 prompt 从 beforePrompt 改为 afterPrompt"的拟议变更，
+ * 由 skill-iteration 服务在实验库中产生，等待 CandidateBundle 导出 + PromotionService 晋升。
+ *
+ * 与 NovelSkillManifest 的区别：NovelSkillManifest 是当前生效的完整 skill 记录，
+ * IteratedSkillRecord 是实验库中产生的"拟议变更"，不直接覆盖正式库的 NovelSkillManifest。
+ * PromotionService 晋升时根据 IteratedSkillRecord 更新正式库 NovelSkillManifest 的 prompt 字段。
+ */
+export interface IteratedSkillRecord extends VersionedRecord {
+  /** 实验前(基线快照中)的 skill ID，对应 NovelSkillManifest.skillId */
+  skillId: string;
+  /** 实验前(基线快照中)的 prompt 文本，用于晋升时校验未被人工修改 */
+  beforePrompt: string;
+  /** 实验后(迭代后)的 prompt 文本，晋升时写入正式库 NovelSkillManifest.prompt */
+  afterPrompt: string;
+  /** LLM 迭代理由，通常引用 review 报告中的 issue id 或 rule */
+  rationale: string;
+  /** 触发本次迭代的 review issue 摘要(QualityIssue.id 列表) */
+  triggeredByIssueIds: string[];
+  /** 触发本次迭代的 review issue 摘要(人类可读描述，便于审计) */
+  triggeredByIssueSummaries: string[];
+  /** 产生此迭代的实验库 workflowRunId，仅作 provenance 用途 */
+  sourceWorkflowRunId: string;
+  /** 产生此迭代时的 LLM 模型名，仅作 provenance 用途 */
+  model: string;
 }
 
 export type WorkflowStage = "context" | "blueprint" | "blueprint-approval" | "draft" | "deterministic-check" | "review" | "revision" | "manuscript-approval" | "fact-extraction" | "fact-approval" | "commit" | "character-enrichment";

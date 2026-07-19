@@ -7,6 +7,10 @@ import {
   verifyProjectSnapshot,
   type ProjectSnapshotBundle,
 } from "../evaluation/project-snapshot";
+import {
+  loadProjectSnapshotIntoExperiment,
+  recaptureExperimentSnapshot,
+} from "../evaluation/experiment-workspace";
 
 const PROJECT_ID = "real-project-1";
 
@@ -226,5 +230,99 @@ describe("real project evaluation snapshot", () => {
     const snapshot = await captureProjectSnapshot(canonical, PROJECT_ID, "manual");
 
     await expect(restoreProjectSnapshot(snapshot, canonical)).rejects.toThrow(/实验数据库/);
+  });
+});
+
+describe("experiment workspace loader", () => {
+  let canonical: NovelDatabase;
+
+  beforeEach(async () => {
+    canonical = new NovelDatabase(`ymcp-novel-canonical-loader-test-${crypto.randomUUID()}`);
+    await canonical.open();
+    await seedCanonicalProject(canonical);
+  });
+
+  afterEach(async () => {
+    await canonical.delete();
+  });
+
+  it("loads a snapshot into an isolated experiment workspace and exposes project metadata", async () => {
+    const bundle = await captureProjectSnapshot(canonical, PROJECT_ID, "manual");
+
+    const { workspace, verification } = await loadProjectSnapshotIntoExperiment(
+      bundle,
+      `loader-${crypto.randomUUID()}`,
+    );
+
+    try {
+      expect(verification.valid).toBe(true);
+      expect(workspace.projectId).toBe(PROJECT_ID);
+      expect(workspace.baseSnapshotId).toBe(bundle.snapshotId);
+      expect(workspace.baseSnapshotHash).toBe(bundle.manifest.snapshotHash);
+      expect(workspace.experimentId).toBeTruthy();
+
+      // 实验库中能读到与正式库相同的记录
+      const project = await workspace.db.projects.get(PROJECT_ID);
+      expect(project?.title).toBe("真实长篇");
+      const document = await workspace.db.documents.get("chapter-1");
+      expect(document?.plainText).toBe("江水很冷。");
+      const skill = await workspace.db.skills.where("[projectId+skillId]").equals([PROJECT_ID, "project-style"]).first();
+      expect(skill?.prompt).toBe("保持克制。");
+    } finally {
+      await workspace.delete();
+    }
+  });
+
+  it("keeps canonical data untouched after loading into experiment workspace", async () => {
+    const bundle = await captureProjectSnapshot(canonical, PROJECT_ID, "manual");
+    const canonicalHashBefore = bundle.manifest.snapshotHash;
+
+    const { workspace } = await loadProjectSnapshotIntoExperiment(
+      bundle,
+      `isolation-${crypto.randomUUID()}`,
+    );
+
+    try {
+      // 在实验库中做任意写入
+      await workspace.db.documents.update("chapter-1", { plainText: "实验中改写的内容。" });
+      await workspace.db.skills.where("[projectId+skillId]").equals([PROJECT_ID, "project-style"]).first().then((s) => {
+        if (s) return workspace.db.skills.update(s.id, { prompt: "实验中改写的 prompt。" });
+        return undefined;
+      });
+
+      // 正式库数据完全不变
+      const canonicalDoc = await canonical.documents.get("chapter-1");
+      expect(canonicalDoc?.plainText).toBe("江水很冷。");
+      const canonicalSkill = await canonical.skills.where("[projectId+skillId]").equals([PROJECT_ID, "project-style"]).first();
+      expect(canonicalSkill?.prompt).toBe("保持克制。");
+
+      // 重新捕获正式库快照,hash 应保持一致
+      const reSnapshot = await captureProjectSnapshot(canonical, PROJECT_ID, "manual");
+      expect(reSnapshot.manifest.snapshotHash).toBe(canonicalHashBefore);
+    } finally {
+      await workspace.delete();
+    }
+  });
+
+  it("recaptures experiment state for pre-promotion verification", async () => {
+    const bundle = await captureProjectSnapshot(canonical, PROJECT_ID, "manual");
+    const { workspace } = await loadProjectSnapshotIntoExperiment(
+      bundle,
+      `recapture-${crypto.randomUUID()}`,
+    );
+
+    try {
+      // 在实验库中改写正文
+      await workspace.db.documents.update("chapter-1", { plainText: "迭代后的内容。" });
+
+      // 重新捕获实验库快照
+      const reSnapshot = await recaptureExperimentSnapshot(workspace, "manual");
+      expect(reSnapshot.manifest.snapshotHash).not.toBe(bundle.manifest.snapshotHash);
+      expect(reSnapshot.records.documents).toHaveLength(1);
+      const doc = reSnapshot.records.documents[0] as { plainText?: string };
+      expect(doc.plainText).toBe("迭代后的内容。");
+    } finally {
+      await workspace.delete();
+    }
   });
 });

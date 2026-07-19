@@ -1,4 +1,3 @@
-import { novelDb } from "../db";
 import { commitAcceptedFacts, createWorkflowSnapshot } from "../facts";
 import { createChapterMemory, sanitizeMemorySummary } from "../memory";
 import { toHtml } from "../manuscript-review";
@@ -7,13 +6,13 @@ import type { StageContext, StageHandler, StageResult } from "../workflow-stages
 export const commitStageHandler: StageHandler = {
   stage: "commit",
   async execute(ctx: StageContext): Promise<StageResult> {
-    const { run, document } = ctx;
-    const draft = await novelDb.workflowArtifacts.get(run.draftArtifactId!);
+    const { run, document, db } = ctx;
+    const draft = await db.workflowArtifacts.get(run.draftArtifactId!);
     if (!draft) throw new Error("最终正文产物不存在");
-    await commitAcceptedFacts(run.projectId, run.id);
+    await commitAcceptedFacts(run.projectId, run.id, db);
     const [factArtifact, candidates] = await Promise.all([
-      novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((artifact) => artifact.kind === "fact-delta").last(),
-      novelDb.factCandidates.where("workflowRunId").equals(run.id).toArray(),
+      db.workflowArtifacts.where("workflowRunId").equals(run.id).and((artifact) => artifact.kind === "fact-delta").last(),
+      db.factCandidates.where("workflowRunId").equals(run.id).toArray(),
     ]);
     const fallbackSummary = draft.contentMarkdown.slice(0, 800);
     const summary = sanitizeMemorySummary(String(factArtifact?.structuredData?.summary || ""), fallbackSummary);
@@ -32,9 +31,9 @@ export const commitStageHandler: StageHandler = {
           threadProgress: candidates.filter((candidate) => candidate.committedAssertionId && candidate.targetTable === "plotThreads").map((candidate) => candidate.humanReadable ?? `${candidate.field}：${String(candidate.after)}`),
           foreshadowingProgress: candidates.filter((candidate) => candidate.committedAssertionId && candidate.targetTable === "foreshadowing").map((candidate) => candidate.humanReadable ?? `${candidate.field}：${String(candidate.after)}`),
         },
-      });
+      }, db);
     }
-    await createWorkflowSnapshot({ projectId: run.projectId, documentId: document.id, label: `${document.title}完成`, summary });
+    await createWorkflowSnapshot({ projectId: run.projectId, documentId: document.id, label: `${document.title}完成`, summary }, db);
     // 关键修复：commit 阶段必须更新 document 的 summary 与 status，否则章节永远停在 review 状态、摘要为空
     // Loop 9 修复 #14：无条件同步 plainText/contentHtml 到 document
     // 根因：manuscript-approval 的 applyManuscriptChanges 在新章节（plainText 为空）时可能不生成 changes，
@@ -42,7 +41,7 @@ export const commitStageHandler: StageHandler = {
     // draftArtifactId 指向的 artifact 就是 manuscript-approval 批准的最终正文，内容与 plainText 应一致。
     const draftText = draft.contentMarkdown ?? "";
     const wordCount = (draftText.match(/[\u3400-\u9fff]|[a-zA-Z0-9]+/g) ?? []).length;
-    await novelDb.documents.update(document.id, {
+    await db.documents.update(document.id, {
       summary,
       status: "final",
       wordCount,

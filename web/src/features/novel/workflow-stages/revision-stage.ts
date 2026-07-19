@@ -1,5 +1,5 @@
 import { streamNovelModel } from "../ai";
-import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb } from "../db";
+import { DEFAULT_CHAPTER_TARGET_WORDS } from "../db";
 import { countNovelWords } from "../quality";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { asBlueprint } from "../workflow-shared";
@@ -244,13 +244,13 @@ export function isBlueprintCoverageIssue(issue: QualityIssue) {
 export const revisionStageHandler: StageHandler = {
   stage: "revision",
   async execute(ctx: StageContext): Promise<StageResult> {
-    const { run, project, document } = ctx;
+    const { run, project, document, db } = ctx;
     const [draft, blueprint, report, feedback, skills] = await Promise.all([
-      novelDb.workflowArtifacts.get(run.draftArtifactId!),
-      novelDb.workflowArtifacts.get(run.blueprintArtifactId!),
-      novelDb.qualityReports.get(run.qualityReportId!),
+      db.workflowArtifacts.get(run.draftArtifactId!),
+      db.workflowArtifacts.get(run.blueprintArtifactId!),
+      db.qualityReports.get(run.qualityReportId!),
       ctx.latestArtifact(run.id, ["review"]),
-      resolveNovelSkills({ projectId: run.projectId, stage: "revision", explicitSkillIds: ["embodied-prose", "style-specificity-audit", "imagery-aesthetics"] }),
+      resolveNovelSkills({ projectId: run.projectId, stage: "revision", explicitSkillIds: ["embodied-prose", "style-specificity-audit", "imagery-aesthetics"], db: ctx.db }),
     ]);
     if (!draft || !report) throw new Error("修订输入不完整");
     const blueprintData = blueprint?.structuredData ? asBlueprint(blueprint.structuredData) : undefined;

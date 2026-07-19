@@ -13,6 +13,7 @@ import type {
   FactAssertion,
   KnowledgeAssertion,
   DerivedMemory,
+  IteratedSkillRecord,
   NarrativeUnit,
   OutlineRealization,
   Foreshadowing,
@@ -44,7 +45,8 @@ import type {
   WorkflowRun,
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
-import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, resetNovelPlanningHierarchy, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES, V18_STORES } from "./db-schema";
+import type { OperationReceipt } from "./evaluation/types";
+import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, resetNovelPlanningHierarchy, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES, V18_STORES, V19_STORES, V20_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -93,6 +95,8 @@ export class NovelDatabase extends Dexie {
   conflicts!: EntityTable<SyncConflict, "id">;
   skills!: EntityTable<NovelSkillManifest, "id">;
   projectSkills!: EntityTable<ProjectSkillBinding, "id">;
+  iteratedSkills!: EntityTable<IteratedSkillRecord, "id">;
+  operationReceipts!: EntityTable<OperationReceipt, "id">;
   workflowDefinitions!: EntityTable<WorkflowDefinition, "id">;
   workflowRuns!: EntityTable<WorkflowRun, "id">;
   workflowArtifacts!: EntityTable<WorkflowArtifact, "id">;
@@ -138,14 +142,16 @@ export class NovelDatabase extends Dexie {
     this.version(16).stores(V16_STORES).upgrade(migrateNovelMemoryReliability);
     this.version(17).stores(V17_STORES).upgrade(migrateOutlineNodeModel);
     this.version(18).stores(V18_STORES).upgrade(resetNovelPlanningHierarchy);
+    this.version(19).stores(V19_STORES);
+    this.version(20).stores(V20_STORES);
   }
 }
 
 export const novelDb = new NovelDatabase();
 
-async function markDerivedMemoriesStale(projectId: string, seedIds: string[], reason: string, now: number) {
+async function markDerivedMemoriesStale(db: NovelDatabase, projectId: string, seedIds: string[], reason: string, now: number) {
   if (!seedIds.length) return [];
-  const memories = await novelDb.derivedMemories.where("projectId").equals(projectId).toArray();
+  const memories = await db.derivedMemories.where("projectId").equals(projectId).toArray();
   const staleIds = new Set(seedIds);
   let changed = true;
   while (changed) {
@@ -159,7 +165,7 @@ async function markDerivedMemoriesStale(projectId: string, seedIds: string[], re
   }
   const affected = memories.filter((memory) => staleIds.has(memory.id) && memory.status !== "stale" && memory.status !== "superseded");
   if (affected.length) {
-    await novelDb.derivedMemories.bulkPut(affected.map((memory) => ({
+    await db.derivedMemories.bulkPut(affected.map((memory) => ({
       ...memory,
       status: "stale" as const,
       validation: { passed: false, issues: [reason], checkedAt: now },
@@ -171,28 +177,28 @@ async function markDerivedMemoriesStale(projectId: string, seedIds: string[], re
   return [...staleIds];
 }
 
-async function invalidateRevisionDependentsInCurrentTransaction(projectId: string, sourceRevisionIds: string[], reason: string) {
+export async function invalidateRevisionDependentsInCurrentTransaction(db: NovelDatabase, projectId: string, sourceRevisionIds: string[], reason: string) {
   if (!sourceRevisionIds.length) return [];
   const revisionIds = new Set(sourceRevisionIds);
   const now = Date.now();
-  const assertions = await novelDb.factAssertions.where("projectId").equals(projectId)
+  const assertions = await db.factAssertions.where("projectId").equals(projectId)
     .and((assertion) => assertion.status === "active" && revisionIds.has(assertion.sourceRevisionId))
     .toArray();
   const assertionIds = new Set(assertions.map((assertion) => assertion.id));
-  const knowledge = await novelDb.knowledgeAssertions.where("projectId").equals(projectId)
+  const knowledge = await db.knowledgeAssertions.where("projectId").equals(projectId)
     .and((entry) => entry.status === "active" && (revisionIds.has(entry.sourceRevisionId) || assertionIds.has(entry.factAssertionId)))
     .toArray();
-  const memorySeeds = await novelDb.derivedMemories.where("projectId").equals(projectId)
+  const memorySeeds = await db.derivedMemories.where("projectId").equals(projectId)
     .and((memory) => Boolean(memory.sourceRevisionId && revisionIds.has(memory.sourceRevisionId)))
     .toArray();
-  if (assertions.length) await novelDb.factAssertions.bulkPut(assertions.map((assertion) => ({ ...assertion, status: "stale" as const, revision: assertion.revision + 1, updatedAt: now, updatedBy: ACTOR_ID })));
-  if (knowledge.length) await novelDb.knowledgeAssertions.bulkPut(knowledge.map((entry) => ({ ...entry, status: "stale" as const, revision: entry.revision + 1, updatedAt: now, updatedBy: ACTOR_ID })));
-  return markDerivedMemoriesStale(projectId, memorySeeds.map((memory) => memory.id), reason, now);
+  if (assertions.length) await db.factAssertions.bulkPut(assertions.map((assertion) => ({ ...assertion, status: "stale" as const, revision: assertion.revision + 1, updatedAt: now, updatedBy: ACTOR_ID })));
+  if (knowledge.length) await db.knowledgeAssertions.bulkPut(knowledge.map((entry) => ({ ...entry, status: "stale" as const, revision: entry.revision + 1, updatedAt: now, updatedBy: ACTOR_ID })));
+  return markDerivedMemoriesStale(db, projectId, memorySeeds.map((memory) => memory.id), reason, now);
 }
 
-export async function invalidateRevisionDependents(projectId: string, sourceRevisionIds: string[], reason = "来源正文修订已被取代") {
-  return novelDb.transaction("rw", novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.derivedMemories, () =>
-    invalidateRevisionDependentsInCurrentTransaction(projectId, sourceRevisionIds, reason));
+export async function invalidateRevisionDependents(projectId: string, sourceRevisionIds: string[], reason = "来源正文修订已被取代", db: NovelDatabase = novelDb) {
+  return db.transaction("rw", db.factAssertions, db.knowledgeAssertions, db.derivedMemories, () =>
+    invalidateRevisionDependentsInCurrentTransaction(db, projectId, sourceRevisionIds, reason));
 }
 
 export async function retireChapterDependencies(projectId: string, documentId: string, sourceRevisionIds: string[]) {
@@ -212,7 +218,7 @@ export async function retireChapterDependencies(projectId: string, documentId: s
     .toArray();
   if (assertions.length) await novelDb.factAssertions.bulkPut(assertions.map((assertion) => ({ ...assertion, status: "retracted" as const, revision: assertion.revision + 1, updatedAt: now, updatedBy: ACTOR_ID })));
   if (knowledge.length) await novelDb.knowledgeAssertions.bulkPut(knowledge.map((entry) => ({ ...entry, status: "retracted" as const, revision: entry.revision + 1, updatedAt: now, updatedBy: ACTOR_ID })));
-  await markDerivedMemoriesStale(projectId, memorySeeds.map((memory) => memory.id), "来源章节已删除，需要重新整合", now);
+  await markDerivedMemoriesStale(novelDb, projectId, memorySeeds.map((memory) => memory.id), "来源章节已删除，需要重新整合", now);
   const realizations = await novelDb.outlineRealizations.where("[projectId+documentId]").equals([projectId, documentId]).primaryKeys();
   if (realizations.length) await novelDb.outlineRealizations.bulkDelete(realizations as string[]);
 }
@@ -232,10 +238,11 @@ export async function appendOperation(
   entityId: string,
   action: ChangeOperation["action"],
   fieldChanges: ChangeOperation["fieldChanges"],
+  db: NovelDatabase = novelDb,
 ) {
   const base = recordBase(projectId);
   const clock = Date.now();
-  await novelDb.operations.add({
+  await db.operations.add({
     ...base,
     operationId: base.id,
     deviceId: deviceId(),
@@ -512,8 +519,9 @@ export async function saveApprovedDocumentRevision(
     acceptedChangeIds?: string[];
     rejectedChangeIds?: string[];
   },
+  db: NovelDatabase = novelDb,
 ) {
-  const before = await novelDb.documents.get(document.id);
+  const before = await db.documents.get(document.id);
   const now = Date.now();
   const approvedRevision: DocumentRevision = {
     ...recordBase(document.projectId),
@@ -537,8 +545,8 @@ export async function saveApprovedDocumentRevision(
     revision: (before?.revision ?? 0) + 1,
   };
 
-  await novelDb.transaction("rw", [novelDb.documents, novelDb.revisions, novelDb.operations, novelDb.manuscriptChanges, novelDb.factAssertions, novelDb.knowledgeAssertions, novelDb.derivedMemories], async () => {
-    const latest = await novelDb.documents.get(document.id);
+  await db.transaction("rw", [db.documents, db.revisions, db.operations, db.manuscriptChanges, db.factAssertions, db.knowledgeAssertions, db.derivedMemories], async () => {
+    const latest = await db.documents.get(document.id);
     if (options?.expected && (!latest
       || latest.revision !== options.expected.documentRevision
       || documentContentHash(latest) !== options.expected.contentHash
@@ -547,10 +555,10 @@ export async function saveApprovedDocumentRevision(
     }
     const supersededRevisionId = latest?.approvedRevisionId;
     if (supersededRevisionId) {
-      await novelDb.revisions.update(supersededRevisionId, { approvalStatus: "superseded", updatedAt: now, updatedBy: ACTOR_ID });
-      await invalidateRevisionDependentsInCurrentTransaction(document.projectId, [supersededRevisionId], "来源正文修订已被取代");
+      await db.revisions.update(supersededRevisionId, { approvalStatus: "superseded", updatedAt: now, updatedBy: ACTOR_ID });
+      await invalidateRevisionDependentsInCurrentTransaction(db, document.projectId, [supersededRevisionId], "来源正文修订已被取代");
     } else if (before && (before.contentHtml || before.plainText) && documentContentHash(before) !== approvedRevision.contentHash) {
-      await novelDb.revisions.add({
+      await db.revisions.add({
         ...recordBase(document.projectId),
         documentId: document.id,
         label: `${label}前`,
@@ -562,15 +570,15 @@ export async function saveApprovedDocumentRevision(
         contentHash: documentContentHash(before),
       });
     }
-    await novelDb.revisions.add(approvedRevision);
-    await novelDb.documents.put(next);
+    await db.revisions.add(approvedRevision);
+    await db.documents.put(next);
     const decidedAt = Date.now();
-    if (options?.acceptedChangeIds?.length) await novelDb.manuscriptChanges.where("id").anyOf(options.acceptedChangeIds).modify({ status: "accepted", decidedAt, updatedAt: decidedAt, updatedBy: ACTOR_ID });
-    if (options?.rejectedChangeIds?.length) await novelDb.manuscriptChanges.where("id").anyOf(options.rejectedChangeIds).modify({ status: "rejected", decidedAt, updatedAt: decidedAt, updatedBy: ACTOR_ID });
+    if (options?.acceptedChangeIds?.length) await db.manuscriptChanges.where("id").anyOf(options.acceptedChangeIds).modify({ status: "accepted", decidedAt, updatedAt: decidedAt, updatedBy: ACTOR_ID });
+    if (options?.rejectedChangeIds?.length) await db.manuscriptChanges.where("id").anyOf(options.rejectedChangeIds).modify({ status: "rejected", decidedAt, updatedAt: decidedAt, updatedBy: ACTOR_ID });
     await appendOperation(document.projectId, "documents", document.id, before ? "update" : "create", {
       contentHtml: { before: before?.contentHtml, after: document.contentHtml },
       approvedRevisionId: { before: before?.approvedRevisionId, after: approvedRevision.id },
-    });
+    }, db);
   });
 
   void upsertEmbedding({
@@ -578,6 +586,7 @@ export async function saveApprovedDocumentRevision(
     targetTable: "documents",
     targetId: document.id,
     content: [document.title, document.summary, document.plainText].filter(Boolean).join("\n"),
+    db,
   }).catch(() => { /* semantic indexing degrades to keyword retrieval */ });
   return { document: next, revision: approvedRevision };
 }

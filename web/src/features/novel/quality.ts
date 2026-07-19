@@ -1,4 +1,4 @@
-import { novelDb, recordBase } from "./db";
+import { novelDb, recordBase, type NovelDatabase } from "./db";
 import { analyzeDraftStructure } from "./draft-structure";
 import type { ChapterBlueprint, NovelAgentRole, QualityDimension, QualityIssue, QualityReport } from "./types";
 
@@ -345,7 +345,9 @@ export async function saveQualityReport(params: {
   deterministic: ReturnType<typeof runDeterministicQualityChecks>;
   reviewers?: ReviewerFinding[];
   threshold: number;
+  db?: NovelDatabase;
 }) {
+  const db = params.db ?? novelDb;
   const aggregated = aggregateQuality(params);
   const report: QualityReport = {
     ...recordBase(params.projectId),
@@ -361,7 +363,7 @@ export async function saveQualityReport(params: {
     metrics: params.deterministic.metrics,
     reviewerRoles: aggregated.reviewerRoles,
   };
-  await novelDb.qualityReports.add(report);
+  await db.qualityReports.add(report);
   return report;
 }
 

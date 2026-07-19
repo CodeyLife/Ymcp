@@ -1,4 +1,4 @@
-import { documentContentHash, novelDb, recordBase, saveApprovedDocumentRevision } from "./db";
+import { documentContentHash, novelDb, recordBase, saveApprovedDocumentRevision, type NovelDatabase } from "./db";
 import type { DocumentRevision, ManuscriptBlock, ManuscriptChange, ManuscriptDocument } from "./types";
 
 export function manuscriptTextHash(text: string) {
@@ -104,10 +104,10 @@ export async function prepareManuscriptChanges(params: {
   proposedText: string;
   workflowRunId?: string;
   sourceArtifactId?: string;
-}) {
-  const document = await novelDb.documents.get(params.documentId);
+}, db: NovelDatabase = novelDb) {
+  const document = await db.documents.get(params.documentId);
   if (!document || document.projectId !== params.projectId) throw new Error("章节不存在");
-  const revision = document.approvedRevisionId ? await novelDb.revisions.get(document.approvedRevisionId) : undefined;
+  const revision = document.approvedRevisionId ? await db.revisions.get(document.approvedRevisionId) : undefined;
   const baseContentHash = documentContentHash(document);
   const sourceContentHash = manuscriptTextHash(params.proposedText);
   const planned = planManuscriptChanges(revisionBlocks(document, revision), params.proposedText);
@@ -124,24 +124,24 @@ export async function prepareManuscriptChanges(params: {
     sourceContentHash,
     status: "pending",
   }));
-  return novelDb.transaction("rw", novelDb.manuscriptChanges, async () => {
-    const existing = await novelDb.manuscriptChanges.where("documentId").equals(document.id).filter((change) =>
+  return db.transaction("rw", db.manuscriptChanges, async () => {
+    const existing = await db.manuscriptChanges.where("documentId").equals(document.id).filter((change) =>
       change.sourceArtifactId === params.sourceArtifactId
       && change.baseDocumentRevision === document.revision
       && change.baseContentHash === baseContentHash
       && change.sourceContentHash === sourceContentHash).toArray();
     if (existing.length) return existing.sort((a, b) => a.order - b.order);
-    const stale = await novelDb.manuscriptChanges.where("documentId").equals(document.id).filter((change) => change.status === "pending" && change.sourceArtifactId !== params.sourceArtifactId).toArray();
-    if (stale.length) await novelDb.manuscriptChanges.where("id").anyOf(stale.map((change) => change.id)).modify({ status: "rejected", decidedAt: now, updatedAt: now });
-    if (records.length) await novelDb.manuscriptChanges.bulkAdd(records);
+    const stale = await db.manuscriptChanges.where("documentId").equals(document.id).filter((change) => change.status === "pending" && change.sourceArtifactId !== params.sourceArtifactId).toArray();
+    if (stale.length) await db.manuscriptChanges.where("id").anyOf(stale.map((change) => change.id)).modify({ status: "rejected", decidedAt: now, updatedAt: now });
+    if (records.length) await db.manuscriptChanges.bulkAdd(records);
     return records;
   });
 }
 
-export async function updateManuscriptChangeText(changeId: string, afterText: string) {
-  const change = await novelDb.manuscriptChanges.get(changeId);
+export async function updateManuscriptChangeText(changeId: string, afterText: string, db: NovelDatabase = novelDb) {
+  const change = await db.manuscriptChanges.get(changeId);
   if (!change || change.status !== "pending" || change.operation === "delete") throw new Error("该段落变更已不可编辑");
-  await novelDb.manuscriptChanges.update(changeId, { afterText, revision: change.revision + 1, updatedAt: Date.now(), updatedBy: "local-user" });
+  await db.manuscriptChanges.update(changeId, { afterText, revision: change.revision + 1, updatedAt: Date.now(), updatedBy: "local-user" });
 }
 
 export async function replacePreparedManuscriptText(params: {
@@ -150,20 +150,20 @@ export async function replacePreparedManuscriptText(params: {
   proposedText: string;
   workflowRunId: string;
   sourceArtifactId: string;
-}) {
+}, db: NovelDatabase = novelDb) {
   const proposedText = params.proposedText.replace(/\r\n/g, "\n").trim();
   if (!proposedText) throw new Error("正文不能为空");
-  const artifact = await novelDb.workflowArtifacts.get(params.sourceArtifactId);
+  const artifact = await db.workflowArtifacts.get(params.sourceArtifactId);
   if (!artifact || artifact.projectId !== params.projectId || artifact.workflowRunId !== params.workflowRunId) {
     throw new Error("正文产物不存在");
   }
 
-  await novelDb.transaction("rw", novelDb.workflowArtifacts, novelDb.manuscriptChanges, async () => {
-    const superseded = await novelDb.manuscriptChanges.where("documentId").equals(params.documentId)
+  await db.transaction("rw", db.workflowArtifacts, db.manuscriptChanges, async () => {
+    const superseded = await db.manuscriptChanges.where("documentId").equals(params.documentId)
       .filter((change) => change.sourceArtifactId === params.sourceArtifactId && change.status === "pending")
       .toArray();
-    if (superseded.length) await novelDb.manuscriptChanges.bulkDelete(superseded.map((change) => change.id));
-    await novelDb.workflowArtifacts.update(artifact.id, {
+    if (superseded.length) await db.manuscriptChanges.bulkDelete(superseded.map((change) => change.id));
+    await db.workflowArtifacts.update(artifact.id, {
       contentMarkdown: proposedText,
       revision: artifact.revision + 1,
       updatedAt: Date.now(),
@@ -171,7 +171,7 @@ export async function replacePreparedManuscriptText(params: {
     });
   });
 
-  return prepareManuscriptChanges({ ...params, proposedText });
+  return prepareManuscriptChanges({ ...params, proposedText }, db);
 }
 
 // Loop 8 修复 #14：导出 toHtml 供 commit-stage 同步 contentHtml
@@ -185,10 +185,10 @@ export async function applyManuscriptChanges(params: {
   sourceArtifactId: string;
   selectedChangeIds: string[];
   label: string;
-}) {
-  const document = await novelDb.documents.get(params.documentId);
+}, db: NovelDatabase = novelDb) {
+  const document = await db.documents.get(params.documentId);
   if (!document) throw new Error("章节不存在");
-  const changes = await novelDb.manuscriptChanges.where("documentId").equals(document.id)
+  const changes = await db.manuscriptChanges.where("documentId").equals(document.id)
     .filter((change) => change.sourceArtifactId === params.sourceArtifactId && change.status === "pending")
     .sortBy("order");
   if (changes.length && !params.selectedChangeIds.length) throw new Error("请至少采纳一个段落变更，或退回正文修改");
@@ -197,10 +197,10 @@ export async function applyManuscriptChanges(params: {
     || document.approvedRevisionId !== baseline.baseRevisionId
     || documentContentHash(document) !== baseline.baseContentHash)) {
     const now = Date.now();
-    await novelDb.manuscriptChanges.where("id").anyOf(changes.map((change) => change.id)).modify({ status: "conflict", updatedAt: now, updatedBy: "local-user" });
+    await db.manuscriptChanges.where("id").anyOf(changes.map((change) => change.id)).modify({ status: "conflict", updatedAt: now, updatedBy: "local-user" });
     throw new Error("正文基线已发生变化，请重新生成逐段审阅");
   }
-  const revision = document.approvedRevisionId ? await novelDb.revisions.get(document.approvedRevisionId) : undefined;
+  const revision = document.approvedRevisionId ? await db.revisions.get(document.approvedRevisionId) : undefined;
   let blocks = revisionBlocks(document, revision);
   const selected = new Set(params.selectedChangeIds);
   const accepted = changes.filter((change) => selected.has(change.id));
@@ -208,7 +208,7 @@ export async function applyManuscriptChanges(params: {
     const index = blocks.findIndex((block) => block.id === change.targetBlockId);
     if (index < 0 || manuscriptTextHash(blocks[index].text) !== change.beforeTextHash) {
       const now = Date.now();
-      await novelDb.manuscriptChanges.where("id").anyOf(changes.map((item) => item.id)).modify({ status: "conflict", updatedAt: now, updatedBy: "local-user" });
+      await db.manuscriptChanges.where("id").anyOf(changes.map((item) => item.id)).modify({ status: "conflict", updatedAt: now, updatedBy: "local-user" });
       throw new Error("目标段落已发生变化，请重新生成逐段审阅");
     }
     if (change.operation === "delete") blocks.splice(index, 1);
@@ -234,5 +234,5 @@ export async function applyManuscriptChanges(params: {
     },
     acceptedChangeIds: accepted.map((change) => change.id),
     rejectedChangeIds: changes.filter((change) => !selected.has(change.id)).map((change) => change.id),
-  });
+  }, db);
 }

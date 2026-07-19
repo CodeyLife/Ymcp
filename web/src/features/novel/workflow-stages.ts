@@ -8,6 +8,7 @@ import type {
   WorkflowRun,
   WorkflowStage,
 } from "./types";
+import type { NovelDatabase } from "./db";
 
 /**
  * 产物输入类型：与 workflow.ts 中的 ArtifactInput 定义保持一致。
@@ -20,11 +21,15 @@ export type ArtifactInput = Omit<
 
 /**
  * Stage 执行上下文：注入 run/project/document 与所有工具函数，便于单元测试时 mock。
+ *
+ * `db` 字段是 workspace 注入入口：默认为全局 novelDb，闭环评估时由调用方传入
+ * 物理隔离的实验库 NovelDatabase 实例，使同一工作流可在两种库上运行。
  */
 export interface StageContext {
   run: WorkflowRun;
   project: StoryProject;
   document: ManuscriptDocument;
+  db: NovelDatabase;
   saveArtifact: (run: WorkflowRun, input: ArtifactInput) => Promise<WorkflowArtifact>;
   latestArtifact: (runId: string, kinds: WorkflowArtifact["kind"][]) => Promise<WorkflowArtifact | undefined>;
   transition: (
@@ -72,9 +77,13 @@ export interface StageHandler {
 
 /**
  * Approval 上下文：审批 handler 所需的依赖。
+ *
+ * `db` 字段与 StageContext.db 同义：用于审批 handler 中读写持久化数据时
+ * 走调用方注入的库（默认为全局 novelDb）。
  */
 export interface ApprovalContext {
   run: WorkflowRun;
+  db: NovelDatabase;
   transition: StageContext["transition"];
   saveArtifact: StageContext["saveArtifact"];
 }

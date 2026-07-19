@@ -1,4 +1,4 @@
-import { novelDb } from "./db";
+import { novelDb, type NovelDatabase } from "./db";
 import { RECORD_SCHEMA_VERSION } from "./db-schema";
 import { cosineSimilarity, getEmbeddingProvider } from "./embedding";
 import type { NovelEmbedding } from "./types";
@@ -48,15 +48,17 @@ export async function upsertEmbedding(params: {
   targetTable: NovelEmbedding["targetTable"];
   targetId: string;
   content: string;
+  db?: NovelDatabase;
 }): Promise<void> {
+  const db = params.db ?? novelDb;
   const units = splitSemanticUnits(params.content);
-  const existing = await novelDb.embeddings
+  const existing = await db.embeddings
     .where("[projectId+targetTable]")
     .equals([params.projectId, params.targetTable])
     .and((e) => e.targetId === params.targetId)
     .toArray();
   if (!units.length) {
-    await novelDb.embeddings.bulkDelete(existing.map((item) => item.id));
+    await db.embeddings.bulkDelete(existing.map((item) => item.id));
     return;
   }
 
@@ -76,10 +78,10 @@ export async function upsertEmbedding(params: {
     model: provider.name, dimension: provider.dimension, vector: vectors[index], contentHash: item.hash, chunkIndex: item.chunkIndex,
   }));
   const retainedIds = new Set([...existing.filter((item) => !changed.some((change) => change.existing?.id === item.id)).map((item) => item.id), ...next.map((item) => item.id)]);
-  await novelDb.transaction("rw", novelDb.embeddings, async () => {
-    if (next.length) await novelDb.embeddings.bulkPut(next);
+  await db.transaction("rw", db.embeddings, async () => {
+    if (next.length) await db.embeddings.bulkPut(next);
     const staleIds = existing.filter((item) => !retainedIds.has(item.id) || !expectedIndexes.includes(item.chunkIndex)).map((item) => item.id);
-    if (staleIds.length) await novelDb.embeddings.bulkDelete(staleIds);
+    if (staleIds.length) await db.embeddings.bulkDelete(staleIds);
   });
 }
 
@@ -92,11 +94,13 @@ export async function vectorSearch(params: {
   targetTables?: NovelEmbedding["targetTable"][];
   query: string;
   topK?: number;
+  db?: NovelDatabase;
 }): Promise<Array<{ targetId: string; targetTable: NovelEmbedding["targetTable"]; chunkIndex?: number; score: number }>> {
   const provider = getEmbeddingProvider();
   const queryVec = await provider.embed(params.query);
+  const db = params.db ?? novelDb;
 
-  const all = await novelDb.embeddings.where("projectId").equals(params.projectId).toArray();
+  const all = await db.embeddings.where("projectId").equals(params.projectId).toArray();
   const compatible = all.filter((item) => item.model === provider.name && item.dimension === provider.dimension && item.vector.length === provider.dimension);
   const filtered = params.targetTables ? compatible.filter((e) => params.targetTables!.includes(e.targetTable)) : compatible;
 

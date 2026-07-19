@@ -1,6 +1,5 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
-import { novelDb } from "../db";
 import { autoAcceptSafeFactCandidates, formatFactCandidateValue, prepareFactCandidates, storeFactCandidates, type ExtractedFact } from "../facts";
 import { formatSkillPrompt, resolveNovelSkills } from "../skills";
 import { novelMemoryService } from "../memory-service";
@@ -10,13 +9,13 @@ import type { StageContext, StageHandler, StageResult } from "../workflow-stages
 export const factExtractionStageHandler: StageHandler = {
   stage: "fact-extraction",
   async execute(ctx: StageContext): Promise<StageResult> {
-    const { run, project } = ctx;
+    const { run, project, db } = ctx;
     const [draft, packet, skills] = await Promise.all([
-      novelDb.workflowArtifacts.get(run.draftArtifactId!),
+      db.workflowArtifacts.get(run.draftArtifactId!),
       run.conversationThreadId
-        ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "fact-extraction", role: "fact-extractor", instruction: "从本次已批准正文提取事实差异", workflowRunId: run.id, skillStage: "fact-extraction" })
-        : novelDb.contextPackets.get(run.contextPacketId!),
-      resolveNovelSkills({ projectId: run.projectId, stage: "fact-extraction", explicitSkillIds: ["fact-delta-extraction"] }),
+        ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "fact-extraction", role: "fact-extractor", instruction: "从本次已批准正文提取事实差异", workflowRunId: run.id, skillStage: "fact-extraction", db: ctx.db })
+        : db.contextPackets.get(run.contextPacketId!),
+      resolveNovelSkills({ projectId: run.projectId, stage: "fact-extraction", explicitSkillIds: ["fact-delta-extraction"], db: ctx.db }),
     ]);
     if (!draft || !packet) throw new Error("事实提取输入不完整");
     const { agent } = await ctx.createAgentRecord({
@@ -48,7 +47,7 @@ ${draft.contentMarkdown}
 ${formatContextPacket(packet)}`,
     });
     const data = result.data as { summary: string; facts: ExtractedFact[] };
-    const prepared = await prepareFactCandidates(run.projectId, data.facts);
+    const prepared = await prepareFactCandidates(run.projectId, data.facts, db);
     const facts = await storeFactCandidates({
       projectId: run.projectId,
       workflowRunId: run.id,
@@ -56,8 +55,8 @@ ${formatContextPacket(packet)}`,
       sourceRevisionId: ctx.document.approvedRevisionId,
       defaultRevealedAt: { chapterId: ctx.document.id, narrativeOrder: ctx.document.order, precision: "exact" },
       facts: prepared.facts,
-    });
-    const autoAcceptedIds = await autoAcceptSafeFactCandidates(facts);
+    }, db);
+    const autoAcceptedIds = await autoAcceptSafeFactCandidates(facts, db);
     const pendingCount = facts.length - autoAcceptedIds.length;
     const artifact = await ctx.saveArtifact(run, {
       projectId: run.projectId,

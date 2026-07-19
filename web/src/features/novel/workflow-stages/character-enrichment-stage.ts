@@ -1,6 +1,6 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
-import { appendOperation, novelDb, recordBase } from "../db";
+import { appendOperation, recordBase, type NovelDatabase } from "../db";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { novelMemoryService } from "../memory-service";
 import type { FactAssertion, StoryEntity } from "../types";
@@ -41,8 +41,8 @@ function isProfileIncomplete(character: NonNullable<StoryEntity["character"]>): 
  * 来源：(1) 新建的 character 候选（通过 committedAssertion.projection.targetId 定位）；
  *       (2) 本次有字段更新的已有 character（通过 candidate.subject.id 定位）。
  */
-async function collectCharactersToEnrich(runId: string, projectId: string): Promise<StoryEntity[]> {
-  const candidates = await novelDb.factCandidates
+async function collectCharactersToEnrich(runId: string, projectId: string, db: NovelDatabase): Promise<StoryEntity[]> {
+  const candidates = await db.factCandidates
     .where("workflowRunId")
     .equals(runId)
     .and((c) => c.targetTable === "entities" && Boolean(c.committedAssertionId))
@@ -53,7 +53,7 @@ async function collectCharactersToEnrich(runId: string, projectId: string): Prom
     if (candidate.novelty === "new") {
       const payload = candidate.after as Record<string, unknown> | undefined;
       if (!payload || typeof payload !== "object" || payload.kind !== "character") continue;
-      const assertion = await novelDb.factAssertions.get(candidate.committedAssertionId!);
+      const assertion = await db.factAssertions.get(candidate.committedAssertionId!);
       const targetId = assertion?.projection?.targetId;
       if (targetId) characterIds.add(targetId);
     } else if (candidate.novelty === "update" && candidate.subject?.kind === "entity" && candidate.subject.id) {
@@ -63,7 +63,7 @@ async function collectCharactersToEnrich(runId: string, projectId: string): Prom
 
   const result: StoryEntity[] = [];
   for (const id of characterIds) {
-    const entity = await novelDb.entities.get(id);
+    const entity = await db.entities.get(id);
     if (entity && entity.projectId === projectId && entity.kind === "character" && entity.character && isProfileIncomplete(entity.character)) {
       result.push(entity);
     }
@@ -74,20 +74,20 @@ async function collectCharactersToEnrich(runId: string, projectId: string): Prom
 export const characterEnrichmentStageHandler: StageHandler = {
   stage: "character-enrichment",
   async execute(ctx: StageContext): Promise<StageResult> {
-    const { run, project, document } = ctx;
+    const { run, project, document, db } = ctx;
 
-    const charactersToEnrich = await collectCharactersToEnrich(run.id, run.projectId);
+    const charactersToEnrich = await collectCharactersToEnrich(run.id, run.projectId, db);
     if (!charactersToEnrich.length) {
       const nextRun = await ctx.transition(run, "character-enrichment", "completed", { finishedAt: Date.now() });
       return { run: nextRun };
     }
 
     const [draft, packet, skills] = await Promise.all([
-      novelDb.workflowArtifacts.get(run.draftArtifactId!),
+      db.workflowArtifacts.get(run.draftArtifactId!),
       run.conversationThreadId
-        ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "character-enrichment", role: "character-enricher", instruction: "基于本章正式事实完善相关人物档案", workflowRunId: run.id, skillStage: "character-enrichment" })
-        : novelDb.contextPackets.get(run.contextPacketId!),
-      resolveNovelSkills({ projectId: run.projectId, stage: "character-enrichment", explicitSkillIds: ["character-desire-engine", "classic-character-ensemble"] }),
+        ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "character-enrichment", role: "character-enricher", instruction: "基于本章正式事实完善相关人物档案", workflowRunId: run.id, skillStage: "character-enrichment", db: ctx.db })
+        : db.contextPackets.get(run.contextPacketId!),
+      resolveNovelSkills({ projectId: run.projectId, stage: "character-enrichment", explicitSkillIds: ["character-desire-engine", "classic-character-ensemble"], db: ctx.db }),
     ]);
     if (!draft || !packet) throw new Error("人物完善输入不完整");
 
@@ -101,7 +101,7 @@ export const characterEnrichmentStageHandler: StageHandler = {
     // 获取每个 character 的相关既定事实
     const characterFacts = await Promise.all(
       charactersToEnrich.map(async (character) => {
-        const facts = await novelDb.factAssertions
+        const facts = await db.factAssertions
           .where("projectId")
           .equals(run.projectId)
           .and((f) => f.status === "active" && f.subject?.id === character.id)
@@ -191,10 +191,10 @@ ${formatContextPacket(packet)}`,
         projection: { targetTable: "entities", targetId: entity.id, field: "character.enrichment" },
       };
 
-      await novelDb.transaction("rw", novelDb.entities, novelDb.operations, novelDb.factAssertions, async () => {
-        await novelDb.entities.update(entity.id, { character: nextCharacter, updatedAt: now, updatedBy: "local-user", revision: Number(entity.revision ?? 0) + 1 });
-        await appendOperation(run.projectId, "entities", entity.id, "update", changes);
-        await novelDb.factAssertions.put(assertion);
+      await db.transaction("rw", db.entities, db.operations, db.factAssertions, async () => {
+        await db.entities.update(entity.id, { character: nextCharacter, updatedAt: now, updatedBy: "local-user", revision: Number(entity.revision ?? 0) + 1 });
+        await appendOperation(run.projectId, "entities", entity.id, "update", changes, db);
+        await db.factAssertions.put(assertion);
       });
 
       enrichedCount += 1;

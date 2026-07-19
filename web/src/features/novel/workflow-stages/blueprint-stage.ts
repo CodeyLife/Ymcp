@@ -1,6 +1,6 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
-import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb } from "../db";
+import { DEFAULT_CHAPTER_TARGET_WORDS } from "../db";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { blueprintMarkdown, blueprintSchema } from "../workflow-shared";
 import { formatCreativeBriefContract } from "../workflow-brief";
@@ -47,16 +47,16 @@ function sanitizePovConsistencyInPlace(data: Record<string, unknown>, povName: s
 export const blueprintStageHandler: StageHandler = {
   stage: "blueprint",
   async execute(ctx: StageContext): Promise<StageResult> {
-    const { run, project, document } = ctx;
+    const { run, project, document, db } = ctx;
     const [packet, feedback, skills, brief] = await Promise.all([
-      novelDb.contextPackets.get(run.contextPacketId!),
+      db.contextPackets.get(run.contextPacketId!),
       ctx.latestArtifact(run.id, ["review"]),
-      resolveNovelSkills({ projectId: run.projectId, stage: "planning", explicitSkillIds: ["chapter-blueprint"] }),
-      run.creativeBriefId ? novelDb.creativeBriefs.get(run.creativeBriefId) : undefined,
+      resolveNovelSkills({ projectId: run.projectId, stage: "planning", explicitSkillIds: ["chapter-blueprint"], db: ctx.db }),
+      run.creativeBriefId ? db.creativeBriefs.get(run.creativeBriefId) : undefined,
     ]);
     if (!packet) throw new Error("章节上下文不存在");
     if (!brief || brief.status !== "confirmed" || brief.targetDocumentId !== document.id) throw new Error("已确认创作简报不存在或与章节不匹配");
-    const pov = brief.povCharacterId ? await novelDb.entities.get(brief.povCharacterId) : undefined;
+    const pov = brief.povCharacterId ? await db.entities.get(brief.povCharacterId) : undefined;
     const briefContract = `${formatCreativeBriefContract(brief, pov?.name)}\n\n${ENDING_HOOK_UNIQUENESS_CONTRACT}`;
     const { agent } = await ctx.createAgentRecord({
       run,
@@ -78,7 +78,7 @@ export const blueprintStageHandler: StageHandler = {
       ...(brief.povCharacterId ? [brief.povCharacterId] : []),
     ]));
     const chapterCharacters = chapterCharacterIds.length > 0
-      ? (await novelDb.entities.bulkGet(chapterCharacterIds)).filter((e): e is StoryEntity => e?.kind === "character")
+      ? (await db.entities.bulkGet(chapterCharacterIds)).filter((e): e is StoryEntity => e?.kind === "character")
       : [];
     const otherCharacterNames = chapterCharacters
       .filter((e) => e.id !== brief.povCharacterId)

@@ -1,6 +1,6 @@
 import { streamNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
-import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb } from "../db";
+import { DEFAULT_CHAPTER_TARGET_WORDS } from "../db";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { buildChapterDraftPrompt, buildDraftSectionContract, chapterOutputTokenBudget, planDraftSections } from "../prose-prompts";
 import { novelMemoryService } from "../memory-service";
@@ -12,14 +12,14 @@ import { repairDraftStructureOnce } from "./draft-structure-repair";
 export const draftStageHandler: StageHandler = {
   stage: "draft",
   async execute(ctx: StageContext): Promise<StageResult> {
-    const { run, project, document } = ctx;
+    const { run, project, document, db } = ctx;
     const packetPromise = run.conversationThreadId
-      ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "draft", role: "writer", instruction: "依据已批准蓝图生成整章正文", workflowRunId: run.id, skillStage: "drafting" })
-      : novelDb.contextPackets.get(run.contextPacketId!);
+      ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "draft", role: "writer", instruction: "依据已批准蓝图生成整章正文", workflowRunId: run.id, skillStage: "drafting", db: ctx.db })
+      : db.contextPackets.get(run.contextPacketId!);
     const [packet, blueprint, skills] = await Promise.all([
       packetPromise,
-      novelDb.workflowArtifacts.get(run.blueprintArtifactId!),
-      resolveNovelSkills({ projectId: run.projectId, stage: "drafting", explicitSkillIds: ["embodied-prose", "serial-rhythm", "character-voice-matrix", "imagery-aesthetics", "prose-discipline"] }),
+      db.workflowArtifacts.get(run.blueprintArtifactId!),
+      resolveNovelSkills({ projectId: run.projectId, stage: "drafting", explicitSkillIds: ["embodied-prose", "serial-rhythm", "character-voice-matrix", "imagery-aesthetics", "prose-discipline"], db: ctx.db }),
     ]);
     if (!packet || !blueprint) throw new Error("已批准蓝图或上下文不存在");
     const { agent } = await ctx.createAgentRecord({

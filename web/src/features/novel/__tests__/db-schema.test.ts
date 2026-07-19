@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import "./setup";
 
 import { createNovelProject, getCanvasLayout, novelDb, recordBase, saveCanvasLayout, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V17_STORES, V18_STORES } from "../db-schema";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V17_STORES, V18_STORES, V19_STORES, V20_STORES } from "../db-schema";
 import { importNovel, verifyProjectArchive } from "../export";
 
 beforeEach(async () => {
@@ -12,9 +12,9 @@ beforeEach(async () => {
   localStorage.clear();
 });
 
-describe("db-schema v18", () => {
-  it("uses the phase/plot-segment/chapter indexes", () => {
-    expect(DB_VERSION).toBe(18);
+describe("db-schema v20", () => {
+  it("uses the phase/plot-segment/chapter indexes and exposes the iteratedSkills + operationReceipts tables", () => {
+    expect(DB_VERSION).toBe(20);
     expect(RECORD_SCHEMA_VERSION).toBe(8);
     expect(V18_STORES.outlineNodes).toContain("phaseId");
     expect(V18_STORES.outlineNodes).toContain("[projectId+phaseId]");
@@ -22,6 +22,15 @@ describe("db-schema v18", () => {
     expect(V18_STORES.outlineNodes).not.toContain("parentId");
     expect(V18_STORES.documents).toContain("plotSegmentId");
     expect(V18_STORES.documents).toContain("[projectId+plotSegmentId]");
+    // Loop 6: iteratedSkills 表索引使用 sourceWorkflowRunId（与 IteratedSkillRecord 字段名一致）
+    expect(V19_STORES.iteratedSkills).toContain("sourceWorkflowRunId");
+    expect(V19_STORES.iteratedSkills).toContain("[projectId+sourceWorkflowRunId]");
+    expect(V19_STORES.iteratedSkills).toContain("[projectId+skillId]");
+    // Loop 8: operationReceipts 表用 operationId + candidateId 双幂等键索引
+    expect(V20_STORES.operationReceipts).toContain("candidateId");
+    expect(V20_STORES.operationReceipts).toContain("operationId");
+    expect(V20_STORES.operationReceipts).toContain("[candidateId+status]");
+    expect(V20_STORES.operationReceipts).toContain("[operationId+status]");
   });
 
   it("discards legacy outline data and pending planning proposals while preserving chapters", async () => {

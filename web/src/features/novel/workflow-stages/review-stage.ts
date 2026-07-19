@@ -1,6 +1,5 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatReviewerContext } from "../context";
-import { novelDb } from "../db";
 import { runDeterministicQualityChecks, saveQualityReport, type ReviewerFinding } from "../quality";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { buildChapterReviewPrompt } from "../prose-prompts";
@@ -27,10 +26,10 @@ export function isQualityRegression(params: { previous?: QualityReport; previous
 export const reviewStageHandler: StageHandler = {
   stage: "review",
   async execute(ctx: StageContext): Promise<StageResult> {
-    const { run, project } = ctx;
+    const { run, project, db } = ctx;
     const [draft, blueprint] = await Promise.all([
-      novelDb.workflowArtifacts.get(run.draftArtifactId!),
-      novelDb.workflowArtifacts.get(run.blueprintArtifactId!),
+      db.workflowArtifacts.get(run.draftArtifactId!),
+      db.workflowArtifacts.get(run.blueprintArtifactId!),
     ]);
     if (!draft || !blueprint) throw new Error("审校输入不完整");
     const blueprintData = blueprint.structuredData ? asBlueprint(blueprint.structuredData) : undefined;
@@ -44,10 +43,10 @@ export const reviewStageHandler: StageHandler = {
     const reviewPackets = new Map<NovelAgentRole, Awaited<ReturnType<typeof novelMemoryService.compileStageContext>>>();
     const reviewOne = async (role: typeof roles[number]) => {
       const [skills, packet] = await Promise.all([
-        resolveNovelSkills({ projectId: run.projectId, stage: "review" }),
+        resolveNovelSkills({ projectId: run.projectId, stage: "review", db: ctx.db }),
         run.conversationThreadId
-          ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "review", role, instruction: `${role} 独立审校当前章节`, workflowRunId: run.id, skillStage: "review" })
-          : novelDb.contextPackets.get(run.contextPacketId!),
+          ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "review", role, instruction: `${role} 独立审校当前章节`, workflowRunId: run.id, skillStage: "review", db: ctx.db })
+          : db.contextPackets.get(run.contextPacketId!),
       ]);
       if (!packet) throw new Error("审校上下文不存在");
       reviewPackets.set(role, packet);
@@ -119,6 +118,7 @@ export const reviewStageHandler: StageHandler = {
       deterministic,
       reviewers,
       threshold: project.settings.qualityThreshold,
+      db: ctx.db,
     });
     // 保存质量报告产物到 artifact 账本（与原实现一致：创建但仅用于审计存档）
     const receiptPacket = reviewPackets.get("continuity-reviewer") ?? reviewPackets.values().next().value;
@@ -133,13 +133,13 @@ export const reviewStageHandler: StageHandler = {
       skillRefs: [],
       contextPacketId: receiptPacket?.id,
     });
-    const previousReport = run.qualityReportId ? await novelDb.qualityReports.get(run.qualityReportId) : undefined;
+    const previousReport = run.qualityReportId ? await db.qualityReports.get(run.qualityReportId) : undefined;
     const comparablePreviousScore = previousReport
       && (previousReport.scoringVersion ?? 1) === (report.scoringVersion ?? 1)
       ? run.previousScore
       : undefined;
     if (isQualityRegression({ previous: previousReport, previousScore: run.previousScore, current: report }) && draft.parentArtifactId) {
-      const previousDraft = await novelDb.workflowArtifacts.get(draft.parentArtifactId);
+      const previousDraft = await db.workflowArtifacts.get(draft.parentArtifactId);
       if (previousDraft) {
         await ctx.createApprovalProposal(run, previousDraft, "workflow-manuscript", `修订版本的 blocker/major/分数综合质量退步，已恢复上一版本（${run.previousScore ?? previousReport?.weightedScore} → ${report.weightedScore}）`);
         const nextRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", {

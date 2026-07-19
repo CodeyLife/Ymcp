@@ -1,6 +1,6 @@
 import Ajv from "ajv";
 import { parse as parseYaml } from "yaml";
-import { novelDb, recordBase } from "./db";
+import { novelDb, recordBase, type NovelDatabase } from "./db";
 import type {
   NovelSkillManifest,
   NovelSkillSource,
@@ -112,17 +112,18 @@ export interface ResolvedSkillSet {
   conflicts: Array<{ skillId: string; conflictsWith: string }>;
 }
 
-export async function listAvailableSkills(projectId: string) {
-  const custom = await novelDb.skills.where("projectId").anyOf("__user__", projectId).toArray();
+export async function listAvailableSkills(projectId: string, db: NovelDatabase = novelDb) {
+  const custom = await db.skills.where("projectId").anyOf("__user__", projectId).toArray();
   return [...BUILTIN_NOVEL_SKILLS, ...custom];
 }
 
-export async function resolveNovelSkills(params: { projectId: string; stage: NovelSkillStage; explicitSkillIds?: string[] }): Promise<ResolvedSkillSet> {
-  const project = await novelDb.projects.get(params.projectId);
+export async function resolveNovelSkills(params: { projectId: string; stage: NovelSkillStage; explicitSkillIds?: string[]; db?: NovelDatabase }): Promise<ResolvedSkillSet> {
+  const db = params.db ?? novelDb;
+  const project = await db.projects.get(params.projectId);
   if (!project) throw new Error("项目不存在");
   const [available, bindings] = await Promise.all([
-    listAvailableSkills(params.projectId),
-    novelDb.projectSkills.where("projectId").equals(params.projectId).toArray(),
+    listAvailableSkills(params.projectId, db),
+    db.projectSkills.where("projectId").equals(params.projectId).toArray(),
   ]);
   const bindingMap = new Map(bindings.map((item) => [item.skillId, item]));
   const selected = new Set(PROFILE_SKILLS[project.settings.contentProfile] ?? PROFILE_SKILLS["general-serial"]);

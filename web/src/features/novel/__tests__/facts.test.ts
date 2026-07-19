@@ -217,9 +217,9 @@ describe("bulkSetFactCandidateStatus - 一键操作", () => {
         { targetTable: "entities", targetId: charA.id, field: "character.state.location", after: "南港", evidence: "矛盾描述。", confidence: 0.95, novelty: "update", conflict: true },
       ],
     });
-    const changed = await bulkSetFactCandidateStatus(candidates.map((item) => item.id), "rejected");
+    const changed = await bulkSetFactCandidateStatus(candidates.map((item) => item.id), "rejected", novelDb, "auto-policy");
     expect(changed).toHaveLength(2);
-    expect(await novelDb.factCandidates.get(candidates[1].id)).toMatchObject({ status: "rejected" });
+    expect(await novelDb.factCandidates.get(candidates[1].id)).toMatchObject({ status: "rejected", decisionSource: "auto-policy" });
   });
 
   it("空数组和已是目标状态的候选被跳过", async () => {

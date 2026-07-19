@@ -31,7 +31,7 @@ export const PROJECT_SNAPSHOT_TABLES = [
 ] as const;
 
 export type ProjectSnapshotTable = (typeof PROJECT_SNAPSHOT_TABLES)[number];
-export type SnapshotReason = "manual" | "chapter-baseline" | "post-promotion" | "replay";
+export type SnapshotReason = "manual" | "chapter-baseline" | "post-promotion" | "post-bench" | "replay";
 export type SnapshotRecord = Record<string, unknown>;
 export type ProjectSnapshotRecords = Record<ProjectSnapshotTable, SnapshotRecord[]>;
 

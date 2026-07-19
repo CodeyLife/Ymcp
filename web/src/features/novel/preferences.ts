@@ -1,11 +1,11 @@
-import { novelDb, recordBase } from "./db";
+import { novelDb, recordBase, type NovelDatabase } from "./db";
 import type { PreferenceSignal, ProjectTasteProfile } from "./types";
 
 type PreferenceSignalInput = Pick<PreferenceSignal, "projectId" | "sourceType" | "sourceId" | "category" | "preference" | "evidence" | "weight">;
 
-export async function recordPreferenceSignal(params: PreferenceSignalInput) {
+export async function recordPreferenceSignal(params: PreferenceSignalInput, db: NovelDatabase = novelDb) {
   const signal: PreferenceSignal = { ...recordBase(params.projectId), ...params };
-  await novelDb.preferenceSignals.add(signal);
+  await db.preferenceSignals.add(signal);
   return signal;
 }
 

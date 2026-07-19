@@ -1,4 +1,4 @@
-import { normalizeArchitecturePhases, novelDb, recordBase } from "./db";
+import { normalizeArchitecturePhases, novelDb, recordBase, type NovelDatabase } from "./db";
 import { vectorSearch } from "./retrieval";
 import { resolveNovelSkills } from "./skills";
 import type { ContextSource, DerivedMemory, FactAssertion, ManuscriptDocument, NovelAgentRole, NovelContextPacket, NovelRetrievalHit, NovelSkillManifest, NovelSkillStage, StoryEntity, WorkflowStage } from "./types";
@@ -153,24 +153,26 @@ export async function compileNovelContext(params: {
   retrievalHits?: NovelRetrievalHit[];
   factCutoffOrder?: number;
   consumer?: { workflowRunId?: string; stage?: WorkflowStage; role?: NovelAgentRole | string; messageId?: string };
+  db?: NovelDatabase;
 }): Promise<NovelContextPacket> {
   const { projectId, task, instruction, targetDocumentId, pinnedSourceIds = [], excludedSourceIds = [] } = params;
+  const db = params.db ?? novelDb;
   const [project, architecture, entities, relations, outline, scenes, threads, clues, snapshots, documents, revisions, assertions, knowledge, memories, units] = await Promise.all([
-    novelDb.projects.get(projectId),
-    novelDb.architectures.where("projectId").equals(projectId).first(),
-    novelDb.entities.where("projectId").equals(projectId).toArray(),
-    novelDb.relations.where("projectId").equals(projectId).toArray(),
-    novelDb.outlineNodes.where("projectId").equals(projectId).sortBy("order"),
-    novelDb.scenes.where("projectId").equals(projectId).sortBy("order"),
-    novelDb.plotThreads.where("projectId").equals(projectId).toArray(),
-    novelDb.foreshadowing.where("projectId").equals(projectId).toArray(),
-    novelDb.snapshots.where("projectId").equals(projectId).reverse().sortBy("createdAt"),
-    novelDb.documents.where("projectId").equals(projectId).sortBy("order"),
-    novelDb.revisions.where("projectId").equals(projectId).toArray(),
-    novelDb.factAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
-    novelDb.knowledgeAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
-    novelDb.derivedMemories.where("projectId").equals(projectId).and((item) => item.status === "active" || item.status === "cold").toArray(),
-    novelDb.narrativeUnits.where("projectId").equals(projectId).toArray(),
+    db.projects.get(projectId),
+    db.architectures.where("projectId").equals(projectId).first(),
+    db.entities.where("projectId").equals(projectId).toArray(),
+    db.relations.where("projectId").equals(projectId).toArray(),
+    db.outlineNodes.where("projectId").equals(projectId).sortBy("order"),
+    db.scenes.where("projectId").equals(projectId).sortBy("order"),
+    db.plotThreads.where("projectId").equals(projectId).toArray(),
+    db.foreshadowing.where("projectId").equals(projectId).toArray(),
+    db.snapshots.where("projectId").equals(projectId).reverse().sortBy("createdAt"),
+    db.documents.where("projectId").equals(projectId).sortBy("order"),
+    db.revisions.where("projectId").equals(projectId).toArray(),
+    db.factAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
+    db.knowledgeAssertions.where("projectId").equals(projectId).and((item) => item.status === "active").toArray(),
+    db.derivedMemories.where("projectId").equals(projectId).and((item) => item.status === "active" || item.status === "cold").toArray(),
+    db.narrativeUnits.where("projectId").equals(projectId).toArray(),
   ]);
   if (!project) throw new Error("项目不存在");
   const target = targetDocumentId ? documents.find((item) => item.id === targetDocumentId) : undefined;
@@ -181,7 +183,7 @@ export async function compileNovelContext(params: {
   const cutoffOrder = params.factCutoffOrder ?? (target ? target.order - 1 : undefined);
   const resolvedSkills = params.resolvedSkills ?? (await resolveNovelSkills({ projectId, stage, explicitSkillIds: params.explicitSkillIds })).skills;
   const terms = searchTerms(instruction, `${target?.title ?? ""} ${target?.plainText.slice(-3000) ?? ""}`);
-  const vectorResults = await vectorSearch({ projectId, query: instruction, targetTables: ["entities", "outlineNodes", "documents", "plotThreads", "foreshadowing"], topK: 30 }).catch(() => [] as Array<{ targetId: string; targetTable: string; score: number }>);
+  const vectorResults = await vectorSearch({ projectId, query: instruction, targetTables: ["entities", "outlineNodes", "documents", "plotThreads", "foreshadowing"], topK: 30, db }).catch(() => [] as Array<{ targetId: string; targetTable: string; score: number }>);
   const vectorScoreMap = new Map(vectorResults.map((result) => [result.targetId, result.score]));
   const pinned = new Set(pinnedSourceIds);
   const excluded = new Set(excludedSourceIds);
@@ -199,7 +201,7 @@ export async function compileNovelContext(params: {
   push(source({ kind: "instruction", id: "instruction", title: "本次任务", content: instruction, weight: 100, layer: "mandatory", pinned: true, reason: "作者本次明确指令", priorityClass: "invariant", authority: "author" }));
   push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant", authority: "approved", evidenceRefs: [project.id] }));
   if (params.creativeBriefId) {
-    const brief = await novelDb.creativeBriefs.get(params.creativeBriefId);
+    const brief = await db.creativeBriefs.get(params.creativeBriefId);
     if (!brief || brief.status !== "confirmed" || brief.projectId !== projectId) throw new Error("创作简报不存在或尚未确认");
     push(source({ kind: "creative-brief", id: brief.id, title: "本次已确认创作简报", content: [`目标：${brief.goal}`, brief.povCharacterId ? `POV：${brief.povCharacterId}` : "", `事实截止点：章节顺序 ${brief.factCutoffOrder ?? cutoffOrder ?? "未指定"}`, `基调：${brief.tone || "沿用项目基调"}`, `语言要求：${brief.languageRequirements.join("；") || "沿用项目文风"}`, `必写：${brief.mustHappen.join("；") || "无"}`, `禁写：${brief.forbidden.join("；") || "无"}`, `目标字数：${brief.targetWords}`].filter(Boolean).join("\n"), weight: 100, layer: "mandatory", pinned: true, reason: "作者确认的本次章节生产契约", priorityClass: "invariant", authority: "author", evidenceRefs: brief.sourceMessageIds }));
   }
@@ -210,7 +212,7 @@ export async function compileNovelContext(params: {
     push(source({ kind: "instruction", id: "pov-boundary", title: "POV 行为边界", content: "作者层真相和未来创作契约只能约束叙事铺垫，当前 POV 角色的判断、对白和主动行为只能依据其已知、怀疑或误解的内容。不得让角色利用尚未得知的信息。", weight: 100, layer: "mandatory", pinned: true, reason: "正文阶段必须隔离作者知识与角色知识", priorityClass: "invariant", authority: "approved" }));
   }
   if (params.threadId) {
-    const conversationMemories = await novelDb.conversationMemories.where("projectId").equals(projectId).and((memory) => memory.status === "active" && (!memory.threadId || memory.threadId === params.threadId || memory.scope === "project")).toArray();
+    const conversationMemories = await db.conversationMemories.where("projectId").equals(projectId).and((memory) => memory.status === "active" && (!memory.threadId || memory.threadId === params.threadId || memory.scope === "project")).toArray();
     for (const memory of conversationMemories) push(source({ kind: "conversation-memory", id: memory.id, title: memory.title, content: memory.content, weight: 78 + memory.confidence * 12, layer: params.retrievalSourceIds?.includes(memory.id) ? "working" : "retrieval", reason: "作者对话中提炼并仍然有效的偏好", priorityClass: "working", authority: "author", evidenceRefs: memory.sourceMessageIds }));
   }
   if (architecture) push(source({ kind: "architecture", id: architecture.id, title: architecture.status === "approved" ? "已批准全书架构（创作契约，不是已发生事实）" : "全书架构草案", content: [`结构方法：${architecture.framework}`, `核心问题：${architecture.centralQuestion}`, `核心冲突：${architecture.centralConflict}`, `全书梗概：${architecture.synopsis}`, `结构阶段：\n${normalizeArchitecturePhases(architecture.phases).map((phase) => `${phase.order + 1}. ${phase.title}：${phase.purpose}；转折：${phase.turningPoint}`).join("\n")}`].join("\n"), weight: architecture.status === "approved" ? 96 : 72, layer: architecture.status === "approved" ? "mandatory" : "working", pinned: architecture.status === "approved", reason: architecture.status === "approved" ? "作者批准的未来创作契约" : "尚未批准的工作规划", priorityClass: architecture.status === "approved" ? "invariant" : "working" }));
@@ -287,7 +289,7 @@ export async function compileNovelContext(params: {
     for (const document of recentDocs) push(source({ kind: "document", id: `legacy-summary:${document.id}`, title: `旧式近期章节：${document.title}`, content: document.summary || document.plainText, weight: 45, layer: "background", reason: "项目尚未建立章节记忆，临时回退到旧式章节资料" }));
   }
   if (snapshots[0] && !eligibleMemories.length) push(source({ kind: "snapshot", id: snapshots[0].id, title: `旧式故事快照：${snapshots[0].label}`, content: `${snapshots[0].storyTime}\n${snapshots[0].recentSummary}`, weight: 40, layer: "background", reason: "项目尚未建立章节记忆，临时回退到旧式快照" }));
-  const taste = await novelDb.tasteProfiles.where("projectId").equals(projectId).and((item) => item.status === "confirmed").last();
+  const taste = await db.tasteProfiles.where("projectId").equals(projectId).and((item) => item.status === "confirmed").last();
   if (taste) push(source({ kind: "taste", id: taste.id, title: "已确认写作偏好", content: `${taste.summary}\n偏好：${taste.preferredPatterns.join("；")}\n避免：${taste.avoidedPatterns.join("；")}`, weight: 88, layer: "mandatory", pinned: true, reason: "作者已确认的文风偏好", priorityClass: "invariant" }));
 
   const allocated = allocateContext(candidates);
@@ -310,7 +312,7 @@ export async function compileNovelContext(params: {
     factCutoffOrder: cutoffOrder,
     consumer: params.consumer ? { ...params.consumer, role: params.consumer.role as NovelAgentRole | undefined } : undefined,
   };
-  await novelDb.contextPackets.add(packet);
+  await db.contextPackets.add(packet);
   return packet;
 }
 

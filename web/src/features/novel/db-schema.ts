@@ -2,7 +2,7 @@
 import type { Transaction } from "dexie";
 import { buildProjectReferenceCatalogs, emptyReferenceCatalog, sanitizeProposalReferencesInPlace, sanitizeReferenceRecordInPlace } from "./reference-integrity";
 
-export const DB_VERSION = 18;
+export const DB_VERSION = 20;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
@@ -114,6 +114,16 @@ export const V18_STORES: Record<string, string | null> = {
   ...V17_STORES,
   outlineNodes: "id, projectId, phaseId, order, [projectId+phaseId]",
   documents: "id, projectId, order, plotSegmentId, status, updatedAt, branch, [projectId+status], [projectId+plotSegmentId]",
+};
+
+export const V19_STORES: Record<string, string | null> = {
+  ...V18_STORES,
+  iteratedSkills: "id, projectId, skillId, sourceWorkflowRunId, createdAt, [projectId+sourceWorkflowRunId], [projectId+skillId]",
+};
+
+export const V20_STORES: Record<string, string | null> = {
+  ...V19_STORES,
+  operationReceipts: "id, projectId, candidateId, operationId, action, status, createdAt, [candidateId+status], [operationId+status]",
 };
 
 const RETIRED_PLANNING_TASKS = new Set([
