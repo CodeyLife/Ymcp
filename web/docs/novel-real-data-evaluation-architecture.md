@@ -70,6 +70,7 @@ flowchart LR
 - 正文状态：`documents`、已批准的 `revisions`
 - 事实状态：`factAssertions`、`knowledgeAssertions`、`outlineRealizations`
 - 记忆状态：有效的 `derivedMemories`、必要的 `snapshots`
+- 作者上下文：仍生效的 `conversationMemories`
 - 创作偏好：`projectSkills`、`tasteProfiles`、有效的 `preferenceSignals`
 
 默认不复制旧的运行过程数据：
@@ -93,7 +94,7 @@ flowchart LR
 
 ```ts
 interface ProjectSnapshotBundle {
-  formatVersion: 1;
+  formatVersion: 2;
   snapshotId: string;
   sourceProjectId: string;
   sourceDatabaseVersion: number;
@@ -161,6 +162,7 @@ interface ExperimentVariant {
 
 ```ts
 interface CandidateBundle {
+  formatVersion: 2;
   id: string;
   experimentId: string;
   variantId: string;
@@ -176,8 +178,10 @@ interface CandidateBundle {
   };
   manuscript: {
     title: string;
+    summary: string;
     plainText: string;
     contentHtml: string;
+    wordCount: number;
     contentHash: string;
   };
   acceptedFacts: PromotableFact[];

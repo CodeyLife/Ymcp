@@ -24,6 +24,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolve } from "node:path";
 
 const { factExtractorMode } = vi.hoisted(() => ({
@@ -137,6 +140,8 @@ import { novelDb } from "../../db";
 import { promoteClosedLoopCandidate, runClosedLoop } from "../../evaluation/closed-loop";
 import { callStructuredNovelModel } from "../../ai";
 import { captureProjectSnapshot } from "../../evaluation/project-snapshot";
+import { captureClosedLoopFixture } from "../../evaluation/evaluation-fixture";
+import { seedCanonicalFromFixture } from "../../../../../scripts/novel-bench/run-closed-loop-impl";
 import type {
   CreativeBrief,
   ManuscriptDocument,
@@ -420,6 +425,70 @@ describe("Loop 9: runClosedLoop 端到端编排（CLI trigger 共享逻辑）", 
     expect(result.stderr).toContain("必须通过 --seed");
     expect(result.stderr).not.toContain("EINVAL");
   }, 20_000);
+
+  it("CLI fixture seed 保留 revision、事实与两类记忆的完整正式状态", async () => {
+    await novelDb.factAssertions.put({
+      ...baseRecord("cli-fact-1"),
+      sourceRevisionId: "revision-1",
+      subject: { kind: "entity", id: POV_CHARACTER_ID },
+      predicate: "located-at",
+      object: "渡口",
+      polarity: "affirmed",
+      truthStatus: "objective",
+      timeMode: "point",
+      provenance: "approved-revision",
+      evidence: "沈砚抵达渡口。",
+      confidence: 1,
+      humanReadable: "沈砚位于渡口",
+      status: "active",
+    } as never);
+    await novelDb.derivedMemories.put({
+      ...baseRecord("cli-derived-memory-1"),
+      level: "chapter",
+      documentId: CHAPTER_1_ID,
+      sourceRevisionId: "revision-1",
+      sourceMemoryIds: [],
+      coverage: { chapterIds: [CHAPTER_1_ID], startOrder: 0, endOrder: 0 },
+      summary: "沈砚抵达渡口。",
+      content: { sceneOutcomes: [], stateChanges: [], knowledgeChanges: [], relationshipChanges: [], threadProgress: [], foreshadowingProgress: [], factAssertionIds: ["cli-fact-1"], inheritedPressures: [] },
+      status: "active",
+      validation: { passed: true, issues: [], checkedAt: 100 },
+      tokenEstimate: 10,
+      generatedAt: 100,
+    } as never);
+    await novelDb.conversationMemories.put({
+      ...baseRecord("cli-conversation-memory-1"),
+      threadId: THREAD_ID,
+      targetId: CHAPTER_2_ID,
+      scope: "project",
+      scopeKey: `project:${PROJECT_ID}`,
+      kind: "preference",
+      title: "作者偏好",
+      content: "保持克制，不替人物总结情绪。",
+      status: "active",
+      confidence: 1,
+      sourceMessageIds: [],
+      evidenceQuotes: [],
+      extractorVersion: "test",
+      autoApplied: false,
+    } as never);
+
+    const fixture = await captureClosedLoopFixture(novelDb, PROJECT_ID, "manual");
+    const tempDir = mkdtempSync(join(tmpdir(), "ymcp-closed-loop-fixture-"));
+    const fixturePath = join(tempDir, "fixture.json");
+    writeFileSync(fixturePath, JSON.stringify(fixture), "utf8");
+    try {
+      await seedCanonicalFromFixture(fixturePath, true);
+      expect(await novelDb.revisions.get("revision-1")).toBeDefined();
+      expect(await novelDb.factAssertions.get("cli-fact-1")).toBeDefined();
+      expect(await novelDb.derivedMemories.get("cli-derived-memory-1")).toBeDefined();
+      expect(await novelDb.conversationMemories.get("cli-conversation-memory-1")).toBeDefined();
+      expect(await novelDb.conversationThreads.get(THREAD_ID)).toBeDefined();
+      expect(await novelDb.creativeBriefs.get(BRIEF_ID)).toBeDefined();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("runClosedLoop({dryRun: false}) 完成完整闭环：promote 写入正式库，hash 前进，工作区清理", async () => {
     // 1. 捕获基线 hash

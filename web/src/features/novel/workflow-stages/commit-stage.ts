@@ -1,6 +1,7 @@
 import { commitAcceptedFacts, createWorkflowSnapshot } from "../facts";
 import { createChapterMemory, sanitizeMemorySummary } from "../memory";
 import { toHtml } from "../manuscript-review";
+import { countNovelWords } from "../quality";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
 export const commitStageHandler: StageHandler = {
@@ -40,7 +41,7 @@ export const commitStageHandler: StageHandler = {
     // 导致 plainText 保持空值。commit-stage 作为最终保存点，必须用 draft.contentMarkdown 填充 plainText。
     // draftArtifactId 指向的 artifact 就是 manuscript-approval 批准的最终正文，内容与 plainText 应一致。
     const draftText = draft.contentMarkdown ?? "";
-    const wordCount = (draftText.match(/[\u3400-\u9fff]|[a-zA-Z0-9]+/g) ?? []).length;
+    const wordCount = countNovelWords(draftText);
     await db.documents.update(document.id, {
       summary,
       status: "final",

@@ -346,7 +346,7 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
     });
 
     // 5. 验证 bundle 顶层字段
-    expect(candidateBundle.formatVersion).toBe(1);
+    expect(candidateBundle.formatVersion).toBe(2);
     expect(candidateBundle.id).toBeTruthy();
     expect(candidateBundle.experimentId).toBe(workspace.experimentId);
     expect(candidateBundle.variantId).toBe("default");
@@ -363,8 +363,10 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
 
     // 7. 验证 manuscript
     expect(candidateBundle.manuscript.title).toBe("第一章");
+    expect(candidateBundle.manuscript.summary).toBe("渡口夜话。");
     expect(candidateBundle.manuscript.plainText).toBe(DRAFT_TEXT);
     expect(candidateBundle.manuscript.contentHtml).toBe(`<p>${DRAFT_TEXT}</p>`);
+    expect(candidateBundle.manuscript.wordCount).toBeGreaterThan(0);
     expect(candidateBundle.manuscript.contentHash).toBeTruthy();
     expect(candidateBundle.manuscript.contentHash).toMatch(/^[0-9a-f]{64}$/); // SHA-256 hex
     expect(candidateBundle.manuscript.sourceWorkflowRunId).toBe(WORKFLOW_RUN_ID);
@@ -449,7 +451,7 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
 
   it("verifyCandidateBundle 检测出格式错误：missing required fields", () => {
     const brokenBundle = {
-      formatVersion: 1,
+      formatVersion: 2,
       id: "",
       experimentId: "",
       variantId: "",
@@ -480,7 +482,7 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
 
   it("verifyCandidateBundle 检测出 iteratedSkills beforePrompt === afterPrompt", () => {
     const bundle = {
-      formatVersion: 1,
+      formatVersion: 2,
       id: "test-id",
       experimentId: "exp-1",
       variantId: "default",
@@ -495,8 +497,10 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
       },
       manuscript: {
         title: "测试章节",
+        summary: "测试摘要",
         plainText: "正文内容",
         contentHtml: "正文内容",
+        wordCount: 4,
         contentHash: "abc123",
       },
       acceptedFacts: [],

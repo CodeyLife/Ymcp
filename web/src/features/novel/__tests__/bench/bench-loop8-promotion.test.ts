@@ -45,6 +45,8 @@ vi.mock("../../ai", () => ({
 }));
 
 import { documentContentHash, novelDb, type NovelDatabase } from "../../db";
+import { setEmbeddingProvider } from "../../embedding";
+import { countNovelWords } from "../../quality";
 import { captureProjectSnapshot, type ProjectHead } from "../../evaluation/project-snapshot";
 import { loadProjectSnapshotIntoExperiment } from "../../evaluation/experiment-workspace";
 import { runSkillIteration } from "../../evaluation/skill-iteration";
@@ -400,6 +402,12 @@ describe("Loop 8: PromotionService 原子单事务晋升 + 幂等 receipt + 注�
   let baseHead: ProjectHead;
 
   beforeEach(async () => {
+    setEmbeddingProvider({
+      name: "promotion-test-embedding",
+      dimension: 2,
+      embed: async () => [1, 0],
+      embedBatch: async (texts) => texts.map(() => [1, 0]),
+    });
     await novelDb.delete();
     await novelDb.open();
     localStorage.clear();
@@ -430,7 +438,8 @@ describe("Loop 8: PromotionService 原子单事务晋升 + 幂等 receipt + 注�
     expect(receipt1.promotedAt).toBeGreaterThan(0);
     expect(receipt1.createdRevisionId).toBeTruthy();
     expect(receipt1.createdFactAssertionIds.length).toBe(1);
-    expect(receipt1.createdMemoryIds).toEqual([]);
+    expect(receipt1.createdMemoryIds).toHaveLength(1);
+    expect(receipt1.createdSnapshotId).toBeTruthy();
     expect(receipt1.createdOperationIds.length).toBe(1);
 
     // 2. 正式库新增了 DocumentRevision
@@ -445,6 +454,8 @@ describe("Loop 8: PromotionService 原子单事务晋升 + 幂等 receipt + 注�
     expect(updatedDocument).toBeDefined();
     expect(updatedDocument!.contentHtml).toBe(candidate.manuscript.contentHtml);
     expect(updatedDocument!.plainText).toBe(candidate.manuscript.plainText);
+    expect(updatedDocument!.summary).toBe(candidate.manuscript.summary);
+    expect(updatedDocument!.wordCount).toBe(countNovelWords(candidate.manuscript.plainText));
     expect(updatedDocument!.approvedRevisionId).toBe(receipt1.createdRevisionId);
     expect(updatedDocument!.revision).toBe(2); // 从 1 → 2
 
@@ -457,6 +468,20 @@ describe("Loop 8: PromotionService 原子单事务晋升 + 幂等 receipt + 注�
     expect(factAssertion!.status).toBe("active");
     expect(factAssertion!.sourceArtifactId).toBeUndefined();
     expect((await novelDb.entities.get("entity-shen-yan") as unknown as { location?: string })?.location).toBe("客栈");
+
+    const chapterMemory = await novelDb.derivedMemories.get(receipt1.createdMemoryIds[0]!);
+    expect(chapterMemory).toMatchObject({
+      documentId: CHAPTER_ID,
+      sourceRevisionId: receipt1.createdRevisionId,
+      summary: candidate.manuscript.summary,
+      status: "active",
+    });
+    const storySnapshot = await novelDb.snapshots.get(receipt1.createdSnapshotId!);
+    expect(storySnapshot).toMatchObject({
+      sourceDocumentId: CHAPTER_ID,
+      recentSummary: candidate.manuscript.summary,
+    });
+    expect((await novelDb.projects.get(PROJECT_ID))?.currentSnapshotId).toBe(receipt1.createdSnapshotId);
 
     // 5. NovelSkillManifest.prompt 被更新
     const updatedSkill = await novelDb.skills.where("[projectId+skillId]").equals([PROJECT_ID, "embodied-prose"]).first();
@@ -475,6 +500,11 @@ describe("Loop 8: PromotionService 原子单事务晋升 + 幂等 receipt + 注�
     expect(opReceipt!.status).toBe("completed");
     expect(opReceipt!.candidateId).toBe(candidate.id);
     expect(opReceipt!.receipts.revisionId).toBe(receipt1.createdRevisionId);
+    expect(opReceipt!.receipts.memoryIds).toEqual(receipt1.createdMemoryIds);
+    expect(opReceipt!.receipts.snapshotId).toBe(receipt1.createdSnapshotId);
+    expect(opReceipt!.receipts.operationIds).toEqual(receipt1.createdOperationIds);
+    expect(await novelDb.operations.get(receipt1.createdOperationIds[0]!)).toBeDefined();
+    expect(await novelDb.embeddings.where("targetId").equals(CHAPTER_ID).count()).toBeGreaterThan(0);
 
     // 7. 旧 approvedRevision 被 superseded
     const oldRevision = await novelDb.revisions.get("revision-1");
@@ -491,6 +521,9 @@ describe("Loop 8: PromotionService 原子单事务晋升 + 幂等 receipt + 注�
     expect(receipt2.operationId).toBe(receipt1.operationId);
     expect(receipt2.createdRevisionId).toBe(receipt1.createdRevisionId);
     expect(receipt2.createdFactAssertionIds).toEqual(receipt1.createdFactAssertionIds);
+    expect(receipt2.createdMemoryIds).toEqual(receipt1.createdMemoryIds);
+    expect(receipt2.createdSnapshotId).toBe(receipt1.createdSnapshotId);
+    expect(receipt2.createdOperationIds).toEqual(receipt1.createdOperationIds);
 
     // 10. 幂等后正式库无新增 revision / factAssertion
     const revisionCount = await novelDb.revisions.where("projectId").equals(PROJECT_ID).count();
@@ -545,6 +578,19 @@ describe("Loop 8: PromotionService 原子单事务晋升 + 幂等 receipt + 注�
     expect(documentAfter!.contentHtml).toBe(DRAFT_TEXT_BEFORE);
     expect(documentAfter!.revision).toBe(1);
     expect(documentAfter!.approvedRevisionId).toBe("revision-1");
+
+    // 6. 同一 operationId 失败后可成功重试，之后仍稳定返回 completed receipt。
+    const retryReceipt = await service.promote(candidate, decision);
+    expect(retryReceipt.status).toBe("promoted");
+    const idempotentReceipt = await service.promote(candidate, decision);
+    expect(idempotentReceipt.status).toBe("already-promoted");
+    expect(idempotentReceipt.createdRevisionId).toBe(retryReceipt.createdRevisionId);
+    expect(idempotentReceipt.createdOperationIds).toEqual(retryReceipt.createdOperationIds);
+    const completedReceipt = await novelDb.operationReceipts
+      .where("[operationId+status]")
+      .equals([`promote:${candidate.id}`, "completed"])
+      .first();
+    expect(completedReceipt).toBeDefined();
   }, 30_000);
 
   it("inspect 检测 stale-baseline：在 candidate 导出后修改正式库 document → inspect.status=stale-baseline + promote 拒绝写入", async () => {

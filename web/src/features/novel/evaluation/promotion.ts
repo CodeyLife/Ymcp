@@ -38,10 +38,16 @@ import type {
   NovelSkillManifest,
   ProjectSkillBinding,
 } from "../types";
-import { commitAcceptedFacts, factProjectionValuesEqual, readFactField } from "../facts";
+import { commitAcceptedFacts, createWorkflowSnapshot, factProjectionValuesEqual, readFactField } from "../facts";
+import { createChapterMemory } from "../memory";
+import { upsertEmbedding } from "../retrieval";
 import { BUILTIN_NOVEL_SKILLS } from "../skills";
 import { captureProjectSnapshot, type ProjectHead } from "./project-snapshot";
-import { computeWorkflowInputHash, verifyCandidateBundle } from "./candidate-bundle";
+import {
+  computeManuscriptContentHash,
+  computeWorkflowInputHash,
+  verifyCandidateBundle,
+} from "./candidate-bundle";
 import type {
   AuthorDecision,
   CandidateBundle,
@@ -50,30 +56,6 @@ import type {
   PromotionReceipt,
   PromotionService,
 } from "./types";
-
-// ===== 哈希辅助 =====
-
-/**
- * 重算 CandidateManuscript.contentHash：SHA-256 over (title + contentHtml + plainText)。
- *
- * 必须与 candidate-bundle.ts 中的 computeManuscriptContentHash 完全一致。
- * 提升时重算并比对，用于检测 bundle 在传输/序列化过程中是否被篡改。
- */
-async function recomputeManuscriptContentHash(input: {
-  title: string;
-  contentHtml: string;
-  plainText: string;
-}): Promise<string> {
-  const bytes = new TextEncoder().encode(
-    JSON.stringify({
-      title: input.title,
-      contentHtml: input.contentHtml,
-      plainText: input.plainText,
-    }),
-  );
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 // ===== 依赖头重算 =====
 
@@ -157,10 +139,12 @@ class PromotionServiceImpl implements PromotionService {
     // 2. 重算 manuscript.contentHash（传输篡改检测）
     let recomputedContentHash = "";
     try {
-      recomputedContentHash = await recomputeManuscriptContentHash({
+      recomputedContentHash = await computeManuscriptContentHash({
         title: candidate.manuscript.title,
+        summary: candidate.manuscript.summary,
         contentHtml: candidate.manuscript.contentHtml,
         plainText: candidate.manuscript.plainText,
+        wordCount: candidate.manuscript.wordCount,
       });
       if (recomputedContentHash !== candidate.manuscript.contentHash) {
         deterministicBlockers.push(
@@ -248,10 +232,12 @@ class PromotionServiceImpl implements PromotionService {
     // 2. 幂等检查：以 candidateId 派生 operationId
     const operationId = `promote:${candidate.id}`;
     const existing = await this.db.operationReceipts
-      .where("operationId")
-      .equals(operationId)
+      .where("[operationId+status]")
+      .equals([operationId, "completed"])
       .first();
-    if (existing && existing.status === "completed") {
+    if (existing) {
+      const operationIds = existing.receipts.operationIds
+        ?? (await this.db.operations.where("operationId").equals(operationId).toArray()).map((item) => item.id);
       return {
         candidateId: candidate.id,
         operationId: existing.operationId,
@@ -261,7 +247,7 @@ class PromotionServiceImpl implements PromotionService {
         createdFactAssertionIds: existing.receipts.factAssertionIds,
         createdMemoryIds: existing.receipts.memoryIds,
         createdSnapshotId: existing.receipts.snapshotId,
-        createdOperationIds: [existing.id],
+        createdOperationIds: operationIds,
       };
     }
 
@@ -365,8 +351,8 @@ class PromotionServiceImpl implements PromotionService {
             contentHtml: candidate.manuscript.contentHtml,
             plainText: candidate.manuscript.plainText,
             title: candidate.manuscript.title,
-            summary: latestDocument.summary, // Loop 8：不修改 summary，保留作者已有的
-            wordCount: candidate.manuscript.plainText.length,
+            summary: candidate.manuscript.summary,
+            wordCount: candidate.manuscript.wordCount,
             status: "final",
             approvedRevisionId: newRevision.id,
             revision: latestDocument.revision + 1,
@@ -435,7 +421,38 @@ class PromotionServiceImpl implements PromotionService {
             throw new Error(`事实投影未完整提交：expected=${acceptedFacts.length} actual=${createdFactAssertionIds.length}`);
           }
 
-          // 5.6 更新 NovelSkillManifest.prompt（仅 accepted skills）
+          // 5.6 创建与正式 revision 绑定的章节记忆和故事状态快照。
+          const chapterMemory = await createChapterMemory({
+            projectId,
+            documentId: updatedDocument.id,
+            sourceRevisionId: newRevision.id,
+            summary: candidate.manuscript.summary,
+            content: {
+              factAssertionIds: createdFactAssertionIds,
+              stateChanges: acceptedFacts
+                .filter((fact) => fact.projectionInput.targetTable === "entities")
+                .map((fact) => fact.payload.humanReadable),
+              knowledgeChanges: acceptedFacts.flatMap((fact) => (fact.projectionInput.knowledgeDeltas ?? [])
+                .map((delta) => `${delta.characterId}：${delta.stance} · ${fact.payload.humanReadable}`)),
+              relationshipChanges: acceptedFacts
+                .filter((fact) => fact.projectionInput.targetTable === "relations")
+                .map((fact) => fact.payload.humanReadable),
+              threadProgress: acceptedFacts
+                .filter((fact) => fact.projectionInput.targetTable === "plotThreads")
+                .map((fact) => fact.payload.humanReadable),
+              foreshadowingProgress: acceptedFacts
+                .filter((fact) => fact.projectionInput.targetTable === "foreshadowing")
+                .map((fact) => fact.payload.humanReadable),
+            },
+          }, db);
+          const storySnapshot = await createWorkflowSnapshot({
+            projectId,
+            documentId: updatedDocument.id,
+            label: `${updatedDocument.title}完成`,
+            summary: candidate.manuscript.summary,
+          }, db);
+
+          // 5.7 更新 NovelSkillManifest.prompt（仅 accepted skills）
           for (const iterated of acceptedSkills) {
             const stored = await db.skills
               .where("skillId")
@@ -462,7 +479,7 @@ class PromotionServiceImpl implements PromotionService {
             await db.skills.put(updated);
           }
 
-          // 5.7 更新 ProjectSkillBinding（仅 accepted bindings）
+          // 5.8 更新 ProjectSkillBinding（仅 accepted bindings）
           for (const iterated of acceptedBindings) {
             const existing = await db.projectSkills
               .where("[projectId+skillId]")
@@ -486,7 +503,7 @@ class PromotionServiceImpl implements PromotionService {
             await db.projectSkills.put(binding);
           }
 
-          // 5.8 写入 ChangeOperation（章节正文变更审计）
+          // 5.9 写入 ChangeOperation（章节正文变更审计）
           const operationBase = recordBase(projectId);
           const operationId = `promote:${candidate.id}`;
           const changeOperation = {
@@ -501,6 +518,8 @@ class PromotionServiceImpl implements PromotionService {
             fieldChanges: {
               contentHtml: { before: latestDocument.contentHtml, after: candidate.manuscript.contentHtml },
               plainText: { before: latestDocument.plainText, after: candidate.manuscript.plainText },
+              summary: { before: latestDocument.summary, after: candidate.manuscript.summary },
+              wordCount: { before: latestDocument.wordCount, after: candidate.manuscript.wordCount },
               approvedRevisionId: { before: supersededRevisionId ?? null, after: newRevision.id },
               revision: { before: latestDocument.revision, after: updatedDocument.revision },
             },
@@ -509,7 +528,7 @@ class PromotionServiceImpl implements PromotionService {
           };
           await db.operations.add(changeOperation);
 
-          // 5.9 写入 OperationReceipt（幂等键）
+          // 5.10 写入 OperationReceipt（幂等键）
           const receipt: OperationReceipt = {
             id: receiptId,
             projectId,
@@ -522,8 +541,9 @@ class PromotionServiceImpl implements PromotionService {
             receipts: {
               revisionId: newRevision.id,
               factAssertionIds: createdFactAssertionIds,
-              memoryIds: [],
-              snapshotId: undefined,
+              memoryIds: [chapterMemory.id],
+              snapshotId: storySnapshot.id,
+              operationIds: [changeOperation.id],
             },
           };
           await db.operationReceipts.put(receipt);
@@ -531,11 +551,22 @@ class PromotionServiceImpl implements PromotionService {
           return {
             revisionId: newRevision.id,
             factAssertionIds: createdFactAssertionIds,
+            memoryIds: [chapterMemory.id],
+            snapshotId: storySnapshot.id,
+            operationIds: [changeOperation.id],
             operationId,
-            receiptId,
+            document: updatedDocument,
           };
         },
       );
+
+      await upsertEmbedding({
+        projectId,
+        targetTable: "documents",
+        targetId: result.document.id,
+        content: [result.document.title, result.document.summary, result.document.plainText].filter(Boolean).join("\n"),
+        db,
+      }).catch(() => { /* semantic indexing degrades to keyword retrieval */ });
 
       return {
         candidateId: candidate.id,
@@ -544,9 +575,9 @@ class PromotionServiceImpl implements PromotionService {
         promotedAt: now,
         createdRevisionId: result.revisionId,
         createdFactAssertionIds: result.factAssertionIds,
-        createdMemoryIds: [],
-        createdSnapshotId: undefined,
-        createdOperationIds: [result.receiptId],
+        createdMemoryIds: result.memoryIds,
+        createdSnapshotId: result.snapshotId,
+        createdOperationIds: result.operationIds,
       };
     } catch (error) {
       // 事务已自动回滚，正式库保持原样。写一条 failed receipt 用于审计。

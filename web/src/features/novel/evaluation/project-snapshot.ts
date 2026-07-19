@@ -3,7 +3,7 @@ import { documentContentHash, NovelDatabase } from "../db";
 import { DB_VERSION, RECORD_SCHEMA_VERSION } from "../db-schema";
 import type { ManuscriptDocument, StoryProject } from "../types";
 
-export const PROJECT_SNAPSHOT_FORMAT_VERSION = 1;
+export const PROJECT_SNAPSHOT_FORMAT_VERSION = 2;
 export const EXPERIMENT_DATABASE_PREFIX = "ymcp-novel-eval-v1-";
 
 export const PROJECT_SNAPSHOT_TABLES = [
@@ -26,6 +26,7 @@ export const PROJECT_SNAPSHOT_TABLES = [
   "narrativeUnits",
   "outlineRealizations",
   "derivedMemories",
+  "conversationMemories",
   "preferenceSignals",
   "tasteProfiles",
 ] as const;
@@ -57,7 +58,7 @@ export interface ProjectSnapshotManifest {
 }
 
 export interface ProjectSnapshotBundle {
-  formatVersion: 1;
+  formatVersion: 2;
   snapshotId: string;
   sourceProjectId: string;
   sourceDatabaseVersion: number;

@@ -18,6 +18,17 @@ export type {
 } from "./project-snapshot";
 
 export {
+  captureClosedLoopFixture,
+  replaceCanonicalDatabaseFromFixture,
+  verifyClosedLoopFixture,
+  CLOSED_LOOP_FIXTURE_FORMAT_VERSION,
+} from "./evaluation-fixture";
+export type {
+  ClosedLoopFixtureBundle,
+  ClosedLoopFixtureVerification,
+} from "./evaluation-fixture";
+
+export {
   loadProjectSnapshotIntoExperiment,
   recaptureExperimentSnapshot,
 } from "./experiment-workspace";
@@ -36,6 +47,8 @@ export {
   verifyCandidateBundle,
   serializeCandidateBundle,
   deserializeCandidateBundle,
+  computeManuscriptContentHash,
+  CANDIDATE_BUNDLE_FORMAT_VERSION,
 } from "./candidate-bundle";
 export type {
   CandidateBundleVerification,

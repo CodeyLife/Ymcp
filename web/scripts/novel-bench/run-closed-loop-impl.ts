@@ -19,6 +19,11 @@ import process from "node:process";
 
 import { novelDb } from "../../src/features/novel/db";
 import { runClosedLoop } from "../../src/features/novel/evaluation/closed-loop";
+import {
+  replaceCanonicalDatabaseFromFixture,
+  verifyClosedLoopFixture,
+  type ClosedLoopFixtureBundle,
+} from "../../src/features/novel/evaluation/evaluation-fixture";
 
 interface ParsedArgs {
   projectId: string;
@@ -106,7 +111,7 @@ function printHelp(): void {
   --author <id>      作者 ID（默认 closed-loop-cli）
   --code-rev <s>     代码版本号（默认 unknown）
   --experiment <id>  实验 ID（默认自动生成）
-  --seed <path>      完整 fixture JSON（必须包含 project/chapter/thread/brief，必填）
+  --seed <path>      完整闭环 fixture JSON（由“导出评测快照”生成，必填）
   --help, -h         显示本帮助
 
 示例：
@@ -115,56 +120,18 @@ function printHelp(): void {
 `.trim());
 }
 
-interface FoundationSnapshot {
-  project: unknown;
-  architectures: unknown[];
-  entities: unknown[];
-  relations: unknown[];
-  outlineNodes: unknown[];
-  scenes: unknown[];
-  plotThreads: unknown[];
-  foreshadowing: unknown[];
-  timelineEvents: unknown[];
-  documents: unknown[];
-  conversationThreads?: unknown[];
-  creativeBriefs?: unknown[];
-  skills?: unknown[];
-  projectSkills?: unknown[];
-}
-
-const FOUNDATION_TABLES = [
-  "architectures",
-  "entities",
-  "relations",
-  "outlineNodes",
-  "scenes",
-  "plotThreads",
-  "foreshadowing",
-  "timelineEvents",
-  "documents",
-  "conversationThreads",
-  "creativeBriefs",
-  "skills",
-  "projectSkills",
-] as const;
-
-async function seedCanonicalFromFixture(fixturePath: string, jsonMode: boolean): Promise<void> {
+export async function seedCanonicalFromFixture(fixturePath: string, jsonMode: boolean): Promise<void> {
   const absPath = resolve(process.cwd(), fixturePath);
   if (!existsSync(absPath)) {
     throw new Error(`fixture 文件不存在：${absPath}`);
   }
-  const snapshot = JSON.parse(readFileSync(absPath, "utf-8")) as FoundationSnapshot;
+  const fixture = JSON.parse(readFileSync(absPath, "utf-8")) as unknown;
+  const verification = await verifyClosedLoopFixture(fixture);
+  if (!verification.valid) throw new Error(`闭环 fixture 校验失败：${verification.issues.join("；")}`);
 
   await novelDb.delete();
   await novelDb.open();
-  if (snapshot.project) await novelDb.projects.put(snapshot.project as never);
-  for (const table of FOUNDATION_TABLES) {
-    const records = snapshot[table];
-    if (records && records.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (novelDb as any)[table].bulkPut(records);
-    }
-  }
+  await replaceCanonicalDatabaseFromFixture(fixture as ClosedLoopFixtureBundle, novelDb);
   const writeLog = jsonMode ? console.error : console.log;
   writeLog(`[closed-loop] 已从 fixture seed 正式库：${absPath}`);
 }

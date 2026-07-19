@@ -3,7 +3,7 @@ import { strToU8, zipSync } from "fflate";
 import type { Table } from "dexie";
 import { novelDb } from "./db";
 import { cleanupReferenceIntegrity } from "./db-schema";
-import { captureProjectSnapshot } from "./evaluation";
+import { captureClosedLoopFixture } from "./evaluation";
 
 const BACKUP_SCHEMA_VERSION = 13;
 const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "manuscriptChanges", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "factAssertions", "knowledgeAssertions", "narrativeUnits", "outlineRealizations", "derivedMemories", "preferenceSignals", "tasteProfiles", "embeddings", "conversationThreads", "conversationMessages", "conversationMemories", "creativeBriefs", "retrievalRuns", "memoryJobs"] as const;
@@ -94,9 +94,9 @@ export async function exportNovel(projectId: string, format: "json" | "markdown"
 export async function exportNovelEvaluationSnapshot(projectId: string) {
   const project = await novelDb.projects.get(projectId);
   if (!project) throw new Error("项目不存在");
-  const snapshot = await captureProjectSnapshot(novelDb, projectId, "manual");
+  const fixture = await captureClosedLoopFixture(novelDb, projectId, "manual");
   download(
-    new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json;charset=utf-8" }),
+    new Blob([JSON.stringify(fixture, null, 2)], { type: "application/json;charset=utf-8" }),
     `${project.title}.ymcp-evaluation.json`,
   );
 }

@@ -144,6 +144,22 @@ async function seedCanonicalProject(db: NovelDatabase) {
     enabled: true,
     config: {},
   });
+  await db.table("conversationMemories").put({
+    ...baseRecord("conversation-memory-1"),
+    threadId: "thread-1",
+    targetId: "chapter-1",
+    scope: "project",
+    scopeKey: `project:${PROJECT_ID}`,
+    kind: "preference",
+    title: "叙述偏好",
+    content: "保持克制的第三人称限知。",
+    status: "active",
+    confidence: 0.95,
+    sourceMessageIds: ["message-1"],
+    evidenceQuotes: ["不要替人物解释情绪"],
+    extractorVersion: "test",
+    autoApplied: false,
+  });
   await db.table("workflowRuns").put({
     ...baseRecord("old-run"),
     workflowId: "chapter-production-v1",
@@ -183,6 +199,7 @@ describe("real project evaluation snapshot", () => {
     expect(before.records.projects).toHaveLength(1);
     expect(before.records.documents).toHaveLength(1);
     expect(before.records.skills).toHaveLength(1);
+    expect(before.records.conversationMemories).toHaveLength(1);
     expect("workflowRuns" in before.records).toBe(false);
 
     await restoreProjectSnapshot(before, experiment);
@@ -190,6 +207,21 @@ describe("real project evaluation snapshot", () => {
 
     expect(after.manifest.snapshotHash).toBe(before.manifest.snapshotHash);
     expect(after.manifest.tableHashes).toEqual(before.manifest.tableHashes);
+    expect(await experiment.conversationMemories.get("conversation-memory-1")).toBeDefined();
+  });
+
+  it("marks the project snapshot stale when active conversation memory changes", async () => {
+    const before = await captureProjectSnapshot(canonical, PROJECT_ID, "manual");
+    await canonical.conversationMemories.update("conversation-memory-1", {
+      content: "改为第一人称，并保留更多内心独白。",
+      revision: 2,
+      updatedAt: 200,
+    });
+    const after = await captureProjectSnapshot(canonical, PROJECT_ID, "manual");
+
+    expect(after.manifest.tableHashes.conversationMemories)
+      .not.toBe(before.manifest.tableHashes.conversationMemories);
+    expect(after.manifest.snapshotHash).not.toBe(before.manifest.snapshotHash);
   });
 
   it("detects any change to snapshot records", async () => {

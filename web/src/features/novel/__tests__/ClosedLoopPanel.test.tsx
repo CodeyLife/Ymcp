@@ -101,7 +101,7 @@ function makeClosedLoopResult(overrides?: Partial<ClosedLoopResult>): ClosedLoop
     experimentId: "exp-1",
     experimentWorkspace: {} as ClosedLoopResult["experimentWorkspace"],
     candidate: {
-      formatVersion: 1,
+      formatVersion: 2,
       id: "cand-1",
       experimentId: "exp-1",
       variantId: "default",
@@ -122,8 +122,10 @@ function makeClosedLoopResult(overrides?: Partial<ClosedLoopResult>): ClosedLoop
       },
       manuscript: {
         title: "第一章 草稿",
+        summary: "第一章摘要",
         plainText: "章节正文…",
         contentHtml: "<p>章节正文…</p>",
+        wordCount: 4,
         contentHash: "hash-manuscript",
       },
       acceptedFacts: [],

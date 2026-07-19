@@ -21,7 +21,7 @@ import type { FactAssertion, FactCandidate, NovelSkillManifest, ProjectSkillBind
  * 因为用户要求"自动推进技能和提示词"作为闭环的一部分。
  */
 export interface CandidateBundle {
-  formatVersion: 1;
+  formatVersion: 2;
   id: string;
   experimentId: string;
   variantId: string;
@@ -58,8 +58,10 @@ export interface CandidateTargetDocument {
 
 export interface CandidateManuscript {
   title: string;
+  summary: string;
   plainText: string;
   contentHtml: string;
+  wordCount: number;
   contentHash: string;
   /** 实验库中生成该稿件的 workflowRunId,仅作 provenance 用途,不写入正式库 */
   sourceWorkflowRunId?: string;
@@ -229,6 +231,7 @@ export interface OperationReceipt {
     factAssertionIds: string[];
     memoryIds: string[];
     snapshotId?: string;
+    operationIds?: string[];
   };
   error?: string;
 }

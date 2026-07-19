@@ -22,6 +22,7 @@ import type {
   WorkflowArtifact,
 } from "../types";
 import { BUILTIN_NOVEL_SKILLS } from "../skills";
+import { countNovelWords } from "../quality";
 import type { ProjectHead } from "./project-snapshot";
 import { listIteratedSkills } from "./skill-iteration";
 import type { ExperimentWorkspace } from "./experiment-workspace";
@@ -40,21 +41,27 @@ import type {
 // ===== 哈希辅助 =====
 
 /**
- * 计算 CandidateManuscript.contentHash：SHA-256 over (title + contentHtml + plainText)。
+ * 计算 CandidateManuscript.contentHash：SHA-256 over all promoted manuscript fields。
  *
  * 与 db.ts 的 documentContentHash（FNV-1a，用于 ManuscriptDocument 内部比对）不同，
  * CandidateBundle 的 contentHash 是跨库传输的完整性证据，使用 SHA-256。
  */
-async function computeManuscriptContentHash(input: {
+export const CANDIDATE_BUNDLE_FORMAT_VERSION = 2;
+
+export async function computeManuscriptContentHash(input: {
   title: string;
+  summary: string;
   contentHtml: string;
   plainText: string;
+  wordCount: number;
 }): Promise<string> {
   const bytes = new TextEncoder().encode(
     JSON.stringify({
       title: input.title,
+      summary: input.summary,
       contentHtml: input.contentHtml,
       plainText: input.plainText,
+      wordCount: input.wordCount,
     }),
   );
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -295,12 +302,16 @@ export async function extractCandidateBundle(params: {
   // 6. 计算 manuscript.contentHash + 组装 CandidateManuscript
   const manuscript: CandidateManuscript = {
     title: targetDocument.title,
+    summary: targetDocument.summary,
     plainText: targetDocument.plainText,
     contentHtml: targetDocument.contentHtml,
+    wordCount: countNovelWords(targetDocument.plainText),
     contentHash: await computeManuscriptContentHash({
       title: targetDocument.title,
+      summary: targetDocument.summary,
       contentHtml: targetDocument.contentHtml,
       plainText: targetDocument.plainText,
+      wordCount: countNovelWords(targetDocument.plainText),
     }),
     sourceWorkflowRunId: params.workflowRunId,
     sourceArtifactId: draftArtifact.id,
@@ -381,7 +392,7 @@ export async function extractCandidateBundle(params: {
 
   // 12. 组装 CandidateBundle
   const bundle: CandidateBundle = {
-    formatVersion: 1,
+    formatVersion: CANDIDATE_BUNDLE_FORMAT_VERSION,
     id: crypto.randomUUID(),
     experimentId: workspace.experimentId,
     variantId,
@@ -400,7 +411,8 @@ export async function extractCandidateBundle(params: {
   };
 
   // 13. 自校验：导出时立即 verify，确保 bundle 完整
-  verifyCandidateBundle(bundle);
+  const verification = verifyCandidateBundle(bundle);
+  if (!verification.valid) throw new Error(`候选包导出校验失败：${verification.issues.join("；")}`);
 
   return bundle;
 }
@@ -416,7 +428,7 @@ export interface CandidateBundleVerification {
  * 校验 CandidateBundle 完整性（同步版本：检查字段存在性，不重算 manuscript.contentHash）。
  *
  * 检查项：
- * - formatVersion === 1
+ * - formatVersion === CANDIDATE_BUNDLE_FORMAT_VERSION
  * - 所有必填顶层字段非空
  * - targetDocument.baseContentHash 非空
  * - 每个 acceptedFact 有 sourceCandidateId + payload 必填字段
@@ -431,7 +443,9 @@ export interface CandidateBundleVerification {
 export function verifyCandidateBundle(bundle: CandidateBundle): CandidateBundleVerification {
   const issues: string[] = [];
 
-  if (bundle.formatVersion !== 1) issues.push("formatVersion 必须为 1");
+  if (bundle.formatVersion !== CANDIDATE_BUNDLE_FORMAT_VERSION) {
+    issues.push(`formatVersion 必须为 ${CANDIDATE_BUNDLE_FORMAT_VERSION}`);
+  }
 
   // 必填顶层字段
   if (!bundle.id) issues.push("id 缺失");
@@ -466,8 +480,15 @@ export function verifyCandidateBundle(bundle: CandidateBundle): CandidateBundleV
   // manuscript 字段
   if (bundle.manuscript) {
     if (!bundle.manuscript.title) issues.push("manuscript.title 缺失");
+    if (typeof bundle.manuscript.summary !== "string") issues.push("manuscript.summary 缺失");
     if (!bundle.manuscript.contentHtml) issues.push("manuscript.contentHtml 缺失");
-    if (bundle.manuscript.plainText === undefined) issues.push("manuscript.plainText 缺失");
+    if (typeof bundle.manuscript.plainText !== "string") issues.push("manuscript.plainText 缺失");
+    if (!Number.isInteger(bundle.manuscript.wordCount) || bundle.manuscript.wordCount < 0) {
+      issues.push("manuscript.wordCount 必须为非负整数");
+    } else if (typeof bundle.manuscript.plainText === "string"
+      && bundle.manuscript.wordCount !== countNovelWords(bundle.manuscript.plainText)) {
+      issues.push("manuscript.wordCount 与正文规范字数不一致");
+    }
     if (!bundle.manuscript.contentHash) issues.push("manuscript.contentHash 缺失");
   }
 
