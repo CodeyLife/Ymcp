@@ -609,7 +609,7 @@ describe("Loop 9: runClosedLoop 端到端编排（CLI trigger 共享逻辑）", 
     expect(receiptCount).toBe(0);
   }, 60_000);
 
-  it("高风险事实停到 fact-approval 时会被明确拒绝，安全结束闭环而不是抛错", async () => {
+  it("高风险但非冲突事实停到 fact-approval 时由 closed-loop 作为作者代理接受，安全结束闭环", async () => {
     factExtractorMode.current = "high-risk";
     const result = await runClosedLoop({
       canonicalDb: novelDb,
@@ -621,7 +621,9 @@ describe("Loop 9: runClosedLoop 端到端编排（CLI trigger 共享逻辑）", 
       dryRun: true,
     });
     expect(result.check.status).toBe("ready");
-    expect(result.candidate.acceptedFacts).toEqual([]);
+    // closed-loop CLI 作为作者代理接受非冲突的 pending 候选（bulkSetFactCandidateStatus 跳过 conflict=true）
+    // mock 的 high-risk fact confidence=0.6 novelty=update conflict=false → 被 closed-loop 接受为 accepted
+    expect(result.candidate.acceptedFacts.length).toBeGreaterThan(0);
     expect(result.receipt).toBeUndefined();
   }, 60_000);
 

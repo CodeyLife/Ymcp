@@ -527,6 +527,67 @@ export interface AIProposal extends VersionedRecord {
   outlineGenerationMode?: "plot-segment-append";
   architecturePhaseId?: string;
   architecturePhaseOrder?: number;
+  /**
+   * 审核+迭代报告。当生成任务启用 audit 循环时记录每轮审核问题与改善情况。
+   * 不参与 proposalItems 校验，仅作为元数据展示。
+   */
+  auditReport?: GenerationAuditReport;
+}
+
+export type AuditSeverity = "blocker" | "major" | "warning";
+
+/**
+ * audit issue 的来源分类——让 LLM 用结构化字段表达，而非在 title 中塞前缀。
+ * - new: 本审核新增（reviewer 未报告）
+ * - upgrade: reviewer 已报告但本审核升级严重度
+ * - downgrade: reviewer 已报告但本审核降级严重度
+ *
+ * 仅 prose-audit（元审核）会用到 upgrade/downgrade；A/B 板块 audit 通常都是 new。
+ */
+export type AuditIssueOrigin = "new" | "upgrade" | "downgrade";
+
+export interface GenerationAuditIssue {
+  severity: AuditSeverity;
+  /** issue 所属质量维度——让 LLM 判断，避免下游机械词匹配 */
+  dimension: QualityDimension;
+  title: string;
+  evidence: string;
+  suggestion: string;
+  /** 来源分类（可选，默认 new）。prose-audit 用于区分"新增"与"升级/降级 reviewer 判断" */
+  origin?: AuditIssueOrigin;
+  /** upgrade/downgrade 时引用被复核 reviewer issue 的稳定 sourceId。 */
+  sourceIssueId?: string;
+}
+
+export interface GenerationAuditRound {
+  /** 第几轮审核（1=首次，2=迭代后再审） */
+  iteration: number;
+  summary: string;
+  issues: GenerationAuditIssue[];
+  /** 本轮是否有 blocker/major 触发迭代 */
+  triggeredIteration: boolean;
+}
+
+/**
+ * audit 迭代机制——三个板块的迭代方式不同：
+ * - internal-iterate: A/B 板块在生成阶段内部做 audit+iterate 循环（rounds 含多轮）
+ * - external-revision: C 板块利用 revision-stage 作为迭代机制（rounds 通常只有 1 轮，迭代由 workflow 循环承担）
+ */
+export type AuditMechanism = "internal-iterate" | "external-revision";
+
+export interface GenerationAuditReport {
+  /** 哪个 audit skill 产出（plot-segment-audit / blueprint-audit / prose-audit） */
+  auditSkillId: string;
+  /** 迭代机制——明确声明 rounds 语义，避免下游误读 */
+  mechanism: AuditMechanism;
+  /** 总轮数（含首轮+迭代后再审） */
+  rounds: GenerationAuditRound[];
+  /** 最终是否所有 major+ 问题已解决（最后一轮无 blocker/major） */
+  improved: boolean;
+  /** 最终遗留的 blocker/major 数量 */
+  remainingMajorCount: number;
+  /** 审核失败时的错误信息（如 LLM 调用失败、schema 校验失败）。失败时 rounds 为空，improved=false */
+  error?: string;
 }
 
 export type RefinementSnapshotInput = Partial<Record<ProposalTargetTable, Array<Record<string, unknown>>>>;
@@ -597,8 +658,86 @@ export interface NovelSkillManifest extends VersionedRecord {
 export interface ProjectSkillBinding extends VersionedRecord {
   skillId: string;
   enabled: boolean;
+  activeVersion?: string;
   priorityOverride?: number;
   config: Record<string, string | number | boolean | string[]>;
+}
+
+export type CraftRuleTargetKind = "skill" | "system-prompt";
+export type CraftRuleCandidateStatus = "proposed" | "evaluating" | "ready" | "rejected" | "promoted" | "rolled-back";
+export type CraftRuleReviewRole = "plot-editor" | "character-editor" | "prose-editor" | "long-form-editor";
+
+export interface CraftRuleScopeAnalysis {
+  observedSymptom: string;
+  failingLayer: string;
+  underlyingMechanism: string;
+  affectedInputClass: string;
+  intendedBenefits: string[];
+  boundaries: string[];
+  nonGoals: string[];
+  regressionRisks: string[];
+}
+
+export interface CraftRuleEvidenceCase {
+  caseId: string;
+  scenarioClass: string;
+  subjectKind: "chapter" | "foundation-task";
+  subjectId: string;
+  documentId?: string;
+  scenarioSignature: string;
+  scenarioProfile: Record<string, string>;
+  baselineWorkItemId: string;
+  candidateWorkItemId: string;
+  baselineArtifactId: string;
+  candidateArtifactId: string;
+  baselineScore: number;
+  candidateScore: number;
+  blockerDelta: number;
+  majorDelta: number;
+  recordedAt: number;
+}
+
+export interface CraftRuleReviewDecision {
+  role: CraftRuleReviewRole;
+  reviewer: "external-llm" | "user";
+  reviewerId: string;
+  reviewRunId: string;
+  model?: string;
+  verdict: "passed" | "revise" | "rejected";
+  summary: string;
+  concerns: string[];
+  evidenceFingerprint?: string;
+  reviewedVersion?: string;
+  reviewedAt: number;
+}
+
+export interface CraftRuleCandidate extends VersionedRecord {
+  targetKind: CraftRuleTargetKind;
+  targetId: string;
+  beforeVersion: string;
+  proposedVersion: string;
+  beforeText: string;
+  afterText: string;
+  rationale: string;
+  scope: CraftRuleScopeAnalysis;
+  status: CraftRuleCandidateStatus;
+  evidenceCases: CraftRuleEvidenceCase[];
+  reviews: CraftRuleReviewDecision[];
+  promotedRecordId?: string;
+  promotedAt?: number;
+  rollbackOfCandidateId?: string;
+}
+
+export interface PromptTemplateVersion extends VersionedRecord {
+  templateId: string;
+  version: string;
+  name: string;
+  description: string;
+  stages: NovelSkillStage[];
+  content: string;
+  active: boolean;
+  source: "builtin" | "project";
+  previousVersionId?: string;
 }
 
 /**
@@ -675,6 +814,81 @@ export interface WorkflowArtifact extends VersionedRecord {
   model?: string;
   skillRefs: string[];
   contextPacketId?: string;
+}
+
+export type CreativeRunMode = "manual" | "segment-auto" | "external";
+export type CreativeRunStatus = "running" | "waiting-review" | "paused" | "completed" | "failed" | "cancelled";
+export type CreativeWorkKind = "generation" | "plot-segment" | "chapter-workflow" | "audit" | "revision" | "promotion";
+export type CreativeWorkStatus = "queued" | "running" | "waiting-review" | "completed" | "blocked" | "failed" | "cancelled";
+
+export interface CreativeRunPolicy {
+  auditTrigger: "manual" | "automatic" | "external";
+  commitPolicy: "manual" | "quality-gated-auto" | "external-auto";
+  qualityThreshold: number;
+  maxIterations: number;
+}
+
+export interface CreativeRun extends VersionedRecord {
+  mode: CreativeRunMode;
+  objective: string;
+  status: CreativeRunStatus;
+  policy: CreativeRunPolicy;
+  activeWorkItemId?: string;
+  baseSnapshotHash?: string;
+  lastEventSequence: number;
+  error?: string;
+  finishedAt?: number;
+}
+
+export interface CreativeWorkItem extends VersionedRecord {
+  creativeRunId: string;
+  kind: CreativeWorkKind;
+  status: CreativeWorkStatus;
+  taskKey?: NovelGenerationTaskKey;
+  targetId?: string;
+  instruction: string;
+  parameters: Record<string, unknown>;
+  dependsOn: string[];
+  iteration: number;
+  artifactRefs: string[];
+  summary?: string;
+  error?: string;
+  leaseExpiresAt?: number;
+  activeIdempotencyKey?: string;
+}
+
+export interface CreativeReview extends VersionedRecord {
+  creativeRunId: string;
+  workItemId: string;
+  subjectArtifactId: string;
+  reviewer: "internal" | "external-llm" | "user";
+  verdict: "passed" | "revise" | "blocked" | "inconclusive";
+  issues: Array<GenerationAuditIssue & {
+    issueId: string;
+    status: "open" | "resolved" | "accepted-risk" | "superseded";
+    supersedesIssueId?: string;
+  }>;
+  summary: string;
+}
+
+export interface CreativeRunEvent extends VersionedRecord {
+  creativeRunId: string;
+  sequence: number;
+  type: "run.created" | "run.status-changed" | "work.enqueued" | "work.started" | "work.requeued" | "work.result-ready" | "work.completed" | "work.blocked" | "work.failed" | "review.recorded";
+  workItemId?: string;
+  idempotencyKey?: string;
+  payload: Record<string, unknown>;
+}
+
+export interface CreativeToolReceipt extends VersionedRecord {
+  tool: string;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  status: "pending" | "completed" | "failed";
+  result?: unknown;
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
 }
 
 export type QualityDimension = "plot" | "characterVoice" | "sceneEmbodiment" | "dialogue" | "specificity" | "hookPayoff" | "continuity";

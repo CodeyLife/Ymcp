@@ -6,11 +6,14 @@ import { appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, emptyChapterBlueprint, n
 import { sanitizeApprovalMetaInPlace } from "./db-schema";
 import { resolveTaskEvidence } from "./memory-service";
 import { assertProposalReferences, assertResolvedPayloadReferences, buildProjectReferenceCatalogs, catalogWithResolvedProposalItems, emptyReferenceCatalog, repairProposalCharacterReferences, repairTimelineAndOutlineNodeReferences, repairUnresolvableTempRefs } from "./reference-integrity";
-import { compileNovelStagePrompt, resolveNovelSkills } from "./skills";
+import { compileNovelStagePrompt, formatSkillPrompt, resolveNovelSkills } from "./skills";
 import type {
   AIProposal,
   AgentRun,
   ArchitecturePhase,
+  GenerationAuditIssue,
+  GenerationAuditReport,
+  GenerationAuditRound,
   NovelAgentRole,
   NovelGenerationScope,
   NovelGenerationTaskKey,
@@ -21,6 +24,7 @@ import type {
   RefinementSnapshotInput,
 } from "./types";
 import { repairDraftStructureOnce } from "./workflow-stages/draft-structure-repair";
+import { auditIssueSchema, formatAuditFindingsForRerun, hasMajorOrBlocker } from "./workflow-shared";
 
 export interface GenerationTaskDefinition {
   key: NovelGenerationTaskKey;
@@ -36,7 +40,7 @@ export interface GenerationTaskDefinition {
 const TASKS: GenerationTaskDefinition[] = [
   { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。", refinable: true },
   { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成可支撑数百万字铺陈的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。每个阶段的 turningPoint 字段必须用文学化叙事书写：写出此阶段结束时人物与世界已无可挽回地改变了什么（处境的不可逆与心境的拐弯），不得用\"X 发现 Y\"\"X 获得 Z 机会\"\"X 建立 Y\"等编剧指令腔。turningPoint 不是\"接下来会发生什么\"的事件预告，而是\"此阶段结束时已回不去\"的文学定格——删除该句后，读者仍能从字里行间感受到该阶段的不可逆变化。", refinable: true },
-  { key: "plot-design", label: "设计剧情段与章节", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "documents"], defaultInstruction: "在选中的幕下设计一个剧情段及其章节。长篇剧情段建议生成 3-4 章（最低 2 章仅在该剧情段是低强度过渡时使用）。章节之间应形成张弛呼吸：行动章（推进主线、爆发冲突）+ 余波章（消化后果、深化人物关系）+ 蓄势章（积累压力、埋设线索、深化世界）+ 兑现章（伏笔回收、阶段转折）的至少三种功能组合。全部章节都是行动章或都是兑现章属于节奏问题——长篇需要呼吸感来支撑数百万字铺陈，连续高强度的章节会让读者疲惫，连续低强度的章节会让读者失去期待。建议在生成时显式标注每章的节奏功能（行动/余波/蓄势/兑现），便于后续章节规划阶段校验节奏多样性。" },
+  { key: "plot-design", label: "设计剧情段与章节", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "documents"], defaultInstruction: "在选中的幕下设计一个剧情段及其章节。章节数量由剧情段需要承载的独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报共同决定，不按固定范围凑数或压缩。若剧情段跨越多种功能或强度，应安排行动、余波、蓄势、兑现等有差异的呼吸；若它本身是单一过渡、完整高潮、短促插曲或实验性结构，则服从该功能，不强制补入低强度章。每章都必须有不可替代的叙事职责和清晰落点。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。", refinable: true },
   { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "设计有明确欲望、恐惧、错误信念、秘密、人物弧和差异化声音的角色。角色名不得与作品设定中的地名、朝代名、年号、官职、典章制度重名——古风/历史/架空题材尤其要避免用都城名（长安、洛阳、汴梁、建康等）作人名，因为读者会先想到城市而非人物。每个角色必须给出完整的初始 state：state.location 引用世界观中已有的 location 实体名（不可写\"未指定\"），state.physical 是角色此刻的具体身体状态（健康/疲劳/受伤等，不可写\"未指定\"），state.emotional 是角色此刻的情绪基调（用具体描述如\"压抑的悲痛\"，不可写\"未指定\"或\"平静\"），state.objective 是角色即时目标，state.inventory 是随身关键物品（可为空数组）。\"未指定\"不得作为任何 state 字段的值。", refinable: true },
   { key: "relations", label: "设计人物关系", scope: "relations", role: "architect", skillStage: "foundation", allowedTables: ["relations"], defaultInstruction: "根据现有角色设计会推动选择和冲突的人物关系。", refinable: true },
@@ -465,7 +469,7 @@ export function validatePlotDesignItems(items: ProposalItem[], phaseId: string, 
   const segments = items.filter((item) => item.targetTable === "outlineNodes");
   const chapters = items.filter((item) => item.targetTable === "documents");
   if (segments.length !== 1) throw new Error(`剧情设计必须且只能创建 1 个剧情段，当前为 ${segments.length} 个`);
-  if (chapters.length < 2 || chapters.length > 4) throw new Error(`剧情设计必须创建 2-4 个章节，当前为 ${chapters.length} 个`);
+  if (chapters.length < 1) throw new Error("剧情设计至少需要创建 1 个章节");
   const segment = segments[0];
   if (!segment.tempId) throw new Error("剧情段缺少 tempId");
   if (segment.payload.phaseId !== phaseId) throw new Error("剧情段必须归属于当前选中的幕");
@@ -490,7 +494,67 @@ function plotDesignContext(phase: ArchitecturePhase, segments: Array<{ id: strin
   ].join("\n\n");
 }
 
-export async function runPlotDesignTask(params: { projectId: string; phaseId: string; instruction?: string; signal?: AbortSignal }) {
+/**
+ * 剧情段设计审核 schema——使用 workflow-shared.ts 的通用 auditIssueSchema。
+ * 所有 audit skill（plot-segment-audit / blueprint-audit / prose-audit）共用同一 schema 结构。
+ */
+const plotSegmentAuditSchema = auditIssueSchema;
+
+/**
+ * 调用 plot-segment-audit skill 对 plot-design 产出做独立 LLM 审核。
+ * 通过 explicitSkillIds 显式启用 plot-segment-audit，避免污染 PROFILE_SKILLS 默认集合。
+ */
+export async function runPlotSegmentAudit(params: {
+  projectId: string;
+  phase: ArchitecturePhase;
+  segment: ProposalItem;
+  chapters: ProposalItem[];
+  contextPacketId: string;
+  signal?: AbortSignal;
+}): Promise<GenerationAuditRound> {
+  const project = await novelDb.projects.get(params.projectId);
+  if (!project) throw new Error("项目不存在");
+  const auditSkills = await resolveNovelSkills({ projectId: params.projectId, stage: "review", explicitSkillIds: ["plot-segment-audit"] });
+  if (!auditSkills.skills.some((skill) => skill.skillId === "plot-segment-audit")) {
+    throw new Error("plot-segment-audit skill 未在 BUILTIN_NOVEL_SKILLS 中找到");
+  }
+  const packet = await novelDb.contextPackets.get(params.contextPacketId);
+  const contextMarkdown = packet ? formatContextPacket(packet) : "（无冻结上下文）";
+  const segmentBrief = `【剧情段】\n标题：${params.segment.payload.title}\n顺序：${params.segment.payload.order}\n概要：${params.segment.payload.summary}`;
+  const chapterBriefs = params.chapters
+    .sort((left, right) => Number(left.payload.order) - Number(right.payload.order))
+    .map((chapter, index) => {
+      const blueprint = (chapter.payload.blueprint as Record<string, unknown> | undefined) ?? {};
+      const mustHappen = Array.isArray(blueprint.mustHappen) ? (blueprint.mustHappen as string[]).join("；") : "无";
+      const conflict = String(blueprint.conflict ?? "无");
+      const objective = String(blueprint.objective ?? "无");
+      return `### 第 ${index + 1} 章：${chapter.payload.title}\n顺序：${chapter.payload.order}\n概要：${chapter.payload.summary}\n主导功能：${objective}\n冲突：${conflict}\n必须发生：${mustHappen}`;
+    })
+    .join("\n\n");
+  const prompt = `# 审核任务\n审核以下剧情段（OutlineNode）及其下章节（Document 列表）的设计质量。\n\n${segmentBrief}\n\n${chapterBriefs}\n\n# 当前幕上下文\n${params.phase.title}\n叙事使命：${params.phase.purpose || "暂无"}\n不可逆转折：${params.phase.turningPoint || "暂无"}\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- 基于 plot-segment-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体章节标题或字段作为证据\n- 必须给出具体修订建议\n\n按 schema 输出 summary 和 issues 数组。`;
+  // builtin skill 的 prompt 不会被 compileNovelStagePrompt 拼接（review stage 只拼 custom skill），
+  // 用 formatSkillPrompt 显式拼接 plot-segment-audit 的完整 prompt，让 LLM 拿到具体审核指导。
+  const auditSkillPrompt = `${compileNovelStagePrompt(auditSkills.skills, "review")}\n\n${formatSkillPrompt(auditSkills.skills.filter((skill) => skill.skillId === "plot-segment-audit"))}`;
+  const result = await callStructuredNovelModel<{ summary: string; issues: GenerationAuditIssue[] }>({
+    model: project.settings.textModel,
+    temperature: 0.15,
+    role: "quality-editor",
+    skillPrompt: auditSkillPrompt,
+    schema: plotSegmentAuditSchema,
+    prompt,
+    signal: params.signal,
+    maxTokens: 4096,
+  });
+  return {
+    iteration: 0,
+    summary: String(result.data.summary ?? ""),
+    issues: Array.isArray(result.data.issues) ? result.data.issues : [],
+    triggeredIteration: false,
+  };
+}
+
+
+export async function runPlotDesignTask(params: { projectId: string; phaseId: string; instruction?: string; signal?: AbortSignal; audit?: { maxIterations?: number } }) {
   const project = await novelDb.projects.get(params.projectId);
   if (!project) throw new Error("项目不存在");
   const pending = await novelDb.proposals.where("projectId").equals(params.projectId).and((proposal) => proposal.status === "pending" && proposal.taskKey === "plot-design").first();
@@ -537,47 +601,120 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
   const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
   const agent: AgentRun = { ...recordBase(params.projectId), goal: instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-plot-design-v2", contextPacketId: packet.id, role: "architect", skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: "设计剧情段与章节", tool: "model.structured", status: "running" }] };
   await novelDb.agentRuns.add(agent);
-  const basePrompt = `# 任务\n在幕“${phase.title}”下设计下一个剧情段，并把剧情段拆成可直接进入创作流程的章节。\n\n# 作者要求\n${instruction}\n\n# 当前规划上下文\n${plotDesignContext(phase, segments, documents)}\n\n# 结构要求\n1. 只创建 1 个 outlineNodes 剧情段，phaseId 必须为 ${phase.id}，order 必须为 ${segmentOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾、需要积累的体验和结束时允许发生的变化。\n3. 创建 2-4 个 documents 章节，plotSegmentId 必须使用 ref:剧情段tempId，order 从 ${chapterOrder} 连续排列。\n4. documents.title 就是正式章节标题；summary 说明本章主导叙事功能与结束状态；blueprint 写入探索或积累方向、本章兑现边界，以及相关 characterIds、plotThreadIds、foreshadowingIds。\n5. 每章只承担一个清晰的主导叙事功能；可以推进事件，也可以建立背景与常态、深化人物关系、积累情感压力或消化后果。章节之间必须可连续写作，不得把后续节点提前压入当前章节。\n6. 同一剧情段内至少安排一种低强度功能章，与行动或兑现章形成张弛；不得让所有章节都以冲突升级和强钩子结束。\n7. 不得创建幕、场景、时间线事件或其它资料表，也不得更新已有资料。\n8. 每章目标字数由系统统一设为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字，不得返回 targetWords。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+  const basePrompt = `# 任务\n在幕“${phase.title}”下设计下一个剧情段，并把剧情段拆成可直接进入创作流程的章节。\n\n# 作者要求\n${instruction}\n\n# 当前规划上下文\n${plotDesignContext(phase, segments, documents)}\n\n# 结构要求\n1. 只创建 1 个 outlineNodes 剧情段，phaseId 必须为 ${phase.id}，order 必须为 ${segmentOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾、需要积累的体验和结束时允许发生的变化。\n3. 创建至少 1 个 documents 章节；数量由独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报决定，不得为固定范围凑数或压缩。plotSegmentId 必须使用 ref:剧情段tempId，order 从 ${chapterOrder} 连续排列。\n4. documents.title 就是正式章节标题；summary 说明本章主导叙事功能与结束状态；blueprint 写入探索或积累方向、本章兑现边界，以及相关 characterIds、plotThreadIds、foreshadowingIds。\n5. 每章只承担一个清晰的主导叙事功能；可以推进事件，也可以建立背景与常态、深化人物关系、积累情感压力或消化后果。章节之间必须可连续写作，不得把后续节点提前压入当前章节。\n6. 当剧情段确实跨越多种功能或强度时，安排有差异的行动、余波、蓄势或兑现节奏；单一过渡、完整高潮、短促插曲或实验性结构无需为满足模板强行补入低强度章。\n7. 不得创建幕、场景、时间线事件或其它资料表，也不得更新已有资料。\n8. 每章目标字数由系统统一设为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字，不得返回 targetWords。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+  const auditEnabled = !!params.audit;
+  const maxAuditIterations = Math.max(0, Math.min(3, params.audit?.maxIterations ?? 1));
   try {
     const characterNameMap = await projectCharacterNameToIdMap(params.projectId);
     const characterReferenceContract = characterNameMap.size
       ? `角色引用只能使用以下真实 ID，不得填写角色名或自造 ID：\n${[...characterNameMap.entries()].map(([name, id]) => `- ${name}: ${id}`).join("\n")}`
       : "当前没有角色时必须省略该字段；povCharacterId 不得返回空字符串，characterIds 必须为空数组。";
     const skillPrompt = `${compileNovelStagePrompt(skills.skills, "planning")}\n\n## 内部引用契约\n${characterReferenceContract}`;
-    let lastError = "";
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = await callStructuredNovelModel<Record<string, unknown>>({ model: project.settings.textModel, temperature: attempt ? 0.3 : 0.55, role: "architect", skillPrompt, schema: proposalSchema(task.allowedTables), prompt: attempt ? `${basePrompt}\n\n# 上次结构校验失败\n${lastError}\n请只修复结构和长度问题。` : basePrompt, signal: params.signal, maxTokens: 8192 });
-      const items = namespaceTempIds(parseProposalItems(result.data), `plot_${phase.order}_${segmentOrder}_`);
-      try {
-        const segment = items.find((item) => item.targetTable === "outlineNodes");
-        if (!segment) throw new Error("缺少剧情段候选");
-        segment.payload = { ...segment.payload, phaseId: phase.id, order: segmentOrder };
-        segment.after = { ...segment.payload };
-        const chapters = items.filter((item) => item.targetTable === "documents").sort((left, right) => Number(left.payload.order) - Number(right.payload.order));
-        for (const [index, chapter] of chapters.entries()) {
-          chapter.payload = { ...chapter.payload, plotSegmentId: `ref:${segment.tempId}`, order: chapterOrder + index, status: "outline" };
-          chapter.after = { ...chapter.payload };
+
+    /**
+     * 调用 LLM 生成 plot-design 候选项，含 3 次结构校验重试。
+     * 当传入 auditFindings 时，prompt 末尾追加审核意见，引导 LLM 修正问题。
+     */
+    const generateItems = async (auditFindings?: string): Promise<{ items: ProposalItem[]; summary: string; promptHash: string; usage: { inputTokens: number; outputTokens: number } }> => {
+      let lastError = "";
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const auditBlock = auditFindings ? `\n\n# 上一轮 LLM 审核意见\n请基于以下审核问题重新设计剧情段与章节，针对每个 major/blocker 问题在生成时落实修订；不要直接复述审核意见，而是把它转化为具体的章节结构调整、节奏功能覆盖或伏笔埋设。\n${auditFindings}` : "";
+        const attemptPrompt = attempt ? `${basePrompt}${auditBlock}\n\n# 上次结构校验失败\n${lastError}\n请只修复结构和长度问题。` : `${basePrompt}${auditBlock}`;
+        const result = await callStructuredNovelModel<Record<string, unknown>>({ model: project.settings.textModel, temperature: attempt ? 0.3 : 0.55, role: "architect", skillPrompt, schema: proposalSchema(task.allowedTables), prompt: attemptPrompt, signal: params.signal, maxTokens: 8192 });
+        const items = namespaceTempIds(parseProposalItems(result.data), `plot_${phase.order}_${segmentOrder}_`);
+        try {
+          const segment = items.find((item) => item.targetTable === "outlineNodes");
+          if (!segment) throw new Error("缺少剧情段候选");
+          segment.payload = { ...segment.payload, phaseId: phase.id, order: segmentOrder };
+          segment.after = { ...segment.payload };
+          const chapters = items.filter((item) => item.targetTable === "documents").sort((left, right) => Number(left.payload.order) - Number(right.payload.order));
+          for (const [index, chapter] of chapters.entries()) {
+            chapter.payload = { ...chapter.payload, plotSegmentId: `ref:${segment.tempId}`, order: chapterOrder + index, status: "outline" };
+            chapter.after = { ...chapter.payload };
+          }
+          validatePlotDesignItems(items, phase.id, segmentOrder, chapterOrder);
+          const catalog = await projectReferenceCatalog(params.projectId);
+          repairProposalCharacterReferences(items, catalog, characterNameMap);
+          repairTimelineAndOutlineNodeReferences(items, catalog);
+          repairUnresolvableTempRefs(items, acceptedRefs, await projectEntityNameToIdMap(params.projectId));
+          assertProposalReferences(items, catalog, acceptedRefs);
+          return { items, summary: String(result.data.summary || "新的剧情段与章节"), promptHash: result.promptHash, usage: result.usage };
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
         }
-        validatePlotDesignItems(items, phase.id, segmentOrder, chapterOrder);
-        const catalog = await projectReferenceCatalog(params.projectId);
-        repairProposalCharacterReferences(items, catalog, characterNameMap);
-        repairTimelineAndOutlineNodeReferences(items, catalog);
-        repairUnresolvableTempRefs(items, acceptedRefs, await projectEntityNameToIdMap(params.projectId));
-        assertProposalReferences(items, catalog, acceptedRefs);
-        const proposal: AIProposal = { ...recordBase(params.projectId), title: "剧情段与章节设计", operation: "structured:plot-design", taskKey: "plot-design", scope: "plot-design", targetId: phase.id, status: "pending", previewMarkdown: proposalMarkdown("剧情段与章节设计", String(result.data.summary || "新的剧情段与章节"), items), patches: [], items, contextPacketId: packet.id, agentRunId: agent.id, model: project.settings.textModel, outlineGenerationMode: "plot-segment-append", architecturePhaseId: phase.id, architecturePhaseOrder: phase.order };
-        agent.status = "completed";
-        agent.finishedAt = Date.now();
-        agent.promptHash = result.promptHash;
-        agent.usage = result.usage;
-        agent.steps[0].status = "completed";
-        agent.steps[0].output = `${items.length} 个候选项`;
-        await novelDb.transaction("rw", novelDb.proposals, novelDb.agentRuns, async () => { await novelDb.proposals.add(proposal); await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() }); });
-        return { proposal, packet, agent };
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
       }
+      throw new Error(`AI 返回的剧情段与章节结构无效：${lastError}`);
+    };
+
+    // 初次生成
+    const initial = await generateItems();
+    let items = initial.items;
+    let summary = initial.summary;
+    let promptHash = initial.promptHash;
+    let usage = initial.usage;
+
+    // audit+iterate 循环
+    let auditReport: GenerationAuditReport | undefined;
+    if (auditEnabled && maxAuditIterations > 0) {
+      const rounds: GenerationAuditRound[] = [];
+      // 第一轮审核（iteration=1）
+      const segmentItem = items.find((item) => item.targetTable === "outlineNodes")!;
+      const chapterItems = items.filter((item) => item.targetTable === "documents");
+      let round = await runPlotSegmentAudit({
+        projectId: params.projectId,
+        phase,
+        segment: segmentItem,
+        chapters: chapterItems,
+        contextPacketId: packet.id,
+        signal: params.signal,
+      });
+      round.iteration = 1;
+      round.triggeredIteration = hasMajorOrBlocker(round.issues);
+      rounds.push(round);
+
+      // 迭代循环：最多 maxAuditIterations 次重新生成
+      let iterationsDone = 0;
+      while (hasMajorOrBlocker(round.issues) && iterationsDone < maxAuditIterations) {
+        iterationsDone += 1;
+        const regenerated = await generateItems(formatAuditFindingsForRerun(round));
+        items = regenerated.items;
+        summary = regenerated.summary;
+        promptHash = regenerated.promptHash;
+        usage = regenerated.usage;
+        const newSegment = items.find((item) => item.targetTable === "outlineNodes")!;
+        const newChapters = items.filter((item) => item.targetTable === "documents");
+        round = await runPlotSegmentAudit({
+          projectId: params.projectId,
+          phase,
+          segment: newSegment,
+          chapters: newChapters,
+          contextPacketId: packet.id,
+          signal: params.signal,
+        });
+        round.iteration = iterationsDone + 1;
+        round.triggeredIteration = hasMajorOrBlocker(round.issues) && iterationsDone < maxAuditIterations;
+        rounds.push(round);
+      }
+
+      const lastRound = rounds[rounds.length - 1];
+      auditReport = {
+        auditSkillId: "plot-segment-audit",
+        mechanism: "internal-iterate",
+        rounds,
+        improved: !hasMajorOrBlocker(lastRound.issues),
+        remainingMajorCount: lastRound.issues.filter((issue) => issue.severity === "blocker" || issue.severity === "major").length,
+      };
     }
-    throw new Error(`AI 返回的剧情段与章节结构无效：${lastError}`);
+
+    const proposal: AIProposal = { ...recordBase(params.projectId), title: "剧情段与章节设计", operation: "structured:plot-design", taskKey: "plot-design", scope: "plot-design", targetId: phase.id, status: "pending", previewMarkdown: proposalMarkdown("剧情段与章节设计", summary, items), patches: [], items, contextPacketId: packet.id, agentRunId: agent.id, model: project.settings.textModel, outlineGenerationMode: "plot-segment-append", architecturePhaseId: phase.id, architecturePhaseOrder: phase.order, auditReport };
+    agent.status = "completed";
+    agent.finishedAt = Date.now();
+    agent.promptHash = promptHash;
+    agent.usage = usage;
+    agent.steps[0].status = "completed";
+    agent.steps[0].output = `${items.length} 个候选项${auditReport ? `；审核 ${auditReport.rounds.length} 轮，剩余 ${auditReport.remainingMajorCount} 个 major+` : ""}`;
+    await novelDb.transaction("rw", novelDb.proposals, novelDb.agentRuns, async () => { await novelDb.proposals.add(proposal); await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() }); });
+    return { proposal, packet, agent };
   } catch (error) {
     agent.status = "failed";
     agent.finishedAt = Date.now();

@@ -2,7 +2,7 @@
 import type { Transaction } from "dexie";
 import { buildProjectReferenceCatalogs, emptyReferenceCatalog, sanitizeProposalReferencesInPlace, sanitizeReferenceRecordInPlace } from "./reference-integrity";
 
-export const DB_VERSION = 20;
+export const DB_VERSION = 25;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
@@ -124,6 +124,35 @@ export const V19_STORES: Record<string, string | null> = {
 export const V20_STORES: Record<string, string | null> = {
   ...V19_STORES,
   operationReceipts: "id, projectId, candidateId, operationId, action, status, createdAt, [candidateId+status], [operationId+status]",
+};
+
+export const V21_STORES: Record<string, string | null> = {
+  ...V20_STORES,
+  creativeRuns: "id, projectId, mode, status, updatedAt, [projectId+status]",
+  creativeWorkItems: "id, projectId, creativeRunId, kind, status, updatedAt, [creativeRunId+status]",
+  creativeReviews: "id, projectId, creativeRunId, workItemId, subjectArtifactId, verdict, createdAt",
+  creativeRunEvents: "id, projectId, creativeRunId, sequence, type, idempotencyKey, [creativeRunId+sequence], [creativeRunId+idempotencyKey]",
+};
+
+export const V22_STORES: Record<string, string | null> = {
+  ...V21_STORES,
+  craftRuleCandidates: "id, projectId, targetKind, targetId, status, updatedAt, [projectId+status], [projectId+targetId]",
+  promptTemplateVersions: "id, projectId, templateId, version, active, updatedAt, [projectId+templateId], [projectId+active]",
+};
+
+export const V23_STORES: Record<string, string | null> = {
+  ...V22_STORES,
+  creativeToolReceipts: "id, projectId, tool, idempotencyKey, createdAt, [projectId+tool+idempotencyKey]",
+};
+
+export const V24_STORES: Record<string, string | null> = {
+  ...V23_STORES,
+  creativeToolReceipts: "id, projectId, tool, idempotencyKey, status, createdAt, [projectId+tool+idempotencyKey]",
+};
+
+export const V25_STORES: Record<string, string | null> = {
+  ...V24_STORES,
+  creativeToolReceipts: "id, projectId, tool, idempotencyKey, status, createdAt, &[projectId+tool+idempotencyKey]",
 };
 
 const RETIRED_PLANNING_TASKS = new Set([

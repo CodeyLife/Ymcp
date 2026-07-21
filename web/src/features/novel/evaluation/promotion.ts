@@ -41,7 +41,7 @@ import type {
 import { commitAcceptedFacts, createWorkflowSnapshot, factProjectionValuesEqual, readFactField } from "../facts";
 import { createChapterMemory } from "../memory";
 import { upsertEmbedding } from "../retrieval";
-import { BUILTIN_NOVEL_SKILLS } from "../skills";
+import { getEffectiveSkill, nextPatchVersion } from "../skills";
 import { captureProjectSnapshot, type ProjectHead } from "./project-snapshot";
 import {
   computeManuscriptContentHash,
@@ -297,6 +297,7 @@ class PromotionServiceImpl implements PromotionService {
         "rw",
         db.tables,
         async () => {
+          const promotedSkillVersions = new Map<string, string>();
           // 5.1 二次读取，校验基线未变（事务内乐观锁）
           const latestDocument = await db.documents.get(candidate.targetDocument.documentId);
           if (!latestDocument) throw new Error("目标 document 在事务中消失");
@@ -365,6 +366,8 @@ class PromotionServiceImpl implements PromotionService {
           for (const fact of acceptedFacts) {
             const factBase = recordBase(projectId);
             const input = fact.projectionInput;
+            // 只有 targetId 缺失的 new fact 才会创建记录。只要带 targetId，
+            // commitAcceptedFacts 就会走更新路径，因此必须执行目标与 before 乐观锁校验。
             if (input.targetId) {
               const projectionTarget = await db.table(input.targetTable).get(input.targetId) as Record<string, unknown> | undefined;
               if (!projectionTarget || projectionTarget.projectId !== projectId) {
@@ -410,7 +413,7 @@ class PromotionServiceImpl implements PromotionService {
             };
             await db.factCandidates.add(replayCandidate);
           }
-          await commitAcceptedFacts(projectId, candidate.manuscript.sourceWorkflowRunId ?? `promotion:${candidate.id}`, db);
+          const commitResult = await commitAcceptedFacts(projectId, candidate.manuscript.sourceWorkflowRunId ?? `promotion:${candidate.id}`, db);
           const committedCandidates = acceptedFacts.length
             ? await db.factCandidates.bulkGet(acceptedFacts.map((fact) => fact.sourceCandidateId))
             : [];
@@ -418,7 +421,21 @@ class PromotionServiceImpl implements PromotionService {
             .map((fact) => fact?.committedAssertionId)
             .filter((id): id is string => Boolean(id));
           if (createdFactAssertionIds.length !== acceptedFacts.length) {
-            throw new Error(`事实投影未完整提交：expected=${acceptedFacts.length} actual=${createdFactAssertionIds.length}`);
+            // commitAcceptedFacts 返回 skipped 详情，构建可诊断的错误信息。
+            // 之前只抛 "expected=N actual=M"，无法定位是哪条 fact 被跳过、为何被跳过。
+            // 现在错误信息包含每条被跳过 fact 的 candidateId、投影目标和具体原因，
+            // 便于排查 LLM 幻觉 targetId、重复 relation、重复 character 等问题。
+            const acceptedById = new Map(acceptedFacts.map((fact) => [fact.sourceCandidateId, fact] as const));
+            const skipDetails = commitResult.skipped
+              .map((entry) => {
+                const fact = acceptedById.get(entry.candidateId);
+                const input = fact?.projectionInput;
+                const target = input ? `${input.targetTable}:${input.targetId ?? "<new>"}.${input.field}` : "<unknown>";
+                const novelty = input?.novelty ?? "?";
+                return `  - candidateId=${entry.candidateId} target=${target} novelty=${novelty} reason=${entry.reason}`;
+              })
+              .join("\n");
+            throw new Error(`事实投影未完整提交：expected=${acceptedFacts.length} actual=${createdFactAssertionIds.length}\n跳过详情：\n${skipDetails || "  <commitAcceptedFacts 未返回 skipped，可能是 acceptedFacts 与 candidates 的 sourceCandidateId 不一致>"}`);
           }
 
           // 5.6 创建与正式 revision 绑定的章节记忆和故事状态快照。
@@ -454,29 +471,21 @@ class PromotionServiceImpl implements PromotionService {
 
           // 5.7 更新 NovelSkillManifest.prompt（仅 accepted skills）
           for (const iterated of acceptedSkills) {
-            const stored = await db.skills
-              .where("skillId")
-              .equals(iterated.skillId)
-              .filter((skill) => skill.projectId === projectId || skill.projectId === "__user__")
-              .toArray();
-            const projectSkill = stored.find((skill) => skill.projectId === projectId);
-            const userSkill = stored.find((skill) => skill.projectId === "__user__");
-            const builtinSkill = BUILTIN_NOVEL_SKILLS.find((skill) => skill.skillId === iterated.skillId);
-            const effective = projectSkill ?? userSkill ?? builtinSkill;
+            const effective = await getEffectiveSkill(projectId, iterated.skillId, db);
             if (!effective) throw new Error(`无法晋升未知 skill：${iterated.skillId}`);
             if (effective.prompt !== iterated.beforePrompt) throw new Error(`skill 已变化，需要重新评估：${iterated.skillId}`);
             const updated: NovelSkillManifest = {
               ...effective,
-              ...(projectSkill ?? recordBase(projectId)),
+              ...recordBase(projectId),
               projectId,
               source: "project",
               readonly: false,
+              version: nextPatchVersion(effective.version),
               prompt: iterated.afterPrompt,
-              revision: (projectSkill?.revision ?? 0) + 1,
-              updatedAt: now,
               updatedBy: ACTOR_ID_FOR_PROMOTION,
             };
-            await db.skills.put(updated);
+            await db.skills.add(updated);
+            promotedSkillVersions.set(iterated.skillId, updated.version);
           }
 
           // 5.8 更新 ProjectSkillBinding（仅 accepted bindings）
@@ -494,6 +503,7 @@ class PromotionServiceImpl implements PromotionService {
               projectId,
               skillId: iterated.skillId,
               enabled: iterated.after.enabled,
+              activeVersion: promotedSkillVersions.get(iterated.skillId) ?? existing?.activeVersion,
               priorityOverride: iterated.after.priorityOverride,
               config: existing?.config ?? {},
               revision: (existing?.revision ?? 0) + 1,

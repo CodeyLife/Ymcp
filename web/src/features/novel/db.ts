@@ -8,6 +8,12 @@ import type {
   ChangeOperation,
   ConversationMemory,
   CreativeBrief,
+  CreativeReview,
+  CreativeRun,
+  CreativeRunEvent,
+  CreativeWorkItem,
+  CreativeToolReceipt,
+  CraftRuleCandidate,
   DocumentRevision,
   EntityRelation,
   FactAssertion,
@@ -31,6 +37,7 @@ import type {
   PreferenceSignal,
   ProjectSkillBinding,
   ProjectTasteProfile,
+  PromptTemplateVersion,
   QualityReport,
   FactCandidate,
   StoryEntity,
@@ -46,7 +53,7 @@ import type {
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
 import type { OperationReceipt } from "./evaluation/types";
-import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, resetNovelPlanningHierarchy, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES, V18_STORES, V19_STORES, V20_STORES } from "./db-schema";
+import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, resetNovelPlanningHierarchy, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES, V18_STORES, V19_STORES, V20_STORES, V21_STORES, V22_STORES, V23_STORES, V24_STORES, V25_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
@@ -117,6 +124,13 @@ export class NovelDatabase extends Dexie {
   creativeBriefs!: EntityTable<CreativeBrief, "id">;
   retrievalRuns!: EntityTable<NovelRetrievalRun, "id">;
   memoryJobs!: EntityTable<NovelMemoryJob, "id">;
+  creativeRuns!: EntityTable<CreativeRun, "id">;
+  creativeWorkItems!: EntityTable<CreativeWorkItem, "id">;
+  creativeReviews!: EntityTable<CreativeReview, "id">;
+  creativeRunEvents!: EntityTable<CreativeRunEvent, "id">;
+  craftRuleCandidates!: EntityTable<CraftRuleCandidate, "id">;
+  promptTemplateVersions!: EntityTable<PromptTemplateVersion, "id">;
+  creativeToolReceipts!: EntityTable<CreativeToolReceipt, "id">;
 
   constructor(databaseName = "ymcp-novel-db-v4") {
     super(databaseName);
@@ -144,6 +158,26 @@ export class NovelDatabase extends Dexie {
     this.version(18).stores(V18_STORES).upgrade(resetNovelPlanningHierarchy);
     this.version(19).stores(V19_STORES);
     this.version(20).stores(V20_STORES);
+    this.version(21).stores(V21_STORES);
+    this.version(22).stores(V22_STORES);
+    this.version(23).stores(V23_STORES);
+    this.version(24).stores(V24_STORES).upgrade(async (transaction) => {
+      const table = transaction.table("creativeToolReceipts");
+      const receipts = await table.toArray() as Array<Record<string, unknown>>;
+      const keepByKey = new Map<string, Record<string, unknown>>();
+      for (const receipt of receipts.sort((left, right) => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))) {
+        const key = `${receipt.projectId}\u0000${receipt.tool}\u0000${receipt.idempotencyKey}`;
+        if (!keepByKey.has(key)) keepByKey.set(key, receipt);
+      }
+      const keepIds = new Set([...keepByKey.values()].map((receipt) => String(receipt.id)));
+      await table.bulkDelete(receipts.filter((receipt) => !keepIds.has(String(receipt.id))).map((receipt) => receipt.id));
+      await table.toCollection().modify((receipt: Record<string, unknown>) => {
+        receipt.status = "completed";
+        receipt.startedAt = typeof receipt.createdAt === "number" ? receipt.createdAt : Date.now();
+        receipt.completedAt = typeof receipt.updatedAt === "number" ? receipt.updatedAt : Date.now();
+      });
+    });
+    this.version(25).stores(V25_STORES);
   }
 }
 

@@ -137,6 +137,15 @@ export interface QualityEvidence {
 
 export interface CandidateProvenance {
   model: string;
+  /** 整个工作流实际解析到的 Skill/System Prompt 版本引用。 */
+  skillRefs?: string[];
+  /** 每个工作流产物所属阶段使用的规则引用及其独立指纹。 */
+  stagePromptEvidence?: Array<{
+    stage: string;
+    artifactId: string;
+    skillRefs: string[];
+    promptFingerprint: string;
+  }>;
   promptFingerprint: string;
   configFingerprint: string;
   codeRevision: string;

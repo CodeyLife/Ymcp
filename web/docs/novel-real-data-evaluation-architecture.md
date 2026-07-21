@@ -94,7 +94,7 @@ flowchart LR
 
 ```ts
 interface ProjectSnapshotBundle {
-  formatVersion: 2;
+  formatVersion: 3;
   snapshotId: string;
   sourceProjectId: string;
   sourceDatabaseVersion: number;

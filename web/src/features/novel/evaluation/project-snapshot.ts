@@ -3,7 +3,7 @@ import { documentContentHash, NovelDatabase } from "../db";
 import { DB_VERSION, RECORD_SCHEMA_VERSION } from "../db-schema";
 import type { ManuscriptDocument, StoryProject } from "../types";
 
-export const PROJECT_SNAPSHOT_FORMAT_VERSION = 2;
+export const PROJECT_SNAPSHOT_FORMAT_VERSION = 3;
 export const EXPERIMENT_DATABASE_PREFIX = "ymcp-novel-eval-v1-";
 
 export const PROJECT_SNAPSHOT_TABLES = [
@@ -21,6 +21,7 @@ export const PROJECT_SNAPSHOT_TABLES = [
   "snapshots",
   "skills",
   "projectSkills",
+  "promptTemplateVersions",
   "factAssertions",
   "knowledgeAssertions",
   "narrativeUnits",
@@ -30,6 +31,8 @@ export const PROJECT_SNAPSHOT_TABLES = [
   "preferenceSignals",
   "tasteProfiles",
 ] as const;
+
+const PROJECT_SNAPSHOT_V2_TABLES = PROJECT_SNAPSHOT_TABLES.filter((tableName) => tableName !== "promptTemplateVersions");
 
 export type ProjectSnapshotTable = (typeof PROJECT_SNAPSHOT_TABLES)[number];
 export type SnapshotReason = "manual" | "chapter-baseline" | "post-promotion" | "post-bench" | "replay";
@@ -58,7 +61,7 @@ export interface ProjectSnapshotManifest {
 }
 
 export interface ProjectSnapshotBundle {
-  formatVersion: 2;
+  formatVersion: 3;
   snapshotId: string;
   sourceProjectId: string;
   sourceDatabaseVersion: number;
@@ -68,6 +71,17 @@ export interface ProjectSnapshotBundle {
   records: ProjectSnapshotRecords;
   manifest: ProjectSnapshotManifest;
 }
+
+export interface LegacyProjectSnapshotBundleV2 extends Omit<ProjectSnapshotBundle, "formatVersion" | "records" | "manifest"> {
+  formatVersion: 2;
+  records: Omit<ProjectSnapshotRecords, "promptTemplateVersions">;
+  manifest: Omit<ProjectSnapshotManifest, "recordCounts" | "tableHashes"> & {
+    recordCounts: Omit<Record<ProjectSnapshotTable, number>, "promptTemplateVersions">;
+    tableHashes: Omit<Record<ProjectSnapshotTable, string>, "promptTemplateVersions">;
+  };
+}
+
+export type SupportedProjectSnapshotBundle = ProjectSnapshotBundle | LegacyProjectSnapshotBundleV2;
 
 export interface SnapshotVerification {
   valid: boolean;
@@ -192,26 +206,33 @@ export async function captureProjectSnapshot(
   };
 }
 
-export async function verifyProjectSnapshot(bundle: ProjectSnapshotBundle): Promise<SnapshotVerification> {
+export async function verifyProjectSnapshot(bundle: SupportedProjectSnapshotBundle): Promise<SnapshotVerification> {
   const issues: string[] = [];
-  if (bundle.formatVersion !== PROJECT_SNAPSHOT_FORMAT_VERSION) issues.push("快照格式版本不受支持");
+  const supportedFormat = bundle.formatVersion === 2 || bundle.formatVersion === PROJECT_SNAPSHOT_FORMAT_VERSION;
+  if (!supportedFormat) issues.push("快照格式版本不受支持");
   if (bundle.manifest.algorithm !== "sha-256") issues.push("快照哈希算法不受支持");
   if (bundle.manifest.schemaVersion !== RECORD_SCHEMA_VERSION) issues.push("快照记录版本与当前版本不一致");
-  if (bundle.sourceDatabaseVersion !== DB_VERSION) issues.push("快照数据库版本与当前版本不一致");
-  for (const tableName of PROJECT_SNAPSHOT_TABLES) {
-    const records = bundle.records[tableName];
+  if (!Number.isInteger(bundle.sourceDatabaseVersion) || bundle.sourceDatabaseVersion <= 0 || bundle.sourceDatabaseVersion > DB_VERSION) {
+    issues.push("快照数据库版本高于当前版本或无效");
+  }
+  const tables = bundle.formatVersion === 2 ? PROJECT_SNAPSHOT_V2_TABLES : PROJECT_SNAPSHOT_TABLES;
+  const recordsByTable = bundle.records as Partial<ProjectSnapshotRecords>;
+  const recordCounts = bundle.manifest.recordCounts as Partial<Record<ProjectSnapshotTable, number>>;
+  const tableHashes = bundle.manifest.tableHashes as Partial<Record<ProjectSnapshotTable, string>>;
+  for (const tableName of tables) {
+    const records = recordsByTable[tableName];
     if (!Array.isArray(records)) {
       issues.push(`${tableName} 表缺失`);
       continue;
     }
-    if (records.length !== bundle.manifest.recordCounts[tableName]) issues.push(`${tableName} 表记录数不匹配`);
-    if (await sha256(records) !== bundle.manifest.tableHashes[tableName]) issues.push(`${tableName} 表哈希不匹配`);
+    if (records.length !== recordCounts[tableName]) issues.push(`${tableName} 表记录数不匹配`);
+    if (await sha256(records) !== tableHashes[tableName]) issues.push(`${tableName} 表哈希不匹配`);
   }
-  const projects = bundle.records.projects;
+  const projects = recordsByTable.projects ?? [];
   if (projects.length !== 1 || projects[0]?.id !== bundle.sourceProjectId) issues.push("快照项目记录与来源项目不一致");
-  for (const tableName of PROJECT_SNAPSHOT_TABLES) {
+  for (const tableName of tables) {
     if (tableName === "projects") continue;
-    const invalidScope = bundle.records[tableName].some((record) => (
+    const invalidScope = (recordsByTable[tableName] ?? []).some((record) => (
       record.projectId !== bundle.sourceProjectId
       && !(tableName === "skills" && record.projectId === "__user__")
     ));
@@ -228,20 +249,37 @@ export async function verifyProjectSnapshot(bundle: ProjectSnapshotBundle): Prom
   return { valid: issues.length === 0, issues, computedHash };
 }
 
+/** Verify the original v2 hash first, then add the new table and issue a v3 manifest. */
+export async function migrateProjectSnapshot(bundle: SupportedProjectSnapshotBundle): Promise<ProjectSnapshotBundle> {
+  const verification = await verifyProjectSnapshot(bundle);
+  if (!verification.valid) throw new Error(`项目快照校验失败：${verification.issues.join("；")}`);
+  if (bundle.formatVersion === PROJECT_SNAPSHOT_FORMAT_VERSION) return bundle;
+  const records = {
+    ...(structuredClone(bundle.records) as Omit<ProjectSnapshotRecords, "promptTemplateVersions">),
+    promptTemplateVersions: [],
+  } satisfies ProjectSnapshotRecords;
+  const manifest = await buildManifest({
+    sourceProjectId: bundle.sourceProjectId,
+    sourceDatabaseVersion: bundle.sourceDatabaseVersion,
+    head: bundle.head,
+    records,
+  });
+  return { ...bundle, formatVersion: PROJECT_SNAPSHOT_FORMAT_VERSION, records, manifest };
+}
+
 export function createExperimentDatabase(experimentId: string) {
   const safeId = experimentId.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!safeId) throw new Error("实验 ID 不能为空");
   return new NovelDatabase(`${EXPERIMENT_DATABASE_PREFIX}${safeId}`);
 }
 
-export async function restoreProjectSnapshot(bundle: ProjectSnapshotBundle, target: NovelDatabase) {
+export async function restoreProjectSnapshot(bundle: SupportedProjectSnapshotBundle, target: NovelDatabase) {
   if (!target.name.startsWith(EXPERIMENT_DATABASE_PREFIX)) throw new Error("项目快照只能恢复到物理隔离的实验数据库");
-  const verification = await verifyProjectSnapshot(bundle);
-  if (!verification.valid) throw new Error(`项目快照校验失败：${verification.issues.join("；")}`);
+  const migrated = await migrateProjectSnapshot(bundle);
   await target.transaction("rw", target.tables, async () => {
     for (const table of target.tables) await table.clear();
     for (const tableName of PROJECT_SNAPSHOT_TABLES) {
-      const records = bundle.records[tableName];
+      const records = migrated.records[tableName];
       if (records.length) await snapshotTable(target, tableName).bulkPut(structuredClone(records));
     }
   });

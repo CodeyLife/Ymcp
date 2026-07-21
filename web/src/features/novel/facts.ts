@@ -153,6 +153,107 @@ export interface PreparedFactCandidates {
   discardedMetaAbsenceCount: number;
   discardedUnprojectableCount: number;
   discardedDuplicateFactCount: number;
+  /**
+   * 因 `after` 格式无效而被丢弃的事实候选数。
+   *
+   * 触发条件：`novelty=new && field=record` 但 `after` 不是非 null 对象
+   * （字符串、数字、数组、null 都算无效）。
+   *
+   * 设计依据：commitAcceptedFacts L543 对非对象 payload 静默 continue，
+   * 导致 promote 检测到 `createdFactAssertionIds.length !== acceptedFacts.length`
+   * 抛错"事实投影未完整提交"。在 prepareFactCandidates 提前过滤可让
+   * closed-loop auto-policy 不会接受这些无效 fact，promote 不会失败。
+   */
+  discardedInvalidRecordCount: number;
+  /**
+   * 因 targetId 在 db 中不存在（或不属于当前项目）而被丢弃的事实候选数。
+   *
+   * 触发条件：fact.targetId 存在但 `db.table(targetTable).get(targetId)` 返回
+   * undefined 或 `target.projectId !== projectId`。覆盖所有 novelty（不只 update），
+   * 因为 commitAcceptedFacts 的 update 路径对所有"非 new+无targetId"的 fact 生效。
+   *
+   * 设计依据：commitAcceptedFacts L784-792 对不存在/不属于本项目的 target 标记
+   * skip reason=`update-target-not-found:${targetTable}:${targetId}` 并 continue，
+   * 导致 promote 抛错"事实投影未完整提交：expected=N actual=0"。
+   * LLM 偶尔输出幻觉 targetId（引用上下文中不存在的实体 ID，或引用本章 draft
+   * 中提到但尚未落库的对象；更糟的情况是把字段名/类型名当作 targetId，如
+   * `character_luchen`、`object_gray_seal_box`），提前过滤避免无效 fact 进入候选库。
+   */
+  discardedInvalidUpdateTargetCount: number;
+  /**
+   * 因 new relation 已存在（同 fromEntityId+toEntityId）而被丢弃的事实候选数。
+   *
+   * 触发条件：`novelty=new && targetTable=relations && field=record` 且
+   * `payload.fromEntityId/toEntityId` 对应的关系已存在于 db.relations。
+   *
+   * 设计依据：commitAcceptedFacts L571-577 对已存在关系静默 continue。
+   * LLM 偶尔把已有关系误判为 new（特别是 aliases 匹配失败时），提前过滤
+   * 让 closed-loop 不接受这些重复 fact。
+   */
+  discardedDuplicateRelationCount: number;
+  /**
+   * 因 targetTable 不在 MUTABLE_TABLES 集合内而被丢弃的事实候选数。
+   *
+   * 触发条件：`fact.targetTable` 不属于 entities/relations/timelineEvents/
+   * documents/scenes/plotThreads/foreshadowing/architectures/outlineNodes 等
+   * 可投影表（例如 LLM 输出 `snapshots` 这种系统内部表名）。
+   *
+   * 设计依据：commitAcceptedFacts L546 对非法 targetTable 静默 continue，
+   * 导致 promote 抛错"事实投影未完整提交：expected=N actual=0"。LLM 偶尔
+   * 把上下文中提到的系统概念（如 snapshots/derivedMemories）误判为可投影
+   * 表名，提前过滤避免无效 fact 进入候选库。此校验对所有 novelty 生效
+   * （不只 update），因为 targetTable 合法性是 fact 结构前提。
+   */
+  discardedInvalidTargetTableCount: number;
+  /**
+   * 因 new relation 缺失 fromEntityId 或 toEntityId 而被丢弃的事实候选数。
+   *
+   * 触发条件：`novelty=new && targetTable=relations && field=record` 且
+   * `payload.fromEntityId` 或 `payload.toEntityId` 为空。
+   *
+   * 设计依据：commitAcceptedFacts L681-684 对缺 endpoints 的 relation 静默
+   * continue，promote 抛错"事实投影未完整提交"。LLM 偶尔输出不完整的 relation
+   * payload（如只写 fromEntityId 忘了 toEntityId），提前过滤避免无效 fact。
+   */
+  discardedRelationMissingEndpointsCount: number;
+  /**
+   * 因 new character 缺失 name 而被丢弃的事实候选数。
+   *
+   * 触发条件：`novelty=new && targetTable=entities && payload.kind=character`
+   * 且 `payload.name` 为空字符串或缺失。
+   *
+   * 设计依据：commitAcceptedFacts L698-701 对缺 name 的 character 静默
+   * continue，promote 抛错"事实投影未完整提交"。LLM 偶尔输出 aliases 但
+   * 忘了 name，提前过滤避免无效 fact。
+   */
+  discardedCharacterMissingNameCount: number;
+  /**
+   * 因 novelty=update 缺失 targetId 而被丢弃的事实候选数。
+   *
+   * 触发条件：`novelty=update` 且 `targetId` 为空字符串或缺失。
+   *
+   * 设计依据：commitAcceptedFacts L725-728 对 novelty=update 但 targetId
+   * 缺失的 fact 静默 continue，promote 抛错。LLM 偶尔输出 novelty=update
+   * 但忘了 targetId（混淆了 new 和 update 语义），提前过滤避免无效 fact。
+   */
+  discardedUpdateMissingTargetIdCount: number;
+}
+
+/**
+ * commitAcceptedFacts 的返回结果。
+ *
+ * - `committedCandidateIds`：成功提交的 factCandidate id 列表（含已写入 factAssertion
+ *   和可选 knowledgeAssertion 的）。顺序与处理顺序一致。
+ * - `skipped`：被静默跳过的候选及其原因。每条 `continue` 路径都记录原因，
+ *   便于上游（如 promotion.ts）在 `createdFactAssertionIds.length !== acceptedFacts.length`
+ *   时构建可诊断的错误信息，而不是只看到 "expected=N actual=M" 这种无线索的报错。
+ *
+ * 设计依据：AGENTS.md「根本原因分析」——不要让下游只能看到症状而无法定位机制。
+ * 7 条静默 continue 路径分别对应不同的 skip reason 常量，便于错误聚类和后续修复。
+ */
+export interface CommitFactsResult {
+  committedCandidateIds: string[];
+  skipped: Array<{ candidateId: string; reason: string }>;
 }
 
 export function formatFactCandidateValue(fact: Pick<ExtractedFact, "after" | "humanReadable">): string {
@@ -478,6 +579,13 @@ export async function prepareFactCandidates(projectId: string, facts: ExtractedF
   let discardedMetaAbsenceCount = 0;
   let discardedUnprojectableCount = 0;
   let discardedDuplicateFactCount = 0;
+  let discardedInvalidRecordCount = 0;
+  let discardedInvalidUpdateTargetCount = 0;
+  let discardedDuplicateRelationCount = 0;
+  let discardedInvalidTargetTableCount = 0;
+  let discardedRelationMissingEndpointsCount = 0;
+  let discardedCharacterMissingNameCount = 0;
+  let discardedUpdateMissingTargetIdCount = 0;
   const indexesByKey = new Map<string, number>();
   const prepared: ExtractedFact[] = [];
 
@@ -486,9 +594,88 @@ export async function prepareFactCandidates(projectId: string, facts: ExtractedF
       discardedMetaAbsenceCount += 1;
       continue;
     }
+    // targetTable 合法性是 fact 结构前提，对所有 novelty 生效。
+    // commitAcceptedFacts L546 对非法 targetTable 静默 continue，导致 promote
+    // 抛错"事实投影未完整提交：expected=N actual=0"。LLM 偶尔输出系统内部
+    // 表名（如 snapshots/derivedMemories），提前过滤避免无效 fact 进入候选库。
+    if (!MUTABLE_TABLES.has(fact.targetTable)) {
+      discardedInvalidTargetTableCount += 1;
+      continue;
+    }
     if (!fact.targetId && fact.field !== "record") {
       discardedUnprojectableCount += 1;
       continue;
+    }
+    // novelty=update 必须有 targetId。commitAcceptedFacts L725-728 对 novelty=update
+    // 但 targetId 缺失的 fact 静默 continue，promote 抛错。LLM 偶尔混淆 new/update
+    // 语义，输出 novelty=update 但忘了 targetId，提前过滤避免无效 fact。
+    if (fact.novelty === "update" && !fact.targetId) {
+      discardedUpdateMissingTargetIdCount += 1;
+      continue;
+    }
+    // novelty=new && field=record 表示创建新对象（entity/relation/timelineEvent 等），
+    // commitAcceptedFacts L543 要求 `after` 必须是非 null 对象（用于 normalizedCreate 构造记录）。
+    // LLM 偶尔输出字符串型 after（如 "观察雾气不能只看一天..."），会导致 commit 静默跳过、
+    // promote 抛错"事实投影未完整提交"。在此提前过滤，避免无效 fact 进入候选库。
+    if (fact.novelty === "new" && fact.field === "record"
+      && (fact.after === null || typeof fact.after !== "object" || Array.isArray(fact.after))) {
+      discardedInvalidRecordCount += 1;
+      continue;
+    }
+    // 所有带 targetId 的 fact（不只 novelty=update）都校验 targetId 真实存在且属于当前项目。
+    //
+    // commitAcceptedFacts L732 的 record 创建路径要求 `novelty=new && !targetId`，
+    // 其余所有 fact（含 novelty=new + targetId 存在、novelty=update）都走 L784-792 的
+    // update 路径，要求 targetId 在 table 中存在，否则 skip reason=
+    // `update-target-not-found:${targetTable}:${targetId}`，promote 抛错"事实投影
+    // 未完整提交：expected=N actual=0"。
+    //
+    // LLM 偶尔输出 novelty=new + targetId=幻觉字段名（如 `character_luchen`、
+    // `object_gray_seal_box`，混淆了 entity 名/字段名与真实 UUID），prepareFactCandidates
+    // 必须提前过滤，避免无效 fact 进入候选库导致 promote 失败。targetTable 合法性
+    // 已在外层通用校验中保证。
+    if (fact.targetId) {
+      const target = await db.table(fact.targetTable).get(fact.targetId) as Record<string, unknown> | undefined;
+      if (!target || target.projectId !== projectId) {
+        discardedInvalidUpdateTargetCount += 1;
+        continue;
+      }
+    }
+    // novelty=new relation 需要 endpoints 完整且 (fromEntityId, toEntityId) 关系不存在。
+    // commitAcceptedFacts L681-684 对缺 endpoints 的 relation 静默 continue，
+    // L571-577 对已存在关系静默 continue。LLM 偶尔输出不完整或重复的 relation，
+    // 提前过滤避免无效 fact。
+    if (fact.novelty === "new" && fact.targetTable === "relations" && fact.field === "record") {
+      const payload = fact.after as Record<string, unknown> | undefined;
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        const fromId = String(payload.fromEntityId ?? "");
+        const toId = String(payload.toEntityId ?? "");
+        if (!fromId || !toId) {
+          discardedRelationMissingEndpointsCount += 1;
+          continue;
+        }
+        const existing = await db.relations
+          .where("projectId")
+          .equals(projectId)
+          .and((r) => r.fromEntityId === fromId && r.toEntityId === toId)
+          .first();
+        if (existing) {
+          discardedDuplicateRelationCount += 1;
+          continue;
+        }
+      }
+    }
+    // novelty=new character 必须有 name。commitAcceptedFacts L698-701 对缺 name
+    // 的 character 静默 continue，promote 抛错。LLM 偶尔输出 aliases 但忘了 name。
+    if (fact.novelty === "new" && fact.targetTable === "entities" && fact.field === "record") {
+      const payload = fact.after as Record<string, unknown> | undefined;
+      if (payload && typeof payload === "object" && !Array.isArray(payload) && payload.kind === "character") {
+        const name = String(payload.name ?? "").trim();
+        if (!name) {
+          discardedCharacterMissingNameCount += 1;
+          continue;
+        }
+      }
     }
     const key = duplicateFactKey(fact);
     const existingIndex = key ? indexesByKey.get(key) : undefined;
@@ -513,14 +700,28 @@ export async function prepareFactCandidates(projectId: string, facts: ExtractedF
     discardedMetaAbsenceCount,
     discardedUnprojectableCount,
     discardedDuplicateFactCount,
+    discardedInvalidRecordCount,
+    discardedInvalidUpdateTargetCount,
+    discardedDuplicateRelationCount,
+    discardedInvalidTargetTableCount,
+    discardedRelationMissingEndpointsCount,
+    discardedCharacterMissingNameCount,
+    discardedUpdateMissingTargetIdCount,
   };
 }
 
-export async function commitAcceptedFacts(projectId: string, workflowRunId: string, db: NovelDatabase = novelDb) {
+export async function commitAcceptedFacts(projectId: string, workflowRunId: string, db: NovelDatabase = novelDb): Promise<CommitFactsResult> {
   const candidates = await db.factCandidates.where("workflowRunId").equals(workflowRunId).and((item) => item.status === "accepted" && !item.conflict && item.novelty !== "duplicate" && !item.committedAt).toArray();
-  const committed: string[] = [];
+  const committedCandidateIds: string[] = [];
+  const skipped: Array<{ candidateId: string; reason: string }> = [];
+  const skip = (candidate: FactCandidate, reason: string) => {
+    skipped.push({ candidateId: candidate.id, reason });
+  };
   for (const candidate of candidates) {
-    if (!MUTABLE_TABLES.has(candidate.targetTable)) continue;
+    if (!MUTABLE_TABLES.has(candidate.targetTable)) {
+      skip(candidate, `invalid-target-table:${candidate.targetTable}`);
+      continue;
+    }
 
     if (candidate.field === "knowledgeDeltas") {
       const assertion = candidateToFactAssertion(candidate, candidate.targetId);
@@ -532,7 +733,7 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
         if (knowledgeAssertions.length) await db.knowledgeAssertions.bulkPut(knowledgeAssertions);
         await db.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
       });
-      committed.push(candidate.id);
+      committedCandidateIds.push(candidate.id);
       continue;
     }
 
@@ -540,24 +741,39 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
 
     if (candidate.novelty === "new" && !candidate.targetId) {
       const payload = candidate.after as Record<string, unknown>;
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) continue;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        skip(candidate, "invalid-record-payload");
+        continue;
+      }
       if (candidate.targetTable === "relations") {
         const fromId = String(payload.fromEntityId ?? "");
         const toId = String(payload.toEntityId ?? "");
-        if (!fromId || !toId) continue;
+        if (!fromId || !toId) {
+          skip(candidate, "relation-missing-endpoints");
+          continue;
+        }
         const existing = await db.relations
           .where("projectId")
           .equals(projectId)
           .and((r) => r.fromEntityId === fromId && r.toEntityId === toId)
           .first();
-        if (existing) continue;
+        if (existing) {
+          skip(candidate, `relation-already-exists:${fromId}->${toId}`);
+          continue;
+        }
       }
       if (candidate.targetTable === "entities" && payload.kind === "character") {
         const name = String(payload.name ?? "").trim();
         const aliases = Array.isArray(payload.aliases) ? payload.aliases.map((a) => String(a).trim()).filter(Boolean) : [];
-        if (!name) continue;
+        if (!name) {
+          skip(candidate, "character-missing-name");
+          continue;
+        }
         const existing = await findExistingCharacter(projectId, name, aliases, db);
-        if (existing) continue;
+        if (existing) {
+          skip(candidate, `character-already-exists:${existing.id}:${existing.name}`);
+          continue;
+        }
       }
       const id = `${candidate.targetTable.slice(0, 3)}:${crypto.randomUUID()}`;
       const record = normalizedCreate(candidate.targetTable as ProposalTargetTable, projectId, id, payload);
@@ -571,14 +787,24 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
         if (knowledgeAssertions.length) await db.knowledgeAssertions.bulkPut(knowledgeAssertions);
         await db.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
       });
-      committed.push(candidate.id);
+      committedCandidateIds.push(candidate.id);
       continue;
     }
 
     const targetId = candidate.targetId;
-    if (!targetId) continue;
+    if (!targetId) {
+      skip(candidate, "update-missing-target-id");
+      continue;
+    }
     const current = await table.get(targetId) as Record<string, unknown> | undefined;
-    if (!current || current.projectId !== projectId) continue;
+    if (!current) {
+      skip(candidate, `update-target-not-found:${candidate.targetTable}:${targetId}`);
+      continue;
+    }
+    if (current.projectId !== projectId) {
+      skip(candidate, `update-target-project-mismatch:${candidate.targetTable}:${targetId}`);
+      continue;
+    }
     const next = applyField(current, candidate.field, candidate.after);
     next.updatedAt = Date.now();
     next.updatedBy = "local-user";
@@ -593,9 +819,9 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
       if (knowledgeAssertions.length) await db.knowledgeAssertions.bulkPut(knowledgeAssertions);
       await db.factCandidates.update(candidate.id, { committedAssertionId: assertion.id, committedAt, updatedAt: committedAt, revision: candidate.revision + 1 });
     });
-    committed.push(candidate.id);
+    committedCandidateIds.push(candidate.id);
   }
-  return committed;
+  return { committedCandidateIds, skipped };
 }
 
 export async function createWorkflowSnapshot(params: { projectId: string; documentId: string; label: string; summary: string }, db: NovelDatabase = novelDb) {

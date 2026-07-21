@@ -45,6 +45,7 @@ import {
   updateProject,
 } from "@/features/novel/db";
 import { exportNovel, exportNovelEvaluationSnapshot } from "@/features/novel/export";
+import { startCreativeMcpBridge } from "@/features/novel/creative-mcp-bridge";
 import { openCollaborativeDocument, resolveStoredManuscriptHtml, seedEmptyCollaborativeDocument } from "@/features/novel/collaboration";
 import { createManuscriptPersistenceGuard, requestDurableBrowserStorage, shouldApplyStoredManuscriptContent, type ManuscriptSaveState } from "@/features/novel/persistence";
 import { DB_VERSION } from "@/features/novel/db-schema";
@@ -352,6 +353,10 @@ export default function NovelStudio() {
   const [aiCollapsed, setAiCollapsed] = useState(() => window.matchMedia("(max-width: 1600px)").matches);
   const [mobileNav, setMobileNav] = useState(false);
   const selectedDocument = documents.find((item) => item.id === selectedDocumentId) ?? documents[0];
+  useEffect(() => {
+    if (!project) return undefined;
+    return startCreativeMcpBridge({ projectId: project.id, projectTitle: project.title });
+  }, [project?.id, project?.title]);
   useEffect(() => {
     const routeDocumentId = searchParams.get("document") ?? undefined;
     if (routeDocumentId && routeDocumentId !== selectedDocumentId) setSelectedDocumentId(routeDocumentId);

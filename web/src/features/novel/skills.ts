@@ -1,6 +1,8 @@
 import Ajv from "ajv";
 import { parse as parseYaml } from "yaml";
 import { novelDb, recordBase, type NovelDatabase } from "./db";
+import { LONG_FORM_WEB_NOVEL_STANDARD } from "./craft-standards";
+import { listPromptTemplates } from "./prompt-templates";
 import type {
   NovelSkillManifest,
   NovelSkillSource,
@@ -77,6 +79,7 @@ const chapterBlueprintSchema = {
 };
 
 export const BUILTIN_NOVEL_SKILLS: NovelSkillManifest[] = [
+  builtin({ skillId: "long-form-master-craft", name: "百万字长篇总纲", description: "以长期叙事承诺、人物生命力、因果结构、阅读节奏和文学质感约束全流程。", category: "long-plan", stages: ["foundation", "planning", "drafting", "review", "revision", "character-enrichment"], priority: 950, prompt: LONG_FORM_WEB_NOVEL_STANDARD, qualityChecks: ["局部推进是否保留长期叙事空间", "人物是否通过有代价的选择推动剧情", "支线和伏笔是否改变后续而非只作装饰", "文体与意境是否准确服务当前视角和场景", "规则是否来自可迁移机制而非单一样例"] }),
   builtin({ skillId: "story-facts-invariant", name: "故事事实优先", description: "区分已确认事实、角色认知、推测和创作建议。", category: "memory", stages: ["foundation", "planning", "drafting", "review", "revision", "fact-extraction"], priority: 1000, prompt: "已确认的故事事实、锁定规则和人物知识边界优先于任何写作技巧。不得把建议写成既定事实；发生冲突时必须指出冲突并停止提交相关变更。", qualityChecks: ["不得违反锁定事实", "角色只能使用已知或合理推断的信息"] }),
   builtin({ skillId: "premise-pressure-test", name: "核心创意压力测试", description: "检查故事承诺、持续冲突和长篇扩展空间。", category: "ideation", stages: ["foundation"], prompt: "从主角主动目标、持续阻力、失败代价、题材承诺、差异化机制和至少三次升级空间检查核心创意。不要用空泛主题代替可发生的戏剧行动；但'可发生的戏剧行动'指的是能在场景里铺陈的具体处境、选择与情感波澜，不是指一上来就要把核心冲突与转折点写到梗概和大纲首句。主题应在故事中自然浮现，而非被宣告。" }),
   builtin({ skillId: "character-desire-engine", name: "人物欲望引擎", description: "用欲望、恐惧、错误信念、真实需求、代价、行为底线与信念闭环构造人物。", category: "character-world", stages: ["foundation", "planning", "review", "character-enrichment"], prompt: "为主要人物明确外在欲望、内在恐惧、错误信念、未承认的需求、道德边界和愿意支付的代价。人物选择必须由这些力量推动，而不是服务作者方便。\n\n【反派与对立角色三零件】长篇反派与对立角色除上述欲望轴外，必须额外具备：(1) 具体且分层的核心欲望（生存层/情感层/信念层）；(2) 一条死都不碰的行为底线——这是读者共情的关键，可以为了目标算计所有人，但绝不伤害某类对象或违背某种承诺；(3) 围绕核心信念展开、前后不矛盾的信念闭环。三类经典模板：理念型（与主角的矛盾是理念之争）、悲剧型（本为好人，因命运/背叛滑向黑暗）、亦正亦邪型（看心情看利益，制造张力）。反派每次出场前自检三问：他想要什么？他不做什么？他死都要守住什么？\n\n【初始 state 必填】创建角色时必须给出完整的初始 state，作为后续章节规划与正文场景的锚点：\n- state.location：角色首次出场的具体地点，应当引用世界观中已有的 location 实体名（如\"东宫文华殿\"\"刑部仵作房\"），不可写\"未指定\"或留空。\n- state.physical：角色此刻的身体状态（疲劳 / 健康 / 受伤 / 重病 / 怀孕 / 残疾等），不可写\"未指定\"；若未明确受伤或异常，应明确写\"健康\"或\"精力充沛\"等具体状态。\n- state.emotional：角色此刻的情绪基调，用具体描述而非抽象词（如\"压抑的悲痛\"\"强压的愤怒\"\"强装的平静\"\"隐忍的警惕\"），不可写\"未指定\"或\"平静\"。\n- state.objective：角色在此状态下的即时目标（短期、可被场景兑现的目标，不是全书欲望）。\n- state.inventory：角色随身或可立即调用的关键物品（可为空数组，但不可缺失字段）。\n- state.relationshipNotes：角色此刻对其他在场角色的态度摘要（可为空数组）。\n\"未指定\"不得作为任何 state 字段的值；缺失字段会让后续章节规划无法判断人物此刻在哪里、处于什么情绪、持有何种资源。" }),
@@ -99,31 +102,101 @@ export const BUILTIN_NOVEL_SKILLS: NovelSkillManifest[] = [
   builtin({ skillId: "romance-arc-design", name: "言情感情线弧光设计", description: "从《我的26岁女房客》《我在风花雪月里等你》等青春言情提炼感情线阶段弧光、虐点设计、关系羁绊描述与言情文笔质感。", category: "long-plan", stages: ["planning", "drafting", "review", "revision"], requires: ["character-desire-engine"], priority: 65, triggers: ["感情线", "言情", "恋爱", "浪漫", "romance", "虐恋", "暧昧", "追妻"], prompt: "借鉴《我的26岁女房客》《我在风花雪月里等你》《世界上最爱我的人》等超级大坦克科比系都市言情，以及《致青春》《何以笙箫默》等优秀青春言情的感情线写法，落实以下规则：\n\n【阶段弧光模型】\n感情线不是平铺直叙的相爱到在一起，而是有明确阶段弧光：初遇 → 好感 → 暧昧 → 升温 → 误会/阻碍 → 虐点 → 和解/抉择 → 结局(HE/BE)。每个阶段必须有：一个推动进入下一阶段的事件、一个阻力来源、一次不可逆的关系认知变化。用 EntityRelation.bond 以中文描述每阶段的关系状态：初遇期萍水相逢尚无深交；好感期互生好感彼此留意；暧昧期心意未明试探拉扯；升温期情意渐浓相互依赖；误会期产生隔阂信任动摇；虐点期关系撕裂痛苦挣扎；和解期冰释前嫌重新接纳或彻底错过各自释怀。bond 描述须随情节推进而更新，不得一成不变。\n\n【双向吸引与剧情融合】\n吸引必须双向，禁止单方面舔狗。男主不能只因女主漂亮善良动心，女主不能只因男主强大护短沦陷，必须有三观契合、性格互补或彼此身上有对方缺失的光。感情线必须跟着主线剧情走，在共患难、并肩行动、日常相处中自然升温，禁止为谈恋爱暂停剧情。每个感情节点都要服务人物目标或主线冲突，禁止脱离剧情的工业糖精。\n\n【拉扯试探与阻碍】\n真正的心动来自拉扯而非一帆风顺。暧昧期核心是试探与回避：一个进半步、一个退半步，用眼神、沉默、欲言又止承载未说出口的心意。阻碍必须来自人物核心恐惧、立场冲突或外部代价（身世、阵营、责任、原生家庭），而非低级的信息不对称硬造误会。超级大坦克科比作品的虐感多来自现实苦海挣扎——人物缺陷、原生家庭、现实压力让本可相爱的人彼此伤害。\n\n【虐点设计原理】\n虐点必须有铺垫与因果，来自人物核心恐惧或立场对立的必然爆发，而非硬煽情或他不知道她没说清的低级误会。《我的26岁女房客》的意难平来自昭阳的人物缺陷与现实挣扎，《我在风花雪月里等你》的虐来自米高的卑微与叶芷的选择，《世界上最爱我的人》的痛来自余味原生家庭的拖累与爱而不得。BE 的痛感来自本可挽回却因人物必然性错过——读者要能追因到前文某个选择或缺陷，而非作者强行拆散。虐点前必须让读者看见他们本可以幸福的希望，落差越大越痛。\n\n【名场面承载】\n重逢、雨夜、告白、误会、牺牲、错过、追妻火葬场等关键场面，禁止用直抒胸臆的她很伤心他心如刀割承载。用一个动作、一个物件、一句没说完的话、一个环境意象承载情绪。《女房客》以爱情是彩色蝴蝶攥紧就褪色的意象承载全篇情感基调。雨、雪、风花雪月、旧物件、未寄出的信都是可复用的情绪载体。关键情绪留白，让读者用自身情感填补。\n\n【对白潜台词】\n言情对白的核心是言不由衷与情感试探。每句重要对白要有表面意思与真实意图两层：字面一层，意图藏在下面，读者第二遍才摸到真意。用破碎对白制造张力——欲言又止的省略号、强行打断、答非所问的心虚。配上小动作（皱眉、转身、攥紧衣角）比话语传递更多。卑微者用回避与过度客气掩饰爱意；骄傲者用讽刺与冷漠掩饰心动。禁止所有角色直白宣告我爱你，情感要泄露而非宣告。\n\n【HE/BE 一致性】\n结局类型须与前文铺垫、人物核心需求匹配。HE 必须解决人物的未承认需求（被爱、被接纳、被原谅），而非外部强行圆满或第三者助攻；人物要有真实成长或代价。BE 的痛感来自因果必然性——某个本可挽回的瞬间因人物缺陷或立场错过，读者能追因到具体选择。禁止为虐而虐的突转结局。结局要回扣开篇的情感承诺。\n\n【避免言情腔】\n警惕嘴角上扬、倒吸一口凉气、心漏跳一拍、眼眶泛红等模板化表达。每个情绪都找属于这个人物、这个场景的独特承载方式。甜不靠撒糖台词堆砌，虐不靠苦情独白硬煽。感情线的质感来自具体的、不可替换的细节。\n\n【现实考据质感】言情的质感来自现实考据，而非悬浮的偶像剧桥段。超级大坦克科比《我在风花雪月里等你》的质感来自作者真在云南开过客栈、了解无人区细节——这种现实考据让言情细节真实可信。落实以下规则：(1) 关键场景（约会地点、职业场景、旅行路线、生活细节）应基于真实地理/职业/行话考据，不得用通用模板（如“高档餐厅”“咖啡馆”“海边”）代替具体场所。(2) 每个关键场景至少包含 1-2 个只有真实去过/了解过该场景才能写出的细节（如云南客栈的火塘布局、某条徒步路线的海拔变化、某行业的黑话）。(3) 若缺乏相关考据，应在场景设计时明确标注“此场景需补充考据”，而非用模糊描写带过。(4) 考据细节应服务情感推进，不得为考据而考据——写云南客栈不只是写客栈，而是让客栈的某个细节（如火塘边的位置安排）推动人物关系。", qualityChecks: ["感情线是否覆盖明确阶段弧光，每阶段有推进事件与不可逆变化", "吸引是否双向且有内在动因，避免单方面舔狗", "虐点是否有铺垫因果，而非低级信息不对称硬造误会", "bond 关系描述是否随情节推进更新而非一成不变", "关键情感是否用行动/物件/意象承载而非直抒胸臆", "对白是否有表面与真实两层意图，避免直白宣告", "结局(HE/BE)是否与人物核心需求及前文铺垫因果一致", "是否避免了嘴角上扬等模板化言情腔", "关键场景是否基于真实考据而非通用模板", "每个关键场景是否有 1-2 个只有真实去过才能写出的细节"] }),
   builtin({ skillId: "imagery-aesthetics", name: "意象美学", description: "以意象系统、虚实相生、情景交融、留白艺术、声韵节奏构建中文意境美，约束 LLM 生成有文学质感的正文。", category: "drafting", stages: ["drafting", "revision"], priority: 75, prompt: "本 skill 是正文意境美的核心约束。生成正文时必须落实以下规则：\n\n【核心意象系统】每部作品须建立 3-5 个贯穿全书的核心意象。核心意象不是随机景物，而是承载主题与人物命运的符号。选择标准：能在不同场景呈现不同状态（如雪可以是初雪/暴雪/残雪），能随人物成长改变含义（如“剑”从凶器变为担当再变为放下）。开篇场景必须首次呈现至少一个核心意象，此后每章至少触及一次。\n\n【场景意象绑定】每个场景须有一个环境意象与视角人物此刻心境形成呼应或反差。呼应：人物内心混乱时，场景意象也混乱（如人群嘈杂、灯火摇晃）。反差：人物内心悲凉时，场景意象却温暖（如邻桌的笑声、灶上的热气），反差比直说更有力。禁止环境描写与人物情绪无关。\n\n【虚实相生】实写人物的行动、对话、感官；虚写人物的心境、命运、主题。实写可被读者“看见”，虚写可被读者“感受”。一段文字中，实写是骨架，虚写是气韵。禁止全实写（变成流水账）或全虚写（变成散文诗）。关键情绪场景的比例：七分实写（动作/对话/感官），三分虚写（意象/留白/暗示）。\n\n【留白艺术】关键情绪不可说透，须用以下留白手法之一承载：\n- 一个反常动作（他放下碗，没有喝那口热汤）\n- 一个被反复触碰的物件（她第三次整理那件没褶的衣裳）\n- 一句没说完的话（“我只是……”他没有说下去）\n- 一个环境意象的突变（风停了，灯却灭了）\n- 一段沉默（他看了她很久，什么也没说）\n留白处让读者用自身情感填补。禁止在留白后补一句解释（“他知道，这意味着……”是破坏留白）。\n\n【感官通感】每个场景至少调动两种感官。除视觉外，须有听觉、嗅觉、触觉或温度感之一。通感（感官交错）可用于意境高点：如“冷香”（触觉+嗅觉）、“暖色压下来”（视觉+触觉）。禁止感官描写沦为罗列（“他看见了X，听见了Y，闻到了Z”是清单，不是意境）——感官必须融入行动与情绪。\n\n【白描承重】最重的情绪用最简的白描承载。禁止用华丽辞藻堆砌情绪高点。越是重要时刻，越要克制形容词。一个准确的白描动作（如“他把手缩回袖子里”）比十个形容词更有力。\n\n【器物隐喻系统】器物是人物延伸，不只是道具。猫腻《庆余年》的范式：范闲的菜刀折射暴力工具的双重性（厨房切菜与战场杀人是同一把刀），五竹的铁钎代表未经修饰的原始力量，监察院黑骑盔甲的反光暗示权力镜像效应。落实以下规则：(1) 每个主要角色可绑定 1-2 件标志性器物（武器/工具/饰物/日常物件），器物应能折射人物身份、信念或命运。(2) 器物在不同场景中呈现不同状态——状态变化暗示人物处境转变（如刀从磨得锋利到卷刃，暗示人物从斗志昂扬到疲惫妥协）。(3) 器物不得只作装饰，必须至少参与一次行动或一次抉择瞬间（如关键抉择时人物摩挲剑柄、攥紧玉佩、放下茶碗）。(4) 禁止用器物直接宣告象征意义（如“这把刀象征着…”“这枚玉佩代表着…”），让器物的功能与处境自然承载隐喻——读者应通过器物被如何使用来体会其意味，而非被作者点破。", qualityChecks: ["开篇是否首次呈现核心意象", "每场景是否有意象与人物心境呼应或反差", "关键情绪是否用留白手法而非直说", "每场景是否调动两种以上感官", "情绪高点是否用白描而非华丽辞藻", "留白后是否避免了破坏性解释", "主要角色是否绑定标志性器物且参与行动", "器物状态变化是否暗示人物处境转变", "器物是否避免直接宣告象征意义"] }),
   builtin({ skillId: "prose-discipline", name: "文笔纪律", description: "防治强调词贬值、金句过密、作者旁白、结构重复等通用文风通病。", category: "drafting", stages: ["drafting", "review"], priority: 80, prompt: "检查强调词、格言式收尾、作者解释、人物语言越界和结构重复。生成时优先使用具体叙事；审校时依据正文证据报告问题，不把审校术语写进正文。", qualityChecks: ["强调词是否控制在每章 2 次以内", "金句式收尾是否控制在每章 2 处以内", "叙述者是否隐身，未直接宣告主题或内心", "配角对白是否未越界，无作者传声筒", "全章是否只回答一个问题，无主题重复推进"] }),
+  builtin({ skillId: "plot-segment-design", name: "剧情段与章节编排", description: "为剧情段（OutlineNode）及其下章节提供专属编排指导：四功能呼吸、张力曲线、伏笔埋设、文学化转折点、支线反哺、信息密度分层。", category: "long-plan", stages: ["planning"], priority: 180, prompt: "本 skill 指导\"剧情段+章节\"的规划设计。一个剧情段（OutlineNode）是幕下的中间层级，由 3-4 个章节组成，是长篇节奏的基本呼吸单元。设计时落实以下规则：\n\n【剧情段是呼吸单元，不是事件清单】\n一个剧情段必须形成完整的\"阻力—推进—回报\"张力曲线，不是把一个大事件切成 N 章。雪中\"温华断臂\"剧情段跨多章铺垫日常，回收瞬间爆发情感；剑来\"山崖书院\"剧情段跨数章建立陈平安的规矩观，再让规矩遭遇挑战。设计时先回答：本剧情段的阻力是什么、推进在哪几章累积、回报由哪条伏笔或人物选择兑现。回报必须来自前文铺陈，不得突降外挂。\n\n【四功能呼吸】\n剧情段内部章节必须覆盖至少三种节奏功能：\n- 行动章（承担行动推进、爆发冲突）\n- 余波章（消化后果、深化人物关系）\n- 蓄势章（积累压力、埋设线索、深化世界）\n- 兑现章（伏笔回收、阶段转折）\n全部章节都是行动章或都是兑现章属于节奏问题——连续高强度让读者疲惫，连续低强度让读者失去期待。建议在生成时显式标注每章的节奏功能，便于后续校验。安静章节可以承担建立常态、人物相处、背景展开、情感发酵、意象生长——只要改变读者对当下的理解或感受，就具有叙事价值。\n\n【章节切分边界】\n每章必须有独立可读的叙事功能，不把一个完整事件切到两章。判断标准：单读这一章能否感受到\"开始—发展—落点\"的完整呼吸？若不能，则切分违规。章尾必须停在揪心瞬间或未解压力，不停在事件中途。\n\n【伏笔的延迟回收】\n每个剧情段建议至少埋设 1 个延迟回收伏笔，以日常细节形态存在（如雪中温华的木剑、剑来陈平安的草鞋），不自我标榜。伏笔可在此剧情段内回收，也可延迟到后续剧情段或幕回收。\n\n【文学化转折点】\n若本剧情段涉及阶段转折（phase.turningPoint 的兑现），转折点必须用文学化定格书写——写处境的不可逆与人物心境的回不去，不得用\"X 发现 Y\"\"X 获得 Z 机会\"等编剧指令腔。判断标准：删除该句后，读者仍能从字里行间感受到不可逆变化。\n\n【支线反哺】\n若本剧情段含支线推进，必须回答反哺三问中至少一问：(1) 它如何改变了主线人物的选择？(2) 它如何改变了主线人物的认知或信念？(3) 它如何为主线提供了关键资源、秘密或盟友？支线不得只通过\"同时发生\"与主线关联，必须通过因果链关联。\n\n【信息密度分层】\n- 引子/铺陈/余波章：每章 2-3 个新信息节点\n- 行动/蓄势章：每章 3-4 个新信息节点\n- 兑现章：可承载较多回收，但每个回收必须有前文铺陈支撑\n不得连续抛出多个发现而不给读者停留空间。\n\n【参考作品剧情段范例】\n- 雪中\"徐凤年第一次游历\"剧情段：3 章蓄势（徐凤年伪装穷酸）+ 1 章爆发（江湖追杀）+ 余波（回家面对父亲）——四功能完整，伏笔（春雷剑）以日常形态埋设\n- 剑来\"陈平安护送李槐\"剧情段：跨多章建立陈平安的\"穷且规矩\"形象，再让规矩遭遇宁姚的挑战——蓄势+行动+余波\n- 庆余年\"范闲进京\"剧情段：铺陈（京城局势）+ 行动（诗会扬名）+ 兑现（揭示身世一角）+ 余波（与父亲对话）——四功能完整，伏笔（五竹铁钎）贯穿始终", qualityChecks: ["剧情段是否覆盖至少三种节奏功能（行动/余波/蓄势/兑现）", "每章是否有独立可读的叙事功能", "剧情段是否形成阻力—推进—回报张力曲线", "是否至少埋设 1 个延迟回收伏笔且以日常形态存在", "转折点是否用文学化定格而非编剧指令腔", "支线是否回答反哺三问中至少一问", "信息密度是否匹配章节功能"] }),
+  builtin({ skillId: "plot-segment-audit", name: "剧情段设计审核", description: "审核剧情段（OutlineNode）+ 其下章节（Document 列表）的设计质量：节奏多样性、因果链、张力曲线、伏笔埋设、长篇余量、文学化转折点、章节切分、支线反哺。基于网文经验与项目语境做弹性判断。", category: "review", stages: ["review"], priority: 170, prompt: "本 skill 审核剧情段（OutlineNode）+ 其下章节（Document 列表）的设计质量。审核时基于网文经验（参考烽火/猫腻/超级大坦克科比等）与具体项目语境做弹性判断，不机械套用规则。发现问题就报，没问题的方面不必报告，避免凑数。\n\n【审核关注点】\n\n1. 节奏多样性\n剧情段内部章节是否覆盖多种节奏功能（行动/余波/蓄势/兑现的呼吸组合）。参考：连续两章以上同一功能可能影响阅读体验，但若每章都有独立的叙事价值，不算问题。请结合剧情段定位判断。\n\n2. 因果链完整性\n章节之间是否有因果连接（每章至少一个 cause 或 consequence 指向段内其他章），形成因果网络而非孤立事件清单。参考：删除某章后其他章仍能成立，可能意味着该章与剧情段关联薄弱。\n\n3. 张力曲线\n剧情段是否形成可辨识的张力曲线（如\"阻力—推进—回报\"或\"压抑—反压—释放\"）。参考：回报应有前文铺陈支撑，突降外挂会削弱读者体验。\n\n4. 伏笔埋设\n剧情段是否埋设了延迟回收的伏笔（以日常细节形态存在）。参考：伏笔\"埋得自然、提得克制、收得有力\"是网文核心质感之一，但若剧情段定位是纯行动推进，可不强制要求。\n\n5. 长篇余量\n剧情段是否提前消费了后续阶段的关键转折、真相揭示、关系跃迁。这是较严重的问题——长篇的张力来自延迟兑现，提前消费会损害后续章节空间。\n\n6. 文学化转折点\n若剧情段涉及阶段转折，转折点是否用文学化定格书写（写处境的不可逆与心境的回不去）。参考：编剧指令腔（\"X 发现 Y\"\"X 获得 Z\"）会降低文学质感。\n\n7. 章节切分合理性\n每章是否有独立可读的叙事功能（单读这一章能否感受到\"开始—发展—落点\"的完整呼吸）。参考：把一个完整事件切到两章通常影响阅读节奏。\n\n8. 支线反哺（若适用）\n若剧情段含支线推进，支线是否回答反哺三问中至少一问（改变主线人物的选择/认知/提供关键资源）。参考：支线只通过\"同时发生\"与主线关联通常意味着关联薄弱。\n\n【审核边界】\n- 不要把\"剧情段只有 2 章\"本身判为问题（低强度过渡剧情段允许 2 章）\n- 不要把安静章节本身判为问题（只要它深化了读者对人物或世界的理解）\n- 不要把\"没有伏笔\"本身判为问题（取决于剧情段定位）\n- 不要把审美偏好当矛盾\n\n【审核输出要求】\n- 每个 issue 必须引用具体章节标题或字段作为证据\n- severity 由你基于问题影响和具体语境判断：blocker（严重破坏长篇结构/事实边界/读者体验）、major（明显影响阅读体验或剧情段质量）、warning（轻微问题或改进建议）\n- dimension 由你判断该 issue 属于哪个质量维度（plot/characterVoice/sceneEmbodiment/dialogue/specificity/hookPayoff/continuity）\n- 必须给出具体修订建议\n- 没问题的方面不必报告，避免凑数", qualityChecks: ["节奏功能是否多样", "章节间是否有因果连接", "张力曲线是否可辨识", "伏笔是否以日常形态埋设", "是否避免提前消费后续阶段节点", "转折点是否文学化", "每章是否有独立叙事功能", "支线是否反哺主线"] }),
+  builtin({ skillId: "blueprint-audit", name: "章节蓝图审核", description: "审核章节蓝图（ChapterBlueprint）的设计质量：主导功能、节拍必要性、POV 一致性、兑现边界、endingHook 开放性、信息密度、长篇余量、上下文呼应。基于网文经验与项目语境做弹性判断。", category: "review", stages: ["review"], priority: 170, prompt: "本 skill 审核章节蓝图（ChapterBlueprint）的设计质量。审核时基于网文经验（参考烽火/猫腻/超级大坦克科比等）与具体项目语境做弹性判断，不机械套用规则。发现问题就报，没问题的方面不必报告，避免凑数。\n\n【审核关注点】\n\n1. 主导功能清晰度\n本章是否有清晰的主导叙事功能（建立常态/深化人物/积累压力/埋设线索/承担行动/呈现余波/阶段兑现）。参考：同时承担多种功能可能导致焦点分散，但若功能自然融合则不算问题。\n\n2. 节拍必要性与因果连续\nbeats 数量是否合理（通常 2-8 个），相邻节拍是否有时间/注意力/因果连续。参考：删除某节拍后前后仍能成立，可能意味着该节拍是凑数；节拍跳跃断裂可能影响阅读流畅。\n\n3. POV 一致性（语义层判断）\n单 POV 章节的 mustHappen 是否避免非 POV 角色内心活动。机械规则只能识别明确模式（\"X 意识到\"等），本审核做语义判断：哪怕措辞改写为\"X 的眼神变得凝重\"，若实质是替非 POV 角色内心下结论，仍可能是问题。建议改写为 POV 可观察的外部行为。但也请结合场景判断——若该内心活动通过 POV 角色可观察的外部线索合理推断，可不算违规。\n\n4. 兑现边界\nmustHappen 是否只容纳本章兑现窗口的内容；forbidden 是否保护尚需铺垫的后续材料（秘密真相、关系跃迁、伏笔回收、后续大纲节点）。这是较重要的边界——提前兑现会损害长篇结构。\n\n5. endingHook 开放性\nendingHook 是否携带未解信息或新压力，而非封闭画面。参考：读者读完章尾后是否想翻下一章？五种开放形态可参考：未完成动作、关系裂痕、未说出口的话、日常细节反常、环境变化暗示新力量。但开放形态不限于这五种，请结合具体语境判断。\n\n6. 信息密度匹配\n根据章节功能核对信息密度是否合理：引子/铺陈/余波章通常 2-3 个新信息节点，行动/蓄势章通常 3-4 个，兑现章可承载较多回收。mustHappen 中\"发现/察觉/意识到\"类节点都算新信息节点。参考：超出上限不一定违规，取决于节点展开是否充分。\n\n7. 长篇余量\n是否为凑结构强造选择、代价、转折或钩子。参考：beats 中的转折应来自前文铺陈，突降无铺垫的转折通常影响质感。\n\n8. 上下文呼应\n与相邻章节是否形成张弛差异，是否衔接上一章未解压力。参考：连续两章同一功能可能影响节奏，但若功能有差异化展开则不算问题。\n\n【网文经验锚点】\n- 雪中徐凤年章节蓝图：每章主导功能清晰（如\"龙虎山问道\"是行动章，\"老黄离世后独饮\"是余波章），章尾钩子用未说出口的话承载\n- 剑来陈平安章节蓝图：蓄势章承担\"陈平安守规矩\"的日常细节积累，章尾用日常细节反常（如\"邻居家灯笼少了一盏\"）暗示新压力\n- 庆余年范闲章节蓝图：兑现章每个回收都有前文铺陈支撑（诗会扬名→揭示身世→与父亲对话），不空降\n\n【审核边界】\n- 不要把安静章节或余韵章本身判为问题\n- 不要把 mustHappen 为空本身判为问题（信息密度匹配的余波章允许）\n- 不要把审美偏好当矛盾\n\n【审核输出要求】\n- 每个 issue 必须引用具体字段（objective/beats[N]/mustHappen[N]/endingHook）作为证据\n- severity 由你基于问题影响和具体语境判断：blocker（严重破坏长篇结构/事实边界/POV 严重越界）、major（明显影响阅读体验或蓝图质量）、warning（轻微问题或改进建议）\n- 必须给出具体修订建议\n- 没问题的方面不必报告，避免凑数", qualityChecks: ["本章是否有清晰主导叙事功能", "beats 是否合理且节拍因果连续", "单 POV 章节是否避免非 POV 角色内心活动（语义层）", "mustHappen 是否只容纳本章兑现窗口内容", "endingHook 是否开放且携带未解信息", "信息密度是否匹配章节功能", "是否避免强造转折或钩子", "是否与相邻章节形成张弛差异"] }),
+  builtin({ skillId: "prose-audit", name: "正文元审核", description: "正文的元审核与综合审核：直接审 draft 正文，同时参考 4 个 reviewer 报告，做综合判断、遗漏检测、误判检测、报告一致性检查。参考烽火/猫腻/超级大坦克科比经验判断整体质感。基于具体语境弹性判断。", category: "review", stages: ["review"], priority: 175, prompt: "本 skill 是正文的元审核与综合审核。它直接审 draft 正文，同时参考 4 个 reviewer（style/character/continuity/plot）的报告，做综合判断、遗漏检测、误判检测、报告一致性检查。审核时基于网文经验（参考烽火/猫腻/超级大坦克科比等）与具体项目语境做弹性判断，不机械套用规则。发现问题就报，没问题的方面不必报告，避免凑数。\n\n【元审核关注点】\n\n1. 报告一致性\n4 个 reviewer 之间是否有矛盾判断（同一处一个判 blocker 一个判 warning，或同一问题给出冲突的修订建议）。若发现矛盾，给出综合判断。\n\n2. 遗漏检测\nreviewer 可能漏掉以下类型的问题，本审核应基于网文经验主动补报：\n- 网文腔（模板化表达如\"恐怖如斯\"\"倒吸一口凉气\"\"嘴角上扬\"等）\n- 情绪直说（\"他很悲伤/愤怒/高兴/害怕/孤独\"等直接宣告）\n- 意象滥用（同一意象连续出现无新信息或新功能）\n- 作者宣告（叙述者直接宣告主题、人物内心或世界规则）\n- 解释性总结（\"这意味着……\"\"他知道……\"\"他意识到……\"等替读者归纳）\n- POV 越界（替视角人物总结他人心理或群体关系状态）\n但请基于具体语境判断：某些情况下\"他意识到\"等表达可能合规（如视角人物的合理推断），不要机械判错。\n\n3. 误判检测\nreviewer 可能把以下情况误判为问题，本审核应纠正：\n- 把安静/铺陈/内省/留白结尾本身判为节奏问题\n- 把意象收束本身判为问题（只要意象携带未解信息或新状态就合规）\n- 把对白潜台词判为信息不清晰（潜台词本就该有两层意图）\n- 把非线性时间叙述判为连续性问题（只要前文有铺垫就合规）\n\n【综合审核关注点】\n\n4. 主导功能落实度\n通读全章，判断蓝图规定的主导叙事功能是否真正落实。参考：\n- 行动章：是否有具体阻力—推进—回报曲线？\n- 余波章：是否深化了读者对人物或世界的理解？\n- 蓄势章：是否积累了可识别的压力或埋设了伏笔？\n- 兑现章：每个回收是否有前文铺陈支撑？\n\n5. 整体质感（参考网文经验）\n参考烽火/猫腻/超级大坦克科比等顶尖网文经验，判断正文质感。关注：\n- 画面感公式（动作+停顿+环境反应+时间流逝+心境外化）是否在关键瞬间应用？\n- 双声部语体（朝堂典雅/市井鲜活）是否按场景切换？\n- 器物是否参与抉择瞬间且状态变化暗示处境？\n- 留白手法（反常动作/被反复触碰的物件/没说完的话/环境意象突变/沉默）是否在关键情绪应用？\n- 意象是否每次出现呈现新状态而非重复氛围？\n- 对白去掉名字后是否仍能区分说话人身份？\n但请基于具体题材和项目风格判断，不机械套用所有维度——例如某些维度在轻小说或快节奏网文中不适用。\n\n6. 长篇余量保留度\n检查正文是否提前消费后续大纲节点：\n- 是否揭示了 forbidden 中的秘密真相？\n- 是否兑现了尚需铺垫的关系跃迁？\n- 是否回收了未到回收条件的伏笔？\n- 是否在章尾另造第二套事件或第二个结尾？\n这是较严重的问题，会损害长篇结构。\n\n7. 章尾钩子开放性\n章尾是否停在揪心瞬间或未解压力？是否携带未解信息或新压力？是否避免封闭画面？是否避免\"意象回声尾句\"（最后节拍已完成后另起一句回扣意象的封闭句）。\n\n8. 章节结构完整性\n全章是否只有一个开场和一个结尾？是否有\"中后段重新开场\"或\"第二组事件重复推进\"？是否有重复段。\n\n【审核边界】\n- 不要把安静章节本身判为问题\n- 不要把意象收束本身判为问题（只要携带未解信息就合规）\n- 不要把审美偏好当矛盾\n\n【审核输出要求】\n- 每个 issue 必须引用具体段落编号（如【第N段】）或原文片段作为证据\n- severity 由你基于问题影响和具体语境判断：blocker（严重破坏长篇结构/事实边界/POV 严重越界/重复段）、major（明显影响阅读体验或正文质感）、warning（reviewer 矛盾/信息密度偏高/节奏建议）\n- dimension 由你判断该 issue 属于哪个质量维度（plot/characterVoice/sceneEmbodiment/dialogue/specificity/hookPayoff/continuity）\n- 必须给出具体修订建议\n- origin 字段标注来源：new（本审核新增）/ upgrade（升级 reviewer 判断）/ downgrade（降级 reviewer 判断）；默认 new\n- 没问题的方面不必报告，避免凑数\n\n【与 4 个 reviewer 的关系】\n本审核不替代 4 个 reviewer，而是在其之上做元审核与综合判断。reviewer 负责局部维度（style/character/continuity/plot），本审核负责：\n- 整章综合判断（主导功能落实度、整体质感）\n- 遗漏检测（reviewer 漏掉的网文腔/情绪直说等）\n- 误判检测（reviewer 把安静章节误判为节奏问题等）\n- 报告一致性（reviewer 之间的矛盾判断）\n本审核的 issue 进入 quality report 的聚合流程，与 reviewer issue 一起参与去重与升级。", qualityChecks: ["reviewer 报告之间是否有矛盾判断", "是否补报了 reviewer 漏掉的网文腔/情绪直说/意象滥用/作者宣告", "是否纠正了 reviewer 的误判（如把安静章节判为节奏问题）", "主导功能是否真正落实", "整体质感是否达到顶尖网文水准", "是否避免提前消费后续大纲节点", "章尾是否开放且无回声尾句", "全章是否只有一个开场和一个结尾"] }),
 ];
 
-const PROFILE_SKILLS: Record<string, string[]> = {
-  "general-serial": ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "character-voice-matrix", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction", "classic-character-ensemble", "classic-narrative-tension", "classic-prose-texture", "imagery-aesthetics", "prose-discipline"],
-  progression: ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "plot-pacing-audit", "fact-delta-extraction", "classic-character-ensemble", "classic-narrative-tension", "classic-prose-texture", "imagery-aesthetics", "prose-discipline"],
-  emotional: ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "character-voice-matrix", "hierarchical-outline", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "fact-delta-extraction", "classic-character-ensemble", "classic-narrative-tension", "classic-prose-texture", "romance-arc-design", "imagery-aesthetics", "prose-discipline"],
+// These portable contracts supersede legacy example-heavy text above. Examples may help
+// research, but executable Skill behavior must be genre-neutral, evidence-based and versionable.
+const PORTABLE_SKILL_PROMPT_OVERRIDES: Record<string, { description?: string; prompt: string; qualityChecks: string[] }> = {
+  "premise-pressure-test": { prompt: "检验核心创意能否持续产生人物主动目标、现实阻力、选择代价、关系变化和题材承诺。扩展空间应来自机制可组合、人物会变化且后果能累积，而不是预设固定升级次数。短篇、单元剧、群像和实验结构按自身承诺判断。", qualityChecks: ["核心创意是否能持续生成有差异的处境", "扩展是否来自人物与机制而非重复升级"] },
+  "character-desire-engine": { prompt: "根据人物处境建立外在欲望、内在需求、恐惧、错误信念、边界、资源与代价之间的动态关系。字段只在有项目证据或创作必要时采用，不把人物压进固定原型。对立角色也应具有自洽目标、可理解边界和独立行动能力。初始状态必须具体到可进入场景，但允许不确定性明确留空并在后续补证。", qualityChecks: ["人物选择是否由自身处境与欲望推动", "代价是否改变后续选择空间", "对立角色是否具有独立行动逻辑"] },
+  "hierarchical-outline": { prompt: "按全书阶段、剧情段与章节逐层分配材料。每一层说明它改变的处境、人物关系、读者认知与后续可能性；下层不重复上层摘要，也不把未来节点提前压进当前层。层级数量、段落长度和转折形态由作品规模、题材与叙事结构决定。", qualityChecks: ["上下层是否具有清晰职责", "当前层是否保留后续展开空间", "阶段变化是否产生可追踪后果"] },
+  "causal-thread-weaving": { prompt: "重要推进应能追溯触发条件、人物行动、阻碍、直接结果与延迟后果。主线和支线通过人物、资源、秘密、关系或价值选择相互改变；支线可以提供对照、世界厚度或情感回声，不必机械服务主线，但必须在作品整体中产生可辨识影响。", qualityChecks: ["推进是否有可追溯因果", "支线是否产生独立且可辨识的影响", "后果是否进入后续状态"] },
+  "foreshadowing-ledger": { prompt: "伏笔记录读者可见线索、角色可知范围、可能误读、提醒条件、揭示条件和回收影响。埋设、提醒和回收的距离与显著度由题材、公平性和阅读节奏决定；伏笔不是每个单元的必填项，也不得以作者预告代替现场证据。", qualityChecks: ["线索与角色知识边界是否清楚", "回收是否有前文证据", "伏笔是否适合当前题材与篇幅"] },
+  "chapter-blueprint": { prompt: "先判断本章不可替代的主导功能、精确起点、允许兑现的材料和需要保护的后续空间，再设计足以完成该功能的节拍。节拍数量、冲突强度、信息释放和章尾形态由具体章节决定；背景、生活、内心、关系、行动、余波和意象都可承担有效节拍。单视角内容不得越过角色可观察、可推断或可被告知的知识边界。", qualityChecks: ["本章是否有不可替代的功能", "节拍是否必要且连续", "是否遵守兑现与知识边界"] },
+  "embodied-prose": { description: "按视角与场景选择行动、感官、对白和内心叙述的表达方式。", prompt: "在行动、感官、环境、对白、自由间接引语与必要的内心叙述之间选择最适合当前视角的表达。抽象判断应有场景证据，但不强制把所有心理改写成动作。关键瞬间的篇幅和表现手段由其叙事重量决定；细节必须具体、有效并符合人物注意力。", qualityChecks: ["叙述手段是否适合当前视角与场景", "认知变化是否有可见或可推断依据", "细节是否具体且具有功能"] },
+  "serial-rhythm": { description: "根据连续章节的功能与因果，组织蓄势、行动、回报和余波。", prompt: "在连续章节中分配建立、停留、蓄势、行动、回报和余波，使阅读期待来自未完成的因果、人物关系和意义变化。钩子数量、位置、强度和结尾开放度没有固定公式；安静或阶段闭合的章节同样可以成立，只要完成自身功能并让长线仍有真实动力。", qualityChecks: ["连续章节是否有功能与强度变化", "回报是否来自铺垫和人物行动", "章尾是否适合本章而非重复模板"] },
+  "plot-segment-design": { description: "按因果跨度、视角、体验空间和篇幅组织剧情段及章节。", prompt: "剧情段是承担一个中程变化的组织单元。章节数量与功能组合由因果跨度、视角转换、体验展开、篇幅预算和回报位置决定。每章应有独立职责，段内状态能够累积并产生后果；不强制覆盖预设功能、伏笔数量、信息密度或张力曲线。", qualityChecks: ["章节数量是否由材料需要决定", "各章是否有独立职责", "段内状态是否连续并产生后果"] },
+  "plot-segment-audit": { description: "按实际目标审核剧情段的因果、人物、节奏、余量与后续影响。", prompt: "依据剧情段目标和实际章节审核因果连续、人物主体性、功能分配、体验空间、节奏变化、长篇余量与后续影响。不得以固定章节数、功能组合、伏笔数量或张力曲线作为合格条件；只报告有具体字段证据且会损害作品承诺的问题。", qualityChecks: ["因果与状态是否连续", "章节功能是否与材料匹配", "是否保留长篇余量"] },
+  "blueprint-audit": { description: "按章节功能和项目证据审核蓝图，不套用固定节拍或章尾公式。", prompt: "依据本章实际功能、项目风格、人物状态、前后因果、知识边界和长篇余量审核蓝图。节拍数量、信息密度、冲突强度与章尾形态没有固定公式。问题必须引用具体字段，说明它如何造成因果断裂、人物失真、体验不足、提前透支或后续动力缺失。", qualityChecks: ["主导功能是否成立", "节拍是否必要且连续", "是否遵守视角与兑现边界", "结构选择是否适合当前章节"] },
+  "prose-audit": { description: "综合核对正文及多角色审核报告的证据、遗漏、误判与冲突。", prompt: "直接核对正文与各局部审核报告，检查遗漏、误判和互相冲突的建议。整体权衡剧情因果、人物主体性与声音、现场体验、语言准确性、意象功能、章节功能和长篇余量。不得套用特定作者、题材、句式、感官数量或章尾公式；每个问题必须引用正文证据，并说明修订对其他维度的风险。", qualityChecks: ["审核结论是否有正文证据", "是否识别局部报告的误判与冲突", "修订建议是否兼顾整体质量"] },
+  "romance-arc-design": { description: "依据双方选择、边界、共同经历与现实代价设计感情线。", prompt: "感情线由人物需求、边界、信任、误读、共同经历与现实代价推动。关系阶段和推进速度由人物与题材决定，不套固定相遇、暧昧、决裂或复合模板。亲密变化必须有双方可追溯的选择和后果，并保留各自独立生活与目标。", qualityChecks: ["关系变化是否来自双方选择", "亲密与冲突是否有具体积累", "人物是否保有独立目标"] },
+  "classic-character-ensemble": { description: "提炼群像人物的独立欲望、关系生态、差异化声音与长期变化。", prompt: "构建能够脱离主角独立运转的群像：重要人物拥有自己的欲望、边界、资源、关系和代价，并能主动改变局势。人物辨识度来自其注意力、决策、动作、语言与回避方式的稳定差异；登场方式服从场景，不套固定动作或对白公式。人物弧光必须由连续选择和后果积累，并允许矛盾、沉默和内心叙述共同呈现复杂性。", qualityChecks: ["重要人物是否具有独立行动逻辑", "人物声音与决策是否可区分", "关系变化是否由连续事件和选择推动"] },
+  "classic-narrative-tension": { description: "提炼多尺度期待、延迟回报、阶段变化与支线联动的通用机制。", prompt: "根据作品体量和类型管理短期、中期与长线期待。悬念、伏笔、回报和阶段变化只有在服务人物选择与因果推进时才采用，其数量、距离和显著度不设固定配额。回报应改变人物处境或读者理解，阶段转折应产生可追踪的后果；支线可通过人物、资源、秘密、关系或主题对照影响作品整体，不要求机械反哺单一主线。", qualityChecks: ["期待是否来自真实未完成因果", "回报是否改变处境或理解", "阶段与支线影响是否进入后续状态"] },
+  "classic-prose-texture": { description: "提炼视角一致、语言准确、意象有功能且人物声音可辨的文笔机制。", prompt: "语言风格由题材、视角人物、时代语境和场景功能共同决定。具体细节、内心叙述、动作、对白、留白与意象都是可选手段，不设感官数量、句式切换或情绪外化公式。意象每次出现应提供新的状态或意义；对白应体现人物当下意图与语言习惯；重要情绪允许直陈、间接呈现或两者结合，但必须准确、克制且有上下文依据。", qualityChecks: ["语言是否符合视角、人物与场景", "细节和意象是否产生新信息或意义", "情绪表达是否准确而非模板化"] },
+  "imagery-aesthetics": { description: "让意象、环境和语言节奏服务视角、人物处境与作品主题。", prompt: "依据题材、视角和场景功能选择环境细节、意象、留白、修辞与句式节奏。意象应参与人物注意、选择或意义变化，而不是装饰；重复意象需要呈现新状态或新关系。不得强制感官数量、意象配额、固定声部或特定作者风格，审美强度应与情节重量和项目风格匹配。", qualityChecks: ["意象是否服务人物、场景或主题", "重复意象是否发生意义变化", "语言审美是否符合项目风格"] },
 };
+for (const skill of BUILTIN_NOVEL_SKILLS) {
+  const override = PORTABLE_SKILL_PROMPT_OVERRIDES[skill.skillId];
+  if (override) Object.assign(skill, override);
+}
+
+const PROFILE_SKILLS: Record<string, string[]> = {
+  "general-serial": ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "character-voice-matrix", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction", "imagery-aesthetics", "prose-discipline"],
+  progression: ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "world-rule-contract", "hierarchical-outline", "causal-thread-weaving", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "plot-pacing-audit", "fact-delta-extraction", "imagery-aesthetics", "prose-discipline"],
+  emotional: ["story-facts-invariant", "premise-pressure-test", "character-desire-engine", "character-voice-matrix", "hierarchical-outline", "foreshadowing-ledger", "chapter-blueprint", "scene-action-reaction", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "fact-delta-extraction", "romance-arc-design", "imagery-aesthetics", "prose-discipline"],
+};
+for (const profile of Object.values(PROFILE_SKILLS)) profile.unshift("long-form-master-craft");
 
 export interface ResolvedSkillSet {
   skills: NovelSkillManifest[];
   conflicts: Array<{ skillId: string; conflictsWith: string }>;
 }
 
-export async function listAvailableSkills(projectId: string, db: NovelDatabase = novelDb) {
+export function compareSemanticVersions(left: string, right: string): number {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    const delta = (a[index] ?? 0) - (b[index] ?? 0);
+    if (delta) return delta;
+  }
+  return 0;
+}
+
+export function nextPatchVersion(version: string): string {
+  const [major = 1, minor = 0, patch = 0] = version.split(".").map(Number);
+  return `${major}.${minor}.${patch + 1}`;
+}
+
+export async function listSkillVersions(projectId: string, db: NovelDatabase = novelDb) {
   const custom = await db.skills.where("projectId").anyOf("__user__", projectId).toArray();
   return [...BUILTIN_NOVEL_SKILLS, ...custom];
+}
+
+export async function listAvailableSkills(projectId: string, db: NovelDatabase = novelDb) {
+  const [versions, bindings] = await Promise.all([
+    listSkillVersions(projectId, db),
+    db.projectSkills.where("projectId").equals(projectId).toArray(),
+  ]);
+  const bindingMap = new Map(bindings.map((binding) => [binding.skillId, binding]));
+  const grouped = new Map<string, NovelSkillManifest[]>();
+  for (const skill of versions) grouped.set(skill.skillId, [...(grouped.get(skill.skillId) ?? []), skill]);
+  return [...grouped.values()].map((candidates) => {
+    const binding = bindingMap.get(candidates[0].skillId);
+    const active = binding?.activeVersion ? candidates.find((skill) => skill.version === binding.activeVersion) : undefined;
+    if (active) return active;
+    return [...candidates].sort((left, right) => {
+      const sourceRank = (skill: NovelSkillManifest) => skill.projectId === projectId ? 3 : skill.projectId === "__user__" ? 2 : 1;
+      return sourceRank(right) - sourceRank(left) || compareSemanticVersions(right.version, left.version) || right.updatedAt - left.updatedAt;
+    })[0];
+  });
+}
+
+export async function getEffectiveSkill(projectId: string, skillId: string, db: NovelDatabase = novelDb) {
+  return (await listAvailableSkills(projectId, db)).find((skill) => skill.skillId === skillId);
 }
 
 export async function resolveNovelSkills(params: { projectId: string; stage: NovelSkillStage; explicitSkillIds?: string[]; db?: NovelDatabase }): Promise<ResolvedSkillSet> {
   const db = params.db ?? novelDb;
   const project = await db.projects.get(params.projectId);
   if (!project) throw new Error("项目不存在");
-  const [available, bindings] = await Promise.all([
+  const [available, bindings, promptTemplates] = await Promise.all([
     listAvailableSkills(params.projectId, db),
     db.projectSkills.where("projectId").equals(params.projectId).toArray(),
+    listPromptTemplates(params.projectId, db),
   ]);
   const bindingMap = new Map(bindings.map((item) => [item.skillId, item]));
   const selected = new Set(PROFILE_SKILLS[project.settings.contentProfile] ?? PROFILE_SKILLS["general-serial"]);
@@ -148,7 +221,24 @@ export async function resolveNovelSkills(params: { projectId: string; stage: Nov
   });
   const active = new Set(skills.map((item) => item.skillId));
   const conflicts = skills.flatMap((skill) => skill.conflicts.filter((id) => active.has(id)).map((id) => ({ skillId: skill.skillId, conflictsWith: id }))).filter((item, index, all) => index === all.findIndex((other) => [other.skillId, other.conflictsWith].sort().join(":") === [item.skillId, item.conflictsWith].sort().join(":")));
-  return { skills, conflicts };
+  const systemPromptSkills: NovelSkillManifest[] = promptTemplates
+    .filter((template) => template.stages.includes(params.stage))
+    .map((template) => ({
+      ...template,
+      skillId: `system-prompt:${template.templateId}`,
+      locale: "zh-CN",
+      category: "long-plan",
+      triggers: [],
+      requires: [],
+      conflicts: [],
+      priority: 2000,
+      prompt: template.content,
+      qualityChecks: [],
+      enabled: true,
+      readonly: template.source === "builtin",
+      source: template.source === "builtin" ? "builtin" : "project",
+    }));
+  return { skills: [...systemPromptSkills, ...skills], conflicts };
 }
 
 function normalizeDraft(raw: Record<string, unknown>, promptFromBody = "") {
@@ -182,32 +272,33 @@ export function parseNovelSkill(input: string): SkillDraft {
 export async function importNovelSkill(params: { projectId: string; content: string; scope: "user" | "project" }) {
   const draft = parseNovelSkill(params.content);
   const projectId = params.scope === "user" ? "__user__" : params.projectId;
-  const existing = await novelDb.skills.where("[projectId+skillId]").equals([projectId, draft.skillId]).first();
+  const existing = await novelDb.skills.where("[projectId+skillId]").equals([projectId, draft.skillId]).and((skill) => skill.version === draft.version).first();
+  if (existing && existing.prompt !== draft.prompt) throw new Error(`Skill ${draft.skillId}@${draft.version} 已存在；修改内容必须提升版本号`);
+  if (existing) return existing;
   const skill: NovelSkillManifest = {
-    ...(existing ?? recordBase(projectId)),
+    ...recordBase(projectId),
     ...draft,
     projectId,
     source: params.scope as NovelSkillSource,
     enabled: true,
     readonly: false,
-    revision: (existing?.revision ?? 0) + 1,
-    updatedAt: Date.now(),
   };
   await novelDb.skills.put(skill);
   return skill;
 }
 
-export async function setProjectSkill(projectId: string, skillId: string, enabled: boolean) {
-  const existing = await novelDb.projectSkills.where("[projectId+skillId]").equals([projectId, skillId]).first();
+export async function setProjectSkill(projectId: string, skillId: string, enabled: boolean, activeVersion?: string, db: NovelDatabase = novelDb) {
+  const existing = await db.projectSkills.where("[projectId+skillId]").equals([projectId, skillId]).first();
   const binding: ProjectSkillBinding = {
     ...(existing ?? recordBase(projectId)),
     skillId,
     enabled,
+    activeVersion: activeVersion ?? existing?.activeVersion,
     config: existing?.config ?? {},
     revision: (existing?.revision ?? 0) + 1,
     updatedAt: Date.now(),
   };
-  await novelDb.projectSkills.put(binding);
+  await db.projectSkills.put(binding);
   return binding;
 }
 
@@ -216,66 +307,40 @@ export function formatSkillPrompt(skills: NovelSkillManifest[]) {
 }
 
 const DRAFTING_FACT_SKILLS = new Set(["story-facts-invariant"]);
-const DRAFTING_CHARACTER_SKILLS = new Set(["character-voice-matrix", "classic-character-ensemble"]);
-const DRAFTING_PROGRESS_SKILLS = new Set(["scene-action-reaction", "serial-rhythm"]);
-const DRAFTING_PROSE_SKILLS = new Set(["embodied-prose", "classic-prose-texture", "imagery-aesthetics", "prose-discipline", "romance-arc-design"]);
 
 function hasAnySkill(skills: NovelSkillManifest[], ids: Set<string>) {
   return skills.some((skill) => ids.has(skill.skillId));
 }
 
 function customSkillBlock(skills: NovelSkillManifest[]) {
-  const custom = skills.filter((skill) => skill.source !== "builtin");
-  if (custom.length === 0) return "";
-  return `\n\n## 项目自定义规则\n${custom.map((skill) => `### ${skill.name}\n${skill.prompt}`).join("\n\n")}\n\n自定义规则只补充项目风格；与事实边界、阶段职责或正文输出契约冲突时，以前述契约为准。`;
+  const governed = skills.filter((skill) => skill.skillId.startsWith("system-prompt:") || skill.skillId === "long-form-master-craft" || skill.source !== "builtin");
+  if (governed.length === 0) return "";
+  return `\n\n## 已解析的版本化创作指导\n${governed.map((skill) => `### ${skill.name} (${skill.skillId}@${skill.version})\n${skill.prompt}`).join("\n\n")}\n\n这些指导约束创作判断；与已确认事实、阶段职责、结构化输出格式或可修改范围冲突时，以不可变契约为准。`;
 }
 
 export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: NovelSkillStage) {
   const sections: string[] = [];
   if (stage === "foundation") {
-    sections.push("## 基础设定契约\n从项目题材、主题承诺和已确认材料推导人物与世界，不套用示例作品、固定时代、职业或剧情模板。每项设定都应说明它如何产生人物选择、现实阻力或长线变化空间；无法进入故事因果的装饰性设定应压缩。");
     if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
       sections.push("## 事实边界\n区分作者已确认事实、模型建议和待验证推断。不得用常见题材惯例填补空缺；新设定只能作为候选提交，并保留与现有事实的来源关系。");
-    }
-    if (skills.some((skill) => skill.skillId === "character-desire-engine")) {
-      sections.push("## 人物基础\n从人物处境建立外在欲望、内在恐惧、错误信念、未承认需求、行为边界与可支付代价。初始状态必须给出项目内真实地点、具体身体与情绪状态、即时目标和可用资源；这些字段来自当前项目，不得复制提示词示例。人物矛盾应形成可持续选择压力，而不是套用固定反派或英雄类型。");
-    }
-    if (skills.some((skill) => skill.skillId === "world-rule-contract")) {
-      sections.push("## 世界规则\n规则写清适用条件、能力上限、代价、例外和社会后果，并能在不同人物与场景中接受一致检验。不得为了当前样例冲突临时增加只对某一角色生效的例外。");
     }
     return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
   }
 
   if (stage === "character-enrichment") {
-    sections.push("## 人物补全契约\n只根据本项目已确认事实、正文行动与对白补全空缺字段。欲望、动机、弱点、秘密、声音和弧光必须能指回具体证据；信息不足就保留空缺，不使用题材身份模板、示例角色或常见人设补齐。已有字段和未来剧情不得改写或臆造。");
     return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
   }
 
   if (stage === "planning") {
-    sections.push("## 长篇规划契约\n大纲用于分配跨章节材料，不是要求尽快完成的任务表。先确定当前层级与本章主导叙事功能，再决定哪些内容只铺垫、哪些继续延迟、哪些已经到达兑现窗口。背景建立、人物相处、内心发展、情感积累、生活过程和意象生长都可以成为正式章节功能，不得默认每章都需要冲突升级、秘密揭晓、关系跃迁或强钩子。");
     if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
       sections.push("## 事实与兑现边界\n严格遵守已批准事实、人物知识边界和锁定规则。把尚未到达揭示条件的秘密、伏笔回收、重大转折和关系变化保留在后续，不因当前章节提及相关材料就提前完成。");
     }
-    if (skills.some((skill) => skill.skillId === "chapter-blueprint")) {
-      sections.push("## 章节蓝图\n为章节选择一个主导功能，使用 2 至 8 个必要节拍。objective 描述探索或积累方向，不等于必须解决的问题；informationRelease 可以为空；mustHappen 只容纳本章已经批准兑现的内容；forbidden 应保护尚需铺垫的后续材料。endingHook 可以是情感余韵、关系张力、未完成动作、意象变化或认知缺口，不必是突发危险。");
-    }
-    sections.push("## 规划质量\n相邻章节需要功能与强度差异。行动和回报应来自足够积累；铺陈章的质量取决于世界、人物、关系或情感是否变得更具体，而不是主线移动了多少。禁止为满足结构模板强造选择、代价、反制、转折和伏笔。");
     return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
   }
 
   if (stage === "drafting") {
-    sections.push("## 正文创作契约\n按以下优先级写作：事实、知识边界与兑现边界 → 本章主导叙事功能 → 人物当下体验与关系 → 场景因果 → 语言质感。蓝图规定本章可以触碰的材料，不是必须全部结算的清单；不得为完成目标提前消费后续大纲节点。");
     if (hasAnySkill(skills, DRAFTING_FACT_SKILLS)) {
       sections.push("## 事实边界\n严格遵守已批准蓝图、正式事实、锁定规则和人物知识边界；信息不足时保持不确定，不得补造既定事实。");
-    }
-    if (hasAnySkill(skills, DRAFTING_CHARACTER_SKILLS)) {
-      sections.push("## 人物与声音\n人物的行动、对白和判断必须符合其身份、欲望、认知与当下处境。让主要说话者保持稳定的词汇、直率程度与回避方式——去掉名字读者仍能认出是谁在说话；从冻结上下文中的年龄、职业、关系距离、目标和既有说话习惯推导声部，不得套用固定身份模板。群像场景中，若蓝图在同一场安排了多个有具体动作（递物、拦阻、指引、反应、整理、呼唤其一）的次要角色，不能只让主要说话者开口：每个有动作呈现的次要角色应有匹配其年龄、职业与处境的差异化表达，用于建立规则、提示世界观、呈现关系质地或锚定当下处境。仅作背景的群演可不发声，但有动作呈现的次要角色若全程沉默，等同于把声音全部收敛到主角与单一 NPC，丢失群像声部。判定标准：去掉说话人名字后，若一场戏中两个以上有动作的次要角色对白交换或缺失，则声音同质化或缺失，违规。");
-    }
-    if (hasAnySkill(skills, DRAFTING_PROGRESS_SKILLS)) {
-      sections.push("## 章节节奏与长篇余量\n先服从本章主导叙事功能。行动章节可以改变局势；铺陈、相处、蓄势或余波章节可以主要深化世界、人物内心、关系和情感，不强求不可逆结果。背景、回忆、生活过程和意象只要改变读者对当下的理解或感受，就具有叙事价值。信息可以被感知、误读或暂时搁置，不必当章转化为决定。只落实蓝图明确列入 mustHappen 的内容，秘密真相、关系跃迁、伏笔回收和后续节点未经许可不得提前兑现。全章只保留一个开场和一个结尾。");
-    }
-    if (hasAnySkill(skills, DRAFTING_PROSE_SKILLS)) {
-      sections.push("## 文风与段落\n以行动、感官、环境和对白承载情绪；动作或对白已经传达含义后立即留白，不再补写解释性心理总结。核心意象只在状态或含义变化时重现，不连续用同一物件替人物说理。段落边界服从注意力、动作因果与情绪停顿。");
     }
     if (skills.some((skill) => skill.skillId === "romance-arc-design")) {
       sections.push("## 感情线\n感情变化必须由共同经历、人物选择和现实代价推动，保持双向吸引与阶段变化。关键情绪通过人物当下的行动、对白和未完成的表达呈现，不用模板化甜虐桥段替代主线因果。");
@@ -285,12 +350,12 @@ export function compileNovelStagePrompt(skills: NovelSkillManifest[], stage: Nov
   }
 
   if (stage === "review") {
-    sections.push("## 审校契约\n只报告有正文证据且属于当前角色职责的问题。先判断本章主导功能，不得把安静、铺陈、内省、关系相处或留白结尾本身判为节奏问题。检查正文是否提前兑现后续节点，或为了逐项完成蓝图而压缩背景、内心、情感和关系过程。机械化风险包括事件报表、解释人物心理、用对白传递作者结论、通用细节、匀速段落、重复事件链和第二个结尾；真正的问题是内容重复或体验没有深化，不是主线没有明显前进。结构问题只把实际需要修改的段落写入 revisionRanges。");
+    sections.push("## 审校输出边界\n结构问题只把实际需要修改的段落写入 revisionRanges；没有正文证据的问题不得输出。");
     return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
   }
 
   if (stage === "revision") {
-    sections.push("## 定向修订契约\n只处理质量报告允许修改的段落，保留段必须原样输出。可以删除、合并或重排允许范围内的内容，但不得生成第二份正文、回复说明、标题、代码围栏或水平分隔线。只做解决问题所必需的调整。");
+    sections.push("## 定向修订不可变边界\n只处理质量报告允许修改的段落，保留段必须原样输出。不得生成第二份正文、回复说明、标题、代码围栏或水平分隔线。");
     return `${sections.join("\n\n")}${customSkillBlock(skills)}`;
   }
 

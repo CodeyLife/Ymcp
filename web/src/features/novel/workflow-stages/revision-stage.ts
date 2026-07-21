@@ -145,7 +145,11 @@ export function findIssueParagraph(issue: QualityIssue, paragraphs: string[]): n
   return -1;
 }
 
-function paragraphRangesInText(text: string, paragraphCount: number): number[] {
+/**
+ * 从文本中解析段落引用——支持"第N段"、"第N-M段"、"【第N段】"等多种格式。
+ * 导出供 review-stage 的 proseAuditIssueToReviewerFinding 复用，避免重复实现。
+ */
+export function paragraphRangesInText(text: string, paragraphCount: number): number[] {
   const indices = new Set<number>();
   const pattern = /第\s*(\d{1,5})\s*(?:[-—–~～至到]\s*(\d{1,5}))?\s*段/g;
   for (const match of text.matchAll(pattern)) {

@@ -2,6 +2,8 @@ import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb, recordBase, type NovelDatabase }
 import type {
   AgentRun,
   ChapterBlueprint,
+  GenerationAuditIssue,
+  GenerationAuditRound,
   NovelAgentRole,
   QualityDimension,
   WorkflowArtifact,
@@ -41,6 +43,63 @@ export const BUILTIN_CHAPTER_WORKFLOW: WorkflowDefinition = {
 export function shouldAutoRevise(params: { passed: boolean; iteration: number; maxIterations: number; previousScore?: number; currentScore: number }) {
   const improvement = params.previousScore === undefined ? Number.POSITIVE_INFINITY : params.currentScore - params.previousScore;
   return !params.passed && params.iteration < params.maxIterations && improvement >= 0.15;
+}
+
+/**
+ * 通用 LLM 审核 schema：所有 audit skill（plot-segment-audit / blueprint-audit / prose-audit）
+ * 共用同一 schema 结构——summary + issues[]，每个 issue 含 severity/dimension/title/evidence/suggestion/origin。
+ * 不强制 issue 数量，没问题的方面不报告。
+ *
+ * dimension 由 LLM 判断（有限枚举），避免下游机械词匹配——severity 都让 LLM 判断了，
+ * dimension 更应该让 LLM 判断。
+ *
+ * origin 仅 prose-audit（元审核）用到，用于区分"新增"与"升级/降级 reviewer 判断"。
+ */
+export const auditIssueSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["summary", "issues"],
+  properties: {
+    summary: { type: "string", minLength: 1 },
+    issues: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["severity", "dimension", "title", "evidence", "suggestion"],
+        properties: {
+          severity: { enum: ["blocker", "major", "warning"] },
+          dimension: { enum: ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity"] },
+          title: { type: "string", minLength: 1 },
+          evidence: { type: "string", minLength: 1 },
+          suggestion: { type: "string", minLength: 1 },
+          origin: { enum: ["new", "upgrade", "downgrade"] },
+          sourceIssueId: { type: "string", minLength: 1 },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * 判断 issue 列表是否包含 blocker 或 major（触发迭代的阈值）。
+ * 由所有 audit 循环（plot-design / blueprint / prose）共用。
+ */
+export function hasMajorOrBlocker(issues: GenerationAuditIssue[]): boolean {
+  return issues.some((issue) => issue.severity === "blocker" || issue.severity === "major");
+}
+
+/**
+ * 把审核轮次的问题格式化为 LLM 重生成 prompt 的附加块。
+ * 由所有 audit 循环共用——传递给下一轮生成调用，引导 LLM 落实修订。
+ */
+export function formatAuditFindingsForRerun(round: GenerationAuditRound): string {
+  if (!round.issues.length) return "本轮审核未发现问题。";
+  const lines = round.issues.map((issue, index) => {
+    const severity = issue.severity === "blocker" ? "阻断" : issue.severity === "major" ? "主要" : "警告";
+    return `${index + 1}. [${severity}] ${issue.title}\n   证据：${issue.evidence}\n   建议：${issue.suggestion}`;
+  });
+  return `本轮审核发现 ${round.issues.length} 个问题：\n${lines.join("\n")}`;
 }
 
 export const blueprintSchema = {

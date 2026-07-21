@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import "./setup";
 
 import { createNovelProject, getCanvasLayout, novelDb, recordBase, saveCanvasLayout, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V17_STORES, V18_STORES, V19_STORES, V20_STORES } from "../db-schema";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V17_STORES, V18_STORES, V19_STORES, V20_STORES, V21_STORES, V22_STORES, V23_STORES, V24_STORES, V25_STORES } from "../db-schema";
 import { importNovel, verifyProjectArchive } from "../export";
 
 beforeEach(async () => {
@@ -12,9 +12,9 @@ beforeEach(async () => {
   localStorage.clear();
 });
 
-describe("db-schema v20", () => {
+describe("db-schema v22", () => {
   it("uses the phase/plot-segment/chapter indexes and exposes the iteratedSkills + operationReceipts tables", () => {
-    expect(DB_VERSION).toBe(20);
+    expect(DB_VERSION).toBe(25);
     expect(RECORD_SCHEMA_VERSION).toBe(8);
     expect(V18_STORES.outlineNodes).toContain("phaseId");
     expect(V18_STORES.outlineNodes).toContain("[projectId+phaseId]");
@@ -31,6 +31,36 @@ describe("db-schema v20", () => {
     expect(V20_STORES.operationReceipts).toContain("operationId");
     expect(V20_STORES.operationReceipts).toContain("[candidateId+status]");
     expect(V20_STORES.operationReceipts).toContain("[operationId+status]");
+    expect(V21_STORES.creativeRuns).toContain("[projectId+status]");
+    expect(V21_STORES.creativeWorkItems).toContain("[creativeRunId+status]");
+    expect(V21_STORES.creativeReviews).toContain("subjectArtifactId");
+    expect(V21_STORES.creativeRunEvents).toContain("[creativeRunId+idempotencyKey]");
+    expect(V22_STORES.craftRuleCandidates).toContain("[projectId+status]");
+    expect(V22_STORES.promptTemplateVersions).toContain("[projectId+templateId]");
+    expect(V23_STORES.creativeToolReceipts).toContain("[projectId+tool+idempotencyKey]");
+    expect(V24_STORES.creativeToolReceipts).not.toContain("&[projectId+tool+idempotencyKey]");
+    expect(V25_STORES.creativeToolReceipts).toContain("&[projectId+tool+idempotencyKey]");
+  });
+
+  it("deduplicates v23 tool receipts before installing the unique idempotency index", async () => {
+    novelDb.close();
+    await novelDb.delete();
+    const legacy = new Dexie(novelDb.name);
+    legacy.version(23).stores(V23_STORES);
+    await legacy.open();
+    const shared = { projectId: "p", tool: "novel_run_create", idempotencyKey: "same", requestFingerprint: "fp", schemaVersion: 8, revision: 1, createdBy: "test", updatedBy: "test", createdAt: 1 };
+    await legacy.table("creativeToolReceipts").bulkPut([
+      { ...shared, id: "older", updatedAt: 1, result: { value: "old" } },
+      { ...shared, id: "newer", updatedAt: 2, result: { value: "new" } },
+    ]);
+    legacy.close();
+
+    await novelDb.open();
+    const receipts = await novelDb.creativeToolReceipts.toArray();
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ id: "newer", status: "completed", result: { value: "new" } });
+    await expect(novelDb.creativeToolReceipts.add({ ...recordBase("p"), tool: "novel_run_create", idempotencyKey: "same", requestFingerprint: "fp", status: "pending", startedAt: 3 }))
+      .rejects.toMatchObject({ name: "ConstraintError" });
   });
 
   it("discards legacy outline data and pending planning proposals while preserving chapters", async () => {

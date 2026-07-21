@@ -2,7 +2,8 @@
 /**
  * 小说创作闭环评估 CLI（novel:closed-loop）
  *
- * 把 capture → load → workflow → skill-iterate → export → inspect → promote 串联为单一命令。
+ * 把 capture → load → workflow → export → inspect → manuscript/fact promote 串联为单一命令。
+ * Skill 与系统 Prompt 迭代由独立的跨场景规则候选流程负责。
  *
  * 用法：
  *   npm run novel:closed-loop -- --project <pid> --chapter <cid> --thread <tid> --brief <bid>

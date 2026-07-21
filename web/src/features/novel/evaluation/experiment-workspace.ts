@@ -14,6 +14,7 @@ import {
   restoreProjectSnapshot,
   verifyProjectSnapshot,
   type ProjectSnapshotBundle,
+  type SupportedProjectSnapshotBundle,
   type SnapshotVerification,
 } from "./project-snapshot";
 
@@ -59,7 +60,7 @@ export interface LoadSnapshotResult {
  * @param experimentId 实验 ID,用于命名实验库(将做安全过滤)
  */
 export async function loadProjectSnapshotIntoExperiment(
-  bundle: ProjectSnapshotBundle,
+  bundle: SupportedProjectSnapshotBundle,
   experimentId: string,
 ): Promise<LoadSnapshotResult> {
   const verification = await verifyProjectSnapshot(bundle);

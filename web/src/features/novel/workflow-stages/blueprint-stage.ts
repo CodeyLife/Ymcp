@@ -1,10 +1,10 @@
 import { callStructuredNovelModel } from "../ai";
 import { formatContextPacket } from "../context";
-import { DEFAULT_CHAPTER_TARGET_WORDS } from "../db";
+import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb } from "../db";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
-import { blueprintMarkdown, blueprintSchema } from "../workflow-shared";
+import { auditIssueSchema, blueprintMarkdown, blueprintSchema, formatAuditFindingsForRerun, hasMajorOrBlocker } from "../workflow-shared";
 import { formatCreativeBriefContract } from "../workflow-brief";
-import type { StoryEntity } from "../types";
+import type { GenerationAuditIssue, GenerationAuditReport, GenerationAuditRound, StoryEntity } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
 // 改进 #7：POV 一致性机械后校验
@@ -16,6 +16,24 @@ import type { StageContext, StageHandler, StageResult } from "../workflow-stages
 const INTERNAL_VERBS = ["发现", "察觉", "意识到", "判断", "明白", "懂得", "看穿", "看透", "领悟", "惊觉", "想到", "看清", "感到", "觉得", "理解", "醒悟", "省悟", "察觉到", "意识到"];
 const MAX_NAME_TAIL_SCAN = 10;
 const ENDING_HOOK_UNIQUENESS_CONTRACT = `章尾驱动力是最后一个节拍结果的具体呈现，不是额外追加的一场戏。若同一个邀约、警告、发现、决定或关系变化同时出现在 mustHappen 与 endingHook，mustHappen 必须明确它只在 endingHook 指定的时机和形式下兑现；最后一个节拍只能铺垫该结果，不得改换时间、地点、传话人或场景再提前兑现一次。`;
+
+/**
+ * 读取 blueprint audit 最大迭代次数。
+ *
+ * StageHandler 没有 params 入口（由 workflow scheduler 直接调度），通过环境变量控制：
+ * - 未设置：默认 1（启用 1 次 audit+iterate 循环）
+ * - "0"：关闭 audit（向后兼容场景）
+ * - "2" / "3"：增加迭代次数
+ *
+ * 上限 3 次，避免长循环消耗 LLM 配额。
+ */
+export function getBlueprintAuditMaxIterations(): number {
+  const raw = process.env.NOVEL_BLUEPRINT_AUDIT_MAX_ITER;
+  if (raw === undefined || raw === "") return 1;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 0) return 1;
+  return Math.min(3, parsed);
+}
 
 function sanitizePovConsistencyInPlace(data: Record<string, unknown>, povName: string | undefined, otherCharacterNames: string[]): { violations: string[] } {
   if (!povName || otherCharacterNames.length === 0) return { violations: [] };
@@ -44,6 +62,62 @@ function sanitizePovConsistencyInPlace(data: Record<string, unknown>, povName: s
   return { violations };
 }
 
+/**
+ * 调用 blueprint-audit skill 对章节蓝图（ChapterBlueprint）做独立 LLM 审核。
+ *
+ * 通过 explicitSkillIds 显式启用 blueprint-audit，避免污染 PROFILE_SKILLS 默认集合
+ * （PROFILE_SKILLS 中的 4 个 reviewer 不应拿到 audit skill 的 prompt）。
+ *
+ * builtin 审核 Skill 只负责声明职责；实际判断原则由版本化审校指导和此阶段契约组成。
+ */
+export async function runBlueprintAudit(params: {
+  projectId: string;
+  documentTitle: string;
+  documentObjective: string;
+  blueprintData: Record<string, unknown>;
+  povName?: string;
+  otherCharacterNames: string[];
+  briefContract: string;
+  contextPacketId: string;
+  db?: typeof novelDb;
+  signal?: AbortSignal;
+}): Promise<GenerationAuditRound> {
+  const db = params.db ?? novelDb;
+  const project = await db.projects.get(params.projectId);
+  if (!project) throw new Error("项目不存在");
+  const auditSkills = await resolveNovelSkills({ projectId: params.projectId, stage: "review", explicitSkillIds: ["blueprint-audit"], db });
+  if (!auditSkills.skills.some((skill) => skill.skillId === "blueprint-audit")) {
+    throw new Error("blueprint-audit skill 未在 BUILTIN_NOVEL_SKILLS 中找到");
+  }
+  const packet = await db.contextPackets.get(params.contextPacketId);
+  const contextMarkdown = packet ? formatContextPacket(packet) : "（无冻结上下文）";
+  const beats = Array.isArray(params.blueprintData.beats) ? params.blueprintData.beats as Array<Record<string, string>> : [];
+  const beatsBrief = beats.length
+    ? beats.map((beat, index) => `### 节拍 ${index + 1}\n- 行动：${beat.action ?? "无"}\n- 情绪：${beat.emotion ?? "无"}\n- 结果：${beat.outcome ?? "无"}`).join("\n\n")
+    : "（无节拍）";
+  const mustHappen = Array.isArray(params.blueprintData.mustHappen) ? (params.blueprintData.mustHappen as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
+  const forbidden = Array.isArray(params.blueprintData.forbidden) ? (params.blueprintData.forbidden as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
+  const informationRelease = Array.isArray(params.blueprintData.informationRelease) ? (params.blueprintData.informationRelease as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
+  const prompt = `# 审核任务\n审核以下章节蓝图（ChapterBlueprint）的设计质量。\n\n## 章节标题\n${params.documentTitle}\n\n## 章节目标\n${params.blueprintData.objective ?? "无"}\n\n## 当前章节要求\n${params.documentObjective || "尚未规划"}\n\n## 起点\n${params.blueprintData.startingState ?? "无"}\n\n## 节拍\n${beatsBrief}\n\n## 章尾驱动力\n${params.blueprintData.endingHook ?? "无"}\n\n## 必须发生\n${mustHappen}\n\n## 禁止事项\n${forbidden}\n\n## 信息释放\n${informationRelease}\n\n## POV\n${params.povName ?? "未指定（多视角切片或未设置）"}\n\n## 其他在场角色\n${params.otherCharacterNames.join("、") || "无"}\n\n## 创作简报契约\n${params.briefContract}\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- 基于 blueprint-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体字段（objective / beats[N] / mustHappen[N] / endingHook / forbidden[N] 等）作为证据\n- 必须给出具体修订建议\n\n按 schema 输出 summary 和 issues 数组。`;
+  const auditSkillPrompt = `${compileNovelStagePrompt(auditSkills.skills, "review")}\n\n## 章节蓝图审核职责\n根据本章实际功能、项目风格、前后因果、人物主体性和长篇材料余量审核。节拍数量、信息密度、冲突强度和章尾形态没有固定合格公式；只有当具体字段造成因果断裂、人物失真、体验不足、提前透支或后续驱动力缺失时才报告问题。不同题材、视角、章节功能和叙事风格必须分别判断。`;
+  const result = await callStructuredNovelModel<{ summary: string; issues: GenerationAuditIssue[] }>({
+    model: project.settings.textModel,
+    temperature: 0.15,
+    role: "quality-editor",
+    skillPrompt: auditSkillPrompt,
+    schema: auditIssueSchema,
+    prompt: prompt.replace("基于 blueprint-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境", "基于版本化审校规则、当前项目目标与蓝图证据进行跨题材判断，不套用特定作者或作品风格"),
+    signal: params.signal,
+    maxTokens: 4096,
+  });
+  return {
+    iteration: 0,
+    summary: String(result.data.summary ?? ""),
+    issues: Array.isArray(result.data.issues) ? result.data.issues : [],
+    triggeredIteration: false,
+  };
+}
+
 export const blueprintStageHandler: StageHandler = {
   stage: "blueprint",
   async execute(ctx: StageContext): Promise<StageResult> {
@@ -64,15 +138,8 @@ export const blueprintStageHandler: StageHandler = {
       goal: "生成可审批章节蓝图",
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
     });
-    const result = await callStructuredNovelModel<Record<string, unknown>>({
-      model: project.settings.textModel,
-      temperature: 0.55,
-      role: "architect",
-      skillPrompt: compileNovelStagePrompt(skills.skills, "planning"),
-      schema: blueprintSchema,
-      prompt: `为“${document.title}”生成章节蓝图。章节目标字数由系统设置为 ${brief.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，你只需按该篇幅规划，不要生成字数。\n\n${briefContract}\n\n当前章节要求：${document.blueprint.objective || "尚未规划，请结合全书架构、故事大纲与当前长线位置设计"}\n\n先选择本章唯一的主导叙事功能：建立故事背景与日常秩序、深化人物内心与关系、积累情绪和压力、埋设或提醒线索、承担行动推进、消化既有后果，或兑现阶段节点。不要默认选择行动推进或阶段兑现；相邻章节应有张弛和功能差异。\n\n大纲是跨章节分配材料的上限，不是本章待办清单。只把本章确实到达兑现窗口、删去就会破坏连续性的内容写入 mustHappen；把尚需铺垫的秘密、关系跃迁、重大转折、伏笔回收和后续节点写入 forbidden。informationRelease 允许为空，也允许只让人物误读或局部感知。endingHook 必须制造一个让读者想知道“接下来会发生什么”的开放问题或新信息压力，不能只停在情感余韵的封闭画面。可以是未完成动作指向尚未到达的地点、关系裂痕露出尚未摊牌的张力、未说出口的话让读者知道它存在却不知道内容、日常细节让读者察觉反常、环境变化暗示新力量或威胁已进入场景，也可以用意象收束但意象必须携带未解信息（反例：停在楼梯不回头+只有雨声无新信息是封闭画面，读者无须翻下一章；正例：停在楼梯不回头+听到楼下哼出自己从未教过的半阕歌，留下“她从哪里听来”的开放问题）。禁止为钩子在中后段突然另起新场景作为章尾，但通过既有线索的细微反常或状态转变引出新压力是被鼓励的。\n\n使用 2 至 8 个必要节拍。相邻节拍保持时间、注意力或因果连续，但不是每个节拍都必须改变局势。允许用完整节拍承载环境与社会背景、人物独处、生活过程、回忆触发、关系相处、情感发酵和文学意象；这些内容应深化读者体验，而不是重复已知信息。对手只有实际在场或施加影响时才需要反制。禁止为凑结构强造选择、代价、转折或钩子。\n\n## 信息密度约束（改进 #10）\n根据章节功能区分信息密度上限：\n- **引子章 / 铺陈章 / 余波章**（建立故事背景、深化人物内心与关系、消化既有后果）：每章至多埋设 2-3 个新信息节点（包括新线索、新人物、新关系、新设定）。其余应当作为后续章节的发现空间保留，不得一次性兑现。引子章尤其要克制——读者需要建立对世界与人物的初步认知，信息密度过高会让读者来不及消化。\n- **行动章 / 蓄势章**（承担行动推进、积累情绪和压力）：可以承载 3-4 个新信息节点，但必须让每个节点都有充分展开的现场过程，不得连续抛出多个发现而不给读者停留空间。\n- **兑现章**（兑现阶段节点）：可以承载较多回收（伏笔回收、真相揭示），但每个回收必须有前文铺陈支撑，不得空降。\n\nmustHappen 中标记的每个"发现 / 察觉 / 意识到"类节点都算一个新信息节点。如果 mustHappen 中此类节点超过本章功能允许的上限，必须把超出部分移入 forbidden 或 flexible。\n${feedback ? `\n用户退回意见：${feedback.contentMarkdown}` : ""}\n\n冻结上下文：\n${formatContextPacket(packet)}`,
-    });
-    // 改进 #7：POV 一致性机械后校验（在 LLM 返回后扫描 mustHappen 中"非 POV 角色名 + 内心动词"）
+
+    // 收集章节内角色（用于 POV 一致性后校验）
     const chapterCharacterIds = Array.from(new Set([
       ...(document.blueprint.characterIds ?? []),
       ...(brief.povCharacterId ? [brief.povCharacterId] : []),
@@ -84,12 +151,108 @@ export const blueprintStageHandler: StageHandler = {
       .filter((e) => e.id !== brief.povCharacterId)
       .flatMap((e) => [e.name, ...(e.aliases ?? [])])
       .filter((name) => typeof name === "string" && name.length >= 2);
-    const povConsistency = sanitizePovConsistencyInPlace(result.data, pov?.name, otherCharacterNames);
+
+    const skillPrompt = compileNovelStagePrompt(skills.skills, "planning");
+
+    const governedBasePrompt = `# 章节蓝图任务\n为“${document.title}”生成可审批章节蓝图。章节目标字数由系统设置为 ${brief.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，不要返回或改写字数。\n\n## 已确认创作简报\n${briefContract}\n\n## 当前章节要求\n${document.blueprint.objective || "尚未规划，请依据冻结材料判断本章在长线中的必要功能"}\n\n创作结构、节拍数量、信息密度、人物与章尾形态以已注入的版本化 planning 指导和项目证据为准。不得使用固定章节公式补齐字段，也不得提前消费尚未到兑现窗口的材料。${feedback ? `\n\n## 用户退回意见\n${feedback.contentMarkdown}` : ""}\n\n## 冻结上下文\n${formatContextPacket(packet)}`;
+
+    /**
+     * 调用 LLM 生成 ChapterBlueprint。
+     * 当传入 auditFindings 时，prompt 末尾追加审核意见，引导 LLM 修正问题。
+     * 返回 result 包含 data/promptHash/usage，由调用方决定是否进入下一轮 audit。
+     */
+    const generateBlueprint = async (auditFindings?: string) => {
+      const auditBlock = auditFindings ? `\n\n# 上一轮 LLM 审核意见\n请基于以下审核问题重新生成章节蓝图，针对每个 major/blocker 问题在生成时落实修订；不要直接复述审核意见，而是把它转化为具体的节拍调整、POV 一致性改写、endingHook 开放性重构或信息密度调整。\n${auditFindings}` : "";
+      return callStructuredNovelModel<Record<string, unknown>>({
+        model: project.settings.textModel,
+        temperature: auditFindings ? 0.35 : 0.55,
+        role: "architect",
+        skillPrompt,
+        schema: blueprintSchema,
+        prompt: `${governedBasePrompt}${auditBlock}`,
+        signal: undefined,
+      });
+    };
+
+    // 初次生成
+    let result = await generateBlueprint();
+    // 改进 #7：POV 一致性机械后校验（在 LLM 返回后扫描 mustHappen 中"非 POV 角色名 + 内心动词"）
+    let povConsistency = sanitizePovConsistencyInPlace(result.data, pov?.name, otherCharacterNames);
     if (povConsistency.violations.length > 0) {
       console.warn(`[blueprint-stage] POV 一致性后校验发现 ${povConsistency.violations.length} 处非 POV 角色内心活动（POV=${pov?.name ?? "?"}），已自动追加 forbidden 约束：\n${povConsistency.violations.join("\n")}`);
     }
+
+    // audit+iterate 循环（Loop 3：B 板块闭环）
+    // 默认 maxIterations=1（可通过环境变量 NOVEL_BLUEPRINT_AUDIT_MAX_ITER 控制）
+    // maxIterations=N 表示最多重新生成 N 次（共 N+1 轮 audit：1 次初始 + N 次再审）
+    const maxAuditIterations = getBlueprintAuditMaxIterations();
+    let auditReport: GenerationAuditReport | undefined;
+    if (maxAuditIterations > 0) {
+      const rounds: GenerationAuditRound[] = [];
+      try {
+        // 审核是生成后的独立质量证据。审核服务不可用时保留已经生成的蓝图，
+        // 由审批者决定是否重试，不能把可用产物降格为工作流失败。
+        let round = await runBlueprintAudit({
+          projectId: run.projectId,
+          documentTitle: document.title,
+          documentObjective: document.blueprint.objective ?? "",
+          blueprintData: result.data,
+          povName: pov?.name,
+          otherCharacterNames,
+          briefContract,
+          contextPacketId: packet.id,
+          db: ctx.db,
+        });
+        round.iteration = 1;
+        round.triggeredIteration = hasMajorOrBlocker(round.issues);
+        rounds.push(round);
+
+        let iterationsDone = 0;
+        while (hasMajorOrBlocker(round.issues) && iterationsDone < maxAuditIterations) {
+          iterationsDone += 1;
+          result = await generateBlueprint(formatAuditFindingsForRerun(round));
+          povConsistency = sanitizePovConsistencyInPlace(result.data, pov?.name, otherCharacterNames);
+          if (povConsistency.violations.length > 0) {
+            console.warn(`[blueprint-stage] 第 ${iterationsDone} 轮迭代后 POV 一致性后校验发现 ${povConsistency.violations.length} 处违规，已自动追加 forbidden 约束：\n${povConsistency.violations.join("\n")}`);
+          }
+          round = await runBlueprintAudit({
+            projectId: run.projectId,
+            documentTitle: document.title,
+            documentObjective: document.blueprint.objective ?? "",
+            blueprintData: result.data,
+            povName: pov?.name,
+            otherCharacterNames,
+            briefContract,
+            contextPacketId: packet.id,
+            db: ctx.db,
+          });
+          round.iteration = iterationsDone + 1;
+          round.triggeredIteration = hasMajorOrBlocker(round.issues) && iterationsDone < maxAuditIterations;
+          rounds.push(round);
+        }
+
+        const lastRound = rounds[rounds.length - 1];
+        auditReport = {
+          auditSkillId: "blueprint-audit",
+          mechanism: "internal-iterate",
+          rounds,
+          improved: !hasMajorOrBlocker(lastRound.issues),
+          remainingMajorCount: lastRound.issues.filter((issue) => issue.severity === "blocker" || issue.severity === "major").length,
+        };
+      } catch (error) {
+        auditReport = {
+          auditSkillId: "blueprint-audit",
+          mechanism: "internal-iterate",
+          rounds,
+          improved: false,
+          remainingMajorCount: 0,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
     const targetWords = brief.targetWords || DEFAULT_CHAPTER_TARGET_WORDS;
-    const structuredData = { ...result.data, targetWords, povCharacterId: brief.povCharacterId };
+    const structuredData = { ...result.data, targetWords, povCharacterId: brief.povCharacterId, auditReport };
     const artifact = await ctx.saveArtifact(run, {
       projectId: run.projectId,
       workflowRunId: run.id,
@@ -102,7 +265,7 @@ export const blueprintStageHandler: StageHandler = {
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
       contextPacketId: packet.id,
     });
-    await ctx.finishAgent(agent, { ...result, artifactId: artifact.id });
+    await ctx.finishAgent(agent, { promptHash: result.promptHash, usage: result.usage, artifactId: artifact.id });
     await ctx.createApprovalProposal(run, artifact, "workflow-blueprint", "章节蓝图待批准");
     const nextRun = await ctx.transition(run, "blueprint-approval", "waiting-approval", { blueprintArtifactId: artifact.id });
     return { run: nextRun, continueLoop: false };

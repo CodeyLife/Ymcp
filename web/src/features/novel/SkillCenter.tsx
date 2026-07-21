@@ -6,6 +6,7 @@ import { novelDb, updateProject } from "./db";
 import { buildDraftTasteProfile, confirmTasteProfile } from "./preferences";
 import { importNovelSkill, listAvailableSkills, resolveNovelSkills, setProjectSkill } from "./skills";
 import type { NovelSkillCategory, NovelSkillStage } from "./types";
+import CraftRuleGovernance from "./CraftRuleGovernance";
 
 const CATEGORY_LABELS: Record<NovelSkillCategory, string> = {
   ideation: "创意定位", "character-world": "人物世界", "long-plan": "长期规划", chapter: "章节设计", drafting: "正文执行", serial: "中文连载", review: "专业审校", memory: "记忆维护",
@@ -50,6 +51,8 @@ export default function SkillCenter({ projectId }: { projectId: string }) {
     </section>
 
     {conflicts.length > 0 && <Alert type="error" showIcon message="存在 Skill 冲突" description={conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")} />}
+
+    <CraftRuleGovernance projectId={projectId} />
 
     <div className="novel-skill-toolbar"><Segmented value={category} onChange={(value) => setCategory(value as NovelSkillCategory | "all")} options={[{ label: "全部", value: "all" }, ...Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label }))]} /><span>{enabledIds.size} 项生效 · {skills.length} 项可用</span></div>
     <section className="novel-skill-list">

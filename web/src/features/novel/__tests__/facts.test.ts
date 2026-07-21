@@ -60,7 +60,7 @@ describe("commitAcceptedFacts - 新建关系", () => {
     await addAcceptedCandidate(project.id, run.id, { after: { fromEntityId: charA.id, toEntityId: charB.id, relationType: "同伴", bond: "关系亲密，已建立信任", publicLabel: "公开标签", privateTruth: "秘密" } });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(1);
+    expect(committed.committedCandidateIds).toHaveLength(1);
 
     const relations = await novelDb.relations.where("projectId").equals(project.id).toArray();
     expect(relations).toHaveLength(1);
@@ -88,7 +88,7 @@ describe("commitAcceptedFacts - 新建关系", () => {
     await addAcceptedCandidate(project.id, run.id, { after: { fromEntityId: charA.id, toEntityId: charB.id, relationType: "同伴", bond: "关系亲密，互相信任" } });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(0);
+    expect(committed.committedCandidateIds).toHaveLength(0);
 
     const relations = await novelDb.relations.where("projectId").equals(project.id).toArray();
     expect(relations).toHaveLength(1);
@@ -105,7 +105,7 @@ describe("commitAcceptedFacts - 新建关系", () => {
     });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(0);
+    expect(committed.committedCandidateIds).toHaveLength(0);
     const relations = await novelDb.relations.where("projectId").equals(project.id).toArray();
     expect(relations).toHaveLength(0);
   });
@@ -119,7 +119,7 @@ describe("commitAcceptedFacts - 新建关系", () => {
     });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(0);
+    expect(committed.committedCandidateIds).toHaveLength(0);
   });
 });
 
@@ -148,7 +148,7 @@ describe("commitAcceptedFacts - 更新现有记录", () => {
     });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(1);
+    expect(committed.committedCandidateIds).toHaveLength(1);
     const updated = await novelDb.relations.get(relation.id);
     expect(updated?.bond).toBe("关系亲密，已建立信任");
   });
@@ -305,7 +305,7 @@ describe("listFactAssertionsWithMeta / listKnowledgeAssertionsWithMeta - 事实�
     // 因此 autoAccept 不会采纳，需手动通过 setFactCandidateStatus 推进
     await setFactCandidateStatus(candidates[0].id, "accepted");
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(1);
+    expect(committed.committedCandidateIds).toHaveLength(1);
 
     // 验证 factAssertions 带 meta
     const factsWithMeta = await listFactAssertionsWithMeta(project.id);
@@ -430,7 +430,7 @@ describe("commitAcceptedFacts - 新人物新建", () => {
     });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(1);
+    expect(committed.committedCandidateIds).toHaveLength(1);
 
     const characters = await novelDb.entities.where("projectId").equals(project.id).toArray();
     expect(characters).toHaveLength(1);
@@ -453,7 +453,7 @@ describe("commitAcceptedFacts - 新人物新建", () => {
     });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(0);
+    expect(committed.committedCandidateIds).toHaveLength(0);
 
     const characters = await novelDb.entities.where("projectId").equals(project.id).and((e) => e.kind === "character").toArray();
     expect(characters).toHaveLength(2); // 只有原来的 陆沉、苏黎
@@ -471,7 +471,7 @@ describe("commitAcceptedFacts - 新人物新建", () => {
     });
 
     const committed = await commitAcceptedFacts(project.id, run.id);
-    expect(committed).toHaveLength(0);
+    expect(committed.committedCandidateIds).toHaveLength(0);
   });
 });
 
@@ -543,6 +543,185 @@ describe("prepareFactCandidates - 可提交边界", () => {
     expect(result.discardedUnprojectableCount).toBe(2);
   });
 
+  it("filters novelty=new field=record facts with non-object after (LLM 输出字符串型 after 的兜底)", async () => {
+    // 回归测试：Loop 6 v2 ch3 因 LLM 输出 `after: "观察雾气不能只看一天..."` 字符串型 after，
+    // commitAcceptedFacts L543 静默 continue 跳过该 fact，导致 promote 抛错
+    // "事实投影未完整提交：expected=3 actual=1"。prepareFactCandidates 提前过滤可避免
+    // 无效 fact 进入候选库，让 closed-loop auto-policy 不会接受这些 fact。
+    const { project, charA } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      // 原失败用例：novelty=new field=record after=字符串 → 应丢弃
+      { targetTable: "entities", field: "record", after: "观察雾气不能只看一天", humanReadable: "挑水草的汉子提供观察雾气的方法", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 原失败用例：novelty=new field=record after=null → 应丢弃
+      { targetTable: "entities", field: "record", after: null, humanReadable: "无效 fact", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 原失败用例：novelty=new field=record after=数组 → 应丢弃
+      { targetTable: "timelineEvents", field: "record", after: ["条件1", "条件2"], humanReadable: "无效 fact", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 反例：novelty=new field=record after=对象 → 应保留
+      { targetTable: "entities", field: "record", after: { kind: "character", name: "新角色", summary: "描述" }, humanReadable: "新角色出现", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 反例：novelty=update field=description after=字符串 → 应保留（update 允许字符串 after）
+      // targetId 必须真实存在（否则被新预校验 discardedInvalidUpdateTargetCount 丢弃）
+      { targetTable: "entities", targetId: charA.id, field: "description", after: "更新后的描述", humanReadable: "描述更新", evidence: "正文。", confidence: 0.9, novelty: "update", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(2);
+    expect(result.discardedInvalidRecordCount).toBe(3);
+    // 保留的两条：对象型 record + update 字符串型 description
+    expect(result.facts[0]!.after).toEqual({ kind: "character", name: "新角色", summary: "描述" });
+    expect(result.facts[1]!.after).toBe("更新后的描述");
+  });
+
+  it("filters novelty=update facts whose targetId does not exist (LLM 幻觉 targetId 的兜底)", async () => {
+    // 回归测试：Loop 6 v3 ch6 三次 attempt 全部 rejected，错误为
+    // "事实投影未完整提交：expected=7 actual=0" 和 "expected=4 actual=2"。
+    // Root cause：LLM 输出 novelty=update 但 targetId 引用不存在的实体 ID
+    // （幻觉 ID，或引用本章 draft 中提到但尚未落库的对象），commitAcceptedFacts L603-604
+    // 静默 continue 跳过所有 update fact，promote 抛错。
+    const { project, charA } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      // 失败用例：novelty=update targetId 不存在 → 应丢弃
+      { targetTable: "entities", targetId: "ent:hallucinated-1", field: "character.state.location", after: "北港", humanReadable: "幻觉角色抵达北港", evidence: "正文。", confidence: 0.95, novelty: "update", conflict: false },
+      // 失败用例：novelty=update targetId 不存在 → 应丢弃
+      { targetTable: "entities", targetId: "ent:hallucinated-2", field: "character.state.location", after: "南港", humanReadable: "幻觉角色抵达南港", evidence: "正文。", confidence: 0.95, novelty: "update", conflict: false },
+      // 反例：novelty=update targetId 真实存在 → 应保留
+      { targetTable: "entities", targetId: charA.id, field: "character.state.location", after: "北港", humanReadable: "陆沉抵达北港", evidence: "正文。", confidence: 0.95, novelty: "update", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(1);
+    expect(result.discardedInvalidUpdateTargetCount).toBe(2);
+    expect(result.facts[0]!.targetId).toBe(charA.id);
+  });
+
+  it("filters novelty=new relations whose (fromEntityId, toEntityId) already exists (LLM 误判 new 的兜底)", async () => {
+    // 回归测试：LLM 偶尔把已有关系误判为 new（特别是 aliases 匹配失败时），
+    // commitAcceptedFacts L571-577 对已存在关系静默 continue，promote 抛错。
+    const { project, charA, charB } = await seedProjectWithCharacters();
+    // 预置已存在关系
+    await novelDb.relations.add({
+      ...recordBase(project.id),
+      fromEntityId: charA.id,
+      toEntityId: charB.id,
+      relationType: "同伴",
+      publicLabel: "",
+      privateTruth: "",
+      bond: "已有关系",
+    });
+    const result = await prepareFactCandidates(project.id, [
+      // 失败用例：novelty=new relation 已存在 → 应丢弃
+      { targetTable: "relations", field: "record", after: { fromEntityId: charA.id, toEntityId: charB.id, relationType: "同伴", bond: "重复关系", publicLabel: "", privateTruth: "" }, humanReadable: "重复关系", evidence: "正文。", confidence: 0.95, novelty: "new", conflict: false },
+      // 反例：novelty=new relation 不存在 → 应保留
+      { targetTable: "relations", field: "record", after: { fromEntityId: charB.id, toEntityId: charA.id, relationType: "对立", bond: "新关系", publicLabel: "", privateTruth: "" }, humanReadable: "新关系", evidence: "正文。", confidence: 0.95, novelty: "new", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(1);
+    expect(result.discardedDuplicateRelationCount).toBe(1);
+  });
+
+  it("filters facts whose targetTable is not in MUTABLE_TABLES (LLM 输出系统内部表名的兜底)", async () => {
+    // 回归测试：LLM 偶尔把上下文中提到的系统概念（如 snapshots/derivedMemories）
+    // 误判为可投影 targetTable，commitAcceptedFacts L546 对非法 targetTable 静默
+    // continue，promote 抛错"事实投影未完整提交：expected=N actual=0"。
+    // 此校验对所有 novelty 生效（不只 update），因为 targetTable 合法性是 fact 结构前提。
+    const { project, charA } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      // 失败用例 1：novelty=new + 非法 targetTable=snapshots → 应丢弃
+      { targetTable: "snapshots", field: "record", after: { content: "陆沉初入江湖" }, humanReadable: "本章快照", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 失败用例 2：novelty=new + 非法 targetTable=derivedMemories → 应丢弃
+      { targetTable: "derivedMemories", field: "record", after: { summary: "陆沉觉醒" }, humanReadable: "衍生记忆", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 失败用例 3：novelty=update + 非法 targetTable=workflowRuns → 应丢弃
+      { targetTable: "workflowRuns", targetId: "run-1", field: "status", after: "completed", humanReadable: "工作流完成", evidence: "正文。", confidence: 0.9, novelty: "update", conflict: false },
+      // 反例：novelty=new + 合法 targetTable=entities → 应保留
+      { targetTable: "entities", field: "record", after: { kind: "character", name: "新人物", aliases: [], summary: "新人", description: "描述", lockedFacts: [] }, humanReadable: "新人物", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 反例：novelty=update + 合法 targetTable=entities → 应保留
+      { targetTable: "entities", targetId: charA.id, field: "character.state.location", after: "北港", humanReadable: "陆沉在北港", evidence: "正文。", confidence: 0.9, novelty: "update", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(2);
+    expect(result.discardedInvalidTargetTableCount).toBe(3);
+    expect(result.facts.map((f) => f.targetTable)).toEqual(["entities", "entities"]);
+  });
+
+  it("filters novelty=new relations missing endpoints (LLM 输出不完整 relation 的兜底)", async () => {
+    // 回归测试：LLM 偶尔输出 relation payload 只含 fromEntityId 或只含 toEntityId，
+    // commitAcceptedFacts L681-684 对缺 endpoints 的 relation 静默 continue，
+    // promote 抛错"事实投影未完整提交：expected=N actual=0"。
+    const { project, charA, charB } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      // 失败用例 1：缺 toEntityId → 应丢弃
+      { targetTable: "relations", field: "record", after: { fromEntityId: charA.id, relationType: "同伴", bond: "关系", publicLabel: "", privateTruth: "" }, humanReadable: "缺 toId", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 失败用例 2：缺 fromEntityId → 应丢弃
+      { targetTable: "relations", field: "record", after: { toEntityId: charB.id, relationType: "同伴", bond: "关系", publicLabel: "", privateTruth: "" }, humanReadable: "缺 fromId", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 反例：endpoints 完整 → 应保留
+      { targetTable: "relations", field: "record", after: { fromEntityId: charA.id, toEntityId: charB.id, relationType: "同伴", bond: "新关系", publicLabel: "", privateTruth: "" }, humanReadable: "完整关系", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(1);
+    expect(result.discardedRelationMissingEndpointsCount).toBe(2);
+  });
+
+  it("filters novelty=new characters missing name (LLM 输出 aliases 但忘 name 的兜底)", async () => {
+    // 回归测试：LLM 偶尔输出 character payload 含 aliases 但忘了 name，
+    // commitAcceptedFacts L698-701 对缺 name 的 character 静默 continue。
+    const { project } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      // 失败用例 1：缺 name → 应丢弃
+      { targetTable: "entities", field: "record", after: { kind: "character", aliases: ["小陆"], summary: "新人", description: "描述", lockedFacts: [] }, humanReadable: "缺 name", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 失败用例 2：name 为空字符串 → 应丢弃
+      { targetTable: "entities", field: "record", after: { kind: "character", name: "  ", aliases: [], summary: "新人", description: "描述", lockedFacts: [] }, humanReadable: "name 空白", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 反例：有 name → 应保留
+      { targetTable: "entities", field: "record", after: { kind: "character", name: "苏婉", aliases: [], summary: "新人", description: "描述", lockedFacts: [] }, humanReadable: "苏婉", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 反例：非 character kind 不校验 name → 应保留
+      { targetTable: "entities", field: "record", after: { kind: "faction", name: "白云宗", summary: "宗门", description: "描述" }, humanReadable: "白云宗", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(2);
+    expect(result.discardedCharacterMissingNameCount).toBe(2);
+  });
+
+  it("filters novelty=update facts missing targetId (LLM 混淆 new/update 语义的兜底)", async () => {
+    // 回归测试：LLM 偶尔输出 novelty=update 但忘了 targetId（混淆 new/update 语义），
+    // commitAcceptedFacts L725-728 对 novelty=update 但 targetId 缺失的 fact 静默 continue。
+    // 注意：field !== "record" 的情况会被前面的 !targetId && field !== "record" 检查捕获，
+    // 这里测试 field === "record" 的情况（如 LLM 想替换整个 record 但忘了 targetId）。
+    const { project, charA } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      // 失败用例 1：novelty=update field=record 缺 targetId → 应丢弃
+      { targetTable: "entities", field: "record", after: { kind: "character", name: "陆沉", summary: "更新", description: "描述", aliases: [], lockedFacts: [] }, humanReadable: "缺 targetId", evidence: "正文。", confidence: 0.9, novelty: "update", conflict: false },
+      // 失败用例 2：novelty=update field=record targetId 为空字符串 → 应丢弃
+      { targetTable: "entities", targetId: "", field: "record", after: { kind: "character", name: "陆沉", summary: "更新", description: "描述", aliases: [], lockedFacts: [] }, humanReadable: "targetId 空", evidence: "正文。", confidence: 0.9, novelty: "update", conflict: false },
+      // 反例：novelty=update field=record 有 targetId 且目标存在 → 应保留
+      { targetTable: "entities", targetId: charA.id, field: "record", after: { kind: "character", name: "陆沉", summary: "更新", description: "描述", aliases: [], lockedFacts: [] }, humanReadable: "陆沉更新", evidence: "正文。", confidence: 0.9, novelty: "update", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(1);
+    expect(result.discardedUpdateMissingTargetIdCount).toBe(2);
+  });
+
+  it("filters facts with targetId that doesn't exist in db (LLM 输出幻觉 targetId 的兜底)", async () => {
+    // 回归测试：Loop 6 v6 ch 13/ch 15 暴露的新 root cause。
+    // LLM 偶尔输出 novelty=new + targetId=幻觉字段名（如 `character_luchen`、
+    // `object_gray_seal_box`，混淆 entity 名/字段名与真实 UUID），commitAcceptedFacts
+    // L784-792 的 update 路径对所有"非 new+无targetId"的 fact 生效，对 targetId 不存在
+    // 的 fact 标记 `update-target-not-found` 并跳过，promote 抛错"事实投影未完整提交"。
+    // prepareFactCandidates 必须对所有有 targetId 的 fact（不只 novelty=update）校验
+    // targetId 真实存在。
+    const { project, charA } = await seedProjectWithCharacters();
+    const result = await prepareFactCandidates(project.id, [
+      // 失败用例 1：novelty=new + field=character.state.* + targetId=幻觉字段名 → 应丢弃
+      { targetTable: "entities", targetId: "character_luchen", field: "character.state.objective", after: "寻找真相", humanReadable: "陆沉目标", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 失败用例 2：novelty=new + field=record + targetId=不存在的 UUID → 应丢弃
+      { targetTable: "entities", targetId: "ent_non_existent_uuid", field: "record", after: { kind: "character", name: "新人", summary: "新人", description: "描述", aliases: [], lockedFacts: [] }, humanReadable: "幻觉 UUID", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 失败用例 3：novelty=update + targetId=不存在的 UUID → 应丢弃
+      { targetTable: "entities", targetId: "ent_another_fake", field: "character.state.location", after: "北港", humanReadable: "陆沉位置", evidence: "正文。", confidence: 0.9, novelty: "update", conflict: false },
+      // 反例 1：novelty=new + field=character.state.* + targetId=真实 charA.id → 应保留
+      { targetTable: "entities", targetId: charA.id, field: "character.state.objective", after: "新目标", humanReadable: "陆沉新目标", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+      // 反例 2：novelty=new + field=record + 无 targetId → 应保留（走 record 创建路径）
+      { targetTable: "entities", field: "record", after: { kind: "character", name: "苏婉", summary: "新人", description: "描述", aliases: [], lockedFacts: [] }, humanReadable: "苏婉", evidence: "正文。", confidence: 0.9, novelty: "new", conflict: false },
+    ]);
+
+    expect(result.facts).toHaveLength(2);
+    expect(result.discardedInvalidUpdateTargetCount).toBe(3);
+  });
+
   it("commits knowledge deltas to the truth ledger without adding ad-hoc entity fields", async () => {
     const { project, charA } = await seedProjectWithCharacters();
     const run = makeRun(project.id);
@@ -566,7 +745,7 @@ describe("prepareFactCandidates - 可提交边界", () => {
     });
     await setFactCandidateStatus(candidate.id, "accepted");
 
-    expect(await commitAcceptedFacts(project.id, run.id)).toEqual([candidate.id]);
+    expect((await commitAcceptedFacts(project.id, run.id)).committedCandidateIds).toEqual([candidate.id]);
     const entity = await novelDb.entities.get(charA.id) as unknown as Record<string, unknown>;
     expect(entity.knowledgeDeltas).toBeUndefined();
     const assertion = await novelDb.factAssertions.get(`fact:${candidate.id}`);

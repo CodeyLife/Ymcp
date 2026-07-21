@@ -77,7 +77,7 @@ describe("context invariants and fact commits", () => {
     await setFactCandidateStatus(accepted.id, "accepted");
     await expect(setFactCandidateStatus(conflict.id, "accepted")).rejects.toThrow(/冲突事实/);
     const committed = await commitAcceptedFacts(project.id, "run-1");
-    expect(committed).toEqual([accepted.id]);
+    expect(committed.committedCandidateIds).toEqual([accepted.id]);
     expect((await novelDb.entities.get(entity.id))?.summary).toBe("被主角藏在钟楼");
     expect((await novelDb.entities.get(entity.id))?.description).toBe("");
     expect((await novelDb.operations.where("projectId").equals(project.id).toArray()).filter((item) => item.entityId === entity.id)).toHaveLength(1);

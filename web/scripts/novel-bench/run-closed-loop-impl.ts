@@ -2,7 +2,7 @@
  * 闭环 CLI 实现入口（由 run-closed-loop.mjs 通过 Vite SSR loader 调用）。
  *
  * 职责：
- * 1. 在 Node.js 中 polyfill IndexedDB（fake-indexeddb），使 Dexie 可用
+ * 1. 在 Node.js 中 polyfill IndexedDB（fake-indexeddb）+ localStorage（供 zustand persist 读取 LLM 配置）
  * 2. 解析 CLI 参数
  * 3. 从完整 fixture seed 进程内正式库（--seed <path>）
  * 4. 调用 runClosedLoop
@@ -24,6 +24,7 @@ import {
   verifyClosedLoopFixture,
   type ClosedLoopFixtureBundle,
 } from "../../src/features/novel/evaluation/evaluation-fixture";
+import { useUIStore } from "../../src/stores/ui";
 
 interface ParsedArgs {
   projectId: string;
@@ -37,6 +38,9 @@ interface ParsedArgs {
   codeRevision: string;
   experimentId?: string;
   seedFixture?: string;
+  apiKey?: string;
+  apiBaseUrl?: string;
+  chatModel?: string;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -66,6 +70,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--code-rev": result.codeRevision = next ?? "unknown"; i += 1; break;
       case "--experiment": result.experimentId = next; i += 1; break;
       case "--seed": result.seedFixture = next; i += 1; break;
+      case "--api-key": result.apiKey = next; i += 1; break;
+      case "--base-url": result.apiBaseUrl = next; i += 1; break;
+      case "--chat-model": result.chatModel = next; i += 1; break;
       case "--help":
       case "-h":
         printHelp();
@@ -111,13 +118,96 @@ function printHelp(): void {
   --author <id>      作者 ID（默认 closed-loop-cli）
   --code-rev <s>     代码版本号（默认 unknown）
   --experiment <id>  实验 ID（默认自动生成）
-  --seed <path>      完整闭环 fixture JSON（由“导出评测快照”生成，必填）
+  --seed <path>      完整闭环 fixture JSON（由"导出评测快照"生成，必填）
+  --api-key <key>    LLM API Key（默认读 process.env.OPENAI_API_KEY 或 VITE_DEFAULT_API_KEY）
+  --base-url <url>   LLM Base URL（默认读 process.env.OPENAI_BASE_URL 或 https://gpt.eromaa.com/v1）
+  --chat-model <id>  Chat 模型 ID（默认 gpt-5-5）
   --help, -h         显示本帮助
 
 示例：
   npm run novel:closed-loop -- --project p1 --chapter c1 --thread t1 --brief b1 --seed ./fixture.json
   npm run novel:closed-loop -- --project p1 --chapter c1 --thread t1 --brief b1 --dry-run --json
+  npm run novel:closed-loop -- --project p1 --chapter c1 --thread t1 --brief b1 --seed ./fixture.json --api-key sk-xxx
 `.trim());
+}
+
+/**
+ * 在 Node.js 中 polyfill localStorage，使 zustand persist 能读到 LLM 配置。
+ *
+ * 优先级：CLI flag > process.env.OPENAI_API_KEY/OPENAI_BASE_URL > import.meta.env.VITE_DEFAULT_API_KEY（Vite SSR 注入）。
+ *
+ * 写入的 key 为 "ymcp-ui"，与 src/stores/ui.ts 的 persist name 一致。
+ * zustand persist 读取格式：{ state: {...}, version: N }
+ *
+ * 导出供 run-20chapters-impl.ts 共享复用。
+ */
+export interface LocalStoragePolyfillInput {
+  apiKey?: string;
+  apiBaseUrl?: string;
+  chatModel?: string;
+  json?: boolean;
+}
+
+export function polyfillLocalStorage(args: LocalStoragePolyfillInput): void {
+  if (typeof globalThis.localStorage !== "undefined" && globalThis.localStorage) {
+    // 已有 localStorage（如 jsdom 环境），不覆盖
+    return;
+  }
+
+  const apiKey = args.apiKey
+    ?? process.env.OPENAI_API_KEY
+    ?? "";
+  const apiBaseUrl = args.apiBaseUrl
+    ?? process.env.OPENAI_BASE_URL
+    ?? "";
+  const chatModel = args.chatModel
+    ?? process.env.CHAT_MODEL
+    ?? "gpt-5-5";
+
+  const persistedState = {
+    state: {
+      apiBaseUrl: apiBaseUrl.trim(),
+      apiKey: apiKey.trim(),
+      chatModel,
+      modelContextWindow: 0,
+      thumbSize: 256,
+      greenscreenPrompt: "",
+      spritesheetPrompt: "",
+      imageGenAdapter: "task",
+      collapsed: false,
+      incomingImage: null,
+    },
+    version: 5,
+  };
+
+  const store: Record<string, string> = {
+    "ymcp-ui": JSON.stringify(persistedState),
+  };
+
+  Object.defineProperty(globalThis, "localStorage", {
+    value: {
+      getItem(key: string) { return key in store ? store[key] : null; },
+      setItem(key: string, value: string) { store[key] = String(value); },
+      removeItem(key: string) { delete store[key]; },
+      clear() { for (const key of Object.keys(store)) delete store[key]; },
+      key(index: number) { return Object.keys(store)[index] ?? null; },
+      get length() { return Object.keys(store).length; },
+    },
+    configurable: true,
+    writable: true,
+  });
+
+  // 关键：zustand persist 在模块加载时（polyfill 之前）已从空环境初始化 store，
+  // 此时 useUIStore.getState().apiKey === ""。仅写入 localStorage 不会让 store 重新 hydrate。
+  // 必须主动 setState 同步 store，否则 ai.ts 的 getEffectiveApiConfig() 仍读到空 apiKey。
+  useUIStore.setState({
+    apiBaseUrl: apiBaseUrl.trim(),
+    apiKey: apiKey.trim(),
+    chatModel,
+  });
+
+  const writeLog = args.json ? console.error : console.log;
+  writeLog(`[closed-loop] localStorage polyfill：apiKey=${apiKey ? "<已注入>" : "<空>"} baseUrl=${apiBaseUrl || "<默认>"} chatModel=${chatModel}`);
 }
 
 export async function seedCanonicalFromFixture(fixturePath: string, jsonMode: boolean): Promise<void> {
@@ -151,6 +241,9 @@ export async function runClosedLoopCli(argv: string[]): Promise<number> {
   if (!args.seedFixture) {
     throw new Error("CLI 使用进程内 IndexedDB，必须通过 --seed <path> 提供包含 project、document、conversationThreads 与 creativeBriefs 的完整 fixture");
   }
+
+  // Polyfill localStorage 必须在任何 LLM 调用前完成（ai.ts → getEffectiveApiConfig → useUIStore → localStorage）
+  polyfillLocalStorage(args);
 
   await seedCanonicalFromFixture(args.seedFixture, args.json);
 

@@ -22,6 +22,7 @@ import type {
   WorkflowArtifact,
 } from "../types";
 import { BUILTIN_NOVEL_SKILLS } from "../skills";
+import { listPromptTemplates } from "../prompt-templates";
 import { countNovelWords } from "../quality";
 import type { ProjectHead } from "./project-snapshot";
 import { listIteratedSkills } from "./skill-iteration";
@@ -121,8 +122,10 @@ export async function computeWorkflowInputHash(value: unknown): Promise<string> 
 /**
  * 从实验库的 FactCandidate 投影为 CandidateBundle.acceptedFacts 中的 PromotableFact。
  *
- * 过滤规则：只保留 novelty !== "duplicate" && conflict === false && risk === "safe" 的候选，
- * 因为 duplicate/conflict/high-risk 候选不应自动晋升（作者可在 AuthorDecision 中显式接受子集）。
+ * 过滤规则：只保留 status === "accepted" && novelty !== "duplicate" && conflict === false 的候选。
+ * risk 不在过滤条件内——risk 是 fact-approval 阶段的决策输入，closed-loop CLI 作为作者代理
+ * 接受 pending 候选后 status=accepted 即应进入 bundle；promotion.ts replayCandidate 会强制
+ * risk="safe" conflict=false，所以 bundle 导出层无需重复 risk 过滤。
  *
  * 必填字段检查：FactCandidate.predicate/object/polarity/truthStatus/timeMode/humanReadable 是可选的，
  * 但 FactAssertion 是必填的。如果候选缺少这些字段，无法投影为 assertion，跳过。
@@ -131,7 +134,10 @@ function projectFactCandidate(candidate: FactCandidate): PromotableFact | null {
   if (candidate.status !== "accepted") return null;
   if (candidate.novelty === "duplicate") return null;
   if (candidate.conflict) return null;
-  if (candidate.risk !== "safe") return null;
+  // 不再按 risk 过滤：risk 是 fact-approval 阶段的决策输入，closed-loop CLI 作为作者代理
+  // 接受 pending 候选后 status=accepted 即应进入 bundle。promotion.ts replayCandidate 会
+  // 强制 risk="safe" conflict=false status="accepted"，所以 bundle 导出时重复过滤 risk
+  // 会导致 closed-loop 接受的 high-risk 候选无法被 promote，factAssertions 恒为 0。
 
   // FactAssertion 必填字段检查
   if (!candidate.predicate) return null;
@@ -361,16 +367,45 @@ export async function extractCandidateBundle(params: {
     .toArray();
   const workflowArtifactIds = workflowArtifacts.map((artifact: WorkflowArtifact) => artifact.id);
 
-  // 10. 计算 promptFingerprint（用激活 skill 的 prompt）
-  //     Loop 7：用 draftArtifact.skillRefs 从实验库 skills 表读取 prompt
-  const skillRefs = (draftArtifact.skillRefs ?? []).map((ref) => ref.split("@")[0]!);
-  const skillRecords = skillRefs.length ? await db.skills.where("skillId").anyOf(skillRefs).toArray() : [];
-  const skillPrompts = skillRefs.map((id) => (
-    skillRecords.find((skill) => skill.skillId === id)?.prompt
-    ?? BUILTIN_NOVEL_SKILLS.find((skill) => skill.skillId === id)?.prompt
-    ?? ""
-  ));
-  const promptFingerprint = await computePromptFingerprint(skillRefs, skillPrompts);
+  // 10. 计算全工作流 promptFingerprint，并保留每个阶段的独立证据。
+  const promptBearingArtifacts = workflowArtifacts.filter((artifact) => (artifact.skillRefs?.length ?? 0) > 0);
+  const resolvedRefs = [...new Set(promptBearingArtifacts.flatMap((artifact) => artifact.skillRefs ?? []))];
+  const parsedRefs = resolvedRefs.map((ref) => {
+    const separator = ref.lastIndexOf("@");
+    return { ref, id: separator >= 0 ? ref.slice(0, separator) : ref, version: separator >= 0 ? ref.slice(separator + 1) : "" };
+  });
+  const ordinaryIds = parsedRefs.filter((item) => !item.id.startsWith("system-prompt:")).map((item) => item.id);
+  const [skillRecords, promptTemplates] = await Promise.all([
+    ordinaryIds.length ? db.skills.where("skillId").anyOf(ordinaryIds).toArray() : [],
+    listPromptTemplates(params.workspace.projectId, db),
+  ]);
+  const promptByRef = new Map(parsedRefs.map(({ ref, id, version }) => {
+    let prompt: string;
+    if (id.startsWith("system-prompt:")) {
+      const templateId = id.slice("system-prompt:".length);
+      prompt = promptTemplates.find((template) => template.templateId === templateId && (!version || template.version === version))?.content ?? "";
+    } else {
+      const records = skillRecords.filter((skill) => skill.skillId === id && (!version || skill.version === version));
+      prompt = records.find((skill) => skill.projectId === params.workspace.projectId)?.prompt
+        ?? records.find((skill) => skill.projectId === "__user__")?.prompt
+        ?? records[0]?.prompt
+        ?? BUILTIN_NOVEL_SKILLS.find((skill) => skill.skillId === id && (!version || skill.version === version))?.prompt
+        ?? "";
+    }
+    return [ref, prompt] as const;
+  }));
+  const stagePromptEvidence = await Promise.all(promptBearingArtifacts.map(async (artifact) => ({
+    stage: artifact.stage,
+    artifactId: artifact.id,
+    skillRefs: [...artifact.skillRefs],
+    promptFingerprint: await computePromptFingerprint(artifact.skillRefs, artifact.skillRefs.map((ref) => promptByRef.get(ref) ?? "")),
+  })));
+  const fingerprintEntries = stagePromptEvidence
+    .flatMap((evidence) => evidence.skillRefs.map((ref) => ({ ref: `${evidence.stage}:${ref}`, prompt: promptByRef.get(ref) ?? "" })))
+    .sort((left, right) => left.ref.localeCompare(right.ref) || left.prompt.localeCompare(right.prompt));
+  const fingerprintRefs = fingerprintEntries.map((entry) => entry.ref);
+  const fingerprintPrompts = fingerprintEntries.map((entry) => entry.prompt);
+  const promptFingerprint = await computePromptFingerprint(fingerprintRefs, fingerprintPrompts);
 
   // 11. 组装 CandidateProvenance
   const configFingerprint = await computeConfigFingerprint({
@@ -382,6 +417,8 @@ export async function extractCandidateBundle(params: {
 
   const provenance: CandidateProvenance = {
     model: draftArtifact.model ?? project.settings.textModel,
+    skillRefs: resolvedRefs,
+    stagePromptEvidence,
     promptFingerprint,
     configFingerprint,
     codeRevision,
@@ -548,6 +585,8 @@ export function verifyCandidateBundle(bundle: CandidateBundle): CandidateBundleV
   // provenance 字段
   if (bundle.provenance) {
     if (!bundle.provenance.model) issues.push("provenance.model 缺失");
+    if (bundle.provenance.skillRefs !== undefined && !Array.isArray(bundle.provenance.skillRefs)) issues.push("provenance.skillRefs 必须为数组");
+    if (bundle.provenance.stagePromptEvidence !== undefined && !Array.isArray(bundle.provenance.stagePromptEvidence)) issues.push("provenance.stagePromptEvidence 必须为数组");
     if (!bundle.provenance.promptFingerprint) issues.push("provenance.promptFingerprint 缺失");
     if (!bundle.provenance.configFingerprint) issues.push("provenance.configFingerprint 缺失");
     if (!bundle.provenance.codeRevision) issues.push("provenance.codeRevision 缺失");

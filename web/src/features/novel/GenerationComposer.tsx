@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { App, Button, Checkbox, Input, Select, Tag } from "antd";
-import { ArrowsAltOutlined, CheckCircleOutlined, CloseOutlined, EditOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Checkbox, Input, Select, Tag } from "antd";
+import { ArrowsAltOutlined, CheckCircleOutlined, CloseOutlined, EditOutlined, FileSearchOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   applyProposalItems,
@@ -9,12 +9,17 @@ import {
   getGenerationTask,
   regenerateProposalItem,
   rejectProposal,
-  runGenerationTask,
   runRefinementTask,
   tasksForScope,
   updateProposalItemPayload,
 } from "./generation";
 import { novelDb } from "./db";
+import {
+  evaluateCreativeReviewGate,
+  executeCreativeCommand,
+  findCreativeWorkForArtifact,
+  startManualCreativeGeneration,
+} from "./creative-execution";
 import type { NovelGenerationScope, NovelGenerationTaskKey, ProposalItem, RefinementSnapshotInput } from "./types";
 import ProposalReviewDialog from "./ProposalReviewDialog";
 import { fieldLabel } from "./ProposalDataCard";
@@ -64,6 +69,13 @@ export default function GenerationComposer({
   const [selectedFields, setSelectedFields] = useState<Record<string, string[]>>({});
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [reviewingItemId, setReviewingItemId] = useState<string>();
+  const creativeReviewState = useLiveQuery(async () => {
+    if (!proposal) return undefined;
+    const work = await findCreativeWorkForArtifact(projectId, proposal.id);
+    if (!work) return undefined;
+    const reviews = await novelDb.creativeReviews.where("workItemId").equals(work.id).sortBy("createdAt");
+    return { work, reviews, latest: reviews.at(-1), gate: evaluateCreativeReviewGate(reviews) };
+  }, [projectId, proposal?.id, proposal?.revision]);
   const refinementAvailable = useLiveQuery(async () => {
     if (!task?.refinable) return false;
     const snapshot = await buildRefinementSnapshot({ projectId, taskKey: task.key, targetId });
@@ -103,14 +115,20 @@ export default function GenerationComposer({
 
   async function generate() {
     if (!task || busy || proposal) return;
-    await perform(() => runGenerationTask({ projectId, taskKey: task.key, instruction: instruction.trim() || task.defaultInstruction, targetId }), "候选内容已生成，请审核");
+    const effectiveInstruction = instruction.trim() || task.defaultInstruction;
+    await perform(() => startManualCreativeGeneration({ projectId, taskKey: task.key, instruction: effectiveInstruction, targetId }), "候选内容已生成，请审核");
   }
 
   async function refine() {
     if (!task || busy || proposal) return;
     if (!instruction.trim()) { message.warning("请输入具体的微调要求"); return; }
     const sourceOverrides = await getRefinementSnapshot?.();
-    await perform(() => runRefinementTask({ projectId, taskKey: task.key, instruction, targetId, sourceOverrides }), "微调候选已生成，请审核");
+    await perform(() => startManualCreativeGeneration({ projectId, taskKey: task.key, instruction, targetId }, novelDb, {
+      executor: async () => {
+        const result = await runRefinementTask({ projectId, taskKey: task.key, instruction, targetId, sourceOverrides });
+        return { artifactRefs: [result.proposal.id], summary: result.proposal.title };
+      },
+    }), "微调候选已生成，请审核");
   }
 
   async function apply() {
@@ -129,17 +147,43 @@ export default function GenerationComposer({
       const snapshot = await buildRefinementSnapshot({ projectId, taskKey: proposal.taskKey, targetId: proposal.targetId, sourceOverrides });
       sourceFingerprint = await fingerprintRefinementSnapshot(snapshot);
     }
-    const result = await applyProposalItems(proposal.id, selected, { sourceFingerprint, selectedFields });
+    let result: Awaited<ReturnType<typeof applyProposalItems>>;
+    const creativeWork = creativeReviewState?.work;
+    if (creativeWork && creativeWork.status === "waiting-review") {
+      await executeCreativeCommand({ runId: creativeWork.creativeRunId, type: "work.accept", workItemId: creativeWork.id, idempotencyKey: `manual:accept:${proposal.id}:${proposal.revision}` }, {
+        db: novelDb,
+        accepter: async () => {
+          result = await applyProposalItems(proposal.id, selected, { sourceFingerprint, selectedFields });
+          return { artifactRefs: [proposal.id], summary: `已采纳 ${result.applied} 项` };
+        },
+      });
+      result = result!;
+    } else {
+      result = await applyProposalItems(proposal.id, selected, { sourceFingerprint, selectedFields });
+    }
     const detail = `${result.conflicts ? `，${result.conflicts} 项因版本冲突未写入` : ""}${result.embeddingFailures ? `，${result.embeddingFailures} 项语义索引待重试` : ""}`;
     result.embeddingFailures ? message.warning(`已采纳 ${result.applied} 项${detail}`) : message.success(`已采纳 ${result.applied} 项${detail}`);
+  }
+
+  async function requestAiReview() {
+    const work = creativeReviewState?.work;
+    if (!work) throw new Error("当前候选没有关联的创作运行");
+    await executeCreativeCommand({ runId: work.creativeRunId, type: "review.request", workItemId: work.id, idempotencyKey: `manual:review:${proposal!.id}:${creativeReviewState.reviews.length}` }, { db: novelDb });
   }
 
   async function rejectAndRegenerate() {
     if (!proposal) return;
     await rejectProposal(proposal.id);
+    if (creativeReviewState?.work) {
+      await executeCreativeCommand({ runId: creativeReviewState.work.creativeRunId, type: "run.cancel", idempotencyKey: `manual:cancel:${proposal.id}:regenerate` }, { db: novelDb });
+    }
     const sourceOverrides = await getRefinementSnapshot?.();
-    if (proposal.generationMode === "refine") await runRefinementTask({ projectId, taskKey: proposal.taskKey!, instruction, targetId, sourceOverrides });
-    else await runGenerationTask({ projectId, taskKey: proposal.taskKey!, instruction, targetId });
+    await startManualCreativeGeneration({ projectId, taskKey: proposal.taskKey!, instruction, targetId }, novelDb, proposal.generationMode === "refine" ? {
+      executor: async () => {
+        const result = await runRefinementTask({ projectId, taskKey: proposal.taskKey!, instruction, targetId, sourceOverrides });
+        return { artifactRefs: [result.proposal.id], summary: result.proposal.title };
+      },
+    } : undefined);
   }
 
   function closeProposal() {
@@ -149,7 +193,10 @@ export default function GenerationComposer({
       content: "将丢弃当前候选内容，不会自动重新生成。",
       okText: "关闭",
       okButtonProps: { danger: true },
-      onOk: async () => { await rejectProposal(proposal.id); },
+      onOk: async () => {
+        await rejectProposal(proposal.id);
+        if (creativeReviewState?.work) await executeCreativeCommand({ runId: creativeReviewState.work.creativeRunId, type: "run.cancel", idempotencyKey: `manual:cancel:${proposal.id}:close` }, { db: novelDb });
+      },
     });
   }
 
@@ -219,7 +266,8 @@ export default function GenerationComposer({
         <footer><Button icon={<ArrowsAltOutlined />} onClick={() => setReviewingItemId(item.id)}>查看完整预览</Button></footer>
       </article>;
       })}</div>
-      <footer><div className="novel-generation-review-actions"><Button icon={<CloseOutlined />} disabled={busy} onClick={() => closeProposal()}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button></div><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
+      {creativeReviewState?.latest && <Alert type={creativeReviewState.gate.passed ? "success" : creativeReviewState.latest.verdict === "inconclusive" ? "warning" : "info"} showIcon message={`AI 审核：${creativeReviewState.latest.summary}`} description={creativeReviewState.gate.openIssues.length ? `仍有 ${creativeReviewState.gate.openIssues.length} 个有效问题` : undefined} />}
+      <footer><div className="novel-generation-review-actions"><Button icon={<CloseOutlined />} disabled={busy} onClick={() => closeProposal()}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button><Button icon={<FileSearchOutlined />} disabled={busy || !creativeReviewState?.work} onClick={() => void perform(requestAiReview, "AI 审核已完成")}>AI 审核</Button></div><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
     </div>}
     <ProposalReviewDialog item={reviewingItem} draft={reviewingItem ? drafts[reviewingItem.id] : undefined} open={Boolean(reviewingItem)} onClose={() => setReviewingItemId(undefined)} onChange={(next) => {
       if (!reviewingItem) return;

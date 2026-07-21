@@ -213,7 +213,7 @@ export async function runSkillIteration(params: {
   });
 
   // 4. 验证每个 iteration：skillId 必须在激活的 skills 中，afterPrompt 必须通过 parseNovelSkill
-  const skillMap = new Map(resolved.skills.map((skill) => [skill.skillId, skill]));
+  const skillMap = new Map(resolved.skills.filter((skill) => !skill.skillId.startsWith("system-prompt:")).map((skill) => [skill.skillId, skill]));
   const issueMap = new Map(qualityReport.issues.map((issue) => [issue.id, issue]));
   const validatedIterations: Array<{
     skill: NovelSkillManifest;

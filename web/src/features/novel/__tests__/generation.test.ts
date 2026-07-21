@@ -96,11 +96,12 @@ describe("phase plot design", () => {
     expect(callStructuredNovelModel).not.toHaveBeenCalled();
   });
 
-  it("validates exactly one segment and two to four chapters", () => {
+  it("validates exactly one segment and a capacity-driven number of chapters", () => {
     const segment: ProposalItem = { id: "segment", tempId: "segment", label: "段", operation: "create", targetTable: "outlineNodes", status: "pending", payload: { phaseId: "phase", title: "段", summary: "概要", order: 0 }, rationale: "", dependencies: [] };
     const chapter = (id: string, order: number): ProposalItem => ({ id, tempId: id, label: id, operation: "create", targetTable: "documents", status: "pending", payload: { plotSegmentId: "ref:segment", title: id, summary: "摘要", order, blueprint: {} }, rationale: "", dependencies: [] });
-    expect(() => validatePlotDesignItems([segment, chapter("one", 0)], "phase", 0, 0)).toThrow(/2-4 个章节/);
-    expect(() => validatePlotDesignItems([segment, chapter("one", 0), chapter("two", 1)], "phase", 0, 0)).not.toThrow();
+    expect(() => validatePlotDesignItems([segment], "phase", 0, 0)).toThrow(/至少需要创建 1 个章节/);
+    expect(() => validatePlotDesignItems([segment, chapter("one", 0)], "phase", 0, 0)).not.toThrow();
+    expect(() => validatePlotDesignItems([segment, ...Array.from({ length: 6 }, (_, index) => chapter(`chapter-${index}`, index))], "phase", 0, 0)).not.toThrow();
   });
 
   it("drops an unresolved POV when plot design runs before character setup", async () => {

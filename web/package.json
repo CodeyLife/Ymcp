@@ -17,13 +17,17 @@
     "test:e2e:foundation": "npx vitest run --config vitest.e2e.config.ts src/features/novel/__tests__/e2e-foundation.test.ts",
     "test:e2e:chapter1": "npx vitest run --config vitest.e2e.config.ts src/features/novel/__tests__/e2e-chapter1.test.ts",
     "bench:compare": "node scripts/novel-bench/compare.mjs",
-    "novel:closed-loop": "node scripts/novel-bench/run-closed-loop.mjs"
+    "novel:closed-loop": "node scripts/novel-bench/run-closed-loop.mjs",
+    "novel:20chapters": "node scripts/novel-bench/run-20chapters.mjs",
+    "novel:mcp": "node scripts/novel-mcp-server.mjs",
+    "test:mcp": "node --test scripts/novel-mcp-server.test.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
     "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "@fontsource-variable/geist": "^5.2.9",
     "@fontsource-variable/geist-mono": "^5.2.8",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@tanstack/react-query": "^5.62.0",
     "@tiptap/core": "^3.27.3",
     "@tiptap/extension-character-count": "^3.27.3",
@@ -48,9 +52,11 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.1.0",
     "remark-gfm": "^4.0.1",
+    "ws": "^8.21.1",
     "y-indexeddb": "^9.0.12",
     "yaml": "^2.9.0",
     "yjs": "^13.6.31",
+    "zod": "^4.4.3",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
@@ -58,6 +64,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.4",
     "fake-indexeddb": "^6.2.5",
     "tailwindcss": "^4.0.0",

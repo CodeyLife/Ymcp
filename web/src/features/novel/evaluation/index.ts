@@ -19,6 +19,7 @@ export type {
 
 export {
   captureClosedLoopFixture,
+  importClosedLoopFixture,
   replaceCanonicalDatabaseFromFixture,
   verifyClosedLoopFixture,
   CLOSED_LOOP_FIXTURE_FORMAT_VERSION,

@@ -216,6 +216,16 @@ async function seedWorkflowRunInExperimentDb(
     skillRefs: ["embodied-prose", "prose-discipline"],
   } as unknown as WorkflowArtifact;
   await db.workflowArtifacts.put(draftArtifact);
+  await db.workflowArtifacts.put({
+    ...baseRecord("artifact-blueprint-provenance"),
+    workflowRunId: WORKFLOW_RUN_ID,
+    stage: "blueprint",
+    kind: "blueprint",
+    title: "第一章蓝图",
+    contentMarkdown: "建立客栈常态并保留线索空间。",
+    model: "test-model",
+    skillRefs: ["system-prompt:planning-craft-guidance@1.0.0", "chapter-blueprint@1.0.0"],
+  } as WorkflowArtifact);
 
   const qualityReport: QualityReport = {
     ...baseRecord(QUALITY_REPORT_ID),
@@ -422,6 +432,11 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
     expect(candidateBundle.provenance.configFingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(candidateBundle.provenance.codeRevision).toBe("loop7-test");
     expect(candidateBundle.provenance.workflowArtifactIds).toContain(DRAFT_ARTIFACT_ID);
+    expect(candidateBundle.provenance.skillRefs).toEqual(expect.arrayContaining(["embodied-prose", "system-prompt:planning-craft-guidance@1.0.0", "chapter-blueprint@1.0.0"]));
+    expect(candidateBundle.provenance.stagePromptEvidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "blueprint", artifactId: "artifact-blueprint-provenance" }),
+      expect.objectContaining({ stage: "draft", artifactId: DRAFT_ARTIFACT_ID }),
+    ]));
     expect(candidateBundle.provenance.experimentStartedAt).toBe(50);
     expect(candidateBundle.provenance.exportedAt).toBeGreaterThan(0);
 
@@ -540,7 +555,7 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
     expect(verification.issues).toContain("iteratedSkills[0].beforePrompt 与 afterPrompt 相同");
   });
 
-  it("PromotableFact 投影过滤 duplicate/conflict/high-risk 候选", async () => {
+  it("PromotableFact 投影过滤 duplicate/conflict 候选（high-risk 由 fact-approval 决策，不在此层过滤）", async () => {
     const bundle = await captureProjectSnapshot(novelDb, PROJECT_ID, "chapter-baseline");
     const loaded = await loadProjectSnapshotIntoExperiment(bundle, `bench-loop7-filter-${crypto.randomUUID()}`);
     workspace = loaded.workspace;
@@ -548,7 +563,7 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
 
     await seedWorkflowRunInExperimentDb(experimentDb, { withFactCandidate: false });
 
-    // 写入 3 个 factCandidate: 1 safe + 1 duplicate + 1 high-risk
+    // 写入 4 个 factCandidate: 1 safe + 1 duplicate + 1 high-risk + 1 conflict
     const safeFact: FactCandidate = {
       ...baseRecord("fact-safe"),
       workflowRunId: WORKFLOW_RUN_ID,
@@ -601,9 +616,11 @@ describe("Loop 7: extractCandidateBundle 从实验库导出 CandidateBundle，ve
       baseDependencyHead: bundle.head,
     });
 
-    // 只有 safeFact 应该被投影到 acceptedFacts
-    expect(candidateBundle.acceptedFacts.length).toBe(1);
-    expect(candidateBundle.acceptedFacts[0]!.sourceCandidateId).toBe("fact-safe");
+    // safeFact + highRiskFact 应被投影到 acceptedFacts（high-risk 由 fact-approval 决策，
+    // bundle 导出层不再过滤 risk；duplicate 和 conflict 仍被过滤）
+    expect(candidateBundle.acceptedFacts.length).toBe(2);
+    const projectedIds = candidateBundle.acceptedFacts.map((fact) => fact.sourceCandidateId).sort();
+    expect(projectedIds).toEqual(["fact-high-risk", "fact-safe"]);
 
     const canonicalHashAfter = await captureCanonicalHash(PROJECT_ID, "post-bench");
     assertCanonicalHashUnchanged(canonicalHashBefore, canonicalHashAfter);

@@ -30,6 +30,7 @@ import {
   saveStoryArchitecture,
 } from "./db";
 import { runPlotDesignTask } from "./generation";
+import { createSegmentAutomationRun, runSegmentAutomation } from "./creative-segment";
 import type { ArchitecturePhase, ManuscriptDocument, OutlineNode, StoryArchitecture } from "./types";
 
 type OpenChapterPanel = "manuscript" | "workflow";
@@ -71,7 +72,7 @@ function ChapterRow({ document, onUpdate, onDelete, onOpen }: {
   </div>;
 }
 
-function SegmentSection({ segment, chapters, siblings, onUpdate, onMove, onDelete, onAddChapter, onUpdateChapter, onDeleteChapter, onOpenChapter }: {
+function SegmentSection({ segment, chapters, siblings, onUpdate, onMove, onDelete, onAddChapter, onUpdateChapter, onDeleteChapter, onOpenChapter, onAutomate, automating }: {
   segment: OutlineNode;
   chapters: ManuscriptDocument[];
   siblings: OutlineNode[];
@@ -82,6 +83,8 @@ function SegmentSection({ segment, chapters, siblings, onUpdate, onMove, onDelet
   onUpdateChapter: (document: ManuscriptDocument, changes: Partial<ManuscriptDocument>) => void;
   onDeleteChapter: (document: ManuscriptDocument) => void;
   onOpenChapter: (documentId: string, panel: OpenChapterPanel) => void;
+  onAutomate: (segment: OutlineNode) => void;
+  automating: boolean;
 }) {
   const index = siblings.findIndex((item) => item.id === segment.id);
   const [collapsed, setCollapsed] = useState(false);
@@ -96,6 +99,7 @@ function SegmentSection({ segment, chapters, siblings, onUpdate, onMove, onDelet
         <Tooltip title="上移剧情段"><Button type="text" aria-label="上移剧情段" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => onMove(segment, -1)} /></Tooltip>
         <Tooltip title="下移剧情段"><Button type="text" aria-label="下移剧情段" icon={<ArrowDownOutlined />} disabled={index === siblings.length - 1} onClick={() => onMove(segment, 1)} /></Tooltip>
         <Tooltip title="新增章节"><Button type="text" aria-label="新增章节" icon={<PlusOutlined />} onClick={() => onAddChapter(segment)} /></Tooltip>
+        <Tooltip title="一键生成并审核本剧情段全部章节"><Button type="text" aria-label="一键生成剧情段" loading={automating} icon={<ThunderboltOutlined />} disabled={!chapters.length} onClick={() => onAutomate(segment)} /></Tooltip>
         <Tooltip title="删除剧情段"><Button danger type="text" aria-label="删除剧情段" icon={<DeleteOutlined />} onClick={() => onDelete(segment)} /></Tooltip>
       </div>
     </header>
@@ -117,6 +121,7 @@ export default function OutlineDocView({ projectId, onOpenChapter }: { projectId
   const [generatePhase, setGeneratePhase] = useState<ArchitecturePhase>();
   const [instruction, setInstruction] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [automatingTarget, setAutomatingTarget] = useState<string>();
   const [collapsedPhases, setCollapsedPhases] = useState<Set<string>>(new Set());
   const togglePhase = useCallback((phaseId: string) => {
     setCollapsedPhases((current) => {
@@ -213,6 +218,23 @@ export default function OutlineDocView({ projectId, onOpenChapter }: { projectId
     }
   }
 
+  async function automateSegment(input: { plotSegmentId?: string; phaseId?: string; objective: string }) {
+    if (automatingTarget) return;
+    setAutomatingTarget(input.plotSegmentId ?? input.phaseId);
+    try {
+      if (input.phaseId) await saveArchitectureDraft();
+      const created = await createSegmentAutomationRun({ projectId, ...input });
+      const finished = await runSegmentAutomation(created.run.id);
+      if (finished.run.status === "completed") message.success("剧情段全部章节已通过审核并提交");
+      else if (finished.run.status === "paused") message.warning(`自动流程已暂停：${finished.workItems.find((item) => item.status === "blocked")?.error ?? "需要审核决策"}`);
+      else message.info(`自动流程状态：${finished.run.status}`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "剧情段自动化失败");
+    } finally {
+      setAutomatingTarget(undefined);
+    }
+  }
+
   if (proposal) return <OutlineProposalReview proposal={proposal} onRegenerate={() => {
     const phase = architecture?.phases.find((item) => item.id === proposal.targetId);
     if (phase) setGeneratePhase(phase);
@@ -231,8 +253,8 @@ export default function OutlineDocView({ projectId, onOpenChapter }: { projectId
       const phaseSegments = segments.filter((segment) => segment.phaseId === phase.id).sort((left, right) => left.order - right.order);
       const phaseCollapsed = collapsedPhases.has(phase.id);
       return <motion.section className="novel-phase-section" key={phase.id} layout initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .28, delay: Math.min(phaseIndex * .04, .2) }}>
-        <header className="novel-phase-header"><button type="button" className="novel-phase-number" aria-label={phaseCollapsed ? "展开本幕" : "收起本幕"} onClick={() => togglePhase(phase.id)}>{phaseCollapsed ? <RightOutlined /> : <DownOutlined />}<span>幕</span><strong>{String(phaseIndex + 1).padStart(2, "0")}</strong></button><div className="novel-phase-summary-editor"><label><span>幕标题</span><Input value={phase.title} placeholder="为这一幕命名" onChange={(event) => updateDraftPhase(phase.id, { title: event.target.value })} /></label><label><span>叙事使命</span><Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} value={phase.purpose} placeholder="这一幕必须完成的叙事推进" onChange={(event) => updateDraftPhase(phase.id, { purpose: event.target.value })} /></label><label><span>不可逆转折</span><Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} value={phase.turningPoint} placeholder="幕末改变故事方向的决定性变化" onChange={(event) => updateDraftPhase(phase.id, { turningPoint: event.target.value })} /></label></div><div className="novel-phase-actions"><Tooltip title="删除本幕"><Button danger type="text" aria-label={`删除${phase.title || `第 ${phaseIndex + 1} 幕`}`} icon={<DeleteOutlined />} onClick={() => removeDraftPhase(phase)} /></Tooltip><Button icon={<RobotOutlined />} onClick={async () => { await saveArchitectureDraft(); setGeneratePhase(phase); }}>AI 设计章节</Button><Button type="primary" icon={<PlusOutlined />} onClick={async () => { await saveArchitectureDraft(); await addSegment(phase); }}>新增剧情段</Button></div></header>
-        {!phaseCollapsed && <div className="novel-phase-segments">{phaseSegments.map((segment) => <SegmentSection key={segment.id} segment={segment} siblings={phaseSegments} chapters={documents.filter((document) => document.plotSegmentId === segment.id)} onUpdate={(item, changes) => void updateSegment(item, changes)} onMove={(item, direction) => void moveSegment(item, direction)} onDelete={removeSegment} onAddChapter={async (item) => { const chapter = await createChapter(projectId, undefined, item.id); onOpenChapter(chapter.id, "manuscript"); }} onUpdateChapter={(document, changes) => void updateChapter(document, changes)} onDeleteChapter={removeChapter} onOpenChapter={onOpenChapter} />)}{!phaseSegments.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该幕还没有剧情段" />}</div>}
+        <header className="novel-phase-header"><button type="button" className="novel-phase-number" aria-label={phaseCollapsed ? "展开本幕" : "收起本幕"} onClick={() => togglePhase(phase.id)}>{phaseCollapsed ? <RightOutlined /> : <DownOutlined />}<span>幕</span><strong>{String(phaseIndex + 1).padStart(2, "0")}</strong></button><div className="novel-phase-summary-editor"><label><span>幕标题</span><Input value={phase.title} placeholder="为这一幕命名" onChange={(event) => updateDraftPhase(phase.id, { title: event.target.value })} /></label><label><span>叙事使命</span><Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} value={phase.purpose} placeholder="这一幕必须完成的叙事推进" onChange={(event) => updateDraftPhase(phase.id, { purpose: event.target.value })} /></label><label><span>不可逆转折</span><Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} value={phase.turningPoint} placeholder="幕末改变故事方向的决定性变化" onChange={(event) => updateDraftPhase(phase.id, { turningPoint: event.target.value })} /></label></div><div className="novel-phase-actions"><Tooltip title="删除本幕"><Button danger type="text" aria-label={`删除${phase.title || `第 ${phaseIndex + 1} 幕`}`} icon={<DeleteOutlined />} onClick={() => removeDraftPhase(phase)} /></Tooltip><Button icon={<RobotOutlined />} onClick={async () => { await saveArchitectureDraft(); setGeneratePhase(phase); }}>AI 设计章节</Button><Button loading={automatingTarget === phase.id} icon={<ThunderboltOutlined />} onClick={() => void automateSegment({ phaseId: phase.id, objective: `为“${phase.title}”设计下一个剧情段并完成全部章节` })}>一键完成下一段</Button><Button type="primary" icon={<PlusOutlined />} onClick={async () => { await saveArchitectureDraft(); await addSegment(phase); }}>新增剧情段</Button></div></header>
+        {!phaseCollapsed && <div className="novel-phase-segments">{phaseSegments.map((segment) => <SegmentSection key={segment.id} segment={segment} siblings={phaseSegments} chapters={documents.filter((document) => document.plotSegmentId === segment.id)} onUpdate={(item, changes) => void updateSegment(item, changes)} onMove={(item, direction) => void moveSegment(item, direction)} onDelete={removeSegment} onAddChapter={async (item) => { const chapter = await createChapter(projectId, undefined, item.id); onOpenChapter(chapter.id, "manuscript"); }} onUpdateChapter={(document, changes) => void updateChapter(document, changes)} onDeleteChapter={removeChapter} onOpenChapter={onOpenChapter} onAutomate={(item) => void automateSegment({ plotSegmentId: item.id, objective: `完成“${item.title}”全部章节` })} automating={automatingTarget === segment.id} />)}{!phaseSegments.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该幕还没有剧情段" />}</div>}
       </motion.section>;
     })}</div></section>
     {unassigned.length > 0 && <section className="novel-unassigned-chapters"><header><div><Tag color="orange">待整理章节</Tag><strong>{unassigned.length} 章</strong></div><p>这些章节尚未归属剧情段，仍可编辑，但不会进入按幕组织的规划。</p></header>{unassigned.map((document) => <div key={document.id}><span>{document.title}</span><Select placeholder="选择剧情段" value={document.plotSegmentId} options={segments.map((segment) => ({ value: segment.id, label: `${phaseList.find((phase) => phase.id === segment.phaseId)?.title ?? "未知幕"} / ${segment.title}` }))} onChange={async (plotSegmentId) => { await updateChapter(document, { plotSegmentId }); await normalizeChapterOrderByPlanning(projectId); }} /><Button onClick={() => onOpenChapter(document.id, "manuscript")}>打开正文</Button></div>)}</section>}

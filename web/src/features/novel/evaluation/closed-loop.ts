@@ -17,8 +17,8 @@
  * 因为这两张表属于"对话层"而非"地基层"。本模块在加载快照后，从正式库读取 thread + brief
  * 记录，显式 seed 到实验库，使 startChapterWorkflow 能在实验库上找到它们。
  */
-import { documentContentHash, type NovelDatabase } from "../db";
-import type { CreativeBrief, ManuscriptDocument, NovelConversationThread } from "../types";
+import { documentContentHash, recordBase, type NovelDatabase } from "../db";
+import type { CraftRuleCandidate, CreativeBrief, ManuscriptDocument, NovelConversationThread } from "../types";
 import { captureProjectSnapshot, type ProjectSnapshotBundle } from "./project-snapshot";
 import {
   loadProjectSnapshotIntoExperiment,
@@ -33,8 +33,6 @@ import type {
   AuthorDecision,
   CandidateBundle,
   CandidateTargetDocument,
-  IteratedBinding,
-  IteratedSkill,
   PromotableFact,
   PromotionCheck,
   PromotionReceipt,
@@ -63,6 +61,13 @@ export interface ClosedLoopOptions {
   authorId?: string;
   /** 若为 true，仅执行 inspect 不执行 promote；默认 false */
   dryRun?: boolean;
+  /** 仅在隔离实验库生效的 Skill/System Prompt 候选，用于真实基线对照。 */
+  ruleOverride?: Pick<CraftRuleCandidate, "id" | "targetKind" | "targetId"> & { version: string; text: string };
+  /**
+   * 兼容旧评测链路：允许单次章节结果生成未经跨场景门禁的 Skill 建议。
+   * 默认关闭；这些建议即使生成也不会被 buildAuthorDecision 自动接受。
+   */
+  proposeLegacySkillIterations?: boolean;
 }
 
 export interface ClosedLoopResult {
@@ -95,7 +100,7 @@ export interface PromoteClosedLoopCandidateResult {
 // ===== 主入口 =====
 
 /**
- * 执行一次完整的闭环评估：capture → load → workflow → skill-iterate → export → inspect → promote。
+ * 执行一次完整的内容闭环评估：capture → load → workflow → export → inspect → promote。
  *
  * 步骤：
  * 1. 捕获正式库基线快照 + hash（用于事后比对）
@@ -105,7 +110,7 @@ export interface PromoteClosedLoopCandidateResult {
  * 5. startChapterWorkflow(blocking=true) → blueprint-approval 暂停
  * 6. approveWorkflowStage(approved=true) → 推过 blueprint-approval
  * 7. approveWorkflowStage(approved=true) → 推过 manuscript-approval → completed
- * 8. runSkillIteration → 在实验库写入 IteratedSkillRecord[]
+ * 8. 仅在显式兼容开关下运行旧版 Skill 建议生成；默认由独立规则候选流程负责
  * 9. extractCandidateBundle → 产出 CandidateBundle
  * 10. createPromotionService.inspect(candidate) → 检查基线/完整性
  * 11. 若 dryRun：跳过 promote；否则 promote(candidate, decision) → receipt
@@ -151,6 +156,21 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
     // 4. 在实验库 seed thread + brief（PROJECT_SNAPSHOT_TABLES 不含这两张表）
     await workspace.db.conversationThreads.put(thread);
     await workspace.db.creativeBriefs.put(brief);
+    if (options.ruleOverride?.targetKind === "skill") {
+      const { getEffectiveSkill, setProjectSkill } = await import("../skills");
+      const current = await getEffectiveSkill(projectId, options.ruleOverride.targetId, workspace.db);
+      if (!current) throw new Error(`实验规则目标 Skill 不存在：${options.ruleOverride.targetId}`);
+      await workspace.db.skills.add({ ...current, ...recordBase(projectId), projectId, source: "project", readonly: false, version: options.ruleOverride.version, prompt: options.ruleOverride.text });
+      await setProjectSkill(projectId, current.skillId, true, options.ruleOverride.version, workspace.db);
+    }
+    if (options.ruleOverride?.targetKind === "system-prompt") {
+      const { listPromptTemplates } = await import("../prompt-templates");
+      const current = (await listPromptTemplates(projectId, workspace.db)).find((item) => item.templateId === options.ruleOverride!.targetId);
+      if (!current) throw new Error(`实验系统 Prompt 不存在：${options.ruleOverride.targetId}`);
+      const active = await workspace.db.promptTemplateVersions.where("[projectId+templateId]").equals([projectId, current.templateId]).and((item) => item.active).toArray();
+      await workspace.db.promptTemplateVersions.bulkPut(active.map((item) => ({ ...item, active: false })));
+      await workspace.db.promptTemplateVersions.add({ ...current, ...recordBase(projectId), projectId, source: "project", active: true, previousVersionId: current.id, version: options.ruleOverride.version, content: options.ruleOverride.text });
+    }
 
     // 5. 启动章节工作流（context → blueprint → blueprint-approval 暂停）
     const run = await startChapterWorkflow(
@@ -165,16 +185,22 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
       workspace.db,
     );
     if (run.status !== "waiting-approval" || run.currentStage !== "blueprint-approval") {
+      // startChapterWorkflow 失败时会 failRun，但 workspace.delete() 在 finally 中执行，
+      // 此时实验库尚未删除，主动读取 workflowRun.error 包含在抛出错误中，避免错误信息丢失。
+      const failedRun = await workspace.db.workflowRuns.get(run.id);
+      const detail = failedRun?.error ?? "(无 error 字段)";
       throw new Error(
-        `工作流启动后预期停在 blueprint-approval，实际 status=${run.status} stage=${run.currentStage}`,
+        `工作流启动后预期停在 blueprint-approval，实际 status=${run.status} stage=${run.currentStage}。workflowRun.error=${detail}`,
       );
     }
 
     // 6. 推过 blueprint-approval
     await approveWorkflowStage(run.id, { approved: true }, workspace.db);
 
-    // 7. 推过 manuscript-approval；若事实阶段留下高风险待决项，自动闭环明确拒绝
-    //    这些未获作者批准的事实，再继续 commit。安全事实已由规则自动接受，不受影响。
+    // 7. 推过 manuscript-approval；若事实阶段留下高风险待决项，自动闭环作为作者代理
+    //    接受这些 pending 候选（bulkSetFactCandidateStatus 内部跳过 conflict=true 的候选，
+    //    冲突事实仍被拒绝），再继续 commit。这保证闭环 CLI 模式下 factAssertions 不为空，
+    //    跨章节连贯性所需的 fact 能被持久化。安全事实已由 autoAcceptSafeFactCandidates 自动接受。
     let advancedRun = await approveWorkflowStage(run.id, { approved: true }, workspace.db);
     if (advancedRun.status === "waiting-approval" && advancedRun.currentStage === "fact-approval") {
       const pendingFactIds = (await workspace.db.factCandidates
@@ -183,7 +209,7 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
         .and((fact) => fact.status === "pending")
         .toArray())
         .map((fact) => fact.id);
-      await bulkSetFactCandidateStatus(pendingFactIds, "rejected", workspace.db, "auto-policy");
+      await bulkSetFactCandidateStatus(pendingFactIds, "accepted", workspace.db, "auto-policy");
       advancedRun = await approveWorkflowStage(run.id, { approved: true }, workspace.db);
     }
 
@@ -195,12 +221,11 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
       );
     }
 
-    // 8. 技能迭代（post-commit side-effect）
-    await runSkillIteration({
-      projectId,
-      workflowRunId: run.id,
-      db: workspace.db,
-    });
+    // 8. 旧版单样本 Skill 建议只用于兼容评测。正式规则迭代必须经过
+    // createCraftRuleCandidate → 多场景证据 → 四角色审核 → promote 门禁。
+    if (options.proposeLegacySkillIterations && !options.ruleOverride) {
+      await runSkillIteration({ projectId, workflowRunId: run.id, db: workspace.db });
+    }
 
     // 9. 导出候选包
     //    baseTargetDocument 必须来自基线快照（工作流前状态），而非实验库当前状态。
@@ -256,6 +281,18 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
       workflowRunId: run.id,
       baseSnapshot,
     };
+  } catch (error) {
+    // approveWorkflowStage / startChapterWorkflow 失败时会 failRun 写实验库，
+    // finally 块会删除实验库，必须在 finally 之前主动读取 workflowRun.error
+    // 包含在错误信息中，避免"工作流当前不在审批状态"等笼统错误丢失真实原因。
+    const detail = await readWorkflowRunError(workspace.db);
+    if (detail) {
+      const message = error instanceof Error ? error.message : String(error);
+      const enriched = new Error(`${message}\n[workflowRun 真实错误] ${detail}`);
+      enriched.cause = error instanceof Error ? error : undefined;
+      throw enriched;
+    }
+    throw error;
   } finally {
     // 实验库清理：即使上面任一步骤抛错也要删除实验库
     try {
@@ -267,6 +304,31 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
 }
 
 // ===== 辅助 =====
+
+/**
+ * 从实验库读取最近一次失败的 workflowRun.error。
+ *
+ * approveWorkflowStage / startChapterWorkflow 失败时会 failRun 写实验库。
+ * closed-loop 的 finally 块会删除实验库，所以 catch 块必须在 finally 之前
+ * 主动读取 workflowRun.error，避免"工作流当前不在审批状态"等笼统错误丢失真实原因。
+ *
+ * 查询策略：按 updatedAt 降序取最新 failed run，返回 `id stage error` 摘要。
+ * 若无 failed run，返回 undefined（错误可能来自其他原因，由调用方原样抛出）。
+ */
+async function readWorkflowRunError(db: NovelDatabase): Promise<string | undefined> {
+  try {
+    const failedRuns = await db.workflowRuns
+      .where("status")
+      .equals("failed")
+      .reverse()
+      .sortBy("updatedAt");
+    if (failedRuns.length === 0) return undefined;
+    const latest = failedRuns[0]!;
+    return `workflowRun ${latest.id} stage=${latest.currentStage} status=${latest.status} error=${String(latest.error ?? "<no error field>")}`;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 从基线快照的 documents 记录中解析目标章节的工作流前状态。
@@ -299,18 +361,18 @@ function resolveBaseTargetDocument(
 }
 
 /**
- * 构造 AuthorDecision：默认接受所有 facts + skills + bindings。
+ * 构造内容晋升决策：默认只接受本次工作流已经审核通过的事实与稿件。
  *
- * CLI/UI 可在此基础上提供更细粒度的审批 UI；本模块默认全接受以使闭环可一键执行。
+ * Skill 与系统 Prompt 必须通过独立的规则候选门禁，不能搭车随稿件晋升。
  */
 export function buildAuthorDecision(candidate: CandidateBundle, authorId: string): AuthorDecision {
   return {
     accepted: true,
     authorId,
-    rationale: "闭环 CLI 默认接受全部候选",
+    rationale: "内容闭环默认接受已审核稿件与事实；规则变更必须走独立门禁",
     acceptedFactIds: candidate.acceptedFacts.map((fact: PromotableFact) => fact.sourceCandidateId),
-    acceptedSkillIds: candidate.iteratedSkills.map((skill: IteratedSkill) => skill.skillId),
-    acceptedBindingKeys: candidate.iteratedBindings.map((binding: IteratedBinding) => binding.skillId),
+    acceptedSkillIds: [],
+    acceptedBindingKeys: [],
     decidedAt: Date.now(),
   };
 }

@@ -90,8 +90,8 @@ describe("formal fact assertion ledger", () => {
     });
     await setFactCandidateStatus(candidate.id, "accepted");
 
-    expect(await commitAcceptedFacts(project.id, run.id)).toEqual([candidate.id]);
-    expect(await commitAcceptedFacts(project.id, run.id)).toEqual([]);
+    expect((await commitAcceptedFacts(project.id, run.id)).committedCandidateIds).toEqual([candidate.id]);
+    expect((await commitAcceptedFacts(project.id, run.id)).committedCandidateIds).toEqual([]);
 
     const assertion = await novelDb.factAssertions.where("derivedFromCandidateId").equals(candidate.id).first();
     expect(assertion).toMatchObject({

@@ -23,7 +23,9 @@ const ROLE_PROMPTS: Record<NovelAgentRole, string> = {
 
 export function endpoint(baseUrl: string) {
   const normalized = baseUrl.replace(/\/+$/, "");
-  if (normalized === "https://gpt.eromaa.com/v1" && import.meta.env.DEV) return "/ai-proxy";
+  // 浏器 dev 模式下走 Vite proxy 避免 CORS；但 Node/SSR 环境（如 novel:closed-loop / novel:20chapters CLI）
+  // 没有 window.location，fetch 无法解析相对 URL，必须直连 baseUrl。
+  if (normalized === "https://gpt.eromaa.com/v1" && import.meta.env.DEV && typeof window !== "undefined") return "/ai-proxy";
   return normalized;
 }
 async function hashPrompt(value: string) {
@@ -124,7 +126,19 @@ async function fetchNonStreamingContent(params: {
     throw new NovelEmptyResponseError("AI 非流式降级响应不是有效 JSON");
   }
   const content = extractMessageContent(payload);
-  if (!content) throw new NovelEmptyResponseError("AI 流式与非流式请求均未返回有效内容");
+  if (!content) {
+    // 诊断：dump payload 结构（不含完整内容，只看 choices/usage/finish_reason）
+    const diag = {
+      model: params.body.model,
+      hasResponseFormat: Boolean(params.body.response_format),
+      choicesCount: (payload.choices as unknown[] | undefined)?.length ?? 0,
+      firstChoiceFinishReason: (payload.choices as Array<{ finish_reason?: string }> | undefined)?.[0]?.finish_reason,
+      usage: payload.usage,
+      responseTextHead: responseText.slice(0, 500),
+    };
+    console.error(`[ai.ts] 非流式空内容诊断：${JSON.stringify(diag)}`);
+    throw new NovelEmptyResponseError("AI 流式与非流式请求均未返回有效内容");
+  }
   return content;
 }
 
@@ -211,6 +225,14 @@ async function requestChat(params: {
           const fallbackBody = { ...body };
           delete fallbackBody.response_format;
           return await fetchAccumulated({ baseUrl: config.baseUrl, apiKey: config.apiKey, body: fallbackBody, signal: params.signal });
+        }
+        // 流式 + response_format strict 模式在某些 OpenAI 兼容提供商（如 eromaa.com）
+        // 会返回 HTTP 200 + 空 content（provider 端 bug，非 4xx，不会触发上面的 fallback）。
+        // 此时立刻降级为非流式 + 去 schema 调用：parseJsonContent 已能处理 markdown 包裹的 JSON。
+        if (params.responseSchema && error instanceof NovelEmptyResponseError) {
+          const fallbackBody = { ...body };
+          delete fallbackBody.response_format;
+          return { content: await fetchNonStreamingContentWithRetry({ baseUrl: config.baseUrl, apiKey: config.apiKey, body: fallbackBody, signal: params.signal }), usage: { inputTokens: 0, outputTokens: 0 } };
         }
         throw error;
       }

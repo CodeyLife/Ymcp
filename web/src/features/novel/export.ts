@@ -3,10 +3,15 @@ import { strToU8, zipSync } from "fflate";
 import type { Table } from "dexie";
 import { novelDb } from "./db";
 import { cleanupReferenceIntegrity } from "./db-schema";
-import { captureClosedLoopFixture } from "./evaluation";
+import {
+  captureClosedLoopFixture,
+  importClosedLoopFixture,
+  type ClosedLoopFixtureBundle,
+} from "./evaluation";
 
-const BACKUP_SCHEMA_VERSION = 13;
-const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "manuscriptChanges", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "factAssertions", "knowledgeAssertions", "narrativeUnits", "outlineRealizations", "derivedMemories", "preferenceSignals", "tasteProfiles", "embeddings", "conversationThreads", "conversationMessages", "conversationMemories", "creativeBriefs", "retrievalRuns", "memoryJobs"] as const;
+const BACKUP_SCHEMA_VERSION = 14;
+const MIN_SUPPORTED_BACKUP_SCHEMA_VERSION = 13;
+const BACKUP_TABLES = ["architectures", "entities", "relations", "outlineNodes", "scenes", "documents", "revisions", "manuscriptChanges", "plotThreads", "foreshadowing", "timelineEvents", "snapshots", "contextPackets", "proposals", "agentRuns", "operations", "conflicts", "skills", "projectSkills", "workflowDefinitions", "workflowRuns", "workflowArtifacts", "qualityReports", "factCandidates", "factAssertions", "knowledgeAssertions", "narrativeUnits", "outlineRealizations", "derivedMemories", "preferenceSignals", "tasteProfiles", "embeddings", "conversationThreads", "conversationMessages", "conversationMemories", "creativeBriefs", "retrievalRuns", "memoryJobs", "creativeRuns", "creativeWorkItems", "creativeReviews", "creativeRunEvents", "craftRuleCandidates", "promptTemplateVersions"] as const;
 
 async function bundleProject(projectId: string) {
   const project = await novelDb.projects.get(projectId);
@@ -102,8 +107,31 @@ export async function exportNovelEvaluationSnapshot(projectId: string) {
 }
 
 export async function importNovel(file: File) {
-  const payload = JSON.parse(await file.text()) as Record<string, unknown> & { manifest?: { format?: string; schemaVersion?: number; integrity?: { algorithm?: string; tables?: Record<string, { count?: number; hash?: string }> } }; project?: { id?: string } };
-  if (payload.manifest?.format !== "ymcp-novel" || payload.manifest.schemaVersion !== BACKUP_SCHEMA_VERSION || !payload.project?.id) throw new Error("不是有效的 Ymcp 小说项目 v13 文件");
+  const payload = JSON.parse(await file.text()) as Record<string, unknown> & {
+    manifest?: { format?: string; schemaVersion?: number; integrity?: { algorithm?: string; tables?: Record<string, { count?: number; hash?: string }> } };
+    project?: { id?: string };
+    format?: string;
+    formatVersion?: number;
+    snapshot?: { sourceProjectId?: string };
+  };
+
+  // 路径 1：ymcp-novel-closed-loop 格式（CLI 产出的 final-snapshot.json 走这里）
+  // 非破坏性合并：不 clear 任何表，只 bulkPut fixture 中的记录，保留其他 projectId 数据
+  if (payload.format === "ymcp-novel-closed-loop") {
+    const result = await importClosedLoopFixture(payload as unknown as ClosedLoopFixtureBundle, novelDb);
+    return result.projectId;
+  }
+
+  // 路径 2：传统 ymcp-novel 归档格式。v13 没有规则候选与 Prompt 版本表，
+  // 导入时自然跳过缺失表；新导出使用 v14。
+  const archiveVersion = payload.manifest?.schemaVersion;
+  if (
+    payload.manifest?.format !== "ymcp-novel"
+    || typeof archiveVersion !== "number"
+    || archiveVersion < MIN_SUPPORTED_BACKUP_SCHEMA_VERSION
+    || archiveVersion > BACKUP_SCHEMA_VERSION
+    || !payload.project?.id
+  ) throw new Error(`不是有效的 Ymcp 小说项目 v${MIN_SUPPORTED_BACKUP_SCHEMA_VERSION}-v${BACKUP_SCHEMA_VERSION} 文件`);
   verifyProjectArchive(payload);
   const projectId = payload.project.id;
   const tables = ["projects", ...BACKUP_TABLES] as const;

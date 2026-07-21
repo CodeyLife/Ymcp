@@ -87,7 +87,7 @@ export const characterEnrichmentStageHandler: StageHandler = {
       run.conversationThreadId
         ? novelMemoryService.compileStageContext({ threadId: run.conversationThreadId, stage: "character-enrichment", role: "character-enricher", instruction: "基于本章正式事实完善相关人物档案", workflowRunId: run.id, skillStage: "character-enrichment", db: ctx.db })
         : db.contextPackets.get(run.contextPacketId!),
-      resolveNovelSkills({ projectId: run.projectId, stage: "character-enrichment", explicitSkillIds: ["character-desire-engine", "classic-character-ensemble"], db: ctx.db }),
+      resolveNovelSkills({ projectId: run.projectId, stage: "character-enrichment", explicitSkillIds: ["character-desire-engine"], db: ctx.db }),
     ]);
     if (!draft || !packet) throw new Error("人物完善输入不完整");
 
