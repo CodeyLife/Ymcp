@@ -124,9 +124,9 @@ describe("current archive and records", () => {
   it("creates and saves architecture phases as the only acts", async () => {
     const project = await createNovelProject({ title: "架构", genre: ["悬疑"], premise: "记忆会说谎。" });
     const architecture = (await novelDb.architectures.where("projectId").equals(project.id).first())!;
-    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase", title: "第一幕", purpose: "建立困境", turningPoint: "离开故乡", order: 7, locked: false }] });
+    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase", title: "第一幕", purpose: "建立困境", turningPoint: "离开故乡", order: 7, locked: false, primaryCurveId: "main" }] });
     const saved = await novelDb.architectures.get(architecture.id);
-    expect(saved?.phases).toEqual([{ id: "phase", title: "第一幕", purpose: "建立困境", turningPoint: "离开故乡", order: 0, locked: false }]);
+    expect(saved?.phases).toEqual([{ id: "phase", title: "第一幕", purpose: "建立困境", turningPoint: "离开故乡", order: 0, locked: false, primaryCurveId: "main" }]);
     expect(await novelDb.outlineNodes.where("projectId").equals(project.id).count()).toBe(0);
   });
 

@@ -20,7 +20,7 @@ import GenerationComposer from "./GenerationComposer";
 import OutlineProposalReview from "./OutlineProposalReview";
 import {
   addOutlineNode,
-  appendOperation,
+  commitFormalRecordChanges,
   createChapter,
   deleteChapter,
   deleteOutlineBranch,
@@ -141,16 +141,14 @@ export default function OutlineDocView({ projectId, onOpenChapter }: { projectId
     const before = await novelDb.outlineNodes.get(segment.id);
     if (!before) return;
     const next = { ...before, ...changes, revision: before.revision + 1, updatedAt: Date.now() };
-    await novelDb.outlineNodes.put(next);
-    await appendOperation(projectId, "outlineNodes", segment.id, "update", { value: { before, after: next } });
+    await commitFormalRecordChanges(projectId, [{ collection: "outlineNodes", before: before as unknown as Record<string, unknown>, after: next as unknown as Record<string, unknown> }]);
   }, [projectId]);
 
   const updateChapter = useCallback(async (document: ManuscriptDocument, changes: Partial<ManuscriptDocument>) => {
     const before = await novelDb.documents.get(document.id);
     if (!before) return;
     const next = { ...before, ...changes, revision: before.revision + 1, updatedAt: Date.now() };
-    await novelDb.documents.put(next);
-    await appendOperation(projectId, "documents", document.id, "update", { value: { before, after: next } });
+    await commitFormalRecordChanges(projectId, [{ collection: "documents", before: before as unknown as Record<string, unknown>, after: next as unknown as Record<string, unknown> }]);
   }, [projectId]);
 
   async function addSegment(phase: ArchitecturePhase) {
@@ -164,7 +162,7 @@ export default function OutlineDocView({ projectId, onOpenChapter }: { projectId
   };
 
   const addDraftPhase = () => {
-    setDraft((current) => current ? { ...current, phases: [...current.phases, { id: crypto.randomUUID(), title: `第 ${current.phases.length + 1} 幕`, purpose: "", turningPoint: "", order: current.phases.length, locked: false }] } : current);
+    setDraft((current) => current ? { ...current, phases: [...current.phases, { id: crypto.randomUUID(), title: `第 ${current.phases.length + 1} 幕`, purpose: "", turningPoint: "", order: current.phases.length, locked: false, primaryCurveId: "" }] } : current);
   };
 
   const removeDraftPhase = (phase: ArchitecturePhase) => {
@@ -188,9 +186,9 @@ export default function OutlineDocView({ projectId, onOpenChapter }: { projectId
     const index = siblings.findIndex((item) => item.id === segment.id);
     const target = siblings[index + direction];
     if (!target) return;
-    await novelDb.outlineNodes.bulkPut([
-      { ...segment, order: target.order, revision: segment.revision + 1, updatedAt: Date.now() },
-      { ...target, order: segment.order, revision: target.revision + 1, updatedAt: Date.now() },
+    await commitFormalRecordChanges(projectId, [
+      { collection: "outlineNodes", before: segment as unknown as Record<string, unknown>, after: { ...segment, order: target.order, revision: segment.revision + 1, updatedAt: Date.now() } as unknown as Record<string, unknown> },
+      { collection: "outlineNodes", before: target as unknown as Record<string, unknown>, after: { ...target, order: segment.order, revision: target.revision + 1, updatedAt: Date.now() } as unknown as Record<string, unknown> },
     ]);
     await normalizeChapterOrderByPlanning(projectId);
   }

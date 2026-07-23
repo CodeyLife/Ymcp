@@ -30,7 +30,7 @@ async function addArchitecture(projectId: string, phaseCount = 1) {
     centralQuestion: "人物能否找回真相？",
     centralConflict: "记忆与现实冲突",
     synopsis: "人物逐步接近真相。",
-    phases: Array.from({ length: phaseCount }, (_, order) => ({ id: `phase-${order}`, title: `第 ${order + 1} 幕`, purpose: `推进阶段 ${order + 1}`, turningPoint: `转折 ${order + 1}`, order, locked: false })),
+    phases: Array.from({ length: phaseCount }, (_, order) => ({ id: `phase-${order}`, title: `第 ${order + 1} 幕`, purpose: `推进阶段 ${order + 1}`, turningPoint: `转折 ${order + 1}`, order, locked: false, primaryCurveId: "main" })),
   });
 }
 
@@ -83,6 +83,9 @@ function auditMajorResponse() {
           dimension: "plot" as const,
           title: "节奏单一：三章都是行动章",
           evidence: "第一章「破门」/第二章「巷战」/第三章「决战」三章主导功能均为行动推进，无余波或蓄势章穿插。",
+          evidenceItemId: "plot_0_0_chapter-3",
+          evidenceField: "blueprint.objective",
+          evidenceQuote: "击败守将",
           suggestion: "将第三章改为余波章，处理战后情绪与人物关系，与第一、二章行动章形成张弛。",
         },
       ],
@@ -119,6 +122,9 @@ function auditStillMajorResponse() {
           dimension: "plot" as const,
           title: "节奏仍偏紧",
           evidence: "虽然加入了余波章，但余波章仍然承担过多推进。",
+          evidenceItemId: "plot_0_0_chapter-3",
+          evidenceField: "blueprint.objective",
+          evidenceQuote: "消化战后情绪与人际关系",
           suggestion: "让余波章更安静，只处理情绪与关系，不推进主线。",
         },
       ],
@@ -208,6 +214,39 @@ describe("plot-segment-audit closed loop", () => {
     expect(report.rounds).toHaveLength(2);
     expect(report.improved).toBe(false);
     expect(report.remainingMajorCount).toBe(1);
+  });
+
+  it("ignores audit issues whose quoted evidence is absent from the current candidate", async () => {
+    const project = await createNovelProject({ title: "证据核验", genre: ["奇幻"], premise: "审核只能引用当前候选。" });
+    const architecture = await addArchitecture(project.id, 1);
+    const phase = architecture.phases[0] as ArchitecturePhase;
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(evidenceReady() as never)
+      .mockResolvedValueOnce(plotDesignImprovedResponse(phase.id) as never)
+      .mockResolvedValueOnce({
+        data: {
+          summary: "引用了旧版本字段。",
+          issues: [{
+            severity: "major",
+            dimension: "plot",
+            title: "旧文本仍存在",
+            evidence: "声称第三章仍要求决战。",
+            evidenceItemId: "plot_0_0_chapter-3",
+            evidenceField: "blueprint.objective",
+            evidenceQuote: "击败守将",
+            suggestion: "删除旧要求。",
+          }],
+        },
+        usage: { inputTokens: 8, outputTokens: 6 },
+        promptHash: "audit-ungrounded",
+      } as never);
+
+    const { proposal } = await runPlotDesignTask({ projectId: project.id, phaseId: phase.id, audit: { maxIterations: 1 } });
+
+    expect(proposal.auditReport?.rounds[0].issues).toEqual([]);
+    expect(proposal.auditReport?.rounds[0].summary).toContain("已忽略 1 条");
+    expect(proposal.auditReport?.improved).toBe(true);
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(3);
   });
 
   it("skips audit entirely when audit param is not provided (backward compatibility)", async () => {

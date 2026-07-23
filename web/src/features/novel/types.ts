@@ -12,7 +12,7 @@ export type EntityKind =
   | "term";
 
 export type StoryFramework = "free" | "three-act" | "four-part" | "save-the-cat" | "snowflake";
-export type PlotThreadKind = "main" | "subplot" | "romance" | "growth" | "mystery" | "antagonist";
+export type PlotThreadKind = "main" | "subplot" | "romance" | "growth" | "mystery" | "antagonist" | "conspiracy";
 export type ProjectRole = "owner" | "editor" | "commenter" | "reader";
 export type ProposalStatus = "pending" | "accepted" | "rejected" | "partially_accepted";
 
@@ -116,6 +116,26 @@ export interface ChapterBlueprint {
   targetWords: number;
 }
 
+/**
+ * 增长曲线——结构化"第二增长曲线"约束。
+ *
+ * 百万字长篇必须至少 2 条独立增长曲线：1 条主线 (kind="main") + 至少 1 条
+ * 生态曲线 (kind="ecological")。生态曲线拥有独立的人物、资源、阶段推进与不可逆变化，
+ * 能在主线间歇期独立推进故事，而非只作为主线背景服务。
+ */
+export interface GrowthCurve {
+  id: string;
+  kind: "main" | "ecological";
+  /** 生态主体——驱动此曲线的核心力量/势力/体系/群体（如商盟、修炼体系、江湖格局、朝廷） */
+  subject: string;
+  /** 资源循环——此曲线运转所依赖的资源获取、流转与消耗机制 */
+  resourceLoop: string;
+  /** 阶段目标——此曲线在架构各阶段的推进目标 */
+  stageGoals: string;
+  /** 不可逆变化——此曲线结束时世界已回不去的结构性变化 */
+  irreversibleChange: string;
+}
+
 export interface ArchitecturePhase {
   id: string;
   title: string;
@@ -123,6 +143,35 @@ export interface ArchitecturePhase {
   turningPoint: string;
   order: number;
   locked: boolean;
+  /** 引用 growthCurves[].id，标注此阶段主要由哪条增长曲线推进 */
+  primaryCurveId: string;
+}
+
+export interface ArchitecturePowerCenter {
+  id: string;
+  name: string;
+  interest: string;
+  resources: string[];
+  actionCapacity: string;
+  bottomLine: string;
+  relationshipDynamics: string;
+}
+
+export interface ArchitectureFeedbackLoop {
+  id: string;
+  name: string;
+  trigger: string;
+  transmission: string[];
+  affectedCenters: string[];
+  storyPressure: string;
+}
+
+export interface ArchitectureLongHorizonHook {
+  id: string;
+  surfaceDetail: string;
+  possibleInterpretations: string[];
+  affectedCenters: string[];
+  payoffWindow: string;
 }
 
 export interface StoryArchitecture extends VersionedRecord {
@@ -131,7 +180,13 @@ export interface StoryArchitecture extends VersionedRecord {
   centralQuestion: string;
   centralConflict: string;
   synopsis: string;
+  /** 旧项目可缺省；新成长篇架构由生成契约要求显式提供。 */
+  powerCenters?: ArchitecturePowerCenter[];
+  feedbackLoops?: ArchitectureFeedbackLoop[];
+  longHorizonHooks?: ArchitectureLongHorizonHook[];
   phases: ArchitecturePhase[];
+  /** 增长曲线——至少 2 条（1 主线 + 至少 1 生态曲线），结构化第二增长曲线约束 */
+  growthCurves: GrowthCurve[];
 }
 
 export interface OutlineNode extends VersionedRecord {
@@ -557,6 +612,10 @@ export interface GenerationAuditIssue {
   origin?: AuditIssueOrigin;
   /** upgrade/downgrade 时引用被复核 reviewer issue 的稳定 sourceId。 */
   sourceIssueId?: string;
+  /** 结构化审核可用的当前候选证据定位；未核验的自由文本证据不能驱动自动迭代。 */
+  evidenceItemId?: string;
+  evidenceField?: string;
+  evidenceQuote?: string;
 }
 
 export interface GenerationAuditRound {
@@ -874,7 +933,7 @@ export interface CreativeReview extends VersionedRecord {
 export interface CreativeRunEvent extends VersionedRecord {
   creativeRunId: string;
   sequence: number;
-  type: "run.created" | "run.status-changed" | "work.enqueued" | "work.started" | "work.requeued" | "work.result-ready" | "work.completed" | "work.blocked" | "work.failed" | "review.recorded";
+  type: "run.created" | "run.status-changed" | "work.enqueued" | "work.started" | "work.requeued" | "work.retried" | "work.result-ready" | "work.completed" | "work.blocked" | "work.failed" | "review.recorded";
   workItemId?: string;
   idempotencyKey?: string;
   payload: Record<string, unknown>;
@@ -1140,6 +1199,7 @@ export type NovelWorkspaceView =
   | "writing"
   | "library"
   | "review"
+  | "operations"
   | "settings"
   | "bible"
   | "characters"

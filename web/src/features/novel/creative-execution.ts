@@ -38,7 +38,7 @@ export interface CreativeReviewInput {
 
 export type CreativeCommand =
   | { runId: string; type: "work.start" | "work.accept" | "review.request"; workItemId: string; idempotencyKey: string }
-  | { runId: string; type: "work.revise"; workItemId: string; instruction?: string; idempotencyKey: string }
+  | { runId: string; type: "work.revise" | "work.retry"; workItemId: string; instruction?: string; idempotencyKey: string }
   | { runId: string; type: "work.recover"; workItemId: string; force?: boolean; idempotencyKey: string }
   | { runId: string; type: "review.submit"; workItemId: string; review: CreativeReviewInput; idempotencyKey: string }
   | { runId: string; type: "run.pause" | "run.resume" | "run.cancel"; idempotencyKey: string };
@@ -65,7 +65,7 @@ export interface CreativeActionResult {
 }
 
 export interface CreativeNextAction {
-  type: "work.start" | "work.revise" | "work.recover" | "work.accept" | "review.request" | "review.submit" | "run.resume";
+  type: "work.start" | "work.revise" | "work.retry" | "work.recover" | "work.accept" | "review.request" | "review.submit" | "run.resume";
   workItemId?: string;
 }
 
@@ -264,8 +264,12 @@ function groupReviewsByWork(reviews: CreativeReview[]): Map<string, CreativeRevi
 }
 
 function availableActions(run: CreativeRun, workItems: CreativeWorkItem[], reviews: CreativeReview[]): CreativeNextAction[] {
-  if (["completed", "failed", "cancelled"].includes(run.status)) return [];
+  if (["completed", "cancelled"].includes(run.status)) return [];
   const actions: CreativeNextAction[] = [];
+  if (run.status === "failed") {
+    for (const item of workItems.filter((candidate) => candidate.status === "failed")) actions.push({ type: "work.retry", workItemId: item.id });
+    return actions;
+  }
   if (run.status === "paused") actions.push({ type: "run.resume" });
   const completed = new Set(workItems.filter((item) => item.status === "completed").map((item) => item.id));
   if (run.status !== "paused") {
@@ -392,8 +396,27 @@ async function prepareChapterEvaluationContext(document: ManuscriptDocument, ins
 async function defaultExecutor(work: CreativeWorkItem, _run: CreativeRun, db: NovelDatabase): Promise<CreativeWorkExecutionResult> {
   if (work.kind === "generation") {
     if (!work.taskKey) throw new Error("generation work 缺少 taskKey");
-    const { runGenerationTask } = await import("./generation");
-    const result = await runGenerationTask({ projectId: work.projectId, taskKey: work.taskKey, targetId: work.targetId, instruction: work.instruction });
+    const { runGenerationTask, runPlotDesignTask } = await import("./generation");
+    if (work.taskKey === "plot-design") {
+      const [architecture, nodes] = await Promise.all([
+        db.architectures.where("projectId").equals(work.projectId).first(),
+        db.outlineNodes.where("projectId").equals(work.projectId).toArray(),
+      ]);
+      const phases = [...(architecture?.phases ?? [])].sort((left, right) => left.order - right.order);
+      const latestNode = [...nodes].sort((left, right) => right.updatedAt - left.updatedAt)[0];
+      const phaseId = work.targetId || latestNode?.phaseId || phases[0]?.id;
+      if (!phaseId) throw new Error("plot-design 缺少可规划的架构阶段");
+      const result = await runPlotDesignTask({ projectId: work.projectId, phaseId, instruction: work.instruction, audit: { maxIterations: 1 } });
+      return { artifactRefs: [result.proposal.id], summary: result.proposal.title };
+    }
+    let targetId = work.targetId;
+    if (work.taskKey === "chapter-plan" && !targetId) {
+      const documents = await db.documents.where("projectId").equals(work.projectId).sortBy("order");
+      targetId = documents.find((document) => !document.deletedAt && document.status === "outline")?.id
+        ?? documents.find((document) => !document.deletedAt)?.id;
+      if (!targetId) throw new Error("chapter-plan 缺少可规划的正式章节");
+    }
+    const result = await runGenerationTask({ projectId: work.projectId, taskKey: work.taskKey, targetId, instruction: work.instruction });
     return { artifactRefs: [result.proposal.id], summary: result.proposal.title };
   }
   if (work.kind === "plot-segment") {
@@ -800,6 +823,42 @@ export async function executeCreativeCommand(
       nextActions: availableActions(run, workItems, reviews),
     };
     await appendEvent(run, { type: "work.requeued", workItemId: work.id, idempotencyKey: command.idempotencyKey, payload: { result, iteration: work.iteration } }, db);
+    return result;
+  }
+
+  if (command.type === "work.retry") {
+    if (work.status !== "failed") throw new Error("只有失败的创作任务可以技术重试");
+    const instruction = command.instruction?.trim();
+    if (instruction) {
+      const baseInstruction = typeof work.parameters.baseInstruction === "string" && work.parameters.baseInstruction.trim()
+        ? work.parameters.baseInstruction.trim()
+        : work.instruction;
+      work.parameters.baseInstruction = baseInstruction;
+      work.instruction = `${baseInstruction}\n\n# 技术失败重试\n${instruction}`;
+    }
+    work.status = "queued";
+    work.artifactRefs = [];
+    work.summary = undefined;
+    work.error = undefined;
+    work.leaseExpiresAt = undefined;
+    work.activeIdempotencyKey = undefined;
+    work.updatedAt = Date.now();
+    work.revision += 1;
+    run.status = "running";
+    run.error = undefined;
+    await db.creativeWorkItems.put(work);
+    workItems = workItems.map((item) => item.id === work.id ? work : item);
+    const result: CreativeActionResult = {
+      runId: run.id,
+      commandType: command.type,
+      workItemId: work.id,
+      status: run.status,
+      workStatus: work.status,
+      artifactRefs: [],
+      summary: "技术失败任务已重新排队，审核迭代次数保持不变",
+      nextActions: availableActions(run, workItems, reviews),
+    };
+    await appendEvent(run, { type: "work.retried", workItemId: work.id, idempotencyKey: command.idempotencyKey, payload: { result, iteration: work.iteration } }, db);
     return result;
   }
 

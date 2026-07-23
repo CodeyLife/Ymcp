@@ -43,7 +43,7 @@ describe("segment creative controller", () => {
   });
 
   it("creates one plot-design work item when starting from an architecture phase", async () => {
-    await db.architectures.put({ ...recordBase(projectId), id: "architecture-1", framework: "free", status: "approved", centralQuestion: "选择", centralConflict: "取舍", synopsis: "", phases: [{ id: "phase-1", order: 0, title: "第一幕", purpose: "建立", turningPoint: "离开故乡", locked: false }] } satisfies StoryArchitecture);
+    await db.architectures.put({ ...recordBase(projectId), id: "architecture-1", framework: "free", status: "approved", centralQuestion: "选择", centralConflict: "取舍", synopsis: "", phases: [{ id: "phase-1", order: 0, title: "第一幕", purpose: "建立", turningPoint: "离开故乡", locked: false, primaryCurveId: "main" }], growthCurves: [] } satisfies StoryArchitecture);
     const snapshot = await createSegmentAutomationRun({ projectId, phaseId: "phase-1", objective: "设计下一个剧情段" }, db);
     expect(snapshot.workItems).toHaveLength(1);
     expect(snapshot.workItems[0]).toMatchObject({ kind: "plot-segment", targetId: "phase-1" });

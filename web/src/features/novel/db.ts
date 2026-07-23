@@ -1,4 +1,4 @@
-import Dexie, { type EntityTable } from "dexie";
+import Dexie, { type EntityTable, type Table } from "dexie";
 import type {
   AgentRun,
   AIProposal,
@@ -53,10 +53,33 @@ import type {
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
 import type { OperationReceipt } from "./evaluation/types";
+import type { RuntimeRecordMutation } from "@/novel-runtime/contracts";
 import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, resetNovelPlanningHierarchy, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES, V18_STORES, V19_STORES, V20_STORES, V21_STORES, V22_STORES, V23_STORES, V24_STORES, V25_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
+type FormalMutationCommitter = (projectId: string, mutations: RuntimeRecordMutation[]) => Promise<unknown>;
+let formalMutationCommitter: FormalMutationCommitter | undefined;
+type FormalChapterDeleteCommitter = (projectId: string, documentId: string) => Promise<unknown>;
+let formalChapterDeleteCommitter: FormalChapterDeleteCommitter | undefined;
+
+export function setFormalMutationCommitter(committer: FormalMutationCommitter | undefined) {
+  formalMutationCommitter = committer;
+}
+
+export function setFormalChapterDeleteCommitter(committer: FormalChapterDeleteCommitter | undefined) {
+  formalChapterDeleteCommitter = committer;
+}
+
+export function isFormalMutationRuntimeEnabled() {
+  return Boolean(formalMutationCommitter);
+}
+
+async function commitThroughRuntime(projectId: string, mutations: RuntimeRecordMutation[]) {
+  if (!formalMutationCommitter) return false;
+  await formalMutationCommitter(projectId, mutations);
+  return true;
+}
 
 function deviceId(): string {
   const key = "ymcp-novel-device-id";
@@ -274,9 +297,19 @@ export async function appendOperation(
   fieldChanges: ChangeOperation["fieldChanges"],
   db: NovelDatabase = novelDb,
 ) {
+  await db.operations.add(createOperation(projectId, table, entityId, action, fieldChanges));
+}
+
+function createOperation(
+  projectId: string,
+  table: string,
+  entityId: string,
+  action: ChangeOperation["action"],
+  fieldChanges: ChangeOperation["fieldChanges"],
+): ChangeOperation {
   const base = recordBase(projectId);
   const clock = Date.now();
-  await db.operations.add({
+  return {
     ...base,
     operationId: base.id,
     deviceId: deviceId(),
@@ -288,10 +321,49 @@ export async function appendOperation(
     fieldChanges,
     syncStatus: "local",
     idempotencyKey: `${deviceId()}:${clock}:${entityId}`,
+  };
+}
+
+export async function commitFormalRecordChanges(projectId: string, changes: Array<{
+  collection: string;
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  fieldChanges?: ChangeOperation["fieldChanges"];
+}>) {
+  if (!changes.length) return;
+  const mutations: RuntimeRecordMutation[] = [];
+  const operations: ChangeOperation[] = [];
+  for (const change of changes) {
+    const record = change.after ?? change.before;
+    if (!record || typeof record.id !== "string") throw new Error("正式记录变更缺少 id");
+    const action: ChangeOperation["action"] = change.after ? change.before ? "update" : "create" : "delete";
+    const operation = createOperation(projectId, change.collection, record.id, action, change.fieldChanges ?? { value: { before: change.before, after: change.after } });
+    operations.push(operation);
+    if (change.after) mutations.push({
+      type: "put",
+      collection: change.collection,
+      id: record.id,
+      expectedRevision: change.before ? Number(change.before.revision ?? 0) : null,
+      value: change.after,
+    });
+    else mutations.push({ type: "delete", collection: change.collection, id: record.id, expectedRevision: Number(change.before?.revision ?? 0) });
+    mutations.push({ type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> });
+  }
+  if (await commitThroughRuntime(projectId, mutations)) return;
+  const tables = [...new Set(changes.map((change) => novelDb.tables.find((table) => table.name === change.collection)).filter((table): table is Table => Boolean(table)))];
+  await novelDb.transaction("rw", [...tables, novelDb.operations], async () => {
+    for (const change of changes) {
+      const table = novelDb.tables.find((candidate) => candidate.name === change.collection);
+      const record = change.after ?? change.before;
+      if (!table || !record || typeof record.id !== "string") continue;
+      if (change.after) await table.put(change.after);
+      else await table.delete(record.id);
+    }
+    await novelDb.operations.bulkAdd(operations);
   });
 }
 
-export async function createNovelProject(input: Pick<StoryProject, "title" | "genre" | "premise">) {
+export async function createNovelProject(input: Pick<StoryProject, "title" | "genre" | "premise">, db: NovelDatabase = novelDb) {
   const now = Date.now();
   const id = crypto.randomUUID();
   const project: StoryProject = {
@@ -336,13 +408,17 @@ export async function createNovelProject(input: Pick<StoryProject, "title" | "ge
     centralQuestion: input.premise,
     centralConflict: "",
     synopsis: "",
+    powerCenters: [],
+    feedbackLoops: [],
+    longHorizonHooks: [],
     phases: [],
+    growthCurves: [],
   };
 
-  await novelDb.transaction("rw", novelDb.projects, novelDb.architectures, novelDb.operations, async () => {
-    await novelDb.projects.add(project);
-    await novelDb.architectures.add(architecture);
-    await appendOperation(id, "projects", id, "create", { title: { before: null, after: project.title } });
+  await db.transaction("rw", db.projects, db.architectures, db.operations, async () => {
+    await db.projects.add(project);
+    await db.architectures.add(architecture);
+    await appendOperation(id, "projects", id, "create", { title: { before: null, after: project.title } }, db);
   });
   return project;
 }
@@ -359,9 +435,13 @@ export async function ensureStoryArchitecture(projectId: string) {
     centralQuestion: project.premise,
     centralConflict: "",
     synopsis: "",
+    powerCenters: [],
+    feedbackLoops: [],
+    longHorizonHooks: [],
     phases: [],
+    growthCurves: [],
   };
-  await novelDb.architectures.add(architecture);
+  await commitFormalRecordChanges(projectId, [{ collection: "architectures", after: architecture as unknown as Record<string, unknown> }]);
   return architecture;
 }
 
@@ -370,18 +450,46 @@ export function normalizeArchitecturePhases(phases: ArchitecturePhase[]) {
 }
 
 export function normalizeArchitecturePayload(payload: Record<string, unknown>) {
-  if (!Array.isArray(payload.phases)) return payload;
-  return {
-    ...payload,
-    phases: payload.phases.map((phase, order) => phase && typeof phase === "object" && !Array.isArray(phase)
+  const normalized: Record<string, unknown> = { ...payload };
+  if (Array.isArray(payload.phases)) {
+    normalized.phases = payload.phases.map((phase, order) => phase && typeof phase === "object" && !Array.isArray(phase)
       ? { ...phase as Record<string, unknown>, order }
-      : phase),
-  };
+      : phase);
+  }
+  // Loop 4: 规范化 growthCurves——确保每条曲线有 id，便于 phases.primaryCurveId 引用
+  if (Array.isArray(payload.growthCurves)) {
+    normalized.growthCurves = payload.growthCurves.map((curve, index) => {
+      if (!curve || typeof curve !== "object" || Array.isArray(curve)) return curve;
+      const c = { ...(curve as Record<string, unknown>) };
+      if (!c.id || typeof c.id !== "string") c.id = `curve-${index + 1}`;
+      return c;
+    });
+  }
+  return normalized;
 }
 
 export async function saveStoryArchitecture(architecture: StoryArchitecture) {
   const before = await novelDb.architectures.get(architecture.id);
   const next = { ...architecture, phases: normalizeArchitecturePhases(architecture.phases), revision: (before?.revision ?? 0) + 1, updatedAt: Date.now(), updatedBy: ACTOR_ID };
+  if (formalMutationCommitter) {
+    const phaseIds = new Set(next.phases.map((phase) => phase.id));
+    const removedSegments = await novelDb.outlineNodes.where("projectId").equals(architecture.projectId).and((segment) => !phaseIds.has(segment.phaseId)).toArray();
+    const removedSegmentIds = removedSegments.map((segment) => segment.id);
+    const [linkedDocuments, realizations, embeddings] = removedSegmentIds.length ? await Promise.all([
+      novelDb.documents.where("projectId").equals(architecture.projectId).and((document) => Boolean(document.plotSegmentId && removedSegmentIds.includes(document.plotSegmentId))).toArray(),
+      novelDb.outlineRealizations.where("projectId").equals(architecture.projectId).and((item) => removedSegmentIds.includes(item.outlineNodeId)).toArray(),
+      novelDb.embeddings.where("targetId").anyOf(removedSegmentIds).toArray(),
+    ]) : [[], [], []];
+    await commitFormalRecordChanges(architecture.projectId, [
+      { collection: "architectures", before: before as unknown as Record<string, unknown> | undefined, after: next as unknown as Record<string, unknown> },
+      ...linkedDocuments.map((document) => ({ collection: "documents", before: document as unknown as Record<string, unknown>, after: { ...document, plotSegmentId: undefined, revision: document.revision + 1, updatedAt: Date.now() } as unknown as Record<string, unknown> })),
+      ...removedSegments.map((segment) => ({ collection: "outlineNodes", before: segment as unknown as Record<string, unknown> })),
+      ...realizations.map((item) => ({ collection: "outlineRealizations", before: item as unknown as Record<string, unknown> })),
+      ...embeddings.map((item) => ({ collection: "embeddings", before: item as unknown as Record<string, unknown> })),
+    ]);
+    await normalizeChapterOrderByPlanning(architecture.projectId);
+    return next;
+  }
   await novelDb.transaction("rw", [novelDb.architectures, novelDb.outlineNodes, novelDb.documents, novelDb.outlineRealizations, novelDb.embeddings, novelDb.operations], async () => {
     const phaseIds = new Set(next.phases.map((phase) => phase.id));
     const removedSegments = await novelDb.outlineNodes.where("projectId").equals(architecture.projectId)
@@ -436,12 +544,19 @@ export async function normalizeChapterOrderByPlanning(projectId: string) {
   const changed = sorted.filter((document, order) => document.order !== order);
   if (!changed.length) return sorted;
   const now = Date.now();
-  await novelDb.documents.bulkPut(sorted.map((document, order) => document.order === order ? document : {
-    ...document,
-    order,
-    revision: document.revision + 1,
-    updatedAt: now,
-  }));
+  if (formalMutationCommitter) {
+    await commitFormalRecordChanges(projectId, changed.map((document) => {
+      const order = sorted.indexOf(document);
+      return { collection: "documents", before: document as unknown as Record<string, unknown>, after: { ...document, order, revision: document.revision + 1, updatedAt: now } as unknown as Record<string, unknown> };
+    }));
+  } else {
+    await novelDb.documents.bulkPut(sorted.map((document, order) => document.order === order ? document : {
+      ...document,
+      order,
+      revision: document.revision + 1,
+      updatedAt: now,
+    }));
+  }
   return sorted.map((document, order) => ({ ...document, order }));
 }
 
@@ -449,33 +564,50 @@ export async function updateProject(projectId: string, changes: Partial<StoryPro
   const before = await novelDb.projects.get(projectId);
   if (!before) throw new Error("项目不存在");
   const next = { ...changes, updatedAt: Date.now(), updatedBy: ACTOR_ID, revision: before.revision + 1 };
+  const fieldChanges = Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, { before: before[key as keyof StoryProject], after: value }]));
+  const operation = createOperation(projectId, "projects", projectId, "update", fieldChanges);
+  if (await commitThroughRuntime(projectId, [
+    { type: "put", collection: "projects", id: projectId, expectedRevision: before.revision, value: { ...before, ...next } },
+    { type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> },
+  ])) return;
   await novelDb.transaction("rw", novelDb.projects, novelDb.operations, async () => {
     await novelDb.projects.update(projectId, next);
-    const fieldChanges = Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, { before: before[key as keyof StoryProject], after: value }]));
-    await appendOperation(projectId, "projects", projectId, "update", fieldChanges);
+    await novelDb.operations.add(operation);
   });
 }
 
 export async function saveDocument(document: ManuscriptDocument, label?: string) {
   const before = await novelDb.documents.get(document.id);
-  await novelDb.transaction("rw", novelDb.documents, novelDb.revisions, novelDb.operations, async () => {
-    if (before && label) {
-      await novelDb.revisions.add({
-        ...recordBase(document.projectId),
-        documentId: document.id,
-        label,
-        contentHtml: before.contentHtml,
-        plainText: before.plainText,
-        source: "checkpoint",
-        branch: before.branch,
-      });
-    }
-    await novelDb.documents.put({ ...document, updatedAt: Date.now(), revision: (before?.revision ?? 0) + 1 });
-    await appendOperation(document.projectId, "documents", document.id, before ? "update" : "create", {
-      contentHtml: { before: before?.contentHtml, after: document.contentHtml },
-    });
+  const revision = before && label ? {
+    ...recordBase(document.projectId),
+    documentId: document.id,
+    label,
+    contentHtml: before.contentHtml,
+    plainText: before.plainText,
+    source: "checkpoint" as const,
+    branch: before.branch,
+  } : undefined;
+  const next = { ...document, updatedAt: Date.now(), revision: (before?.revision ?? 0) + 1 };
+  const operation = createOperation(document.projectId, "documents", document.id, before ? "update" : "create", {
+    contentHtml: { before: before?.contentHtml, after: document.contentHtml },
   });
-  // 异步触发 embedding 更新：不阻塞主流程，失败静默（降级为纯关键词检索）
+  if (await commitThroughRuntime(document.projectId, [
+    ...(revision ? [{ type: "put" as const, collection: "revisions", id: revision.id, expectedRevision: null, value: revision as unknown as Record<string, unknown> }] : []),
+    { type: "put", collection: "documents", id: document.id, expectedRevision: before?.revision ?? null, value: next as unknown as Record<string, unknown> },
+    { type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> },
+  ])) {
+    triggerDocumentEmbedding(next);
+    return;
+  }
+  await novelDb.transaction("rw", novelDb.documents, novelDb.revisions, novelDb.operations, async () => {
+    if (revision) await novelDb.revisions.add(revision);
+    await novelDb.documents.put(next);
+    await novelDb.operations.add(operation);
+  });
+  triggerDocumentEmbedding(next);
+}
+
+function triggerDocumentEmbedding(document: ManuscriptDocument) {
   void upsertEmbedding({
     projectId: document.projectId,
     targetTable: "documents",
@@ -492,47 +624,47 @@ export async function saveDocumentContent(params: {
   status?: ManuscriptDocument["status"];
   checkpointLabel?: string;
 }) {
-  let saved: ManuscriptDocument | undefined;
-  await novelDb.transaction("rw", novelDb.documents, novelDb.revisions, novelDb.operations, async () => {
-    const before = await novelDb.documents.get(params.documentId);
-    if (!before) throw new Error("章节不存在");
-    if (params.checkpointLabel) {
-      await novelDb.revisions.add({
-        ...recordBase(before.projectId),
-        documentId: before.id,
-        label: params.checkpointLabel,
-        contentHtml: before.contentHtml,
-        plainText: before.plainText,
-        source: "checkpoint",
-        branch: before.branch,
-        approvalStatus: "checkpoint",
-        contentHash: documentContentHash(before),
-      });
-    }
-    const next: ManuscriptDocument = {
-      ...before,
-      contentHtml: params.contentHtml,
-      plainText: params.plainText,
-      wordCount: params.wordCount,
-      status: params.status ?? before.status,
-      revision: before.revision + 1,
-      updatedAt: Date.now(),
-      updatedBy: ACTOR_ID,
-    };
-    await novelDb.documents.put(next);
-    await appendOperation(before.projectId, "documents", before.id, "update", {
-      contentHtml: { before: before.contentHtml, after: next.contentHtml },
-      plainText: { before: before.plainText, after: next.plainText },
-    });
-    saved = next;
+  const before = await novelDb.documents.get(params.documentId);
+  if (!before) throw new Error("章节不存在");
+  const checkpoint = params.checkpointLabel ? {
+    ...recordBase(before.projectId),
+    documentId: before.id,
+    label: params.checkpointLabel,
+    contentHtml: before.contentHtml,
+    plainText: before.plainText,
+    source: "checkpoint" as const,
+    branch: before.branch,
+    approvalStatus: "checkpoint" as const,
+    contentHash: documentContentHash(before),
+  } : undefined;
+  const saved: ManuscriptDocument = {
+    ...before,
+    contentHtml: params.contentHtml,
+    plainText: params.plainText,
+    wordCount: params.wordCount,
+    status: params.status ?? before.status,
+    revision: before.revision + 1,
+    updatedAt: Date.now(),
+    updatedBy: ACTOR_ID,
+  };
+  const operation = createOperation(before.projectId, "documents", before.id, "update", {
+    contentHtml: { before: before.contentHtml, after: saved.contentHtml },
+    plainText: { before: before.plainText, after: saved.plainText },
   });
-  if (!saved) throw new Error("正文保存失败");
-  void upsertEmbedding({
-    projectId: saved.projectId,
-    targetTable: "documents",
-    targetId: saved.id,
-    content: [saved.title, saved.summary, saved.plainText].filter(Boolean).join("\n"),
-  }).catch(() => { /* semantic indexing degrades to keyword retrieval */ });
+  if (await commitThroughRuntime(before.projectId, [
+    ...(checkpoint ? [{ type: "put" as const, collection: "revisions", id: checkpoint.id, expectedRevision: null, value: checkpoint as unknown as Record<string, unknown> }] : []),
+    { type: "put", collection: "documents", id: before.id, expectedRevision: before.revision, value: saved as unknown as Record<string, unknown> },
+    { type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> },
+  ])) {
+    triggerDocumentEmbedding(saved);
+    return saved;
+  }
+  await novelDb.transaction("rw", novelDb.documents, novelDb.revisions, novelDb.operations, async () => {
+    if (checkpoint) await novelDb.revisions.add(checkpoint);
+    await novelDb.documents.put(saved);
+    await novelDb.operations.add(operation);
+  });
+  triggerDocumentEmbedding(saved);
   return saved;
 }
 
@@ -638,9 +770,17 @@ export async function addEntity(projectId: string, kind: StoryEntity["kind"], na
     attributes: {},
     ...(kind === "character" ? { character: { role: "配角", appearance: "", personality: "", desire: "", motivation: "", weakness: "", secret: "", abilities: [], voice: "", arc: "", state: { location: "", physical: "正常", emotional: "平静", objective: "", inventory: [], relationshipNotes: [] } } } : {}),
   };
+  const operation = createOperation(projectId, "entities", entity.id, "create", { name: { before: null, after: name } });
+  if (await commitThroughRuntime(projectId, [
+    { type: "put", collection: "entities", id: entity.id, expectedRevision: null, value: entity as unknown as Record<string, unknown> },
+    { type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> },
+  ])) {
+    triggerEntityEmbedding(entity);
+    return entity;
+  }
   await novelDb.transaction("rw", novelDb.entities, novelDb.operations, async () => {
     await novelDb.entities.add(entity);
-    await appendOperation(projectId, "entities", entity.id, "create", { name: { before: null, after: name } });
+    await novelDb.operations.add(operation);
   });
   triggerEntityEmbedding(entity);
   return entity;
@@ -648,13 +788,22 @@ export async function addEntity(projectId: string, kind: StoryEntity["kind"], na
 
 export async function updateEntity(entity: StoryEntity) {
   const before = await novelDb.entities.get(entity.id);
-  await novelDb.transaction("rw", novelDb.entities, novelDb.operations, async () => {
-    await novelDb.entities.put({ ...entity, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() });
-    await appendOperation(entity.projectId, "entities", entity.id, before ? "update" : "create", {
-      value: { before, after: entity },
-    });
+  const next = { ...entity, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() };
+  const operation = createOperation(entity.projectId, "entities", entity.id, before ? "update" : "create", {
+    value: { before, after: entity },
   });
-  triggerEntityEmbedding(entity);
+  if (await commitThroughRuntime(entity.projectId, [
+    { type: "put", collection: "entities", id: entity.id, expectedRevision: before?.revision ?? null, value: next as unknown as Record<string, unknown> },
+    { type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> },
+  ])) {
+    triggerEntityEmbedding(next);
+    return;
+  }
+  await novelDb.transaction("rw", novelDb.entities, novelDb.operations, async () => {
+    await novelDb.entities.put(next);
+    await novelDb.operations.add(operation);
+  });
+  triggerEntityEmbedding(next);
 }
 
 // 实体 embedding 内容构建：与 context.ts 候选源内容保持一致，确保向量检索语义对齐
@@ -676,8 +825,14 @@ export async function addOutlineNode(projectId: string, phaseId: string, title: 
     summary: "",
     order,
   };
-  await novelDb.outlineNodes.add(node);
-  await appendOperation(projectId, "outlineNodes", node.id, "create", { title: { before: null, after: title } });
+  const operation = createOperation(projectId, "outlineNodes", node.id, "create", { title: { before: null, after: title } });
+  if (!(await commitThroughRuntime(projectId, [
+    { type: "put", collection: "outlineNodes", id: node.id, expectedRevision: null, value: node as unknown as Record<string, unknown> },
+    { type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> },
+  ]))) {
+    await novelDb.outlineNodes.add(node);
+    await novelDb.operations.add(operation);
+  }
   // 异步触发 embedding 更新
   void upsertEmbedding({
     projectId,
@@ -693,6 +848,21 @@ export async function deleteOutlineBranch(projectId: string, nodeId: string) {
   const selected = nodes.find((node) => node.id === nodeId);
   if (!selected) return [];
   const removed = [nodeId];
+  if (formalMutationCommitter) {
+    const [linkedDocuments, realizations, embeddings] = await Promise.all([
+      novelDb.documents.where("projectId").equals(projectId).and((document) => document.plotSegmentId === nodeId).toArray(),
+      novelDb.outlineRealizations.where("projectId").equals(projectId).and((item) => removed.includes(item.outlineNodeId)).toArray(),
+      novelDb.embeddings.where("targetId").anyOf(removed).toArray(),
+    ]);
+    await commitFormalRecordChanges(projectId, [
+      ...linkedDocuments.map((document) => ({ collection: "documents", before: document as unknown as Record<string, unknown>, after: { ...document, plotSegmentId: undefined, revision: document.revision + 1, updatedAt: Date.now() } as unknown as Record<string, unknown> })),
+      { collection: "outlineNodes", before: selected as unknown as Record<string, unknown>, fieldChanges: { title: { before: selected.title, after: null } } },
+      ...realizations.map((item) => ({ collection: "outlineRealizations", before: item as unknown as Record<string, unknown> })),
+      ...embeddings.map((item) => ({ collection: "embeddings", before: item as unknown as Record<string, unknown> })),
+    ]);
+    await normalizeChapterOrderByPlanning(projectId);
+    return removed;
+  }
   await novelDb.transaction("rw", novelDb.outlineNodes, novelDb.documents, novelDb.outlineRealizations, novelDb.embeddings, novelDb.operations, async () => {
     const linkedDocuments = await novelDb.documents.where("projectId").equals(projectId)
       .and((document) => document.plotSegmentId === nodeId)
@@ -721,34 +891,43 @@ export function emptyChapterBlueprint(targetWords = DEFAULT_CHAPTER_TARGET_WORDS
 }
 
 export async function createChapter(projectId: string, title?: string, plotSegmentId?: string) {
-  const documentId = await novelDb.transaction("rw", novelDb.documents, novelDb.operations, async () => {
-    const documents = await novelDb.documents.where("projectId").equals(projectId).toArray();
-    const order = documents.length ? Math.max(...documents.map((item) => item.order)) + 1 : 0;
-    const document: ManuscriptDocument = {
-      ...recordBase(projectId),
-      order,
-      plotSegmentId,
-      title: title || `第${order + 1}章`,
-      blueprint: emptyChapterBlueprint(),
-      contentHtml: "",
-      plainText: "",
-      summary: "",
-      status: "outline",
-      wordCount: 0,
-      branch: "main",
-      yjsDocumentId: crypto.randomUUID(),
-    };
-    await novelDb.documents.add(document);
-    await appendOperation(projectId, "documents", document.id, "create", { title: { before: null, after: document.title } });
-    return document.id;
-  });
+  const documents = await novelDb.documents.where("projectId").equals(projectId).toArray();
+  const order = documents.length ? Math.max(...documents.map((item) => item.order)) + 1 : 0;
+  const document: ManuscriptDocument = {
+    ...recordBase(projectId),
+    order,
+    plotSegmentId,
+    title: title || `第${order + 1}章`,
+    blueprint: emptyChapterBlueprint(),
+    contentHtml: "",
+    plainText: "",
+    summary: "",
+    status: "outline",
+    wordCount: 0,
+    branch: "main",
+    yjsDocumentId: crypto.randomUUID(),
+  };
+  const operation = createOperation(projectId, "documents", document.id, "create", { title: { before: null, after: document.title } });
+  if (!(await commitThroughRuntime(projectId, [
+    { type: "put", collection: "documents", id: document.id, expectedRevision: null, value: document as unknown as Record<string, unknown> },
+    { type: "put", collection: "operations", id: operation.id, expectedRevision: null, value: operation as unknown as Record<string, unknown> },
+  ]))) {
+    await novelDb.transaction("rw", novelDb.documents, novelDb.operations, async () => {
+      await novelDb.documents.add(document);
+      await novelDb.operations.add(operation);
+    });
+  }
   await normalizeChapterOrderByPlanning(projectId);
-  return (await novelDb.documents.get(documentId))!;
+  return (await novelDb.documents.get(document.id))!;
 }
 
 export async function deleteChapter(documentId: string) {
   const document = await novelDb.documents.get(documentId);
   if (!document) return;
+  if (formalChapterDeleteCommitter) {
+    await formalChapterDeleteCommitter(document.projectId, documentId);
+    return;
+  }
   const runs = await novelDb.workflowRuns.where("targetDocumentId").equals(documentId).toArray();
   const runIds = runs.map((run) => run.id);
   const chapterProposals = await novelDb.proposals.where("targetId").equals(documentId).toArray();
@@ -824,9 +1003,10 @@ export async function deleteProject(projectId: string) {
 
 export async function createCheckpoint(projectId: string, label: string) {
   const documents = await novelDb.documents.where("projectId").equals(projectId).toArray();
-  await novelDb.revisions.bulkAdd(documents.map((doc) => ({
+  const revisions = documents.map((doc) => ({
     ...recordBase(projectId), documentId: doc.id, label, contentHtml: doc.contentHtml, plainText: doc.plainText, source: "checkpoint" as const, branch: doc.branch,
-  })));
+  }));
+  await commitFormalRecordChanges(projectId, revisions.map((revision) => ({ collection: "revisions", after: revision as unknown as Record<string, unknown> })));
 }
 
 export async function resolveConflict(conflict: SyncConflict, value: unknown, resolution: SyncConflict["status"]) {

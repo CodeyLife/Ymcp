@@ -1,5 +1,5 @@
 import Ajv, { type AnySchema } from "ajv";
-import { getEffectiveApiConfig } from "@/stores/ui";
+import { getNovelApiConfig } from "./api-config";
 import type { NovelAgentRole } from "./types";
 import { assertModelContextLimit } from "./model-capabilities";
 
@@ -25,7 +25,7 @@ export function endpoint(baseUrl: string) {
   const normalized = baseUrl.replace(/\/+$/, "");
   // 浏器 dev 模式下走 Vite proxy 避免 CORS；但 Node/SSR 环境（如 novel:closed-loop / novel:20chapters CLI）
   // 没有 window.location，fetch 无法解析相对 URL，必须直连 baseUrl。
-  if (normalized === "https://gpt.eromaa.com/v1" && import.meta.env.DEV && typeof window !== "undefined") return "/ai-proxy";
+  if (normalized === "https://gpt.eromaa.com/v1" && import.meta.env?.DEV && typeof window !== "undefined") return "/ai-proxy";
   return normalized;
 }
 async function hashPrompt(value: string) {
@@ -209,7 +209,7 @@ async function requestChat(params: {
   responseSchema?: Record<string, unknown>;
   maxTokens?: number;
 }) {
-  const config = getEffectiveApiConfig();
+  const config = getNovelApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
   assertModelContextLimit({ model: params.model, text: params.messages.map((message) => message.content).join("\n"), override: config.modelContextWindow, outputReserve: params.maxTokens ?? 4096 });
   const body: Record<string, unknown> = { model: params.model, temperature: params.temperature, messages: params.messages };
@@ -260,7 +260,7 @@ export async function streamNovelModel(params: {
   maxTokens?: number;
   onToken?: (text: string) => void;
 }) {
-  const config = getEffectiveApiConfig();
+  const config = getNovelApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt].filter(Boolean).join("\n\n");
   assertModelContextLimit({ model: params.model, text: `${system}\n${params.prompt}`, override: config.modelContextWindow, outputReserve: params.maxTokens ?? 8192 });

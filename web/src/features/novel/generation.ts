@@ -39,17 +39,17 @@ export interface GenerationTaskDefinition {
 
 const TASKS: GenerationTaskDefinition[] = [
   { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。", refinable: true },
-  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成可支撑数百万字铺陈的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。每个阶段的 turningPoint 字段必须用文学化叙事书写：写出此阶段结束时人物与世界已无可挽回地改变了什么（处境的不可逆与心境的拐弯），不得用\"X 发现 Y\"\"X 获得 Z 机会\"\"X 建立 Y\"等编剧指令腔。turningPoint 不是\"接下来会发生什么\"的事件预告，而是\"此阶段结束时已回不去\"的文学定格——删除该句后，读者仍能从字里行间感受到该阶段的不可逆变化。", refinable: true },
+  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成与项目体量相称、可持续展开的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。每个阶段的 turningPoint 字段必须用文学化叙事书写，同时落到具体资源控制、秘密公开、组织裂变或关系承诺的不可逆变化；不得只写抽象感悟，也不得写成\"接下来会发生什么\"的事件预告。\n\n【架构层硬约束】(1) 多权力中心：权力网络容量必须与项目体量相称；百万字长篇至少包含 5 个独立权力中心（不限于商界/政界/武林/朝廷/家族/宗教/超自然势力/技术集团，依题材而定），每个权力中心有自己的利益、资源、行动能力与底线，能独立推动剧情——不可全部围绕主角或单一反派。权力中心之间至少存在一组非二元对立关系（既有合作又有冲突），避免简单正邪分明的阵营结构。(2) 跨组织反馈：百万字长篇至少包含 3 条反馈链，写明触发条件、跨中心传导步骤、受影响中心与故事压力；affectedCenters 必须引用已建模中心的 id 或准确名称。(3) 长线伏笔钩子：百万字长篇至少留出 3 条可在后续百章缓慢发酵的长线伏笔钩子，以日常细节形态埋设，不自我标榜；其回收路径不得在架构阶段就被锁死单一解释，affectedCenters 同样必须闭合引用。(4) 张力线交织：架构中的多条张力线（主线/支线/对抗线/共谋线/感情线等）必须通过共享人物、资源、秘密或选择相互改变，不得只是平行推进。(5) 第二增长曲线（结构化字段强制）：百万字长篇必须有至少 2 条独立增长曲线，必须在 payload.growthCurves 数组中显式声明——1 条 kind=\"main\"（主线增长曲线）+ 至少 1 条 kind=\"ecological\"（生态增长曲线）。每条曲线必须填写：subject（生态主体，如权力生态、商业生态、制度生态、修炼体系、江湖格局、社会变革、行业演化等，依题材而定）、resourceLoop（资源循环——此曲线运转所依赖的资源获取/流转/消耗机制）、stageGoals（此曲线在架构各阶段的推进目标）、irreversibleChange（此曲线结束时世界已回不去的结构性变化）。ecological 曲线的四个字段必须独立于主线主角命运——判定标准：若删除主线后，该 ecological 曲线能否独立支撑至少一个阶段的推进？若不能，则重构。每个 phase 的 primaryCurveId 必须引用 growthCurves[].id，标注此阶段主要由哪条曲线推进；至少 1 个 phase 的 primaryCurveId 必须引用 ecological 曲线（即至少一个阶段主要由生态曲线推进，而非全部围绕主线）。若作品涉及感情线，架构层的感情阶段绑定与多权力中心约束见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
   { key: "plot-design", label: "设计剧情段与章节", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "documents"], defaultInstruction: "在选中的幕下设计一个剧情段及其章节。章节数量由剧情段需要承载的独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报共同决定，不按固定范围凑数或压缩。若剧情段跨越多种功能或强度，应安排行动、余波、蓄势、兑现等有差异的呼吸；若它本身是单一过渡、完整高潮、短促插曲或实验性结构，则服从该功能，不强制补入低强度章。每章都必须有不可替代的叙事职责和清晰落点。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。", refinable: true },
-  { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "设计有明确欲望、恐惧、错误信念、秘密、人物弧和差异化声音的角色。角色名不得与作品设定中的地名、朝代名、年号、官职、典章制度重名——古风/历史/架空题材尤其要避免用都城名（长安、洛阳、汴梁、建康等）作人名，因为读者会先想到城市而非人物。每个角色必须给出完整的初始 state：state.location 引用世界观中已有的 location 实体名（不可写\"未指定\"），state.physical 是角色此刻的具体身体状态（健康/疲劳/受伤等，不可写\"未指定\"），state.emotional 是角色此刻的情绪基调（用具体描述如\"压抑的悲痛\"，不可写\"未指定\"或\"平静\"），state.objective 是角色即时目标，state.inventory 是随身关键物品（可为空数组）。\"未指定\"不得作为任何 state 字段的值。", refinable: true },
-  { key: "relations", label: "设计人物关系", scope: "relations", role: "architect", skillStage: "foundation", allowedTables: ["relations"], defaultInstruction: "根据现有角色设计会推动选择和冲突的人物关系。", refinable: true },
+  { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "为本作设计至少 5 位核心角色，每位角色作为独立的 entity 提案项返回（百万字长篇群像规模硬约束——这是首要要求，不得只返回 1-2 位）。每位角色必须有：明确欲望(desire)、恐惧(weakness)、错误信念、秘密(secret)、人物弧(arc)和差异化声音(voice)；完整的初始 state（location 引用世界观已有 location 实体名 / physical 具体身体状态 / emotional 具体情绪基调 / objective 即时目标 / inventory 随身物品，均不可写\"未指定\"）。角色名不得与地名、朝代名、年号、官职、典章制度重名——古风/历史/架空题材尤其要避免用都城名（长安、洛阳、汴梁、建康等）作人名，因为读者会先想到城市而非人物。\n\n【群像独立性硬约束】核心角色之间必须至少存在两组非二元对立关系（既有合作又有冲突），避免所有关系都收敛至主角与单一反派的对立。至少 1 位核心角色应能独立推动一条非主线驱动的生态增长曲线（如权力生态、商业生态、江湖格局等），其欲望、资源与行动不服务主角目标。判定标准：若所有核心角色的欲望都服务或阻碍同一主角目标，则群像缺失独立性，应重构。若作品涉及感情线，主恋爱角色的恋爱维度字段要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
+  { key: "relations", label: "设计人物关系", scope: "relations", role: "architect", skillStage: "foundation", allowedTables: ["relations"], defaultInstruction: "为已生成的核心角色设计至少 5 条会推动选择和冲突的人物关系，每条关系作为独立的 relation 提案项返回（这是首要要求，不得只返回 1-2 条）。每条关系需有 publicLabel（明面关系）和 privateTruth（私下隐情），关系类型(relationType)不得雷同。若作品涉及感情线，主恋爱关系的 bond 字段需标注当前感情阶段与关系状态（中文描述），privateTruth 承载尚未公开的情感真相；具体要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
   { key: "timeline", label: "规划时间线", scope: "timeline", role: "architect", skillStage: "planning", allowedTables: ["timelineEvents"], defaultInstruction: "生成有明确先后、持续时间、原因和后果的故事时间线。", refinable: true },
-  { key: "worldview", label: "完善世界观", scope: "worldview", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "完善地点、组织、阵营、物品、物种、规则、能力与术语，并保持世界设定之间的关系一致。", refinable: true },
-  { key: "plot-threads", label: "规划剧情线", scope: "threads", role: "architect", skillStage: "planning", allowedTables: ["plotThreads"], defaultInstruction: "规划主线和支线，明确参与者、当前状态、优先级与下一步推进。", refinable: true },
-  { key: "foreshadowing", label: "规划伏笔", scope: "foreshadowing", role: "architect", skillStage: "planning", allowedTables: ["foreshadowing"], defaultInstruction: "规划线索、真相、误导、提醒与回收节点。", refinable: true },
-  { key: "story-control", label: "生成剧情控制资料", scope: "review", role: "architect", skillStage: "planning", allowedTables: ["plotThreads", "foreshadowing", "timelineEvents"], defaultInstruction: "根据已批准架构、大纲和资料库生成剧情线、伏笔和时间线控制资料。", refinable: true },
-  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "结合已批准架构、故事大纲和当前写作进度，确定本章唯一的主导叙事功能与兑现边界；允许本章主要用于背景、人物、关系、情感、蓄势或余波。若本章 povCharacterId 是单一角色（第三人称限知 POV），则 mustHappen 中的所有动作必须是该 POV 角色亲自可观察、可推断或可被告知的事项，或该 POV 角色自身的内心动作——不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等）。如需呈现多角色内心：方案 A 保持单 POV，把他人内心外化为 POV 角色可观察的行动；方案 B 显式标注本章为\"多视角切片\"，povCharacterId 留空，characterIds 列出全部视角人物，beats 中标注每个节拍的 POV。", refinable: true },
+  { key: "worldview", label: "完善世界观", scope: "worldview", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "完善地点、组织、阵营、物品、物种、规则、能力与术语，并保持世界设定之间的关系一致。百万字长篇至少返回 8 个可独立引用的世界观实体，其中至少包含 2 个地点、3 个组织或阵营、2 个规则/能力/术语；不能用一个总称替代所有地域文化圈，也不能只生成名称而缺少生产方式、制度职责、资源依赖或能力边界。", refinable: true },
+  { key: "plot-threads", label: "规划剧情线", scope: "threads", role: "architect", skillStage: "planning", allowedTables: ["plotThreads"], defaultInstruction: "为本作规划至少 4 条剧情线，每条剧情线作为独立的 plotThread 提案项返回（百万字长篇必备结构：1 主线(kind=main) + 1 支线(kind=subplot) + 1 对抗线(kind=antagonist) + 1 共谋线(kind=conspiracy)——这是首要要求，不得只返回 1-2 条；若作品含感情线可额外增加 kind=romance）。每条剧情线需明确参与者、当前状态、优先级与下一步推进。\n\n【剧情线硬约束】(1) 支线反哺三问：每条支线必须回答以下三问中的至少一问：(a) 它如何改变了主线人物的选择？(b) 它如何改变了主线人物的认知或信念？(c) 它如何为主线提供了关键资源、秘密或盟友？若一条支线对这三个问题都回答\"否\"，则该支线只是主线休息站，不应规划为独立剧情线。支线不得只通过\"同时发生\"与主线关联（如\"主角在做 A 时，配角在做 B\"），必须通过因果链关联（如\"配角在 B 中获得的信息改变了主角在 A 中的选择\"）。(2) 对抗线独立生态：对抗线（kind=antagonist 或独立反派支线）必须有自己的独立生态——反派有自己的目标、资源、行动能力、底线与盟友，不能只是\"阻碍主角\"的工具人。nextMove 字段强制约束：对抗线的 nextMove 必须描述反派推进自身目标的行动（如\"整合北境三族兵力，完成南征准备\"\"收编西域商路，截断对手财源\"），不得以主角为行动对象或主语（如\"派人监视主角\"\"判断主角是否危险\"\"阻止主角获取 X\"等均违规——这些只是阻碍主角，不是推进自身目标）。判定标准：若删除 nextMove 中的主角名字后，该行动是否仍有独立的战略意义？若没有，则该行动只是\"给主角制造困难\"，应改为推进反派自身目标的行动。反派至少有一条不碰的行为底线（这是读者共情的关键），反派的核心信念应形成前后不矛盾的闭环。(3) 共谋线独立生态：百万字长篇必须有至少 1 条 kind=conspiracy 的共谋线——一群角色暗中结盟或共谋，有独立于对抗线的目标、参与者(participantIds)、当前状态(status)与下一步推进(nextMove)。共谋线与对抗线的区别：对抗线是明面反派推进自身目标，共谋线是隐藏联盟暗中操纵/布局/合谋，其存在与目的在前期对主角和其他势力不可见。nextMove 字段强制约束：共谋线的 nextMove 必须描述共谋者推进其阴谋的行动（如\"暗中收买三名长老，在下次议事时联合发难\"\"伪造传承凭证，为篡夺正统铺路\"），不得以主角为行动对象或主语。判定标准：若删除 nextMove 中的主角名字后，该行动是否仍有独立的阴谋推进意义？共谋线必须与主线存在延迟揭示关系——其真相在中后期才被主角察觉，前期只以异常迹象呈现。若作品涉及感情线，romance 剧情线的字段级要求（kind=romance、priority、nextMove 标注感情阶段、progress 映射弧光进度）见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
+  { key: "foreshadowing", label: "规划伏笔", scope: "foreshadowing", role: "architect", skillStage: "planning", allowedTables: ["foreshadowing"], defaultInstruction: "为本作规划至少 4 条伏笔，每条伏笔作为独立的 foreshadowing 提案项返回（百万字长篇至少 1 条跨百章长线伏笔——这是首要要求，不得只返回 1-2 条）。每条伏笔涵盖线索(clue)、真相(truth)、误导、提醒与回收节点。\n\n【伏笔硬约束】(1) 延迟回收范式：伏笔埋设时必须以日常细节形态存在，不得自我标榜（禁止\"他不知道这个决定将改变一切\"\"这个细节后来证明至关重要\"等作者预告）；提醒应以不经意方式呈现（人物偶然瞥见、他人随口提及），不得让人物主动追查（除非该人物有明确动机）；回收应让读者产生\"原来如此\"的恍然，而非\"终于揭晓\"的被动接受——回收瞬间应触发情感爆发，而非信息确认。判定标准：若读者重读埋设段落时能立刻认出这是伏笔，则埋设过于刻意。(2) 长线伏笔多义真相：长篇（百万字以上）需至少规划 1 条跨百章以上的长线伏笔。truth 字段写最终真相，但 notes 字段必须显式列出至少 1 个中期误导解释（读者在百章以内可能推断出的错误结论）。长线伏笔不得全部服务同一条主线（如全部指向同一案件真相），至少 1 条应独立关联权力格局、人物关系或世界规则，能在回收时改变角色关系或权力平衡。所有长线伏笔的 truth 不得收敛至同一解释。短篇或单元剧不强制此要求。若作品涉及感情线，至少规划 1 条服务感情线弧光的伏笔，notes 标注关联感情阶段与回收方式；具体要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
+  { key: "story-control", label: "生成剧情控制资料", scope: "review", role: "architect", skillStage: "planning", allowedTables: ["plotThreads", "foreshadowing", "timelineEvents"], defaultInstruction: "根据已生成的剧情线(plot-threads 任务)、伏笔(foreshadowing 任务)和时间线(timeline 任务)，交叉校验三者一致性并补充控制元数据。严禁重复生成已存在的 plotThreads/foreshadowing/timelineEvents 记录——只允许对已有记录执行 update 操作。\n\n【story-control 职责边界】(1) 一致性校验：检查剧情线参与者在时间线事件中是否一致、伏笔回收节点是否与剧情线进度匹配、时间线因果链是否与剧情线 nextMove 对齐。(2) 控制元数据补充：为伏笔补充回收节点映射（哪个剧情段/章节回收）、为剧情线补充进度同步点（哪条时间线事件标志剧情线进度变化）、为时间线补充因果约束标注。(3) 冲突标注：识别并标注三者之间的逻辑冲突（如伏笔回收早于埋设、剧情线 nextMove 与时间线顺序矛盾），以 update 操作修正 status/progress/nextMove 字段。\n\n【保留性更新合同】只提交确有必要的字段补丁。不得用较短的控制说明覆盖已经更完整的 title、summary、description、clue 或 truth；已有 participantIds、locationId、causeIds、consequenceIds 一致时必须省略这些字段。向 notes 增加回收映射时，只提交以“控制映射：”开头的追加段即可，系统会把正式原 notes 确定性地置于前面；也可返回“原 notes + 控制映射”，但不能用 clue、truth、状态或映射文本替换原说明。没有矛盾的记录无需为了显得有改动而更新。\n\n【禁止行为】(a) 禁止创建新的 plotThreads 记录（kind/title/summary 不得与已有记录重复）。(b) 禁止创建新的 foreshadowing 记录（clue/truth 不得与已有记录重复）。(c) 禁止创建新的 timelineEvents 记录。如发现已有记录存在质量问题，应通过 update 操作修正字段值，而非创建新记录。", refinable: true },
+  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "结合已批准架构、故事大纲和当前写作进度，确定本章唯一的主导叙事功能与兑现边界；允许本章主要用于背景、人物、关系、情感、蓄势或余波。若本章 povCharacterId 是单一角色（第三人称限知 POV），则 mustHappen 中的所有动作必须是该 POV 角色亲自可观察、可推断或可被告知的事项，或该 POV 角色自身的内心动作——不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等）。如需呈现多角色内心：方案 A 保持单 POV，把他人内心外化为 POV 角色可观察的行动；方案 B 显式标注本章为\"多视角切片\"，povCharacterId 留空，characterIds 列出全部视角人物，beats 中标注每个节拍的 POV。\n\n【POV 模式互斥硬约束】方案 A 与方案 B 互斥，不得混用：(1) 若 povCharacterId 填入具体角色 ID（非空、非\"multi\"），则必须使用方案 A——所有 mustHappen 项不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等），只能包含 POV 角色可观察、可推断、可被告知的外部事项，或 POV 角色自身的决定/记忆/误读/回避。(2) 若本章需要呈现 ≥2 个角色的内心活动（如\"三线切片\"\"群像章节\"），则必须使用方案 B——povCharacterId 必须为空或填入\"multi\"占位，不得填具体角色 ID；characterIds 必须列出全部视角人物；beats 中每个节拍必须显式标注其 POV（如\"[POV:A] ...\"\"[POV:B] ...\"）。(3) 违规判定：povCharacterId 填具体角色 ID 但 mustHappen 含非 POV 角色内心动作 = 违规；povCharacterId 为空但 beats 未标注 POV = 违规；声称\"多视角切片\"但 povCharacterId 仍填单一角色 = 违规。若作品涉及感情线，章节 romance beat 的形态与字段级要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
   { key: "scene-design", label: "设计场景", scope: "scenes", role: "architect", skillStage: "planning", allowedTables: ["scenes"], defaultInstruction: "为当前章节规划场景顺序、功能、冲突、结果、角色和行动节拍。", refinable: true },
   { key: "chapter-draft", label: "生成章节正文", scope: "writing", role: "writer", skillStage: "drafting", allowedTables: ["documents"], defaultInstruction: "依据当前章节蓝图和场景计划生成完整正文。" },
   { key: "review", label: "审校并提出修订", scope: "review", role: "quality-editor", skillStage: "review", allowedTables: ["documents"], defaultInstruction: "检查故事与正文的因果、人物、连续性、节奏和文风，并提供可选择采纳的定向修订。" },
@@ -69,7 +69,7 @@ export function tasksForScope(scope: NovelGenerationScope) {
 
 const payloadContract = `字段契约：
 - projects: title, subtitle, premise, genre, audience, themes, sellingPoints, pov, tense, tone, languageStyle, targetWords
-- architectures: framework, status, centralQuestion, centralConflict, synopsis, phases[{id,title,purpose,turningPoint,order,locked}]；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔
+- architectures: framework, status, centralQuestion, centralConflict, synopsis, powerCenters[{id,name,interest,resources,actionCapacity,bottomLine,relationshipDynamics}], feedbackLoops[{id,name,trigger,transmission,affectedCenters,storyPressure}], longHorizonHooks[{id,surfaceDetail,possibleInterpretations,affectedCenters,payoffWindow}], phases[{id,title,purpose,turningPoint,order,locked,primaryCurveId}], growthCurves[{id,kind,subject,resourceLoop,stageGoals,irreversibleChange}]；数量按项目体量决定，百万字长篇至少为 powerCenters 5 个、feedbackLoops 3 条、longHorizonHooks 3 条；affectedCenters 只能引用 powerCenters 中已有 id 或准确名称；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔；phases.turningPoint 还必须落到资源、秘密、组织或关系承诺的具体不可逆变化；phases.primaryCurveId 引用 growthCurves[].id，标注此阶段主要由哪条增长曲线推进；growthCurves 至少 2 条（kind=main 主线 + 至少 1 条 kind=ecological 生态曲线），ecological 曲线的 subject/resourceLoop/stageGoals/irreversibleChange 必须独立于主线主角命运——若删除主线后该曲线能否独立支撑至少一个阶段的推进
 - outlineNodes: phaseId, title, summary, order；每条记录只表示一个剧情段，phaseId 必须引用全书架构中的真实幕 ID
 - documents: order, plotSegmentId(可用 ref:剧情段临时ID), title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,plotThreadIds,foreshadowingIds,conflict,informationRelease,mustHappen,flexible,forbidden}；正文任务可额外给 plainText；章节目标字数由系统设置，不得返回 targetWords
 - scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, outcome, wordTarget, beats[{id,text,order}]
@@ -88,15 +88,18 @@ const characterSchema = {
     state: { type: "object", additionalProperties: false, required: ["location", "physical", "emotional", "objective", "inventory"], properties: { location: { type: "string" }, physical: { type: "string" }, emotional: { type: "string" }, objective: { type: "string" }, inventory: stringArraySchema, relationshipNotes: stringArraySchema, lastChangedChapterId: { type: "string" } } },
   },
 } as const;
+const architecturePowerCenterSchema = { type: "object", additionalProperties: false, required: ["id", "name", "interest", "resources", "actionCapacity", "bottomLine", "relationshipDynamics"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, interest: { type: "string", minLength: 1 }, resources: { ...stringArraySchema, minItems: 1 }, actionCapacity: { type: "string", minLength: 1 }, bottomLine: { type: "string", minLength: 1 }, relationshipDynamics: { type: "string", minLength: 1 } } } as const;
+const architectureFeedbackLoopSchema = { type: "object", additionalProperties: false, required: ["id", "name", "trigger", "transmission", "affectedCenters", "storyPressure"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, trigger: { type: "string", minLength: 1 }, transmission: { ...stringArraySchema, minItems: 2 }, affectedCenters: { ...stringArraySchema, minItems: 2 }, storyPressure: { type: "string", minLength: 1 } } } as const;
+const architectureLongHorizonHookSchema = { type: "object", additionalProperties: false, required: ["id", "surfaceDetail", "possibleInterpretations", "affectedCenters", "payoffWindow"], properties: { id: { type: "string", minLength: 1 }, surfaceDetail: { type: "string", minLength: 1 }, possibleInterpretations: { ...stringArraySchema, minItems: 2 }, affectedCenters: { ...stringArraySchema, minItems: 1 }, payoffWindow: { type: "string", minLength: 1 } } } as const;
 const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>> = {
   projects: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, subtitle: { type: "string" }, premise: { type: "string" }, genre: stringArraySchema, audience: { type: "string" }, themes: stringArraySchema, sellingPoints: stringArraySchema, pov: { type: "string" }, tense: { type: "string" }, tone: { type: "string" }, languageStyle: { type: "string" }, targetWords: { type: "number", minimum: 1 } } },
-  architectures: { type: "object", additionalProperties: false, properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, phases: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string" }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" } } } } } },
+  architectures: { type: "object", additionalProperties: false, properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, powerCenters: { type: "array", minItems: 1, items: architecturePowerCenterSchema }, feedbackLoops: { type: "array", minItems: 1, items: architectureFeedbackLoopSchema }, longHorizonHooks: { type: "array", minItems: 1, items: architectureLongHorizonHookSchema }, phases: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked", "primaryCurveId"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string" }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" }, primaryCurveId: { type: "string", minLength: 1 } } } }, growthCurves: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["id", "kind", "subject", "resourceLoop", "stageGoals", "irreversibleChange"], properties: { id: { type: "string", minLength: 1 }, kind: { enum: ["main", "ecological"] }, subject: { type: "string", minLength: 1 }, resourceLoop: { type: "string", minLength: 1 }, stageGoals: { type: "string", minLength: 1 }, irreversibleChange: { type: "string", minLength: 1 } } } } } },
   outlineNodes: { type: "object", additionalProperties: false, properties: { phaseId: { type: "string", minLength: 1 }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 } } },
   documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, plotSegmentId: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
   scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
   entities: { type: "object", additionalProperties: false, properties: { kind: { enum: ["character", "location", "organization", "faction", "item", "species", "rule", "ability", "term"] }, name: { type: "string" }, aliases: stringArraySchema, summary: { type: "string" }, description: { type: "string" }, tags: stringArraySchema, lockedFacts: stringArraySchema, attributes: { type: "object" }, character: characterSchema }, allOf: [{ if: { properties: { kind: { const: "character" } }, required: ["kind"] }, then: { required: ["character"] } }] },
   relations: { type: "object", additionalProperties: false, properties: { fromEntityId: { type: "string" }, toEntityId: { type: "string" }, relationType: { type: "string" }, publicLabel: { type: "string" }, privateTruth: { type: "string" }, bond: { type: "string" } } },
-  plotThreads: { type: "object", additionalProperties: false, properties: { kind: { enum: ["main", "subplot", "romance", "growth", "mystery", "antagonist"] }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["planned", "active", "paused", "resolved", "abandoned"] }, priority: { type: "number", minimum: 0, maximum: 100 }, participantIds: stringArraySchema, startNodeId: { type: "string" }, targetNodeId: { type: "string" }, progress: { type: "number", minimum: 0, maximum: 100 }, nextMove: { type: "string" } } },
+  plotThreads: { type: "object", additionalProperties: false, properties: { kind: { enum: ["main", "subplot", "romance", "growth", "mystery", "antagonist", "conspiracy"] }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["planned", "active", "paused", "resolved", "abandoned"] }, priority: { type: "number", minimum: 0, maximum: 100 }, participantIds: stringArraySchema, startNodeId: { type: "string" }, targetNodeId: { type: "string" }, progress: { type: "number", minimum: 0, maximum: 100 }, nextMove: { type: "string" } } },
   foreshadowing: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, clue: { type: "string" }, truth: { type: "string" }, status: { enum: ["seeded", "reminded", "misdirected", "advanced", "revealed", "resolved", "abandoned"] }, seededNodeId: { type: "string" }, targetNodeId: { type: "string" }, urgency: { type: "number", minimum: 0, maximum: 100 }, notes: { type: "string" } } },
   timelineEvents: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, storyDate: { type: "string" }, duration: { type: "string" }, narrativeOrder: { type: "number" }, locationId: { type: "string" }, participantIds: stringArraySchema, causeIds: stringArraySchema, consequenceIds: stringArraySchema, description: { type: "string" }, parallelGroup: { type: "string" } } },
 };
@@ -143,7 +146,7 @@ const payloadAjv = new Ajv({ allErrors: true, strict: false });
 const PAYLOAD_VALIDATORS = Object.fromEntries(Object.entries(TABLE_PAYLOAD_SCHEMAS).map(([table, schema]) => [table, payloadAjv.compile(schema)])) as Record<ProposalTargetTable, ValidateFunction>;
 const CREATE_REQUIRED_FIELDS: Record<ProposalTargetTable, string[]> = {
   projects: ["title", "premise"],
-  architectures: ["centralQuestion", "centralConflict", "synopsis", "phases"],
+  architectures: ["centralQuestion", "centralConflict", "synopsis", "powerCenters", "feedbackLoops", "longHorizonHooks", "phases", "growthCurves"],
   outlineNodes: ["phaseId", "title", "summary", "order"],
   documents: ["order", "plotSegmentId", "title", "summary", "blueprint"],
   scenes: ["chapterId", "title", "order", "purpose", "conflict", "outcome"],
@@ -155,10 +158,60 @@ const CREATE_REQUIRED_FIELDS: Record<ProposalTargetTable, string[]> = {
 };
 const CREATE_PAYLOAD_VALIDATORS = Object.fromEntries(Object.entries(TABLE_PAYLOAD_SCHEMAS).map(([table, schema]) => [table, payloadAjv.compile({ ...schema, required: CREATE_REQUIRED_FIELDS[table as ProposalTargetTable] })])) as Record<ProposalTargetTable, ValidateFunction>;
 
+interface ArchitectureSystemCapacity {
+  powerCenters: number;
+  feedbackLoops: number;
+  longHorizonHooks: number;
+  feedbackAffectedCenters: number;
+}
+
+function architectureSystemCapacity(targetWords: number): ArchitectureSystemCapacity {
+  if (targetWords >= 1_500_000) return { powerCenters: 7, feedbackLoops: 4, longHorizonHooks: 4, feedbackAffectedCenters: 3 };
+  if (targetWords >= 1_000_000) return { powerCenters: 5, feedbackLoops: 3, longHorizonHooks: 3, feedbackAffectedCenters: 2 };
+  return { powerCenters: 1, feedbackLoops: 1, longHorizonHooks: 1, feedbackAffectedCenters: 2 };
+}
+
+function timelineSystemCapacity(targetWords: number) {
+  if (targetWords >= 1_500_000) return 7;
+  if (targetWords >= 1_000_000) return 6;
+  return 1;
+}
+
+function architecturePayloadSchema(capacity: ArchitectureSystemCapacity) {
+  const base = MODEL_PAYLOAD_SCHEMAS.architectures;
+  const properties = base.properties as Record<string, Record<string, unknown>>;
+  const feedbackLoop = properties.feedbackLoops.items as Record<string, unknown>;
+  const feedbackLoopProperties = feedbackLoop.properties as Record<string, Record<string, unknown>>;
+  return {
+    ...base,
+    properties: {
+      ...properties,
+      powerCenters: { ...properties.powerCenters, minItems: capacity.powerCenters },
+      feedbackLoops: {
+        ...properties.feedbackLoops,
+        minItems: capacity.feedbackLoops,
+        items: {
+          ...feedbackLoop,
+          properties: {
+            ...feedbackLoopProperties,
+            affectedCenters: { ...feedbackLoopProperties.affectedCenters, minItems: capacity.feedbackAffectedCenters },
+          },
+        },
+      },
+      longHorizonHooks: { ...properties.longHorizonHooks, minItems: capacity.longHorizonHooks },
+    },
+  };
+}
+
 function proposalSchema(
   allowedTables: ProposalTargetTable[],
   requiredPayloadFields?: Partial<Record<ProposalTargetTable, string[]>>,
+  architectureCapacity?: ArchitectureSystemCapacity,
 ) {
+  const payloadSchemas = Object.fromEntries(allowedTables.map((table) => [
+    table,
+    table === "architectures" && architectureCapacity ? architecturePayloadSchema(architectureCapacity) : MODEL_PAYLOAD_SCHEMAS[table],
+  ])) as Record<ProposalTargetTable, Record<string, unknown>>;
   return {
     type: "object",
     additionalProperties: false,
@@ -184,10 +237,10 @@ function proposalSchema(
             dependencies: { type: "array", items: { type: "string" } },
           },
           allOf: [
-            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table } } }, then: { properties: { payload: MODEL_PAYLOAD_SCHEMAS[table] } } })),
-            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "create" } }, required: ["targetTable", "operation"] }, then: { properties: { payload: { ...MODEL_PAYLOAD_SCHEMAS[table], required: CREATE_REQUIRED_FIELDS[table] } } } })),
+            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table } } }, then: { properties: { payload: payloadSchemas[table] } } })),
+            ...allowedTables.map((table) => ({ if: { properties: { targetTable: { const: table }, operation: { const: "create" } }, required: ["targetTable", "operation"] }, then: { properties: { payload: { ...payloadSchemas[table], required: CREATE_REQUIRED_FIELDS[table] } } } })),
             ...allowedTables.flatMap((table) => requiredPayloadFields?.[table]?.length
-              ? [{ if: { properties: { targetTable: { const: table } }, required: ["targetTable"] }, then: { properties: { payload: { ...MODEL_PAYLOAD_SCHEMAS[table], required: requiredPayloadFields[table] } } } }]
+              ? [{ if: { properties: { targetTable: { const: table } }, required: ["targetTable"] }, then: { properties: { payload: { ...payloadSchemas[table], required: requiredPayloadFields[table] } } } }]
               : []),
             { if: { properties: { operation: { const: "update" } }, required: ["operation"] }, then: { required: ["targetId"], properties: { payload: { type: "object", minProperties: 1 } } } },
           ],
@@ -259,7 +312,7 @@ function formatValue(value: unknown): string {
 // 每类实体在预览中重点展示的字段（payload 键 → 中文标签）
 const PROPOSAL_PREVIEW_FIELDS: Partial<Record<ProposalTargetTable, Array<[string, string]>>> = {
   projects: [["premise", "前提"], ["genre", "题材"], ["themes", "主题"], ["audience", "受众"], ["pov", "视角"], ["tone", "基调"], ["languageStyle", "语言风格"]],
-  architectures: [["framework", "结构方法"], ["centralQuestion", "核心问题"], ["centralConflict", "核心冲突"], ["synopsis", "梗概"], ["phases", "阶段"]],
+  architectures: [["framework", "结构方法"], ["centralQuestion", "核心问题"], ["centralConflict", "核心冲突"], ["synopsis", "梗概"], ["powerCenters", "权力中心"], ["feedbackLoops", "反馈链"], ["longHorizonHooks", "长期钩子"], ["phases", "阶段"], ["growthCurves", "增长曲线"]],
   entities: [["kind", "类型"], ["name", "名称"], ["summary", "摘要"], ["description", "描述"], ["aliases", "别名"], ["tags", "标签"], ["character", "角色设定"]],
   relations: [["fromEntityId", "主体"], ["toEntityId", "客体"], ["relationType", "关系类型"], ["publicLabel", "公开标签"], ["privateTruth", "隐情"], ["bond", "羁绊"]],
   outlineNodes: [["phaseId", "所属幕"], ["title", "剧情段标题"], ["summary", "剧情段摘要"]],
@@ -333,11 +386,14 @@ async function referenceInventory(projectId: string) {
     novelDb.outlineNodes.where("projectId").equals(projectId).sortBy("order"),
   ]);
   const characters = entities.filter((item) => item.kind === "character");
+  const locations = entities.filter((item) => item.kind === "location");
   return [
-    "角色（characterIds / povCharacterId）：",
+    "角色（characterIds / povCharacterId / participantIds）：",
     ...(characters.length ? characters.map((item) => `- id=${item.id} | ${item.name}`) : ["- 暂无，不得填写角色 ID"]),
-    "参与实体（participantIds）：",
-    ...(entities.length ? entities.map((item) => `- id=${item.id} | ${item.kind} | ${item.name}`) : ["- 暂无，不得填写参与实体 ID"]),
+    "关系实体（fromEntityId / toEntityId）：",
+    ...(entities.length ? entities.map((item) => `- id=${item.id} | ${item.kind} | ${item.name}`) : ["- 暂无，不得填写关系实体 ID"]),
+    "地点（locationId）：",
+    ...(locations.length ? locations.map((item) => `- id=${item.id} | ${item.name}`) : ["- 暂无，不得填写地点 ID"]),
     "剧情线（plotThreadIds）：",
     ...(threads.length ? threads.map((item) => `- id=${item.id} | ${item.title}`) : ["- 暂无，不得填写剧情线 ID"]),
     "伏笔（foreshadowingIds）：",
@@ -425,6 +481,34 @@ async function attachExpectedRevisions(items: ProposalItem[]) {
   }
 }
 
+async function assertStoryControlPreservesSources(items: ProposalItem[]) {
+  const protectedFields: Partial<Record<ProposalTargetTable, string[]>> = {
+    plotThreads: ["kind", "title", "summary", "participantIds"],
+    foreshadowing: ["title", "clue", "truth"],
+    timelineEvents: ["title", "storyDate", "duration", "narrativeOrder", "locationId", "participantIds", "description"],
+  };
+  for (const item of items) {
+    if (item.operation !== "update" || !item.targetId) throw new Error("story-control 只能对已有记录提交 update 补丁");
+    const source = await novelDb.table(item.targetTable).get(item.targetId) as Record<string, unknown> | undefined;
+    if (!source) throw new Error(`story-control 尝试更新不存在的记录：${item.targetTable}/${item.targetId}`);
+    for (const field of protectedFields[item.targetTable] ?? []) {
+      if (Object.prototype.hasOwnProperty.call(item.payload, field) && JSON.stringify(item.payload[field]) !== JSON.stringify(source[field])) {
+        throw new Error(`story-control 不得改写 ${item.targetTable}.${field}；只提交控制字段补丁`);
+      }
+    }
+    if (item.targetTable === "foreshadowing" && typeof item.payload.notes === "string") {
+      const existingNotes = String(source.notes ?? "");
+      if (existingNotes && !item.payload.notes.startsWith(existingNotes)) {
+        const mappingIndex = item.payload.notes.indexOf("控制映射：");
+        if (mappingIndex < 0) throw new Error("story-control 更新 foreshadowing.notes 时必须提供明确的“控制映射：”追加段");
+        const mergedNotes = `${existingNotes}\n${item.payload.notes.slice(mappingIndex).trim()}`;
+        item.payload = { ...item.payload, notes: mergedNotes };
+        item.after = { ...(item.after ?? item.payload), notes: mergedNotes };
+      }
+    }
+  }
+}
+
 function parseProposalItems(data: Record<string, unknown>): ProposalItem[] {
   const rawItems = Array.isArray(data.items) ? (data.items as Array<Record<string, unknown>>) : [];
   return rawItems.map((raw) => ({
@@ -498,7 +582,56 @@ function plotDesignContext(phase: ArchitecturePhase, segments: Array<{ id: strin
  * 剧情段设计审核 schema——使用 workflow-shared.ts 的通用 auditIssueSchema。
  * 所有 audit skill（plot-segment-audit / blueprint-audit / prose-audit）共用同一 schema 结构。
  */
-const plotSegmentAuditSchema = auditIssueSchema;
+const PLOT_AUDIT_EVIDENCE_FIELDS = ["title", "summary", "blueprint.objective", "blueprint.conflict", "blueprint.mustHappen", "blueprint.informationRelease"] as const;
+type PlotAuditEvidenceField = typeof PLOT_AUDIT_EVIDENCE_FIELDS[number];
+type GroundedPlotAuditIssue = GenerationAuditIssue & {
+  evidenceItemId: string;
+  evidenceField: PlotAuditEvidenceField;
+  evidenceQuote: string;
+};
+
+const plotSegmentAuditSchema = {
+  ...auditIssueSchema,
+  properties: {
+    ...auditIssueSchema.properties,
+    issues: {
+      ...auditIssueSchema.properties.issues,
+      items: {
+        ...auditIssueSchema.properties.issues.items,
+        required: [
+          ...auditIssueSchema.properties.issues.items.required,
+          "evidenceItemId",
+          "evidenceField",
+          "evidenceQuote",
+        ],
+        properties: {
+          ...auditIssueSchema.properties.issues.items.properties,
+          evidenceItemId: { type: "string", minLength: 1 },
+          evidenceField: { enum: PLOT_AUDIT_EVIDENCE_FIELDS },
+          evidenceQuote: { type: "string", minLength: 2 },
+        },
+      },
+    },
+  },
+};
+
+function plotAuditFieldText(item: ProposalItem, field: PlotAuditEvidenceField): string {
+  if (field === "title" || field === "summary") return String(item.payload[field] ?? "");
+  const blueprint = (item.payload.blueprint as Record<string, unknown> | undefined) ?? {};
+  const key = field.slice("blueprint.".length);
+  const value = blueprint[key];
+  return Array.isArray(value) ? value.map(String).join("\n") : String(value ?? "");
+}
+
+export function retainGroundedPlotAuditIssues(items: ProposalItem[], issues: GroundedPlotAuditIssue[]): GroundedPlotAuditIssue[] {
+  const byId = new Map(items.flatMap((item) => [item.id, item.tempId].filter(Boolean).map((id) => [String(id), item] as const)));
+  return issues.filter((issue) => {
+    const item = byId.get(issue.evidenceItemId);
+    if (!item || !PLOT_AUDIT_EVIDENCE_FIELDS.includes(issue.evidenceField)) return false;
+    const quote = issue.evidenceQuote.trim();
+    return quote.length >= 2 && plotAuditFieldText(item, issue.evidenceField).includes(quote);
+  });
+}
 
 /**
  * 调用 plot-segment-audit skill 对 plot-design 产出做独立 LLM 审核。
@@ -531,11 +664,14 @@ export async function runPlotSegmentAudit(params: {
       return `### 第 ${index + 1} 章：${chapter.payload.title}\n顺序：${chapter.payload.order}\n概要：${chapter.payload.summary}\n主导功能：${objective}\n冲突：${conflict}\n必须发生：${mustHappen}`;
     })
     .join("\n\n");
-  const prompt = `# 审核任务\n审核以下剧情段（OutlineNode）及其下章节（Document 列表）的设计质量。\n\n${segmentBrief}\n\n${chapterBriefs}\n\n# 当前幕上下文\n${params.phase.title}\n叙事使命：${params.phase.purpose || "暂无"}\n不可逆转折：${params.phase.turningPoint || "暂无"}\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- 基于 plot-segment-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体章节标题或字段作为证据\n- 必须给出具体修订建议\n\n按 schema 输出 summary 和 issues 数组。`;
+  const evidenceIndex = [params.segment, ...params.chapters]
+    .map((item) => `- ${item.tempId || item.id}：${String(item.payload.title || "未命名")}`)
+    .join("\n");
+  const prompt = `# 审核任务\n审核以下剧情段（OutlineNode）及其下章节（Document 列表）的设计质量。\n\n${segmentBrief}\n\n${chapterBriefs}\n\n# 当前幕上下文\n${params.phase.title}\n叙事使命：${params.phase.purpose || "暂无"}\n不可逆转折：${params.phase.turningPoint || "暂无"}\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核证据索引\n${evidenceIndex}\n\n# 审核输出要求\n- 基于 plot-segment-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须填写 evidenceItemId、evidenceField、evidenceQuote；evidenceQuote 必须从所指当前字段逐字复制，不能引用上一轮文本或自行改写\n- evidenceField 只能选择 schema 允许的字段路径；跨章问题也必须至少提供一个可核验的主证据\n- 必须给出具体修订建议\n\n按 schema 输出 summary 和 issues 数组。`;
   // builtin skill 的 prompt 不会被 compileNovelStagePrompt 拼接（review stage 只拼 custom skill），
   // 用 formatSkillPrompt 显式拼接 plot-segment-audit 的完整 prompt，让 LLM 拿到具体审核指导。
   const auditSkillPrompt = `${compileNovelStagePrompt(auditSkills.skills, "review")}\n\n${formatSkillPrompt(auditSkills.skills.filter((skill) => skill.skillId === "plot-segment-audit"))}`;
-  const result = await callStructuredNovelModel<{ summary: string; issues: GenerationAuditIssue[] }>({
+  const result = await callStructuredNovelModel<{ summary: string; issues: GroundedPlotAuditIssue[] }>({
     model: project.settings.textModel,
     temperature: 0.15,
     role: "quality-editor",
@@ -545,10 +681,12 @@ export async function runPlotSegmentAudit(params: {
     signal: params.signal,
     maxTokens: 4096,
   });
+  const groundedIssues = retainGroundedPlotAuditIssues([params.segment, ...params.chapters], Array.isArray(result.data.issues) ? result.data.issues : []);
+  const omittedCount = (result.data.issues?.length ?? 0) - groundedIssues.length;
   return {
     iteration: 0,
-    summary: String(result.data.summary ?? ""),
-    issues: Array.isArray(result.data.issues) ? result.data.issues : [],
+    summary: `${String(result.data.summary ?? "")}${omittedCount > 0 ? `（已忽略 ${omittedCount} 条无法由当前候选字段核验的问题）` : ""}`,
+    issues: groundedIssues,
     triggeredIteration: false,
   };
 }
@@ -557,8 +695,6 @@ export async function runPlotSegmentAudit(params: {
 export async function runPlotDesignTask(params: { projectId: string; phaseId: string; instruction?: string; signal?: AbortSignal; audit?: { maxIterations?: number } }) {
   const project = await novelDb.projects.get(params.projectId);
   if (!project) throw new Error("项目不存在");
-  const pending = await novelDb.proposals.where("projectId").equals(params.projectId).and((proposal) => proposal.status === "pending" && proposal.taskKey === "plot-design").first();
-  if (pending) return { proposal: pending, packet: await novelDb.contextPackets.get(pending.contextPacketId), agent: pending.agentRunId ? await novelDb.agentRuns.get(pending.agentRunId) : undefined };
   const [architecture, nodes, documents] = await Promise.all([
     novelDb.architectures.where("projectId").equals(params.projectId).first(),
     novelDb.outlineNodes.where("projectId").equals(params.projectId).toArray(),
@@ -615,7 +751,7 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
      * 调用 LLM 生成 plot-design 候选项，含 3 次结构校验重试。
      * 当传入 auditFindings 时，prompt 末尾追加审核意见，引导 LLM 修正问题。
      */
-    const generateItems = async (auditFindings?: string): Promise<{ items: ProposalItem[]; summary: string; promptHash: string; usage: { inputTokens: number; outputTokens: number } }> => {
+    const generateItems = async (auditFindings?: string, minimumChapterCount = 1): Promise<{ items: ProposalItem[]; summary: string; promptHash: string; usage: { inputTokens: number; outputTokens: number } }> => {
       let lastError = "";
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const auditBlock = auditFindings ? `\n\n# 上一轮 LLM 审核意见\n请基于以下审核问题重新设计剧情段与章节，针对每个 major/blocker 问题在生成时落实修订；不要直接复述审核意见，而是把它转化为具体的章节结构调整、节奏功能覆盖或伏笔埋设。\n${auditFindings}` : "";
@@ -628,6 +764,7 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
           segment.payload = { ...segment.payload, phaseId: phase.id, order: segmentOrder };
           segment.after = { ...segment.payload };
           const chapters = items.filter((item) => item.targetTable === "documents").sort((left, right) => Number(left.payload.order) - Number(right.payload.order));
+          if (chapters.length < minimumChapterCount) throw new Error(`审核修订不得把章节数从 ${minimumChapterCount} 章缩减为 ${chapters.length} 章；除非审核明确要求合并，否则应在原结构上修正问题。`);
           for (const [index, chapter] of chapters.entries()) {
             chapter.payload = { ...chapter.payload, plotSegmentId: `ref:${segment.tempId}`, order: chapterOrder + index, status: "outline" };
             chapter.after = { ...chapter.payload };
@@ -676,7 +813,9 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
       let iterationsDone = 0;
       while (hasMajorOrBlocker(round.issues) && iterationsDone < maxAuditIterations) {
         iterationsDone += 1;
-        const regenerated = await generateItems(formatAuditFindingsForRerun(round));
+        const previousChapterCount = items.filter((item) => item.targetTable === "documents").length;
+        const allowConsolidation = round.issues.some((issue) => /合并|删减|减少章节/.test(`${issue.title} ${issue.suggestion}`));
+        const regenerated = await generateItems(formatAuditFindingsForRerun(round), allowConsolidation ? 1 : previousChapterCount);
         items = regenerated.items;
         summary = regenerated.summary;
         promptHash = regenerated.promptHash;
@@ -725,6 +864,209 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
   }
 }
 
+/**
+ * 多项任务的最低提案项数量。若 LLM 首次返回的提案项不足此数，会以更强的数量提示重试（最多 2 次）。
+ * 这是对 defaultInstruction 中"至少 N 项"硬约束的执行层兜底——LLM 在长 prompt 中容易忽略埋在末尾的数量约束，
+ * 重试时会把数量不足明确注入 instruction 首部，确保 LLM 看到。
+ */
+const MIN_PROPOSAL_ITEMS: Partial<Record<NovelGenerationTaskKey, number>> = {
+  characters: 5,
+  relations: 5,
+  worldview: 8,
+  "plot-threads": 4,
+  foreshadowing: 4,
+};
+const MIN_ITEM_RETRY_MAX = 2;
+
+/**
+ * 统计与任务语义相关的提案项数量。
+ *
+ * 根因修复：characters 任务的 allowedTables=["entities"] 允许所有 entity kind
+ * （character/location/organization/faction/item/species/rule/ability/term）。
+ * LLM 可能返回 5 个 entity 但只 1 个是 character，其余是 location/organization——
+ * 此时 items.length>=5 不会触发重试，但实际角色数 <5，不满足群像硬约束。
+ *
+ * 此函数按任务语义统计相关项：
+ * - characters：只算 payload.kind === "character" 的项（防止 LLM 用 location/organization 凑数）
+ * - 其他任务（relations/plot-threads/foreshadowing）：allowedTables 只有一种表，全部项都相关
+ *
+ * 判定标准：若 LLM 返回的项中存在与任务核心目标不匹配的子类型，按相关子类型计数而非总数。
+ */
+function countRelevantProposalItems(taskKey: NovelGenerationTaskKey, items: ProposalItem[]): number {
+  if (taskKey === "characters") {
+    return items.filter((item) => item.payload.kind === "character").length;
+  }
+  return items.length;
+}
+
+/**
+ * 校验架构 payload 的第二增长曲线结构化约束。
+ *
+ * 根因修复（Loop 4 Major #2）：第二增长曲线约束此前仅为文字要求，无结构化字段。
+ * LLM 即使理解了约束，也没有地方放置生态曲线信息，导致所有阶段都围绕主线主角命运。
+ * 现在架构 payload 新增 growthCurves 数组 + phases.primaryCurveId 字段，
+ * 此函数在执行层校验：(1) 至少 2 条曲线；(2) 至少 1 条 ecological；
+ * (3) 至少 1 个 phase 的 primaryCurveId 引用 ecological 曲线。
+ *
+ * 返回 null 表示校验通过，返回 string 表示错误描述（用于重试 instruction）。
+ */
+function validateArchitectureGrowthCurves(payload: Record<string, unknown>): string | null {
+  const curves = Array.isArray(payload.growthCurves) ? payload.growthCurves as Array<Record<string, unknown>> : [];
+  if (curves.length < 2) {
+    return `growthCurves 只有 ${curves.length} 条，要求至少 2 条（1 条 kind="main" 主线 + 至少 1 条 kind="ecological" 生态曲线）。请在 payload.growthCurves 数组中补充。`;
+  }
+  const ecologicalCurves = curves.filter((c) => c.kind === "ecological");
+  if (ecologicalCurves.length === 0) {
+    return `growthCurves 缺少 kind="ecological" 的生态增长曲线——至少需要 1 条独立于主线的生态曲线。当前 ${curves.length} 条曲线全部是主线，请将至少 1 条改为 kind="ecological" 并填写独立的 subject/resourceLoop/stageGoals/irreversibleChange。`;
+  }
+  const ecologicalIds = new Set(ecologicalCurves.map((c) => String(c.id)));
+  const phases = Array.isArray(payload.phases) ? payload.phases as Array<Record<string, unknown>> : [];
+  const phasesOnEcological = phases.filter((p) => ecologicalIds.has(String(p.primaryCurveId ?? "")));
+  if (phasesOnEcological.length === 0) {
+    const ecoIdList = [...ecologicalIds].join(", ");
+    return `所有 ${phases.length} 个阶段的 primaryCurveId 都引用主线曲线，没有阶段由生态曲线推进。至少需要 1 个阶段的 primaryCurveId 引用 ecological 曲线（可用 id: ${ecoIdList}）。`;
+  }
+  return null;
+}
+
+function validateArchitectureSystems(payload: Record<string, unknown>, targetWords: number): string | null {
+  const isMillionWordProject = targetWords >= 1_000_000;
+  const required = architectureSystemCapacity(targetWords);
+  const powerCenters = Array.isArray(payload.powerCenters) ? payload.powerCenters as Array<Record<string, unknown>> : [];
+  if (powerCenters.length < required.powerCenters) return `powerCenters 只有 ${powerCenters.length} 个，${isMillionWordProject ? "百万字" : "当前体量"}架构至少需要 ${required.powerCenters} 个可独立行动的权力中心；请逐项填写 name/interest/resources/actionCapacity/bottomLine/relationshipDynamics。`;
+  const centerRefs = powerCenters.flatMap((center) => [String(center.id ?? "").trim(), String(center.name ?? "").trim()]).filter(Boolean);
+  if (new Set(centerRefs).size !== centerRefs.length) return "powerCenters 的 id 与 name 必须各自唯一，且不得互相重名，以便反馈链和长期钩子准确引用。";
+
+  const feedbackLoops = Array.isArray(payload.feedbackLoops) ? payload.feedbackLoops as Array<Record<string, unknown>> : [];
+  if (feedbackLoops.length < required.feedbackLoops) return `feedbackLoops 只有 ${feedbackLoops.length} 条，${isMillionWordProject ? "百万字" : "当前体量"}架构至少需要 ${required.feedbackLoops} 条跨组织反馈链；每条需写清 trigger、至少两步 transmission、受影响中心和产生的故事压力。`;
+  const narrowFeedback = feedbackLoops.find((loop) => !Array.isArray(loop.affectedCenters) || loop.affectedCenters.length < required.feedbackAffectedCenters);
+  if (narrowFeedback) return `feedbackLoops 中 ${String(narrowFeedback.id ?? narrowFeedback.name ?? "未命名项")} 只连接了 ${Array.isArray(narrowFeedback.affectedCenters) ? narrowFeedback.affectedCenters.length : 0} 个权力中心；当前体量要求每条反馈链至少跨 ${required.feedbackAffectedCenters} 个中心，避免退化为两方直线冲突。`;
+  const longHorizonHooks = Array.isArray(payload.longHorizonHooks) ? payload.longHorizonHooks as Array<Record<string, unknown>> : [];
+  if (longHorizonHooks.length < required.longHorizonHooks) return `longHorizonHooks 只有 ${longHorizonHooks.length} 条，${isMillionWordProject ? "百万字" : "当前体量"}架构至少需要 ${required.longHorizonHooks} 条长期钩子；每条需以具体 surfaceDetail 出现，并保留至少两种 possibleInterpretations。`;
+
+  const knownCenters = new Set(centerRefs);
+  for (const [collectionName, records] of [["feedbackLoops", feedbackLoops], ["longHorizonHooks", longHorizonHooks]] as const) {
+    for (const record of records) {
+      const affectedCenters = Array.isArray(record.affectedCenters) ? record.affectedCenters.map(String) : [];
+      const unknownCenters = affectedCenters.filter((center) => !knownCenters.has(center));
+      if (unknownCenters.length > 0) {
+        return `${collectionName} 中 ${String(record.id ?? record.name ?? "未命名项")} 的 affectedCenters 引用了未建模中心：${unknownCenters.join("、")}。请先把这些中心加入 powerCenters，或改为已有中心的 id/准确名称。`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 校验剧情线 payload 的共谋线结构化约束。
+ *
+ * 根因修复（Loop 5 Major #2，复发于 Loop 4）：共谋线缺失在历史权谋(Loop 4)和玄幻修真(Loop 5)
+ * 两个不同题材复发，证伪了 Loop 4 audit "内容深度问题非结构缺陷" 的判断。
+ * 根因是 plot-threads instruction 此前仅将共谋线作为"建议"（"共谋线/感情线"二选一），
+ * LLM 选 romance 即可跳过共谋线，且无执行层校验，PlotThreadKind 也无 conspiracy 类型。
+ * 现新增 kind=conspiracy 类型 + 执行层校验：百万字长篇必须有 ≥1 条 kind=conspiracy 共谋线，
+ * 且该线有非空 nextMove（共谋者推进阴谋的独立行动，不得以主角为行动对象）。
+ *
+ * 返回 null 表示校验通过，返回 string 表示错误描述（用于重试 instruction）。
+ */
+function validatePlotThreadsConspiracy(items: ProposalItem[]): string | null {
+  const threadItems = items.filter((i) => i.targetTable === "plotThreads");
+  const conspiracyItems = threadItems.filter((i) => i.payload?.kind === "conspiracy");
+  if (conspiracyItems.length === 0) {
+    const existingKinds = threadItems.map((i) => String(i.payload?.kind ?? "?")).join(", ");
+    return `剧情线缺少 kind="conspiracy" 的共谋线——百万字长篇必须有至少 1 条独立共谋线（一群角色暗中结盟/共谋，有独立于对抗线的目标与 nextMove）。当前 ${threadItems.length} 条剧情线的 kind 为 [${existingKinds}]，请新增 1 条 kind="conspiracy" 的共谋线，其 nextMove 必须描述共谋者推进阴谋的独立行动（不得以主角为行动对象）。`;
+  }
+  const missingNextMove = conspiracyItems.filter((i) => !String(i.payload?.nextMove ?? "").trim());
+  if (missingNextMove.length > 0) {
+    return `kind="conspiracy" 的共谋线缺少 nextMove 字段——共谋线必须有描述共谋者推进阴谋行动的 nextMove（不得为空）。请为每条共谋线补充 nextMove。`;
+  }
+  return null;
+}
+
+function validateWorldviewCoverage(items: ProposalItem[]): string | null {
+  const entities = items.filter((item) => item.targetTable === "entities");
+  const locations = entities.filter((item) => item.payload?.kind === "location");
+  const organizations = entities.filter((item) => item.payload?.kind === "organization" || item.payload?.kind === "faction");
+  const systems = entities.filter((item) => ["rule", "ability", "term"].includes(String(item.payload?.kind ?? "")));
+  if (locations.length < 2) return `worldview 只有 ${locations.length} 个地点实体，百万字长篇至少需要 2 个可独立引用、具有不同生产方式或文化制度的地域。`;
+  if (organizations.length < 3) return `worldview 只有 ${organizations.length} 个组织/阵营实体，百万字长篇至少需要 3 个能独立行动并拥有资源与职责的组织或阵营。`;
+  if (systems.length < 2) return `worldview 只有 ${systems.length} 个规则/能力/术语实体，百万字长篇至少需要 2 个可约束行动的制度、能力或术语，不能只列地点和组织名。`;
+  return null;
+}
+
+function validateTimelineStructure(items: ProposalItem[], targetWords: number): string | null {
+  const events = items.filter((item) => item.targetTable === "timelineEvents");
+  const requiredEvents = timelineSystemCapacity(targetWords);
+  if (events.length < requiredEvents) return `timeline 只有 ${events.length} 个事件，当前体量至少需要 ${requiredEvents} 个分布在全书阶段中的骨干事件，不能只规划开篇。`;
+  const orders = events.map((item) => Number(item.payload.narrativeOrder));
+  if (orders.some((order) => !Number.isFinite(order)) || new Set(orders).size !== orders.length) return "timelineEvents.narrativeOrder 必须逐项提供且互不重复，以便建立明确叙事顺序。";
+  if (targetWords >= 1_000_000) {
+    const locatedEvents = events.filter((item) => typeof item.payload.locationId === "string" && item.payload.locationId.trim());
+    if (locatedEvents.length < 2) return `timeline 只有 ${locatedEvents.length} 个事件提供 locationId；百万字长篇至少需要 2 个使用真实地点 ID 的地域锚点，避免跨地域变化只存在于标题散文中。`;
+  }
+  const tempIds = new Set(events.map((item) => item.tempId).filter((id): id is string => Boolean(id)));
+  if (tempIds.size !== events.length) return "每个 timelineEvents 候选都必须提供唯一 tempId，供同批事件建立 causeIds/consequenceIds 因果引用。";
+  const edges = new Set<string>();
+  for (const event of events) {
+    const source = event.tempId!;
+    for (const field of ["causeIds", "consequenceIds"] as const) {
+      const refs = Array.isArray(event.payload[field]) ? event.payload[field].map(String) : [];
+      for (const raw of refs) {
+        const target = raw.startsWith("ref:") ? raw.slice(4) : raw;
+        if (!tempIds.has(target) || target === source) continue;
+        edges.add([source, target].sort().join("::"));
+      }
+    }
+  }
+  if (edges.size < events.length - 1) return `timeline 的同批事件只有 ${edges.size} 条有效因果连接；${events.length} 个骨干事件至少需要 ${events.length - 1} 条通过 ref:tempId 建立的 causeIds/consequenceIds 连接，允许并行但不能彼此孤立。`;
+  return null;
+}
+
+/**
+ * 统一的重试原因检测——将多项任务数量兜底与架构 payload 结构校验合并为单一入口。
+ *
+ * 返回 null 表示无需重试，返回 { message } 表示需要重试并附带给 LLM 的修正指令。
+ */
+function getGenerationRetryReason(taskKey: NovelGenerationTaskKey, items: ProposalItem[], minItems: number, targetWords: number): { message: string } | null {
+  const enforceMillionWordStructure = targetWords >= 1_000_000;
+  if (!enforceMillionWordStructure) return null;
+  // 1. 多项任务数量兜底（characters/relations/plot-threads/foreshadowing）
+  if (minItems > 0) {
+    const relevantCount = countRelevantProposalItems(taskKey, items);
+    if (relevantCount < minItems) {
+      const label = taskKey === "characters" ? "角色（payload.kind=\"character\"）" : "提案项";
+      const suffix = taskKey === "characters"
+        ? "每个 item 的 payload.kind 必须为 \"character\"，不要返回 location/organization/item 等非角色实体来凑数。"
+        : "不要只生成 1-2 项就停止。";
+      return { message: `上次只生成了 ${relevantCount} 个相关${label}，不满足至少 ${minItems} 个的硬要求。请务必生成至少 ${minItems} 个独立的${label}，每项作为独立的 JSON 对象返回。${suffix}` };
+    }
+  }
+  // 2. 架构 payload 结构校验（第二增长曲线结构化字段强制）
+  if (taskKey === "architecture") {
+    const archItem = items.find((i) => i.targetTable === "architectures");
+    if (archItem) {
+      const systemError = validateArchitectureSystems(archItem.payload, targetWords);
+      if (systemError) return { message: systemError };
+      const error = validateArchitectureGrowthCurves(archItem.payload);
+      if (error) return { message: error };
+    }
+  }
+  // 3. 剧情线共谋线结构校验（百万字长篇必备 kind=conspiracy 独立共谋线）
+  if (taskKey === "plot-threads") {
+    const error = validatePlotThreadsConspiracy(items);
+    if (error) return { message: error };
+  }
+  if (taskKey === "worldview") {
+    const error = validateWorldviewCoverage(items);
+    if (error) return { message: error };
+  }
+  if (taskKey === "timeline") {
+    const error = validateTimelineStructure(items, targetWords);
+    if (error) return { message: error };
+  }
+  return null;
+}
+
 export async function runGenerationTask(params: {
   projectId: string;
   taskKey: NovelGenerationTaskKey;
@@ -754,8 +1096,36 @@ export async function runGenerationTask(params: {
 
   const effectiveInstruction = params.instruction;
   let sectionContextBlock = "";
+  sectionContextBlock += `\n# 项目身份边界\n当前正式项目名为《${project.title}》。候选标题、摘要、标签和 payload 必须沿用这个项目身份，不得引入另一个作品名、测试名或未获授权的改名。\n`;
+  const enforceMillionWordStructure = project.targetWords >= 1_000_000;
+  sectionContextBlock += enforceMillionWordStructure
+    ? `\n# 项目体量边界\n本项目目标字数为 ${project.targetWords.toLocaleString()}，属于明确配置的百万字长篇；角色、关系、剧情线、伏笔、生态增长曲线和共谋线的长篇结构门禁生效。\n`
+    : `\n# 项目体量边界\n本项目目标字数为 ${project.targetWords.toLocaleString()}，不属于百万字长篇。任务文本中针对“百万字长篇”的最低数量、生态增长曲线、共谋线和跨百章伏笔要求均为可选建议，不得为满足这些建议扩张项目结构；按本项目实际题材、体量和作者要求决定数量。\n`;
   if (params.taskKey === "chapter-plan") {
-    sectionContextBlock += `\n# 章节字数规则\n每章目标字数由系统统一设置为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字。请按该篇幅规划章节，但不要在 payload 中返回 targetWords。\n`;
+    sectionContextBlock += `\n# 章节规划边界\n- 每章目标字数由系统统一设置为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字。请按该篇幅规划章节，但不要在 payload 中返回 targetWords。\n- 本任务只规划当前章节的标题、摘要和蓝图；order、plotSegmentId、status 等文档结构字段由系统继承，不能借章节规划移动章节、改变归属或推进写作状态。\n`;
+  }
+  if (params.taskKey === "architecture") {
+    const capacity = architectureSystemCapacity(project.targetWords);
+    const architectureCapacity = enforceMillionWordStructure
+      ? `本项目体量对应的架构容量为：powerCenters 至少 ${capacity.powerCenters} 个、feedbackLoops 至少 ${capacity.feedbackLoops} 条、longHorizonHooks 至少 ${capacity.longHorizonHooks} 条；每条 feedbackLoops.affectedCenters 至少引用 ${capacity.feedbackAffectedCenters} 个已建模中心。`
+      : "本项目不是百万字长篇：结构数量服从真实叙事需要，不得为长篇门槛强行扩张。";
+    sectionContextBlock += `\n# 架构字段落点\n- ${architectureCapacity}\n- centralConflict 或 synopsis 必须呈现可辨认的权力中心，以及各自的利益、关键资源、行动能力和底线；至少一组关系必须同时包含合作与冲突。\n- 必须写清资源如何在这些权力中心之间流转、短缺或被截断，以及局部行动如何反馈到其他中心，不能只写抽象的“旧秩序”与“新秩序”。feedbackLoops 和 longHorizonHooks 的 affectedCenters 只能引用 powerCenters 中已有的 id 或准确名称，不得引用只在散文中出现、却没有建模的势力。\n- 长期钩子须以允许多种解释的具体异常或日常细节出现，供后续伏笔阶段展开；不得提前锁死唯一回收答案。\n- phases.purpose 必须分别说明该阶段由哪项资源、秘密、关系或不可兼得的选择把主线、群像行动和感情线连在一起；若含感情线，写出由双方职责、边界或价值承诺导致的关系阶段变化。\n- phases.turningPoint 保持文学表达，但必须明确哪项资源控制已经易手、哪桩秘密已经公开、哪个组织已经裂变，或哪份关系承诺已经使旧选择不再可能；不能只写“人物理解了”“世界改变了”等抽象感悟。\n`;
+  }
+  if (params.taskKey === "worldview") {
+    const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
+    const powerCenterNames = (architecture?.powerCenters ?? [])
+      .map((center) => center.name.trim())
+      .filter(Boolean);
+    const canonicalCenters = powerCenterNames.length ? powerCenterNames.join("、") : "暂无已建模权力中心";
+    sectionContextBlock += `\n# 世界观连续性合同\n- 已接受架构中的权力中心为：${canonicalCenters}。\n- 世界观阶段负责把架构中的抽象行动中心落成可引用实体。组织或阵营候选应优先使用上述正式名称；不得仅改几个字就创建职能相同的平行组织。\n- 如确需创建从属机构、历史前身或地方分支，必须在 summary 或 description 中明确写出它与对应正式权力中心的隶属、继承或对抗关系，不能让读者猜测二者是否同一组织。\n- 地点、制度、术语与能力需要说明它们具体约束或供给哪些既有中心，但不得用标签堆砌代替生产方式、资源成本、治理职责和行为边界。\n`;
+  }
+  if (params.taskKey === "timeline") {
+    const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
+    const phases = [...(architecture?.phases ?? [])].sort((left, right) => left.order - right.order);
+    const phaseLines = phases.length
+      ? phases.map((phase) => `- ${phase.title}：${phase.purpose}；不可逆转折=${phase.turningPoint}`).join("\n")
+      : "- 暂无已接受阶段";
+    sectionContextBlock += `\n# 长篇时间线合同\n- 当前体量至少返回 ${timelineSystemCapacity(project.targetWords)} 个骨干事件，分布到故事前、中、后部；不能把时间线等同于开篇事件清单。\n- 已接受架构阶段如下：\n${phaseLines}\n- 每个事件提供唯一 tempId。除真正的起点外，事件须通过 causeIds 或前序事件的 consequenceIds 使用 ref:tempId 接入同批因果图；允许并行事件，但不能留下彼此孤立的事件岛。\n- storyDate 与 duration 要让旅行、调查、组织决策、关系变化和余波拥有可信时间，不得让跨地域制度变化在数日内完成。\n- participantIds 只引用真实角色；地点使用 locationId，组织、规则和资源写入 description。\n`;
   }
   if (params.taskKey === "plot-threads") {
     sectionContextBlock += `\n# 剧情线与规划关联\n- 每条剧情线的 startNodeId 和 targetNodeId 应引用"可引用对象索引"中的剧情段真实 ID。\n- startNodeId 标记剧情线起始剧情段，targetNodeId 标记剧情线目标达成剧情段。\n- 如剧情线贯穿全卷，可只填 startNodeId，targetNodeId 留空。\n`;
@@ -768,19 +1138,38 @@ export async function runGenerationTask(params: {
   await novelDb.agentRuns.add(agent);
   try {
     const skillPrompt = compileNovelStagePrompt(skills.skills, task.skillStage);
-    const basePrompt = `# 任务\n${effectiveInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段（title、summary、description、rationale 等）只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等审批元信息，这些状态由系统管理。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有角色、剧情线和伏笔时，只能复制“可引用对象索引”中的真实 ID，不得把名称、英文别名或规则名当成 ID；没有可用对象时对应数组必须为空。也可使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
-    const result = await callStructuredNovelModel<Record<string, unknown>>({
+    const minItems = MIN_PROPOSAL_ITEMS[params.taskKey] ?? 0;
+    // 生成兜底重试：LLM 容易在长 prompt 中忽略埋在末尾的"至少 N 项"约束或架构结构化字段。
+    // 若首次返回不满足约束（数量不足 / 架构 growthCurves 结构不符），以更强的提示重试（最多 MIN_ITEM_RETRY_MAX 次）。
+    // 统一通过 getGenerationRetryReason 检测重试原因——涵盖多项任务数量兜底 + 架构第二增长曲线结构校验。
+    let result: Awaited<ReturnType<typeof callStructuredNovelModel<Record<string, unknown>>>> | undefined;
+    let items: ReturnType<typeof parseProposalItems> | undefined;
+    for (let countAttempt = 0; ; countAttempt += 1) {
+      const retryReason = items ? getGenerationRetryReason(params.taskKey, items, minItems, project.targetWords) : null;
+      const currentInstruction = countAttempt === 0
+        ? effectiveInstruction
+        : `${effectiveInstruction}\n\n【重要 - 需要修正】${retryReason!.message}`;
+      const basePrompt = `# 任务\n${currentInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段（title、summary、description、rationale 等）只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等审批元信息，这些状态由系统管理。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有角色、剧情线和伏笔时，只能复制“可引用对象索引”中的真实 ID，不得把名称、英文别名或规则名当成 ID；没有可用对象时对应数组必须为空。也可使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+      result = await callStructuredNovelModel<Record<string, unknown>>({
         model: project.settings.textModel,
         temperature: task.role === "writer" ? project.settings.temperature : 0.55,
         role: task.role,
         skillPrompt,
-        schema: proposalSchema(task.allowedTables, params.requiredPayloadFields),
+        schema: proposalSchema(task.allowedTables, params.requiredPayloadFields, architectureSystemCapacity(project.targetWords)),
         prompt: basePrompt,
         signal: params.signal,
         // Loop 7 修复 #11：角色生成需输出 5 个角色完整字段（appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state），180s 默认超时不足
         timeoutMs: params.taskKey === "characters" ? 300_000 : undefined,
       });
-    const items = parseProposalItems(result.data);
+      items = parseProposalItems(result.data);
+      const nextRetryReason = getGenerationRetryReason(params.taskKey, items, minItems, project.targetWords);
+      if (!nextRetryReason || countAttempt >= MIN_ITEM_RETRY_MAX) break;
+      agent.steps[0].output = `attempt ${countAttempt + 1}: ${nextRetryReason.message.slice(0, 100)}，将重试`;
+    }
+    // 循环至少执行一次，result 和 items 必定已赋值
+    if (!result || !items) throw new Error("生成循环未产出结果（不可达）");
+    const finalRetryReason = getGenerationRetryReason(params.taskKey, items, minItems, project.targetWords);
+    if (finalRetryReason) throw new Error(`生成结果连续 ${MIN_ITEM_RETRY_MAX + 1} 次未满足结构约束：${finalRetryReason.message}`);
     if (params.taskKey === "chapter-draft") {
       for (const item of items) {
         if (item.targetTable !== "documents" || typeof item.payload.plainText !== "string") continue;
@@ -796,7 +1185,26 @@ export async function runGenerationTask(params: {
       for (const item of items) { item.operation = architecture ? "update" : "create"; item.targetId = architecture?.id; item.targetTable = "architectures"; }
     }
     if (params.taskKey === "scene-design" && params.targetId) for (const item of items) item.payload = { ...item.payload, chapterId: params.targetId };
-    if (params.taskKey === "chapter-plan" && params.targetId) for (const item of items) { item.operation = "update"; item.targetTable = "documents"; item.targetId = params.targetId; }
+    if (params.taskKey === "chapter-plan" && params.targetId) {
+      const target = await novelDb.documents.get(params.targetId);
+      if (!target) throw new Error("章节规划目标不存在");
+      for (const item of items) {
+        const blueprint = item.payload.blueprint && typeof item.payload.blueprint === "object" && !Array.isArray(item.payload.blueprint)
+          ? item.payload.blueprint as Record<string, unknown>
+          : {};
+        item.operation = "update";
+        item.targetTable = "documents";
+        item.targetId = params.targetId;
+        item.payload = {
+          ...item.payload,
+          order: target.order,
+          plotSegmentId: target.plotSegmentId,
+          status: target.status,
+          blueprint: { ...blueprint, targetWords: DEFAULT_CHAPTER_TARGET_WORDS },
+        };
+        item.after = structuredClone(item.payload);
+      }
+    }
     if (params.taskKey === "chapter-draft" && params.targetId) for (const item of items) { item.operation = "update"; item.targetTable = "documents"; item.targetId = params.targetId; }
     if (params.taskKey === "review") {
       const documents = await novelDb.documents.where("projectId").equals(params.projectId).sortBy("order");
@@ -809,6 +1217,7 @@ export async function runGenerationTask(params: {
       }
     }
     if (!items.length) throw new Error("AI 没有返回可审核的候选项");
+    if (params.taskKey === "story-control") await assertStoryControlPreservesSources(items);
     {
       const [catalog, nameMap, entityNameMap] = await Promise.all([
         projectReferenceCatalog(params.projectId),
@@ -818,6 +1227,9 @@ export async function runGenerationTask(params: {
       repairProposalCharacterReferences(items, catalog, nameMap);
       repairTimelineAndOutlineNodeReferences(items, catalog);
       repairUnresolvableTempRefs(items, acceptedRefs, entityNameMap);
+      for (const item of items) {
+        if (item.operation === "create" && item.after) item.payload = structuredClone(item.after);
+      }
       assertProposalReferences(items, catalog, acceptedRefs);
     }
     await attachExpectedRevisions(items);

@@ -249,6 +249,15 @@ function assertPayloadReferences(
     // repairProposalCharacterReferences 已在 assert 之前剔除非角色 entity ID，故此处用 character 校验。
     assertArrayField(item, payload, "participantIds", "character", catalog, tempRefs, aliases);
   }
+  const validatesThreadParticipants = item.targetTable === "plotThreads"
+    && (item.operation === "create" || Object.prototype.hasOwnProperty.call(payload, "participantIds"));
+  if (validatesThreadParticipants && (!Array.isArray(payload.participantIds) || payload.participantIds.length === 0)) {
+    throw new Error(`候选项“${item.label}”的 participantIds 必须至少包含 1 个真实角色 ID`);
+  }
+  if (item.targetTable === "relations") {
+    assertOptionalField(item, payload, "fromEntityId", "entity", catalog, tempRefs, aliases);
+    assertOptionalField(item, payload, "toEntityId", "entity", catalog, tempRefs, aliases);
+  }
 }
 
 export function assertProposalReferences(
@@ -322,18 +331,31 @@ export function repairProposalCharacterReferences(
   let repaired = 0;
   let dropped = 0;
 
-  const resolveByName = (item: ProposalItem): string | undefined => {
+  const mentionedCharacterIds = (item: ProposalItem): string[] => {
     const payload = item.after ?? item.payload;
-    if (!payload || typeof payload !== "object") return undefined;
+    if (!payload || typeof payload !== "object") return [];
     const label = String(item.label || "");
     const rationale = String(item.rationale || "");
     const summary = String((payload as Record<string, unknown>).summary || "");
     const title = String((payload as Record<string, unknown>).title || "");
     const fullText = `${label} ${rationale} ${summary} ${title}`;
-    for (const name of sortedNames) {
-      if (fullText.includes(name)) return characterNameToIdMap.get(name);
-    }
-    return undefined;
+    return [...new Set(sortedNames
+      .filter((name) => fullText.includes(name))
+      .map((name) => characterNameToIdMap.get(name))
+      .filter((id): id is string => Boolean(id)))];
+  };
+
+  const resolveByName = (item: ProposalItem): string | undefined => mentionedCharacterIds(item)[0];
+
+  const repairCharacterIdSet = (item: ProposalItem, value: unknown[]): string[] => {
+    const fixed = [...new Set(value.map(String).filter((id) => id.startsWith("ref:") || catalog.characterIds.has(id)))];
+    const invalidCount = value.length - fixed.length;
+    if (invalidCount <= 0) return fixed;
+    const mentioned = mentionedCharacterIds(item).filter((id) => !fixed.includes(id));
+    fixed.push(...mentioned);
+    repaired += mentioned.length;
+    dropped += invalidCount;
+    return fixed;
   };
 
   for (const item of items) {
@@ -354,22 +376,7 @@ export function repairProposalCharacterReferences(
 
     for (const { container, field } of arrayTargets) {
       const arr = container[field] as unknown[];
-      const fixed: string[] = [];
-      for (const idRaw of arr) {
-        const id = String(idRaw);
-        if (id.startsWith("ref:") || catalog.characterIds.has(id)) {
-          fixed.push(id);
-          continue;
-        }
-        const resolved = resolveByName(item);
-        if (resolved) {
-          fixed.push(resolved);
-          repaired++;
-        } else {
-          dropped++;
-        }
-      }
-      container[field] = fixed;
+      container[field] = repairCharacterIdSet(item, arr);
     }
 
     // 处理 povCharacterId 单值字段（scenes / documents.blueprint）
@@ -402,23 +409,23 @@ export function repairProposalCharacterReferences(
     // 此处用 catalog.characterIds 校验，非角色 entity ID（含 location/organization/item 等）会被剔除。
     if (table === "plotThreads" || table === "timelineEvents") {
       if (Array.isArray(payload.participantIds)) {
-        const fixedParticipants: string[] = [];
-        for (const idRaw of payload.participantIds) {
-          const id = String(idRaw);
-          if (id.startsWith("ref:") || catalog.characterIds.has(id)) {
-            fixedParticipants.push(id);
-            continue;
-          }
-          // 尝试按角色名匹配（只匹配 character 实体，不匹配 location/organization）
-          const resolved = resolveByName(item);
-          if (resolved) {
-            fixedParticipants.push(resolved);
-            repaired++;
-          } else {
-            dropped++;
-          }
+        payload.participantIds = repairCharacterIdSet(item, payload.participantIds);
+      }
+    }
+
+    if (table === "relations") {
+      const fullText = `${String(item.label || "")} ${String(item.rationale || "")} ${String(payload.publicLabel || "")} ${String(payload.privateTruth || "")}`;
+      const mentionedIds = [...new Set(sortedNames.filter((name) => fullText.includes(name)).map((name) => characterNameToIdMap.get(name)).filter((id): id is string => Boolean(id)))];
+      for (const field of ["fromEntityId", "toEntityId"] as const) {
+        const id = String(payload[field] ?? "");
+        if (id.startsWith("ref:") || catalog.entityIds.has(id)) continue;
+        const otherField = field === "fromEntityId" ? "toEntityId" : "fromEntityId";
+        const otherId = String(payload[otherField] ?? "");
+        const resolved = mentionedIds.find((candidate) => candidate !== otherId);
+        if (resolved) {
+          payload[field] = resolved;
+          repaired++;
         }
-        payload.participantIds = fixedParticipants;
       }
     }
   }

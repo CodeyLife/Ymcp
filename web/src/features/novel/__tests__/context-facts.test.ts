@@ -14,7 +14,7 @@ describe("context invariants and fact commits", () => {
   it("provides acts, plot segments, and chapter planning data without outline events", async () => {
     const project = await createNovelProject({ title: "规划上下文", genre: ["悬疑"], premise: "章节直接落实剧情段。" });
     const architecture = (await novelDb.architectures.where("projectId").equals(project.id).first())!;
-    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase-1", title: "第一幕", purpose: "迫使主角离开", turningPoint: "故乡被封锁", order: 0, locked: false }] });
+    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase-1", title: "第一幕", purpose: "迫使主角离开", turningPoint: "故乡被封锁", order: 0, locked: false, primaryCurveId: "main" }] });
     const segment = await addOutlineNode(project.id, "phase-1", "离开故乡", 0);
     const chapter = await createChapter(project.id, "封锁之夜", segment.id);
     await novelDb.documents.update(chapter.id, { summary: "主角在封锁前夜作出离开的决定。", blueprint: { ...chapter.blueprint, objective: "离开故乡", plotThreadIds: ["main-thread"], foreshadowingIds: ["sealed-gate"] } });
@@ -45,7 +45,7 @@ describe("context invariants and fact commits", () => {
     await saveStoryArchitecture({
       ...architecture!,
       status: "approved",
-      phases: [{ id: "phase-1", title: "中段升级", purpose: "主角发现丢失的时间被人保存。", turningPoint: "主角决定夺回时间。", order: 0, locked: true }],
+      phases: [{ id: "phase-1", title: "中段升级", purpose: "主角发现丢失的时间被人保存。", turningPoint: "主角决定夺回时间。", order: 0, locked: true, primaryCurveId: "main" }],
     });
     const document = await createChapter(project.id, "第一章");
     await novelDb.scenes.add({

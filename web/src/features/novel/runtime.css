@@ -1,0 +1,60 @@
+.novel-runtime-page { min-height: 100%; padding: 32px; color: #f4f4f5; background: #09090b; }
+.novel-runtime-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 24px; border-bottom: 1px solid #27272a; }
+.novel-runtime-header span, .novel-runtime-studio header span, .novel-runtime-panel-title span { color: #34d399; font: 600 11px/1.4 "Geist Mono", monospace; text-transform: uppercase; }
+.novel-runtime-header h1 { margin: 8px 0 4px; font-size: 34px; letter-spacing: 0; }
+.novel-runtime-header p, .novel-runtime-studio header p { margin: 0; color: #a1a1aa; }
+.novel-runtime-strip { display: flex; gap: 28px; padding: 14px 0; color: #a1a1aa; font-size: 13px; border-bottom: 1px solid #27272a; }
+.novel-runtime-strip strong { color: #f4f4f5; }
+.novel-runtime-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; padding-top: 24px; }
+.novel-runtime-grid article { display: grid; grid-template-columns: 112px minmax(0, 1fr); min-height: 190px; overflow: hidden; background: #18181b; border: 1px solid #303034; border-radius: 6px; }
+.novel-runtime-cover { display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 16px; color: #d1fae5; background: #12372d; border: 0; cursor: pointer; }
+.novel-runtime-cover .anticon { font-size: 36px; }
+.novel-runtime-grid article > div { display: flex; min-width: 0; flex-direction: column; padding: 18px; }
+.novel-runtime-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.novel-runtime-title h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+.novel-runtime-grid article p { display: -webkit-box; overflow: hidden; margin: 12px 0; color: #a1a1aa; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.novel-runtime-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.novel-runtime-tags span { padding: 2px 7px; color: #d4d4d8; background: #27272a; border-radius: 3px; font-size: 11px; }
+.novel-runtime-grid footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; color: #71717a; font-size: 12px; }
+.novel-runtime-empty { display: grid; min-height: 360px; place-content: center; justify-items: center; gap: 12px; }
+.novel-runtime-migration-list { display: grid; gap: 10px; margin-top: 16px; width: 100%; }
+.novel-runtime-migration-list label { align-items: flex-start; padding: 10px; border: 1px solid #3f3f46; border-radius: 4px; }
+.novel-runtime-migration-list small { display: block; max-width: 440px; margin-top: 3px; overflow: hidden; color: #a1a1aa; text-overflow: ellipsis; white-space: nowrap; }
+.novel-runtime-studio { min-height: 100vh; color: #f4f4f5; background: #09090b; }
+.novel-runtime-studio > header { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 18px; min-height: 94px; padding: 16px 24px; border-bottom: 1px solid #27272a; }
+.novel-runtime-studio h1 { margin: 3px 0; font-size: 23px; letter-spacing: 0; }
+.novel-runtime-actions { display: flex; gap: 8px; }
+.novel-runtime-studio > main { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: calc(100vh - 94px); }
+.novel-runtime-studio aside { padding: 20px 14px; background: #111113; border-right: 1px solid #27272a; }
+.novel-runtime-studio aside h2 { margin: 0 8px 14px; font-size: 13px; }
+.novel-runtime-studio aside p { padding: 0 8px; color: #71717a; font-size: 12px; }
+.novel-runtime-studio aside button { display: grid; grid-template-columns: 20px minmax(0, 1fr) 20px; align-items: center; gap: 9px; width: 100%; padding: 10px 8px; color: #d4d4d8; text-align: left; background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
+.novel-runtime-studio aside button:hover { background: #27272a; }
+.novel-runtime-studio aside button span { min-width: 0; }
+.novel-runtime-studio aside strong, .novel-runtime-studio aside small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-runtime-studio aside small { margin-top: 2px; color: #71717a; font-size: 11px; }
+.novel-runtime-work { display: grid; align-content: start; gap: 18px; padding: 24px; }
+.novel-runtime-panel { border-top: 1px solid #3f3f46; }
+.novel-runtime-panel-title { display: flex; align-items: center; justify-content: space-between; padding: 16px 0 10px; }
+.novel-runtime-panel-title h2 { margin: 2px 0 0; font-size: 16px; letter-spacing: 0; }
+.novel-runtime-operation { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: start; gap: 14px; padding: 14px 0; border-top: 1px solid #27272a; }
+.novel-runtime-operation p, .novel-runtime-change p { margin: 4px 0 0; color: #a1a1aa; }
+.novel-runtime-operation time { color: #71717a; font-size: 11px; }
+.novel-runtime-change { display: flex; align-items: center; justify-content: space-between; gap: 20px; width: 100%; padding: 14px 0; color: inherit; text-align: left; background: transparent; border: 0; border-top: 1px solid #27272a; cursor: pointer; }
+.novel-runtime-muted { color: #71717a; }
+.novel-runtime-review-actions { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto auto; gap: 8px; width: 100%; }
+.novel-runtime-preview { max-height: 65vh; overflow: auto; padding: 8px 18px; color: #e4e4e7; line-height: 1.8; }
+.novel-runtime-preview h1, .novel-runtime-preview h2, .novel-runtime-preview h3 { letter-spacing: 0; }
+@media (max-width: 760px) {
+  .novel-runtime-page { padding: 18px; }
+  .novel-runtime-header { align-items: flex-start; flex-direction: column; }
+  .novel-runtime-strip { flex-wrap: wrap; gap: 10px 18px; }
+  .novel-runtime-grid { grid-template-columns: 1fr; }
+  .novel-runtime-grid article { grid-template-columns: 84px minmax(0, 1fr); }
+  .novel-runtime-studio > header { grid-template-columns: 32px minmax(0, 1fr); }
+  .novel-runtime-actions { grid-column: 1 / -1; }
+  .novel-runtime-studio > main { grid-template-columns: 1fr; }
+  .novel-runtime-studio aside { border-right: 0; border-bottom: 1px solid #27272a; }
+  .novel-runtime-review-actions { grid-template-columns: 1fr 1fr 1fr; }
+  .novel-runtime-review-actions .ant-input { grid-column: 1 / -1; }
+}

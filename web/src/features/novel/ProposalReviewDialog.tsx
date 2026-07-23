@@ -17,6 +17,7 @@ function architectureValue(value: Record<string, unknown>): ArchitectureEditable
     centralConflict: String(value.centralConflict ?? ""),
     synopsis: String(value.synopsis ?? ""),
     phases: Array.isArray(value.phases) ? value.phases as ArchitectureEditableData["phases"] : [],
+    growthCurves: Array.isArray(value.growthCurves) ? value.growthCurves as ArchitectureEditableData["growthCurves"] : [],
   };
 }
 

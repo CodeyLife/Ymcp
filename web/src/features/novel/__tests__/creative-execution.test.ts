@@ -177,6 +177,22 @@ describe("CreativeExecutionEngine", () => {
       .rejects.toThrow("当前不能进入下一轮修订");
   });
 
+  it("lets a failed generation re-enter the revision queue", async () => {
+    const run = await createCreativeRun({ projectId: "project-1", mode: "external", objective: "恢复生成失败", policy: { maxIterations: 2 } }, db);
+    const work = await enqueueCreativeWork(run.id, { kind: "generation", taskKey: "characters", instruction: "生成完整群像" }, db);
+    const executor = vi.fn().mockRejectedValue(new Error("候选数量不足"));
+
+    await expect(executeCreativeCommand({ runId: run.id, type: "work.start", workItemId: work.id, idempotencyKey: "failed-start" }, { db, executor }))
+      .rejects.toThrow("候选数量不足");
+    expect(await db.creativeWorkItems.get(work.id)).toMatchObject({ status: "failed" });
+
+    const failedSnapshot = await inspectCreativeRun(run.id, undefined, db);
+    expect(failedSnapshot.nextActions).toContainEqual({ type: "work.retry", workItemId: work.id });
+    const retried = await executeCreativeCommand({ runId: run.id, type: "work.retry", workItemId: work.id, instruction: "重新生成有效 JSON", idempotencyKey: "failed-retry" }, { db, executor });
+    expect(retried).toMatchObject({ status: "running", workStatus: "queued" });
+    expect(await db.creativeWorkItems.get(work.id)).toMatchObject({ status: "queued", iteration: 0, error: undefined });
+  });
+
   it("lets a later review supersede an earlier blocker without rewriting history", async () => {
     const run = await createCreativeRun({ projectId: "project-1", mode: "external", objective: "复核正文问题" }, db);
     const work = await enqueueCreativeWork(run.id, { kind: "generation", taskKey: "chapter-draft", targetId: "chapter-1", instruction: "生成正文" }, db);

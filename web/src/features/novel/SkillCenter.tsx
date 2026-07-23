@@ -4,7 +4,7 @@ import { CheckCircleOutlined, DeleteOutlined, ImportOutlined, SafetyCertificateO
 import { useLiveQuery } from "dexie-react-hooks";
 import { novelDb, updateProject } from "./db";
 import { buildDraftTasteProfile, confirmTasteProfile } from "./preferences";
-import { importNovelSkill, listAvailableSkills, resolveNovelSkills, setProjectSkill } from "./skills";
+import { deleteNovelSkill, importNovelSkill, listAvailableSkills, resolveNovelSkills, setProjectSkill } from "./skills";
 import type { NovelSkillCategory, NovelSkillStage } from "./types";
 import CraftRuleGovernance from "./CraftRuleGovernance";
 
@@ -59,7 +59,7 @@ export default function SkillCenter({ projectId }: { projectId: string }) {
       {visible.map((skill) => <article key={`${skill.source}:${skill.skillId}`} className={enabledIds.has(skill.skillId) ? "enabled" : ""}>
         <div className="novel-skill-mark">{skill.category.slice(0, 2).toUpperCase()}</div>
         <div><header><strong>{skill.name}</strong><Tag>{skill.version}</Tag><Tag color={skill.source === "builtin" ? "default" : "gold"}>{skill.source === "builtin" ? "内置" : skill.source === "user" ? "用户" : "项目"}</Tag></header><p>{skill.description}</p><footer>{skill.stages.map((stage) => <span key={stage}>{stage}</span>)}{skill.license && <span>{skill.license}</span>}</footer></div>
-        <div className="novel-skill-actions"><Switch checked={enabledIds.has(skill.skillId)} onChange={(enabled) => void setProjectSkill(projectId, skill.skillId, enabled)} />{!skill.readonly && <Button danger type="text" icon={<DeleteOutlined />} onClick={() => void novelDb.skills.delete(skill.id)} />}</div>
+        <div className="novel-skill-actions"><Switch checked={enabledIds.has(skill.skillId)} onChange={(enabled) => void setProjectSkill(projectId, skill.skillId, enabled)} />{!skill.readonly && <Button danger type="text" icon={<DeleteOutlined />} onClick={() => void deleteNovelSkill(skill)} />}</div>
       </article>)}
     </section>
 

@@ -62,6 +62,13 @@ export default defineConfig({
                 timeout: 600000,
                 proxyTimeout: 600000,
             },
+            "/novel-api": {
+                target: "http://127.0.0.1:4766",
+                changeOrigin: true,
+                rewrite: (p) => p.replace(/^\/novel-api/, ""),
+                timeout: 600000,
+                proxyTimeout: 600000,
+            },
         },
     },
     build: {

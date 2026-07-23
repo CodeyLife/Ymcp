@@ -1,0 +1,9 @@
+[2m11:02:58[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /v1/events?projectId=277997c9-4b1b-415b-8d0f-bf54476397aa[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m11:19:16[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /v1/events?projectId=277997c9-4b1b-415b-8d0f-bf54476397aa[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m11:23:05[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /v1/events?projectId=277997c9-4b1b-415b-8d0f-bf54476397aa[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)

@@ -17,7 +17,7 @@ import {
   type ContextMenuState,
   type Position,
 } from "@/shared/canvas";
-import { addEntity, appendOperation, novelDb, recordBase, updateEntity } from "../db";
+import { addEntity, commitFormalRecordChanges, novelDb, recordBase, updateEntity } from "../db";
 import type { EntityRelation, StoryEntity } from "../types";
 import CharacterCard from "../CharacterCard";
 import GenerationComposer from "../GenerationComposer";
@@ -121,15 +121,12 @@ export function CharacterCanvasPanel({ projectId }: { projectId: string }) {
   const handleDeleteCharacter = useCallback(
     async (entityId: string) => {
       const related = relations.filter((r) => r.fromEntityId === entityId || r.toEntityId === entityId);
-      await novelDb.transaction("rw", novelDb.entities, novelDb.relations, novelDb.operations, async () => {
-        for (const r of related) {
-          await novelDb.relations.delete(r.id);
-          await appendOperation(projectId, "relations", r.id, "delete", { value: { before: r, after: null } });
-        }
-        const entity = await novelDb.entities.get(entityId);
-        await novelDb.entities.delete(entityId);
-        await appendOperation(projectId, "entities", entityId, "delete", { name: { before: entity?.name ?? null, after: null } });
-      });
+      const entity = await novelDb.entities.get(entityId);
+      if (!entity) return;
+      await commitFormalRecordChanges(projectId, [
+        ...related.map((relation) => ({ collection: "relations", before: relation as unknown as Record<string, unknown> })),
+        { collection: "entities", before: entity as unknown as Record<string, unknown>, fieldChanges: { name: { before: entity.name, after: null } } },
+      ]);
       message.success("角色已删除");
     },
     [projectId, relations, message],
@@ -138,8 +135,8 @@ export function CharacterCanvasPanel({ projectId }: { projectId: string }) {
   const handleDeleteRelation = useCallback(
     async (relationId: string) => {
       const relation = await novelDb.relations.get(relationId);
-      await novelDb.relations.delete(relationId);
-      await appendOperation(projectId, "relations", relationId, "delete", { value: { before: relation, after: null } });
+      if (!relation) return;
+      await commitFormalRecordChanges(projectId, [{ collection: "relations", before: relation as unknown as Record<string, unknown> }]);
       message.success("关系已删除");
     },
     [projectId, message],
@@ -156,10 +153,8 @@ export function CharacterCanvasPanel({ projectId }: { projectId: string }) {
   const handleSaveRelation = useCallback(async () => {
     if (!relationDraft) return;
     const before = await novelDb.relations.get(relationDraft.id);
-    await novelDb.relations.put({ ...relationDraft, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() });
-    await appendOperation(projectId, "relations", relationDraft.id, before ? "update" : "create", {
-      value: { before, after: relationDraft },
-    });
+    const after = { ...relationDraft, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() };
+    await commitFormalRecordChanges(projectId, [{ collection: "relations", before: before as unknown as Record<string, unknown> | undefined, after: after as unknown as Record<string, unknown> }]);
     setEditingRelation(null);
     setRelationDraft(null);
     message.success("关系已保存");
@@ -176,10 +171,7 @@ export function CharacterCanvasPanel({ projectId }: { projectId: string }) {
         privateTruth: "",
         bond: "",
       };
-      await novelDb.relations.add(relation);
-      await appendOperation(projectId, "relations", relation.id, "create", {
-        relationType: { before: null, after: relation.relationType },
-      });
+      await commitFormalRecordChanges(projectId, [{ collection: "relations", after: relation as unknown as Record<string, unknown>, fieldChanges: { relationType: { before: null, after: relation.relationType } } }]);
       setEditingRelation(relation);
     },
     [projectId],

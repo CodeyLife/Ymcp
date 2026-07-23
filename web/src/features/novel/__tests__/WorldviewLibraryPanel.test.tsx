@@ -13,6 +13,8 @@ vi.mock("../db", () => ({
   addEntity: vi.fn(),
   updateEntity: vi.fn(),
   appendOperation: vi.fn(),
+  commitFormalRecordChanges: vi.fn(),
+  isFormalMutationRuntimeEnabled: () => false,
   novelDb: {
     entities: { where: () => ({ equals: () => ({ and: () => ({ toArray: () => Promise.resolve([]) }) }) }), get: vi.fn(), delete: vi.fn() },
     relations: { where: () => ({ equals: () => ({ toArray: () => Promise.resolve([]) }) }), delete: vi.fn(), get: vi.fn(), put: vi.fn(), add: vi.fn() },

@@ -104,4 +104,156 @@ describe("creative tool gateway", () => {
     const artifact = await executeCreativeTool("novel_artifact_get", { projectId: "project-1", runId, artifactId: candidate.id }, { db });
     expect(artifact.result).toEqual({ kind: "closed-loop-candidate", value: candidate });
   });
+
+  it("novel_project_create creates a project that novel_project_list can see and novel_project_delete can remove", async () => {
+    const created = await executeCreativeTool("novel_project_create", {
+      idempotencyKey: "create-wuxia",
+      title: "剑啸江湖",
+      premise: "少年剑客入江湖复仇，与各方势力周旋",
+      genre: ["武侠", "江湖"],
+    }, { db });
+    const projectId = (created.result as { id: string }).id;
+    expect(projectId).toBeTruthy();
+
+    const list = await executeCreativeTool("novel_project_list", {}, { db });
+    const projects = (list.result as { projects: Array<{ id: string; title: string }> }).projects;
+    expect(projects.some((project) => project.id === projectId && project.title === "剑啸江湖")).toBe(true);
+
+    // 幂等：相同 idempotencyKey+title+premise+genre 重复调用返回同一 projectId
+    const second = await executeCreativeTool("novel_project_create", {
+      idempotencyKey: "create-wuxia",
+      title: "剑啸江湖",
+      premise: "少年剑客入江湖复仇，与各方势力周旋",
+      genre: ["武侠", "江湖"],
+    }, { db });
+    expect((second.result as { id: string }).id).toBe(projectId);
+
+    // novel_receipt_get 对 GLOBAL_SCOPE 工具使用 "__global__" 作为 projectId
+    const receipt = await executeCreativeTool("novel_receipt_get", { targetTool: "novel_project_create", idempotencyKey: "create-wuxia" }, { db });
+    expect(receipt.result).toMatchObject({ tool: "novel_project_create", status: "completed" });
+
+    // 删除
+    const deleted = await executeCreativeTool("novel_project_delete", { projectId, idempotencyKey: "delete-wuxia" }, { db });
+    expect((deleted.result as { deleted: boolean }).deleted).toBe(true);
+    const listAfterDelete = await executeCreativeTool("novel_project_list", {}, { db });
+    const projectsAfterDelete = (listAfterDelete.result as { projects: Array<{ id: string }> }).projects;
+    expect(projectsAfterDelete.some((project) => project.id === projectId)).toBe(false);
+  });
+
+  it("novel_project_create rejects invalid genre input", async () => {
+    await expect(executeCreativeTool("novel_project_create", {
+      idempotencyKey: "create-bad",
+      title: "无效",
+      premise: "测试",
+      genre: "武侠" as unknown as string[],
+    }, { db })).rejects.toThrow("genre 必须是字符串数组");
+    await expect(executeCreativeTool("novel_project_create", {
+      idempotencyKey: "create-bad-empty",
+      title: "无效",
+      premise: "测试",
+      genre: [],
+    }, { db })).rejects.toThrow("genre 不能为空");
+  });
+
+  it("novel_bootstrap_run enqueues foundation+planning work items with proper dependency chain", async () => {
+    const created = await executeCreativeTool("novel_project_create", {
+      idempotencyKey: "create-bootstrap",
+      title: "测试 bootstrap",
+      premise: "测试用",
+      genre: ["测试"],
+    }, { db });
+    const projectId = (created.result as { id: string }).id;
+
+    const bootstrap = await executeCreativeTool("novel_bootstrap_run", {
+      projectId,
+      idempotencyKey: "bootstrap-1",
+      objective: "构建跨阶段保持一致的群像悬疑，并将总篇幅规划为长篇体量",
+    }, { db });
+    const snapshot = bootstrap.result as { run: { id: string; status: string }; workItems: Array<{ id: string; taskKey: string; status: string; dependsOn: string[]; instruction: string }> };
+    expect(snapshot.run.status).toBe("running");
+    // 默认 chain 是 10 个任务（不含 chapter-plan）
+    expect(snapshot.workItems).toHaveLength(10);
+    const taskKeySet = new Set(snapshot.workItems.map((work) => work.taskKey));
+    expect(taskKeySet).toEqual(new Set([
+      "project-positioning", "architecture", "characters", "relations", "worldview",
+      "plot-threads", "foreshadowing", "timeline", "story-control", "plot-design",
+    ]));
+    // 验证依赖链：architecture 依赖 project-positioning
+    const workByTask = Object.fromEntries(snapshot.workItems.map((work) => [work.taskKey, work])) as Record<string, { id: string; dependsOn: string[] }>;
+    expect(workByTask["architecture"].dependsOn).toEqual([workByTask["project-positioning"].id]);
+    expect(workByTask["plot-threads"].dependsOn).toEqual(expect.arrayContaining([
+      workByTask["architecture"].id, workByTask["characters"].id, workByTask["relations"].id,
+    ]));
+    expect(workByTask["plot-design"].dependsOn).toEqual(expect.arrayContaining([
+      workByTask["plot-threads"].id, workByTask["foreshadowing"].id, workByTask["timeline"].id,
+    ]));
+    // 全部任务初始为 queued
+    expect(snapshot.workItems.every((work) => work.status === "queued")).toBe(true);
+    expect(snapshot.workItems.every((work) => work.instruction.includes("构建跨阶段保持一致的群像悬疑，并将总篇幅规划为长篇体量"))).toBe(true);
+    expect(snapshot.workItems.every((work) => work.instruction.includes("不得用阶段默认值覆盖明确的项目目标"))).toBe(true);
+  });
+
+  it("novel_bootstrap_run with includeChapterPlan enqueues 11 tasks and chapter-plan depends on plot-design", async () => {
+    const created = await executeCreativeTool("novel_project_create", {
+      idempotencyKey: "create-bootstrap-cp",
+      title: "测试 bootstrap + chapter-plan",
+      premise: "测试用",
+      genre: ["测试"],
+    }, { db });
+    const projectId = (created.result as { id: string }).id;
+
+    const bootstrap = await executeCreativeTool("novel_bootstrap_run", {
+      projectId,
+      idempotencyKey: "bootstrap-cp-1",
+      includeChapterPlan: true,
+    }, { db });
+    const snapshot = bootstrap.result as { workItems: Array<{ id: string; taskKey: string; dependsOn: string[] }> };
+    expect(snapshot.workItems).toHaveLength(11);
+    const workByTask = Object.fromEntries(snapshot.workItems.map((work) => [work.taskKey, work])) as Record<string, { id: string; dependsOn: string[] }>;
+    expect(workByTask["chapter-plan"].dependsOn).toEqual([workByTask["plot-design"].id]);
+  });
+
+  it("novel_foundation_export returns structured foundation snapshot with all 9 sections", async () => {
+    const created = await executeCreativeTool("novel_project_create", {
+      idempotencyKey: "create-export",
+      title: "测试导出",
+      premise: "测试用",
+      genre: ["测试"],
+    }, { db });
+    const projectId = (created.result as { id: string }).id;
+
+    const exportResult = await executeCreativeTool("novel_foundation_export", { projectId }, { db });
+    const exported = exportResult.result as {
+      project: { id: string; title: string; premise: string };
+      architecture: { framework: string; status: string; centralQuestion: string } | null;
+      characters: unknown[];
+      relations: unknown[];
+      plotThreads: unknown[];
+      foreshadowing: unknown[];
+      outlineNodes: unknown[];
+      documents: unknown[];
+      timelineEvents: unknown[];
+      entityIndex: unknown[];
+    };
+    expect(exported.project.id).toBe(projectId);
+    expect(exported.project.title).toBe("测试导出");
+    // createNovelProject 会自动创建一个 architecture 记录
+    expect(exported.architecture).not.toBeNull();
+    expect(exported.architecture?.framework).toBe("free");
+    expect(exported.architecture?.centralQuestion).toBe("测试用");
+    // 空项目其它字段应该是空数组
+    expect(exported.characters).toEqual([]);
+    expect(exported.relations).toEqual([]);
+    expect(exported.plotThreads).toEqual([]);
+    expect(exported.foreshadowing).toEqual([]);
+    expect(exported.outlineNodes).toEqual([]);
+    expect(exported.documents).toEqual([]);
+    expect(exported.timelineEvents).toEqual([]);
+    expect(exported.entityIndex).toEqual([]);
+  });
+
+  it("novel_foundation_export rejects for nonexistent project", async () => {
+    await expect(executeCreativeTool("novel_foundation_export", { projectId: "does-not-exist" }, { db }))
+      .rejects.toThrow("项目不存在");
+  });
 });

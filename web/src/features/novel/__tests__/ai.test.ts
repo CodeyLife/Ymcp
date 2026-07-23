@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/stores/ui", () => ({
-  getEffectiveApiConfig: () => ({ baseUrl: "https://example.test/v1", apiKey: "test-key" }),
+vi.mock("../api-config", () => ({
+  getNovelApiConfig: () => ({ baseUrl: "https://example.test/v1", apiKey: "test-key", modelContextWindow: 0 }),
 }));
 
 import { callStructuredNovelModel, streamNovelModel } from "../ai";

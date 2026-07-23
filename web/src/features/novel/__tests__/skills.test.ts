@@ -62,6 +62,9 @@ describe("prose aesthetics skills", () => {
     expect(compiled).toContain("informationRelease 可以为空");
     expect(compiled).not.toContain("2 至 8 个必要节拍");
     expect(compiled).not.toContain("每章至少埋一个");
+    expect(compiled).toContain("documents.blueprint.mustHappen");
+    expect(compiled).not.toContain("documents.blueprint.beats");
+    expect(compiled).not.toContain("beat.emotion");
   });
 
   it("compiles one neutral drafting contract without story-specific examples", async () => {
@@ -95,6 +98,9 @@ describe("prose aesthetics skills", () => {
 
     expect(compiled).toContain("不得复制提示词示例");
     expect(compiled).toContain("只根据本项目已确认事实、正文行动与对白");
+    expect(compiled).toContain("关系压力优先来自双方职责、边界、核心恐惧");
+    expect(compiled).toContain("相识→相知→相吸→靠近→现实压力→价值抉择→关系重定义→余波或归宿");
+    expect(compiled).not.toContain("误会压力");
     expect(compiled).not.toMatch(/东宫|刑部仵作房|萧彻|沈知微|顾长安|皇子|宦官/);
   });
 

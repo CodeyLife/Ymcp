@@ -17,7 +17,7 @@ import {
   type ContextMenuState,
   type Position,
 } from "@/shared/canvas";
-import { appendOperation, novelDb, recordBase } from "../db";
+import { commitFormalRecordChanges, novelDb, recordBase } from "../db";
 import type { TimelineEvent } from "../types";
 import { TimelineNodeContent } from "./TimelineNodeContent";
 import GenerationComposer from "../GenerationComposer";
@@ -138,8 +138,7 @@ export function TimelineCanvasPanel({ projectId }: { projectId: string }) {
       consequenceIds: [],
       description: "",
     };
-    await novelDb.timelineEvents.add(event);
-    await appendOperation(projectId, "timelineEvents", event.id, "create", { title: { before: null, after: event.title } });
+    await commitFormalRecordChanges(projectId, [{ collection: "timelineEvents", after: event as unknown as Record<string, unknown>, fieldChanges: { title: { before: null, after: event.title } } }]);
     setEditingEvent(event);
   }, [projectId, events.length]);
 
@@ -148,19 +147,11 @@ export function TimelineCanvasPanel({ projectId }: { projectId: string }) {
       const target = await novelDb.timelineEvents.get(eventId);
       // 清理其他事件中对本事件的引用
       const related = events.filter((e) => e.causeIds.includes(eventId) || e.consequenceIds.includes(eventId));
-      await novelDb.transaction("rw", novelDb.timelineEvents, novelDb.operations, async () => {
-        for (const e of related) {
-          const updated = {
-            ...e,
-            causeIds: e.causeIds.filter((id) => id !== eventId),
-            consequenceIds: e.consequenceIds.filter((id) => id !== eventId),
-          };
-          await novelDb.timelineEvents.put({ ...updated, revision: e.revision + 1, updatedAt: Date.now() });
-          await appendOperation(projectId, "timelineEvents", e.id, "update", { value: { before: e, after: updated } });
-        }
-        await novelDb.timelineEvents.delete(eventId);
-        await appendOperation(projectId, "timelineEvents", eventId, "delete", { title: { before: target?.title ?? null, after: null } });
-      });
+      if (!target) return;
+      await commitFormalRecordChanges(projectId, [
+        ...related.map((event) => ({ collection: "timelineEvents", before: event as unknown as Record<string, unknown>, after: { ...event, causeIds: event.causeIds.filter((id) => id !== eventId), consequenceIds: event.consequenceIds.filter((id) => id !== eventId), revision: event.revision + 1, updatedAt: Date.now() } as unknown as Record<string, unknown> })),
+        { collection: "timelineEvents", before: target as unknown as Record<string, unknown>, fieldChanges: { title: { before: target.title, after: null } } },
+      ]);
       message.success("事件已删除");
     },
     [projectId, events, message],
@@ -172,14 +163,12 @@ export function TimelineCanvasPanel({ projectId }: { projectId: string }) {
       const fromEvent = await novelDb.timelineEvents.get(fromId);
       const toEvent = await novelDb.timelineEvents.get(toId);
       if (!fromEvent || !toEvent) return;
-      await novelDb.transaction("rw", novelDb.timelineEvents, novelDb.operations, async () => {
-        const updatedFrom = { ...fromEvent, consequenceIds: fromEvent.consequenceIds.filter((id) => id !== toId) };
-        const updatedTo = { ...toEvent, causeIds: toEvent.causeIds.filter((id) => id !== fromId) };
-        await novelDb.timelineEvents.put({ ...updatedFrom, revision: fromEvent.revision + 1, updatedAt: Date.now() });
-        await novelDb.timelineEvents.put({ ...updatedTo, revision: toEvent.revision + 1, updatedAt: Date.now() });
-        await appendOperation(projectId, "timelineEvents", fromId, "update", { value: { before: fromEvent, after: updatedFrom } });
-        await appendOperation(projectId, "timelineEvents", toId, "update", { value: { before: toEvent, after: updatedTo } });
-      });
+      const updatedFrom = { ...fromEvent, consequenceIds: fromEvent.consequenceIds.filter((id) => id !== toId), revision: fromEvent.revision + 1, updatedAt: Date.now() };
+      const updatedTo = { ...toEvent, causeIds: toEvent.causeIds.filter((id) => id !== fromId), revision: toEvent.revision + 1, updatedAt: Date.now() };
+      await commitFormalRecordChanges(projectId, [
+        { collection: "timelineEvents", before: fromEvent as unknown as Record<string, unknown>, after: updatedFrom as unknown as Record<string, unknown> },
+        { collection: "timelineEvents", before: toEvent as unknown as Record<string, unknown>, after: updatedTo as unknown as Record<string, unknown> },
+      ]);
       message.success("因果关系已删除");
     },
     [projectId, message],
@@ -188,10 +177,8 @@ export function TimelineCanvasPanel({ projectId }: { projectId: string }) {
   const handleSaveEvent = useCallback(async () => {
     if (!eventDraft) return;
     const before = await novelDb.timelineEvents.get(eventDraft.id);
-    await novelDb.timelineEvents.put({ ...eventDraft, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() });
-    await appendOperation(projectId, "timelineEvents", eventDraft.id, before ? "update" : "create", {
-      value: { before, after: eventDraft },
-    });
+    const after = { ...eventDraft, revision: (before?.revision ?? 0) + 1, updatedAt: Date.now() };
+    await commitFormalRecordChanges(projectId, [{ collection: "timelineEvents", before: before as unknown as Record<string, unknown> | undefined, after: after as unknown as Record<string, unknown> }]);
     setEditingEvent(null);
     setEventDraft(null);
     message.success("事件已保存");
@@ -203,14 +190,12 @@ export function TimelineCanvasPanel({ projectId }: { projectId: string }) {
       const toEvent = await novelDb.timelineEvents.get(toId);
       if (!fromEvent || !toEvent) return;
       if (fromEvent.consequenceIds.includes(toId)) return;
-      await novelDb.transaction("rw", novelDb.timelineEvents, novelDb.operations, async () => {
-        const updatedFrom = { ...fromEvent, consequenceIds: [...fromEvent.consequenceIds, toId] };
-        const updatedTo = { ...toEvent, causeIds: [...toEvent.causeIds, fromId] };
-        await novelDb.timelineEvents.put({ ...updatedFrom, revision: fromEvent.revision + 1, updatedAt: Date.now() });
-        await novelDb.timelineEvents.put({ ...updatedTo, revision: toEvent.revision + 1, updatedAt: Date.now() });
-        await appendOperation(projectId, "timelineEvents", fromId, "update", { value: { before: fromEvent, after: updatedFrom } });
-        await appendOperation(projectId, "timelineEvents", toId, "update", { value: { before: toEvent, after: updatedTo } });
-      });
+      const updatedFrom = { ...fromEvent, consequenceIds: [...fromEvent.consequenceIds, toId], revision: fromEvent.revision + 1, updatedAt: Date.now() };
+      const updatedTo = { ...toEvent, causeIds: [...toEvent.causeIds, fromId], revision: toEvent.revision + 1, updatedAt: Date.now() };
+      await commitFormalRecordChanges(projectId, [
+        { collection: "timelineEvents", before: fromEvent as unknown as Record<string, unknown>, after: updatedFrom as unknown as Record<string, unknown> },
+        { collection: "timelineEvents", before: toEvent as unknown as Record<string, unknown>, after: updatedTo as unknown as Record<string, unknown> },
+      ]);
       message.success("因果关系已建立");
     },
     [projectId, message],

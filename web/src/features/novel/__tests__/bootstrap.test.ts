@@ -57,9 +57,13 @@ function architectureResponse() {
         centralConflict: "女孩必须保存被遗忘者的痕迹，同时躲避维护遗忘秩序的机构",
         synopsis: "女孩从一次违规保留档案开始，逐步发现城市依靠遗忘维持表面稳定，并决定让消失者重新被看见。",
         phases: [
-          { id: "phase-1", title: "残留的名字", purpose: "女孩发现第一份无法销毁的档案。", turningPoint: "她第一次见到被遗忘者。", order: 0, locked: false },
-          { id: "phase-2", title: "遗忘的秩序", purpose: "她追查制度背后的代价。", turningPoint: "她自己的名字进入销毁名单。", order: 1, locked: false },
-          { id: "phase-3", title: "重新被看见", purpose: "她让城市面对被抹去的人。", turningPoint: "所有档案在公共空间重现。", order: 2, locked: false },
+          { id: "phase-1", title: "残留的名字", purpose: "女孩发现第一份无法销毁的档案。", turningPoint: "她第一次见到被遗忘者。", order: 0, locked: false, primaryCurveId: "main" },
+          { id: "phase-2", title: "遗忘的秩序", purpose: "她追查制度背后的代价。", turningPoint: "她自己的名字进入销毁名单。", order: 1, locked: false, primaryCurveId: "eco" },
+          { id: "phase-3", title: "重新被看见", purpose: "她让城市面对被抹去的人。", turningPoint: "所有档案在公共空间重现。", order: 2, locked: false, primaryCurveId: "main" },
+        ],
+        growthCurves: [
+          { id: "main", kind: "main", subject: "女孩与被遗忘者的连接", resourceLoop: "每销毁一份档案城市稳定一分但女孩的记忆多一层", stageGoals: "从发现异常到公开对抗", irreversibleChange: "城市的遗忘机制被永久打破" },
+          { id: "eco", kind: "ecological", subject: "遗忘机构的权力生态", resourceLoop: "机构通过销毁档案获取维持秩序的资源与合法性", stageGoals: "从暗中运作到公开镇压", irreversibleChange: "机构的合法性与运作基础被公开质疑" },
         ],
       },
       rationale: "为后续规划提供阶段骨架",

@@ -1,4 +1,4 @@
-import { getEffectiveApiConfig } from "@/stores/ui";
+import { getNovelApiConfig } from "./api-config";
 import { endpoint } from "./ai";
 
 /**
@@ -25,7 +25,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    const config = getEffectiveApiConfig();
+    const config = getNovelApiConfig();
     if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
     const resp = await fetch(`${endpoint(config.baseUrl)}/embeddings`, {
       method: "POST",

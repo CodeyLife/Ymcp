@@ -1,4 +1,4 @@
-import { novelDb, recordBase, type NovelDatabase } from "./db";
+import { createNovelProject, novelDb, recordBase, type NovelDatabase } from "./db";
 import {
   createCreativeRun,
   enqueueCreativeWork,
@@ -8,7 +8,7 @@ import {
   type CreativeReviewInput,
   type CreativeWorkInput,
 } from "./creative-execution";
-import type { CreativeRunPolicy } from "./types";
+import type { CreativeRunPolicy, NovelGenerationTaskKey } from "./types";
 import { NOVEL_GENERATION_TASKS, getGenerationTask } from "./generation";
 import { listAvailableSkills, listSkillVersions } from "./skills";
 import { BUILTIN_PROMPT_TEMPLATES, listPromptTemplates } from "./prompt-templates";
@@ -42,6 +42,12 @@ export const CREATIVE_TOOL_NAMES = [
   "novel_rule_review_submit",
   "novel_rule_promote",
   "novel_rule_rollback",
+  // 项目生命周期与一键流程（无 projectId 路由到任意已连接宿主）
+  "novel_project_create",
+  "novel_project_list",
+  "novel_project_delete",
+  "novel_bootstrap_run",
+  "novel_foundation_export",
 ] as const;
 
 export type CreativeToolName = typeof CREATIVE_TOOL_NAMES[number];
@@ -49,7 +55,43 @@ export type CreativeToolName = typeof CREATIVE_TOOL_NAMES[number];
 const MUTATING_TOOLS = new Set<CreativeToolName>([
   "novel_run_create", "novel_action_execute", "novel_review_submit", "novel_rule_candidate_create",
   "novel_rule_evidence_submit", "novel_rule_foundation_evaluate", "novel_rule_review_submit", "novel_rule_promote", "novel_rule_rollback",
+  "novel_project_create", "novel_project_delete", "novel_bootstrap_run",
 ]);
+
+// 无 projectId 的工具（项目生命周期管理）：通过 broker.requestAnyConnected 路由到任意已连接浏览器宿主执行。
+// 这类工具的幂等收据 key 使用 "__global__" 代替 projectId，仍保证幂等性。
+export const GLOBAL_SCOPE_TOOL_NAMES = new Set<CreativeToolName>(["novel_project_create", "novel_project_list"]);
+const GLOBAL_SCOPE_TOOLS = GLOBAL_SCOPE_TOOL_NAMES;
+
+// bootstrap 任务链：novel_bootstrap_run 按 foundation → planning 顺序 enqueue 这 10 个任务，
+// 前置依赖链由系统自动构造。LLM 通过 novel_action_execute work.start 逐个启动。
+const BOOTSTRAP_TASK_CHAIN: NovelGenerationTaskKey[] = [
+  "project-positioning",
+  "architecture",
+  "characters",
+  "relations",
+  "worldview",
+  "plot-threads",
+  "foreshadowing",
+  "timeline",
+  "story-control",
+  "plot-design",
+];
+
+// 各 bootstrap 任务的依赖（在 chain 中相对索引）。依赖一旦失败，下游任务也会被 work.start 时拒绗
+// 未列出的任务（review/story-bible/chapter-plan/scene-design/chapter-draft/chapter-workflow）由 LLM 通过 work.enqueue 手动入队
+const BOOTSTRAP_TASK_DEPENDENCIES: Partial<Record<NovelGenerationTaskKey, NovelGenerationTaskKey[]>> = {
+  "project-positioning": [],
+  architecture: ["project-positioning"],
+  characters: ["architecture"],
+  relations: ["characters"],
+  worldview: ["architecture"],
+  "plot-threads": ["architecture", "characters", "relations"],
+  foreshadowing: ["plot-threads"],
+  timeline: ["architecture", "plot-threads"],
+  "story-control": ["plot-threads", "foreshadowing", "timeline"],
+  "plot-design": ["plot-threads", "foreshadowing", "timeline"],
+};
 
 export interface CreativeToolEnvelope {
   ok: true;
@@ -167,10 +209,111 @@ async function executeCreativeToolCore(
   dependencies: CreativeToolGatewayDependencies = {},
 ): Promise<CreativeToolEnvelope> {
   const db = dependencies.db ?? novelDb;
+
+  // ===== 项目生命周期与一键流程（无 projectId 工具走 GLOBAL_SCOPE 路由） =====
+  if (tool === "novel_project_create") {
+    const title = requiredString(args, "title");
+    const premise = requiredString(args, "premise");
+    const genreRaw = args.genre;
+    if (!Array.isArray(genreRaw) || genreRaw.some((item) => typeof item !== "string")) throw new Error("genre 必须是字符串数组");
+    const genre = genreRaw.map((item) => item.trim()).filter(Boolean);
+    if (!genre.length) throw new Error("genre 不能为空");
+    const project = await createNovelProject({ title, premise, genre }, db);
+    return { ok: true, tool, result: { id: project.id, title: project.title, premise: project.premise, genre: project.genre, status: project.status, settings: project.settings } };
+  }
+  if (tool === "novel_project_list") {
+    const projects = await db.projects.toArray();
+    const summary = projects.map((project) => ({
+      id: project.id,
+      title: project.title,
+      premise: project.premise,
+      genre: project.genre,
+      status: project.status,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      contentProfile: project.settings.contentProfile,
+    }));
+    return { ok: true, tool, result: { projects: summary } };
+  }
+  if (tool === "novel_project_delete") {
+    const projectId = requiredString(args, "projectId");
+    if (projectId === "__global__") throw new Error("不能删除 __global__ 保留 scope");
+    await db.transaction("rw", db.tables, async () => {
+      for (const table of db.tables) {
+        if (table.name === "projects") await table.delete(projectId);
+        else if (table.schema.indexes.some((index) => index.name === "projectId")) await table.where("projectId").equals(projectId).delete();
+      }
+    });
+    return { ok: true, tool, result: { deleted: true, projectId } };
+  }
+  if (tool === "novel_bootstrap_run") {
+    const projectId = requiredString(args, "projectId");
+    const project = await db.projects.get(projectId);
+    if (!project) throw new Error("项目不存在");
+    const objective = typeof args.objective === "string" && args.objective.trim() ? args.objective.trim() : `Bootstrap foundation+planning for ${project.title}`;
+    const includeChapterPlan = args.includeChapterPlan === true;
+    const mode = args.mode === "manual" ? "manual" : "external";
+    const run = await createCreativeRun({ projectId, mode, objective, policy: { maxIterations: mode === "manual" ? 2 : 3 } }, db);
+    // 按 chain 顺序 enqueue，依赖链根据 BOOTSTRAP_TASK_DEPENDENCIES 解析为同 run 内 work item id
+    const taskIdToWorkId = new Map<NovelGenerationTaskKey, string>();
+    const chain: NovelGenerationTaskKey[] = [...BOOTSTRAP_TASK_CHAIN];
+    if (includeChapterPlan) chain.push("chapter-plan");
+    for (const taskKey of chain) {
+      const task = getGenerationTask(taskKey);
+      const deps = BOOTSTRAP_TASK_DEPENDENCIES[taskKey] ?? [];
+      const dependsOn = deps
+        .map((dep) => taskIdToWorkId.get(dep))
+        .filter((id): id is string => Boolean(id));
+      // chapter-plan 不在 BOOTSTRAP_TASK_DEPENDENCIES 中，默认依赖 plot-design
+      const extraDeps = taskKey === "chapter-plan" ? [taskIdToWorkId.get("plot-design")].filter((id): id is string => Boolean(id)) : [];
+      const work = await enqueueCreativeWork(run.id, {
+        kind: "generation",
+        taskKey,
+        instruction: `${task.defaultInstruction}\n\n# 本次规划目标与跨阶段约束\n${objective}\n\n本阶段产物必须落实上述目标中与自身职责相关的约束；不得用阶段默认值覆盖明确的项目目标。`,
+        dependsOn: [...dependsOn, ...extraDeps],
+      }, db);
+      taskIdToWorkId.set(taskKey, work.id);
+    }
+    return { ok: true, tool, result: await inspectCreativeRun(run.id, undefined, db) };
+  }
+  if (tool === "novel_foundation_export") {
+    const projectId = requiredString(args, "projectId");
+    const project = await db.projects.get(projectId);
+    if (!project) throw new Error("项目不存在");
+    const [architecture, characters, relations, plotThreads, foreshadowing, outlineNodes, documents, timelineEvents, entities] = await Promise.all([
+      db.architectures.where("projectId").equals(projectId).first(),
+      db.entities.where("projectId").equals(projectId).filter((entity) => entity.kind === "character").toArray(),
+      db.relations.where("projectId").equals(projectId).toArray(),
+      db.plotThreads.where("projectId").equals(projectId).toArray(),
+      db.foreshadowing.where("projectId").equals(projectId).toArray(),
+      db.outlineNodes.where("projectId").equals(projectId).sortBy("order"),
+      db.documents.where("projectId").equals(projectId).sortBy("order"),
+      db.timelineEvents.where("projectId").equals(projectId).toArray(),
+      db.entities.where("projectId").equals(projectId).toArray(),
+    ]);
+    return {
+      ok: true,
+      tool,
+      result: {
+        project: { id: project.id, title: project.title, premise: project.premise, genre: project.genre, audience: project.audience, themes: project.themes, sellingPoints: project.sellingPoints, pov: project.pov, tense: project.tense, tone: project.tone, languageStyle: project.languageStyle, targetWords: project.targetWords, status: project.status, settings: project.settings },
+        architecture: architecture ? { framework: architecture.framework, status: architecture.status, centralQuestion: architecture.centralQuestion, centralConflict: architecture.centralConflict, synopsis: architecture.synopsis, phases: architecture.phases, growthCurves: architecture.growthCurves } : null,
+        characters: characters.map((entity) => ({ id: entity.id, name: entity.name, summary: entity.summary, description: entity.description, attributes: entity.attributes, lockedFacts: entity.lockedFacts })),
+        relations: relations.map((relation) => ({ id: relation.id, fromEntityId: relation.fromEntityId, toEntityId: relation.toEntityId, relationType: relation.relationType, publicLabel: relation.publicLabel, privateTruth: relation.privateTruth, bond: relation.bond })),
+        plotThreads: plotThreads.map((thread) => ({ id: thread.id, kind: thread.kind, title: thread.title, summary: thread.summary, status: thread.status, priority: thread.priority, participantIds: thread.participantIds, progress: thread.progress, nextMove: thread.nextMove })),
+        foreshadowing: foreshadowing.map((item) => ({ id: item.id, title: item.title, clue: item.clue, truth: item.truth, status: item.status, urgency: item.urgency, notes: item.notes })),
+        outlineNodes: outlineNodes.map((node) => ({ id: node.id, phaseId: node.phaseId, title: node.title, summary: node.summary, order: node.order })),
+        documents: documents.filter((doc) => !doc.deletedAt).map((doc) => ({ id: doc.id, plotSegmentId: doc.plotSegmentId, title: doc.title, summary: doc.summary, order: doc.order, status: doc.status, blueprint: doc.blueprint })),
+        timelineEvents: timelineEvents.map((event) => ({ id: event.id, title: event.title, storyDate: event.storyDate, duration: event.duration, narrativeOrder: event.narrativeOrder, participantIds: event.participantIds, description: event.description })),
+        entityIndex: entities.map((entity) => ({ id: entity.id, kind: entity.kind, name: entity.name })),
+      },
+    };
+  }
+
   if (tool === "novel_run_create") {
+    const mode = args.mode === "manual" ? "manual" : "external";
     const run = await createCreativeRun({
       projectId: requiredString(args, "projectId"),
-      mode: "external",
+      mode,
       objective: requiredString(args, "objective"),
       policy: args.policy as Partial<CreativeRunPolicy> | undefined,
       baseSnapshotHash: typeof args.baseSnapshotHash === "string" ? args.baseSnapshotHash : undefined,
@@ -182,8 +325,9 @@ async function executeCreativeToolCore(
     return { ok: true, tool, result: await projectCatalog(requiredString(args, "projectId"), db) };
   }
   if (tool === "novel_receipt_get") {
-    const projectId = requiredString(args, "projectId");
     const targetTool = requiredString(args, "targetTool");
+    // GLOBAL_SCOPE_TOOLS（novel_project_create）的幂等收据使用 "__global__" 作为 projectId
+    const projectId = GLOBAL_SCOPE_TOOLS.has(targetTool as CreativeToolName) ? "__global__" : requiredString(args, "projectId");
     const idempotencyKey = requiredString(args, "idempotencyKey");
     if (!CREATIVE_TOOL_NAMES.includes(targetTool as CreativeToolName) || !MUTATING_TOOLS.has(targetTool as CreativeToolName)) throw new Error("targetTool 必须是可变更创作工具");
     const receipt = await db.creativeToolReceipts.where("[projectId+tool+idempotencyKey]").equals([projectId, targetTool, idempotencyKey]).first();
@@ -279,14 +423,14 @@ async function executeCreativeToolCore(
       const work = await enqueueCreativeWork(runId, parseCreativeWorkInput(args.work), db);
       return { ok: true, tool, result: { work, snapshot: await inspectCreativeRun(runId, undefined, db) } };
     }
-    if (!["work.start", "work.revise", "work.recover", "work.accept", "review.request", "run.pause", "run.resume", "run.cancel"].includes(action)) {
+    if (!["work.start", "work.revise", "work.retry", "work.recover", "work.accept", "review.request", "run.pause", "run.resume", "run.cancel"].includes(action)) {
       throw new Error(`不支持的创作动作：${action}`);
     }
     const idempotencyKey = requiredString(args, "idempotencyKey");
     const command = action.startsWith("run.")
       ? { runId, type: action as "run.pause" | "run.resume" | "run.cancel", idempotencyKey }
-      : action === "work.revise"
-        ? { runId, type: "work.revise" as const, workItemId: requiredString(args, "workItemId"), instruction: typeof args.instruction === "string" ? args.instruction : undefined, idempotencyKey }
+      : action === "work.revise" || action === "work.retry"
+        ? { runId, type: action as "work.revise" | "work.retry", workItemId: requiredString(args, "workItemId"), instruction: typeof args.instruction === "string" ? args.instruction : undefined, idempotencyKey }
         : action === "work.recover"
           ? { runId, type: "work.recover" as const, workItemId: requiredString(args, "workItemId"), force: args.force === true, idempotencyKey }
         : { runId, type: action as "work.start" | "work.accept" | "review.request", workItemId: requiredString(args, "workItemId"), idempotencyKey };
@@ -300,7 +444,7 @@ async function executeCreativeToolCore(
     const idempotencyKey = requiredString(args, "idempotencyKey");
     const review = args.review as CreativeReviewInput | undefined;
     if (!review || typeof review !== "object") throw new Error("review 不能为空");
-    if (review.reviewer !== "external-llm") throw new Error("MCP 外部审核的 reviewer 必须为 external-llm");
+    if (review.reviewer !== "external-llm" && review.reviewer !== "user") throw new Error("审核 reviewer 必须为 external-llm 或 user");
     return { ok: true, tool, result: await executeCreativeCommand({ runId, type: "review.submit", workItemId, idempotencyKey, review }, dependencies) };
   }
   if (tool === "novel_run_complete") {
@@ -324,7 +468,8 @@ export async function executeCreativeTool(
 ): Promise<CreativeToolEnvelope> {
   if (!MUTATING_TOOLS.has(tool)) return executeCreativeToolCore(tool, args, dependencies);
   const db = dependencies.db ?? novelDb;
-  const projectId = requiredString(args, "projectId");
+  // GLOBAL_SCOPE_TOOLS（novel_project_create）没有 projectId 参数；用保留 scope "__global__" 作为收据主键。
+  const projectId = GLOBAL_SCOPE_TOOLS.has(tool) ? "__global__" : requiredString(args, "projectId");
   const idempotencyKey = requiredString(args, "idempotencyKey");
   const fingerprint = await requestFingerprint(tool, args);
   const receiptKey: [string, string, string] = [projectId, tool, idempotencyKey];

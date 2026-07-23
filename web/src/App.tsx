@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import AppLayout from "@/layouts/AppLayout";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
@@ -23,6 +23,11 @@ function RouteFallback() {
   );
 }
 
+function RuntimeRedirect() {
+  const { projectId } = useParams();
+  return <Navigate to={projectId ? `/novels/${projectId}?view=operations` : "/novels"} replace />;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -31,6 +36,7 @@ export default function App() {
         <Route path="image-gen" element={<Suspense fallback={<RouteFallback />}><ImageGen /></Suspense>} />
         <Route path="video-gen" element={<Suspense fallback={<RouteFallback />}><VideoGen /></Suspense>} />
         <Route path="novels" element={<Suspense fallback={<RouteFallback />}><NovelProjects /></Suspense>} />
+        <Route path="novel-runtime" element={<RuntimeRedirect />} />
         <Route path="workbench" element={<Suspense fallback={<RouteFallback />}><Workbench /></Suspense>} />
         <Route path="matte" element={<Suspense fallback={<RouteFallback />}><Matte /></Suspense>} />
         <Route path="sprite-split" element={<Suspense fallback={<RouteFallback />}><SpriteSplit /></Suspense>} />
@@ -41,6 +47,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
       <Route path="novels/:projectId" element={<Suspense fallback={<RouteFallback />}><NovelStudio /></Suspense>} />
+      <Route path="novel-runtime/:projectId" element={<RuntimeRedirect />} />
     </Routes>
   );
 }

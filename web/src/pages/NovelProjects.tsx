@@ -1,11 +1,15 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { App, Button, Empty, Form, Input, Modal, Progress, Steps, Tag } from "antd";
 import { ApartmentOutlined, BookOutlined, BulbOutlined, CloudSyncOutlined, DeleteOutlined, ExportOutlined, ImportOutlined, PlusOutlined, RightOutlined, StopOutlined } from "@ant-design/icons";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useNavigate } from "react-router-dom";
-import { deleteProject, novelDb } from "@/features/novel/db";
-import { bootstrapNovelFromCoreIdea, NovelBootstrapError, type NovelBootstrapProgress, type NovelBootstrapStage } from "@/features/novel/bootstrap";
+import { deleteProject as deleteLocalProject, novelDb } from "@/features/novel/db";
+import type { NovelBootstrapProgress, NovelBootstrapStage } from "@/features/novel/bootstrap";
 import { exportNovel, importNovel } from "@/features/novel/export";
+import { buildLegacyMigrationBundle } from "@/features/novel/legacy-runtime-migration";
+import { novelRuntimeClient } from "@/features/novel/runtime-client";
+import { ensureRuntimeProject, refreshRuntimeProjection, refreshRuntimeProjectListProjection, syncNovelRuntimeApiConfig } from "@/features/novel/runtime-records";
+import { useNovelRuntimeEvents } from "@/features/novel/use-runtime-events";
 import "@/features/novel/novel.css";
 
 const BOOTSTRAP_STAGE_META: Record<NovelBootstrapStage, { title: string; description: string; icon: React.ReactNode }> = {
@@ -35,6 +39,11 @@ export default function NovelProjects() {
   const importRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const [form] = Form.useForm();
+  useNovelRuntimeEvents();
+
+  useEffect(() => {
+    void refreshRuntimeProjectListProjection().catch(() => undefined);
+  }, []);
 
   function resetCreateDialog() {
     setOpen(false);
@@ -52,7 +61,7 @@ export default function NovelProjects() {
     if (!bootstrapProjectId) return;
     const projectId = bootstrapProjectId;
     resetCreateDialog();
-    navigate(`/novels/${projectId}?view=planning`);
+    navigate(`/novels/${projectId}?view=operations`);
   }
 
   async function create(values: { coreIdea: string }) {
@@ -61,19 +70,26 @@ export default function NovelProjects() {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const result = await bootstrapNovelFromCoreIdea({
-        coreIdea: values.coreIdea,
-        projectId: bootstrapProjectId,
-        signal: controller.signal,
-        onProgress: setBootstrapProgress,
+      const coreIdea = values.coreIdea.trim();
+      const title = coreIdea.split(/[，。！？!?\n]/, 1)[0]?.trim().slice(0, 24) || "未命名小说";
+      setBootstrapProgress((current) => current.map((item) => item.stage === "project-positioning" ? { ...item, status: "running" } : item));
+      await syncNovelRuntimeApiConfig();
+      const { project } = await novelRuntimeClient.createProject({ title, premise: coreIdea, genre: ["待定位"] });
+      controller.signal.throwIfAborted();
+      await refreshRuntimeProjection(project.id);
+      setBootstrapProjectId(project.id);
+      await novelRuntimeClient.enqueue({
+        projectId: project.id,
+        kind: "plan",
+        driver: "human",
+        instruction: `根据以下核心创意建立完整作品定位、全书架构、主要人物和初始剧情规划。每个候选必须等待用户审核，不得自动晋升正式资料。\n\n${coreIdea}`,
       });
       resetCreateDialog();
-      message.success("故事工作区已建立");
-      navigate(`/novels/${result.projectId}?view=planning`);
+      message.success("创作任务已建立，请审核首批候选");
+      navigate(`/novels/${project.id}?view=operations`);
     } catch (error) {
-      if (error instanceof NovelBootstrapError) setBootstrapProjectId(error.projectId);
       const cancelled = controller.signal.aborted;
-      setBootstrapError(cancelled ? "生成已取消，可继续完成剩余内容" : error instanceof Error ? error.message : "创建失败");
+      setBootstrapError(cancelled ? "创建已取消" : error instanceof Error ? error.message : "创建失败");
     } finally {
       if (abortRef.current === controller) abortRef.current = undefined;
       setCreating(false);
@@ -84,11 +100,19 @@ export default function NovelProjects() {
     if (!file) return;
     try {
       const projectId = await importNovel(file);
+      await novelRuntimeClient.migrate(await buildLegacyMigrationBundle([projectId]));
+      await refreshRuntimeProjection(projectId);
       message.success("项目已导入");
       navigate(`/novels/${projectId}`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : "导入失败");
     }
+  }
+
+  async function removeProject(projectId: string) {
+    await ensureRuntimeProject(projectId);
+    await novelRuntimeClient.deleteProject(projectId);
+    await deleteLocalProject(projectId);
   }
 
   return (
@@ -147,7 +171,7 @@ export default function NovelProjects() {
                   </div>
                   <div className="novel-project-actions">
                     <Button type="text" icon={<ExportOutlined />} onClick={() => void exportNovel(project.id, "json")}>备份</Button>
-                    <Button type="text" danger icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除《${project.title}》？`, content: "本地项目资料、正文和版本记录将全部删除。", okText: "删除", okButtonProps: { danger: true }, onOk: () => deleteProject(project.id) })}>删除</Button>
+                    <Button type="text" danger icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除《${project.title}》？`, content: "正式项目资料、正文和版本记录将全部删除。", okText: "删除", okButtonProps: { danger: true }, onOk: () => removeProject(project.id) })}>删除</Button>
                     <Button type="primary" onClick={() => navigate(`/novels/${project.id}`)}>进入创作 <RightOutlined /></Button>
                   </div>
                 </div>

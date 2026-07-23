@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { analyzeOutlineProposal, analyzeOutlineStructure } from "../outline-structure";
 import type { ArchitecturePhase, OutlineNode, ProposalItem } from "../types";
 
-const phases: ArchitecturePhase[] = [{ id: "phase-1", title: "第一幕", purpose: "建立困境", turningPoint: "被迫离开", order: 0, locked: false }];
+const phases: ArchitecturePhase[] = [{ id: "phase-1", title: "第一幕", purpose: "建立困境", turningPoint: "被迫离开", order: 0, locked: false, primaryCurveId: "main" }];
 
 function node(id: string, phaseId = "phase-1", order = 0): OutlineNode {
   return { id, projectId: "project", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test", phaseId, order, title: id, summary: "概要" };

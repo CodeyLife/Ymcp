@@ -1,117 +1,80 @@
-# Novel Workflow MCP
+# Novel Runtime MCP
 
-The MCP server exposes the live novel project currently open in Ymcp. The browser remains the data owner because project records are stored in IndexedDB; the stdio server forwards validated MCP calls over a localhost WebSocket bridge.
+小说 MCP 直接连接本机常驻运行时，不再转发到浏览器标签页。SQLite 是正式数据源；浏览器仅作为 UI，关闭页面不会停止已经排队或正在执行的创作 operation。
 
-## Start
+## 启动
 
-1. Start Ymcp with `npm run dev` and open the target novel project.
-2. Configure the MCP client to launch `scripts/novel-mcp-server.mjs`.
-3. Call `novel_bridge_status` first and use its `projectId` in every later tool call.
+开发环境运行：
 
-Example MCP client configuration on Windows:
+```powershell
+npm run dev
+```
+
+该命令同时启动本地小说运行时和 Vite。只需要运行 MCP 时可直接配置：
 
 ```json
 {
   "mcpServers": {
     "ymcp-novel": {
       "command": "node",
-      "args": ["F:\\GitHubProject\\Ymcp\\web\\scripts\\novel-mcp-server.mjs"],
-      "env": {
-        "YMCP_MCP_BRIDGE_PORT": "4765",
-        "YMCP_MCP_REQUEST_TIMEOUT_MS": "900000",
-        "YMCP_MCP_TOKEN": ""
-      }
+      "args": ["F:\\GitHubProject\\Ymcp\\web\\scripts\\novel-mcp-server.mjs"]
     }
   }
 }
 ```
 
-For a shared token, set the same non-empty value in `YMCP_MCP_TOKEN` for the MCP process and `VITE_YMCP_MCP_TOKEN` in `.env.local`, then restart the Vite server. Production builds must also set `VITE_YMCP_MCP_BRIDGE_ENABLED=true` when the bridge is required.
+MCP adapter 会检查 `http://127.0.0.1:4766/v1/health`，运行时不存在时自动后台启动。可用环境变量：
 
-## External workflow
+- `YMCP_NOVEL_RUNTIME_URL`：覆盖运行时地址。
+- `YMCP_NOVEL_DATA_DIR` / `YMCP_NOVEL_DB_PATH`：覆盖 SQLite 数据位置。
+- `YMCP_API_BASE_URL`、`YMCP_API_KEY`、`YMCP_MODEL_CONTEXT_WINDOW`：为无 UI 环境提供模型配置。
+- `YMCP_NOVEL_MCP_PROFILE=advanced`：额外暴露旧 run/work/rule 诊断工具。
 
-1. `novel_run_create`
-2. `novel_action_execute` with `action: "work.enqueue"`
-3. Repeatedly inspect `novel_action_list`, execute available work, and read returned artifacts.
-4. Submit an `external-llm` review through `novel_review_submit`.
-5. A passed review auto-accepts the result. A revise/blocked review exposes `work.revise` until the run iteration limit is reached.
-6. `novel_run_complete` verifies that no unfinished work or unresolved major issue remains.
+运行时要求 Node.js 24 或更高版本，默认数据库为 `%LOCALAPPDATA%\Ymcp\novel-runtime.sqlite`。
 
-Every tool except `novel_bridge_status` requires the connected `projectId`. Mutating calls also require stable idempotency keys.
+## 默认工作流
 
-## Three execution modes
+1. 调用 `novel_project_list`，或用 `novel_project_create` 创建项目。
+2. 用 `novel_project_select` 按完整标题或 ID 选择一次项目；创建项目会自动选择。
+3. 调用 `novel_plan`、`novel_write` 或 `novel_revise`。工具立即返回持久化 `operationId`。
+4. 用 `novel_operation_get` 或 `novel_status` 读取后台进度；失败且根因已修正时，用 `novel_operation_retry` 从原工作项继续。
+5. operation 产生候选后，用 `novel_change_get` 读取并审核完整产物。
+6. 用 `novel_change_review` 接受、拒绝或要求重做，并提供 `reviewerId` 与 `model`；不要仅凭候选摘要盲目接受。
 
-The three modes share the same creative work model and review gate; they differ only in who advances and who may commit:
+项目级工具可用 `projectRef` 临时覆盖当前选择。没有选择时不会猜测最近项目；同名项目不会模糊匹配。MCP 创建的 operation 固定为 `external-mcp` driver，只接受带模型身份的 `external-llm` 审核；UI 创建的 operation 固定为 `human` driver，只接受用户审核。接受候选前运行时会校验正式项目快照，检测到并发修改时返回 `SNAPSHOT_CONFLICT`。
 
-| Mode | Entry | Advancement | Commit authority |
-| --- | --- | --- | --- |
-| Manual | Studio generation, chapter workflow, and Skill Center rule-governance controls | User starts each step, runs isolated rule A/B evaluations, and reviews the result | User |
-| Segment auto | Thunderbolt action on a plot segment or phase | Controller generates the segment chapters in dependency order and runs internal review/revision | Quality gate |
-| External | MCP tools in this document | External LLM discovers legal work, starts it, reads artifacts, submits review, and iterates | A passing `external-llm` or user review |
+`novel_status` 和 `novel_operation_get` 返回结构化 `nextActions`。调用模型只能从这些动作中选择，不应绕过审核门或自行猜测运行状态。
 
-Content review never edits a Skill or system Prompt. A passed chapter review may promote the manuscript and accepted facts only. Rule changes use the separate workflow below.
+## 规则改进闭环
 
-## Discovery and recovery
+默认 profile 直接提供意图级工具：
 
-Call `novel_catalog_get` before planning work. It returns phases, plot segments, chapters, legal generation task keys, supported work kinds, workflow definitions, effective Skills, immutable Skill versions, system Prompt versions, and existing rule candidates. Use `novel_rule_target_get` with an optional `version` to read the complete Skill or system Prompt text before proposing a replacement. Do not invent task keys or use internal work kinds.
+- `novel_improvement_propose`：记录症状、失败层、根因机制、影响输入类别、边界和回归风险，创建不可变规则候选。
+- `novel_improvement_evaluate`：对章节或基础设定任务运行隔离基线/候选 A/B；需要在实质不同的场景上重复执行。
+- `novel_improvement_get`：读取证据、审核记录和未满足的晋升门禁。
+- `novel_improvement_review`：提交剧情、人物、文笔或长篇编辑的独立审核。
+- `novel_improvement_promote`：仅在跨场景证据与全部审核门通过后晋升。
+- `novel_improvement_rollback`：回滚已晋升版本。
 
-`work.start` creates a renewable execution lease. If a client disconnects and a work item remains `running` after the lease expires, execute `work.recover` with a new idempotency key to return it to `queued`. `force: true` is reserved for an operator who has confirmed that the original worker is no longer active.
+单次低分或单个样例不能直接修改正式 Skill、系统 Prompt 或流程。`advanced` profile 继续暴露旧低层工具，只用于诊断与兼容。
 
-## Cautious Skill and Prompt evolution
+## 断线与恢复
 
-System rules are versioned, evaluated, promoted, and rolled back independently from manuscript generation. The server does not automatically infer a global rule from one weak chapter.
+- operation、事件、租约和候选全部持久化在 SQLite。
+- MCP 断开不会取消 operation。
+- 运行时重启会立即回收上一个进程持有的 operation 租约；已进入待审核状态的产物会重建候选状态而不会重复生成。
+- 变更确认是独立幂等请求，重复确认不会重复写入正式稿。
+- 正式项目记录、change、operation 和提交收据在同一 SQLite 事务中提交；失败时运行投影从 SQLite 正式状态恢复。
 
-The same lifecycle is available to a user in **Skill Center → Rule candidates**. MCP is the programmable surface for an external LLM; both surfaces call the same service and gate implementation.
+## 旧项目迁移
 
-1. Use `novel_catalog_get` to select an effective `skillId` or `templateId`, then read its complete current text with `novel_rule_target_get`.
-2. Create a candidate with `novel_rule_candidate_create`. Its `scope` must state the observed symptom, failing layer, underlying mechanism, affected input class, intended benefits, boundaries, non-goals, and regression risks.
-3. For each scenario, enqueue two `chapter-workflow` items for the same `targetId` in isolated dry runs:
+完整小说编辑工作台和统一创作任务面板都位于 `/novels`；旧 `/novel-runtime` 路径会重定向到项目中心。项目尚未进入运行时时，可在项目内的“创作任务”页执行一次性迁移：
 
-```json
-{
-  "kind": "chapter-workflow",
-  "targetId": "chapter-id",
-  "instruction": "Write and evaluate this chapter",
-  "parameters": { "evaluationRole": "baseline", "ruleCandidateId": "candidate-id", "scenarioClass": "action-under-pressure" }
-}
-```
+1. 浏览器读取所选项目全部 project-scoped 表以及用户级 Skill。
+2. 生成 SHA-256 完整性摘要。
+3. 运行时先在 `%LOCALAPPDATA%\Ymcp\backups` 写入迁移前归档。
+4. 校验通过后，在一个 SQLite 事务中导入记录和非敏感模型配置。
 
-```json
-{
-  "kind": "chapter-workflow",
-  "targetId": "chapter-id",
-  "instruction": "Write and evaluate this chapter",
-  "parameters": {
-    "evaluationRole": "candidate",
-    "ruleCandidateId": "candidate-id",
-    "scenarioClass": "action-under-pressure"
-  }
-}
-```
+API Key 不进入迁移归档或主 SQLite，而是单独保存到用户本地数据目录下权限受限的 `novel-runtime.secrets.json`。
 
-4. Start and review both items normally. Evaluation items remain isolated even after acceptance; they never overwrite the formal manuscript or active rules.
-5. Submit chapter pairs with `novel_rule_evidence_submit`, or use `novel_rule_foundation_evaluate` for foundation-only targets. Repeat until evidence covers at least three structurally distinct chapters or foundation tasks; renaming `scenarioClass` does not create a new scenario.
-6. Submit four rule-level reviews with `novel_rule_review_submit`: `plot-editor`, `character-editor`, `prose-editor`, and `long-form-editor`. Each review must include `reviewerId`, a unique `reviewRunId`, and the external `model`; the gate requires at least two independent reviewer identities.
-
-Every mutating tool reserves a durable idempotency receipt before executing. Query `novel_receipt_get` with the original tool name and key to distinguish `pending`, `completed`, and `failed`; a `pending` receipt is never replayed automatically because its side effects may already exist.
-7. Inspect `novel_rule_candidate_get`. Promotion requires all four latest reviews to pass, no new blocker/major issue, no per-scenario regression above 0.2, and an average quality gain of at least 0.1.
-8. Use `novel_rule_promote` only when the gate is ready. Promotion creates a new immutable patch version and atomically switches the active binding.
-9. Use `novel_rule_rollback` to switch back to the evaluated baseline version without deleting history.
-
-The catalog marks targets with `chapterEvaluationEligible`. The current governance flow only accepts targets that actually participate in the isolated chapter workflow. Foundation-only rules require a separate foundation evaluator and are rejected rather than being scored from unrelated chapter noise.
-
-The three required scenario classes must represent different creative functions or conditions, such as action versus aftermath versus setup, different points of view, or materially different genres and prose registers. Renaming the same fixture does not provide cross-scenario evidence.
-
-## Long-form quality contract
-
-The built-in `long-form-master-craft` Skill and `long-form-fiction-master` system Prompt carry the shared standard across planning, drafting, review, and revision. The standard distills reusable strengths of leading serialized fiction without copying a title or author style:
-
-- A durable premise continues producing choices and consequences after the opening hook.
-- Macro arcs, plot segments, chapters, and scenes each have their own payoff horizon; a chapter does not consume future revelations merely to feel eventful.
-- Causality, escalation, subplots, foreshadowing, and reversals alter later choices instead of decorating an outline.
-- Characters possess desires, fears, knowledge boundaries, moral limits, distinct voices, and costly agency; the ensemble continues acting when off page.
-- Action, setup, aftermath, intimacy, discovery, and payoff chapters form a readable rhythm rather than one repeated intensity curve.
-- Prose uses concrete sensory selection, viewpoint-specific imagery, subtext, silence, and restraint. Imagery changes meaning with context and serves the scene rather than displaying vocabulary.
-- Continuity tracks facts, relationships, injuries, resources, promises, time, and information ownership across a manuscript that may reach millions of words.
-
-These are evaluation dimensions, not a checklist that every chapter must visibly satisfy. Genre promise, chapter function, narrative distance, and the project's chosen voice remain controlling context.
+原 IndexedDB 不会删除，可作为人工回滚来源；迁移摘要有幂等收据，同一归档不会重复导入。

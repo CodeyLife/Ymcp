@@ -13,7 +13,8 @@ import {
   tasksForScope,
   updateProposalItemPayload,
 } from "./generation";
-import { novelDb } from "./db";
+import { isFormalMutationRuntimeEnabled, novelDb } from "./db";
+import { novelRuntimeClient } from "./runtime-client";
 import {
   evaluateCreativeReviewGate,
   executeCreativeCommand,
@@ -69,6 +70,7 @@ export default function GenerationComposer({
   const [selectedFields, setSelectedFields] = useState<Record<string, string[]>>({});
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [reviewingItemId, setReviewingItemId] = useState<string>();
+  const legacyReadOnly = isFormalMutationRuntimeEnabled();
   const creativeReviewState = useLiveQuery(async () => {
     if (!proposal) return undefined;
     const work = await findCreativeWorkForArtifact(projectId, proposal.id);
@@ -116,23 +118,22 @@ export default function GenerationComposer({
   async function generate() {
     if (!task || busy || proposal) return;
     const effectiveInstruction = instruction.trim() || task.defaultInstruction;
-    await perform(() => startManualCreativeGeneration({ projectId, taskKey: task.key, instruction: effectiveInstruction, targetId }), "候选内容已生成，请审核");
+    await perform(async () => {
+      await novelRuntimeClient.enqueue({ projectId, kind: "plan", taskKey: task.key, target: targetId, driver: "human", instruction: effectiveInstruction });
+    }, "统一创作任务已创建，请在创作任务中审核候选");
   }
 
   async function refine() {
     if (!task || busy || proposal) return;
     if (!instruction.trim()) { message.warning("请输入具体的微调要求"); return; }
-    const sourceOverrides = await getRefinementSnapshot?.();
-    await perform(() => startManualCreativeGeneration({ projectId, taskKey: task.key, instruction, targetId }, novelDb, {
-      executor: async () => {
-        const result = await runRefinementTask({ projectId, taskKey: task.key, instruction, targetId, sourceOverrides });
-        return { artifactRefs: [result.proposal.id], summary: result.proposal.title };
-      },
-    }), "微调候选已生成，请审核");
+    await perform(async () => {
+      await novelRuntimeClient.enqueue({ projectId, kind: "plan", taskKey: task.key, target: targetId, driver: "human", instruction: `在既有正式资料基础上完成定向修订。\n\n${instruction}` });
+    }, "统一修订任务已创建，请在创作任务中审核候选");
   }
 
   async function apply() {
     if (!proposal) return;
+    if (legacyReadOnly) throw new Error("迁移前候选仅供查阅。请关闭后通过统一创作任务重新生成并审核。");
     for (const id of selected) {
       const item = proposal.items.find((candidate) => candidate.id === id);
       if (!item) continue;
@@ -166,6 +167,7 @@ export default function GenerationComposer({
   }
 
   async function requestAiReview() {
+    if (legacyReadOnly) throw new Error("迁移前候选仅供查阅，请通过统一创作任务重新生成。");
     const work = creativeReviewState?.work;
     if (!work) throw new Error("当前候选没有关联的创作运行");
     await executeCreativeCommand({ runId: work.creativeRunId, type: "review.request", workItemId: work.id, idempotencyKey: `manual:review:${proposal!.id}:${creativeReviewState.reviews.length}` }, { db: novelDb });
@@ -173,6 +175,7 @@ export default function GenerationComposer({
 
   async function rejectAndRegenerate() {
     if (!proposal) return;
+    if (legacyReadOnly) throw new Error("迁移前候选仅供查阅，请通过统一创作任务重新生成。");
     await rejectProposal(proposal.id);
     if (creativeReviewState?.work) {
       await executeCreativeCommand({ runId: creativeReviewState.work.creativeRunId, type: "run.cancel", idempotencyKey: `manual:cancel:${proposal.id}:regenerate` }, { db: novelDb });
@@ -188,6 +191,7 @@ export default function GenerationComposer({
 
   function closeProposal() {
     if (!proposal) return;
+    if (legacyReadOnly) { message.info("迁移前候选保留为只读资料，不会修改正式项目。"); return; }
     modal.confirm({
       title: "关闭当前候选？",
       content: "将丢弃当前候选内容，不会自动重新生成。",
@@ -250,13 +254,14 @@ export default function GenerationComposer({
       </div>
     </div>
     {proposal && <div className="novel-generation-review">
+      {legacyReadOnly && <Alert type="info" showIcon message="迁移前候选只读" description="该候选来自 IndexedDB 历史资料，不能再写入正式项目；请在创作任务中重新生成并审核。" />}
       <header><div><Tag color="gold">待审核</Tag><strong>{proposal.title}</strong><small>{proposal.items.length} 个候选项</small></div><Checkbox checked={selected.length > 0 && selected.length === pendingItems.length} indeterminate={selected.length > 0 && selected.length < pendingItems.length} onChange={(event) => selectAll(event.target.checked)}>全选</Checkbox></header>
       <div className="novel-generation-items">{proposal.items.map((item) => {
         const draft = drafts[item.id] ?? item.payload;
         const changedFields = changedFieldsFor(item, draft);
         const selectedItemFields = selectedFields[item.id] ?? [];
         return <article key={item.id} className={`${item.status === "conflict" ? "conflict" : ""}${item.operation === "delete" ? " delete-candidate" : ""}`}>
-        <header><Checkbox disabled={item.status === "conflict"} checked={selected.includes(item.id)} indeterminate={item.operation === "update" && selectedItemFields.length > 0 && selectedItemFields.length < changedFields.length} onChange={(event) => selectItem(item, event.target.checked, changedFields)} /><div><strong>{item.label}</strong><small>{item.status === "conflict" ? "版本冲突 · 请重新生成" : item.operation === "create" ? "新增" : item.operation === "delete" ? "删除" : "更新"} · {item.targetTable}</small></div><div className="novel-candidate-actions"><Button type="text" icon={<ReloadOutlined />} loading={busy} aria-label="重新生成本项" title="重新生成本项" onClick={() => void perform(async () => { await regenerateProposalItem(proposal.id, item.id, instruction, await getRefinementSnapshot?.()); }, "该候选项已重新生成")} /><Button type="text" icon={<ArrowsAltOutlined />} aria-label="打开完整预览" title="打开完整预览" onClick={() => setReviewingItemId(item.id)} /></div></header>
+        <header><Checkbox disabled={legacyReadOnly || item.status === "conflict"} checked={selected.includes(item.id)} indeterminate={item.operation === "update" && selectedItemFields.length > 0 && selectedItemFields.length < changedFields.length} onChange={(event) => selectItem(item, event.target.checked, changedFields)} /><div><strong>{item.label}</strong><small>{item.status === "conflict" ? "版本冲突 · 请重新生成" : item.operation === "create" ? "新增" : item.operation === "delete" ? "删除" : "更新"} · {item.targetTable}</small></div><div className="novel-candidate-actions"><Button type="text" icon={<ReloadOutlined />} disabled={legacyReadOnly} loading={busy} aria-label="重新生成本项" title="重新生成本项" onClick={() => void perform(async () => { await regenerateProposalItem(proposal.id, item.id, instruction, await getRefinementSnapshot?.()); }, "该候选项已重新生成")} /><Button type="text" icon={<ArrowsAltOutlined />} aria-label="打开完整预览" title="打开完整预览" onClick={() => setReviewingItemId(item.id)} /></div></header>
         <p>{item.rationale}</p>
         {item.operation === "delete"
           ? <div className="novel-delete-impact"><strong>采纳后将删除此项</strong>{item.impact?.length ? <ul>{item.impact.map((impact) => <li key={impact}>{impact}</li>)}</ul> : <span>没有检测到其他结构化引用</span>}</div>
@@ -267,7 +272,7 @@ export default function GenerationComposer({
       </article>;
       })}</div>
       {creativeReviewState?.latest && <Alert type={creativeReviewState.gate.passed ? "success" : creativeReviewState.latest.verdict === "inconclusive" ? "warning" : "info"} showIcon message={`AI 审核：${creativeReviewState.latest.summary}`} description={creativeReviewState.gate.openIssues.length ? `仍有 ${creativeReviewState.gate.openIssues.length} 个有效问题` : undefined} />}
-      <footer><div className="novel-generation-review-actions"><Button icon={<CloseOutlined />} disabled={busy} onClick={() => closeProposal()}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button><Button icon={<FileSearchOutlined />} disabled={busy || !creativeReviewState?.work} onClick={() => void perform(requestAiReview, "AI 审核已完成")}>AI 审核</Button></div><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={!selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
+      <footer><div className="novel-generation-review-actions"><Button icon={<CloseOutlined />} disabled={busy || legacyReadOnly} onClick={() => closeProposal()}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy || legacyReadOnly} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button><Button icon={<FileSearchOutlined />} disabled={busy || legacyReadOnly || !creativeReviewState?.work} onClick={() => void perform(requestAiReview, "AI 审核已完成")}>AI 审核</Button></div><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={legacyReadOnly || !selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
     </div>}
     <ProposalReviewDialog item={reviewingItem} draft={reviewingItem ? drafts[reviewingItem.id] : undefined} open={Boolean(reviewingItem)} onClose={() => setReviewingItemId(undefined)} onChange={(next) => {
       if (!reviewingItem) return;

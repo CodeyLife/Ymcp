@@ -9,7 +9,11 @@ const architecture: ArchitectureEditableData = {
   centralQuestion: "主角是否愿意承担真相的代价？",
   centralConflict: "记忆管理局与民间记录者争夺城市历史。",
   synopsis: "一名记录员发现城市的共同记忆正在被人为改写。",
-  phases: [{ id: "phase-1", title: "缺口出现", purpose: "建立异常并迫使主角行动", turningPoint: "主角发现自己的档案也是伪造的", order: 0, locked: false }],
+  phases: [{ id: "phase-1", title: "缺口出现", purpose: "建立异常并迫使主角行动", turningPoint: "主角发现自己的档案也是伪造的", order: 0, locked: false, primaryCurveId: "main" }],
+  growthCurves: [
+    { id: "main", kind: "main", subject: "记录员追索真相", resourceLoop: "线索换取风险", stageGoals: "逐步接近记忆源头", irreversibleChange: "城市接受被删除的历史" },
+    { id: "archive", kind: "ecological", subject: "记忆管理制度", resourceLoop: "档案销毁维持秩序", stageGoals: "从隐秘运转走向公开失控", irreversibleChange: "垄断记忆的制度失去合法性" },
+  ],
 };
 
 describe("architecture data editor", () => {
@@ -19,6 +23,9 @@ describe("architecture data editor", () => {
     expect(html).toContain("核心问题");
     expect(html).toContain("全书梗概");
     expect(html).toContain("宏观阶段");
+    expect(html).toContain("增长曲线");
+    expect(html).toContain("记录员追索真相");
+    expect(html).toContain("主要增长曲线");
     expect(html).toContain("缺口出现");
     expect(html).toContain("添加幕");
   });
@@ -27,7 +34,9 @@ describe("architecture data editor", () => {
     const html = renderToStaticMarkup(<ArchitectureDataEditor value={architecture} readOnly preview />);
     expect(html).toContain("主角是否愿意承担真相的代价");
     expect(html).toContain("主角发现自己的档案也是伪造的");
+    expect(html).toContain("记忆管理制度");
     expect(html).not.toContain("添加幕");
+    expect(html).not.toContain("添加曲线");
     expect(html).not.toContain("删除缺口出现");
   });
 

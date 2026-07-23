@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/config/defaults", () => ({
+  DEFAULT_BASE_URL: "https://gpt.eromaa.com/v1",
+  DEFAULT_API_KEY: "",
+}));
+
 import { getEffectiveApiConfig, migratePersistedUIState, useUIStore } from "../ui";
 
 describe("UI state migrations", () => {

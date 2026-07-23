@@ -1,0 +1,142 @@
+
+  [32m[1mVITE[22m v6.4.3[39m  [2mready in [0m[1m518[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m00:28:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m00:28:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m00:29:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m00:29:54[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m00:40:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m00:40:27[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m00:40:56[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m01:05:51[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m01:06:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/novel-runtime-store.test.ts[22m
+[2m01:07:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/features/novel/GenerationComposer.tsx[22m
+[2m01:07:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m01:08:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m01:09:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/creative-execution.test.ts[22m
+[2m01:10:03[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-mcp-server.mjs[22m
+[2m01:10:03[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mdocs/novel-mcp.md[22m
+[2m01:10:03[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-mcp-server.test.mjs[22m
+[2m01:21:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m01:21:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m01:21:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-mcp-server.mjs[22m
+[2m01:29:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/features/novel/GenerationComposer.tsx[22m
+[2m01:30:06[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/features/novel/GenerationComposer.tsx[22m
+[2m01:30:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/creative-tool-gateway.ts[22m
+[2m01:30:39[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m01:31:14[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m01:31:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/creative-execution.test.ts[22m
+[2m01:32:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m01:45:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m01:57:37[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m01:57:59[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m02:12:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m02:15:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m02:16:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m02:25:45[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m02:25:46[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m02:25:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m02:26:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m02:28:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m02:28:36[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m02:28:36[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m02:36:48[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m02:37:08[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m02:37:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m02:42:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m02:43:13[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m02:51:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m02:56:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m02:56:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m03:01:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:02:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m03:07:56[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:08:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m03:08:40[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:08:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m03:16:33[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m03:16:48[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m03:21:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:21:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:22:46[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m03:28:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:31:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:31:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m03:36:38[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:36:38[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:36:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/plot-design-audit.test.ts[22m
+[2m03:37:50[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/plot-design-audit.test.ts[22m
+[2m03:39:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m03:40:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/generation.test.ts[22m
+[2m03:47:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/stores/__tests__/ui.test.ts[22m
+[2m08:53:08[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/contracts.ts[22m
+[2m08:53:08[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/sqlite-store.ts[22m
+[2m08:54:03[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/sqlite-store.ts[22m
+[2m08:54:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m08:54:50[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m08:55:06[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-client.ts[22m
+[2m08:56:30[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/novel-runtime-store.test.ts[22m
+[2m08:57:30[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m08:57:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m08:58:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m08:59:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx, /src/features/novel/WorldviewLibraryPanel.tsx[22m
+[2m08:59:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.tsx[22m
+[2m08:59:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m09:01:43[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/db.ts[22m
+[2m09:02:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/OutlineDocView.tsx[22m
+[2m09:03:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelStudio.tsx, /src/index.css[22m
+[2m09:04:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/db.ts[22m
+[2m09:04:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelStudio.tsx, /src/index.css[22m
+[2m09:05:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/features/novel/WorldviewLibraryPanel.tsx, /src/index.css[22m
+[2m09:05:40[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelStudio.tsx[22m
+[2m09:06:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelStudio.tsx[22m
+[2m09:08:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/sqlite-store.ts[22m
+[2m09:08:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/db.ts[22m
+[2m09:09:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m09:09:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m09:09:33[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-records.ts[22m
+[2m09:10:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelProjects.tsx, /src/pages/NovelStudio.tsx, /src/features/novel/GenerationComposer.tsx[22m
+[2m09:10:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/NovelStudio.tsx[22m
+[2m09:10:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/db.ts[22m
+[2m09:12:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-mcp-server.test.mjs[22m
+[2m09:13:56[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m09:14:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m09:15:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/sqlite-store.ts[22m
+[2m09:15:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m09:15:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m09:15:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-client.ts[22m
+[2m09:15:36[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m09:15:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m09:15:54[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m09:16:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/novel-runtime-store.test.ts[22m
+[2m10:59:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m10:59:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m10:59:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-client.ts[22m
+[2m10:59:51[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m11:01:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/features/novel/GenerationComposer.tsx, /src/index.css[22m
+[2m11:03:45[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-mcp-server.test.mjs[22m
+[2m11:09:41[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-mcp-server.test.mjs[22m
+[2m11:11:14[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/db.ts[22m
+[2m11:12:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/db.ts[22m
+[2m11:12:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/features/novel/GenerationComposer.tsx, /src/index.css[22m
+[2m11:13:22[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/features/novel/GenerationComposer.tsx, /src/index.css[22m
+[2m11:16:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/__tests__/WorldviewLibraryPanel.test.tsx[22m
+[2m11:21:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/db.ts[22m
+[2m11:21:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/novel-runtime/service.ts[22m
+[2m11:21:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mscripts/novel-runtime.ts[22m
+[2m11:21:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.tsx[22m
+[2m11:21:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-client.ts[22m
+[2m11:21:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-records.ts[22m
+[2m12:06:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-records.ts[22m
+[2m12:06:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/features/novel/RuntimeOperationsPanel.tsx[22m
+[2m12:06:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m12:06:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/pages/RuntimeNovelProjects.tsx[22m
+[2m12:10:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/features/novel/RuntimeOperationsPanel.tsx[22m
+[2m13:11:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/novel/runtime-records.ts[22m
+[2m13:11:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m13:13:27[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m
+[2m13:14:00[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/index.css, /src/features/novel/RuntimeOperationsPanel.tsx[22m
+[2m13:14:00[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/NovelProjects.tsx, /src/index.css[22m

@@ -826,7 +826,7 @@ export function createNovelMemoryService(config?: { baseUrl?: string; getToken?:
   return config?.baseUrl ? new HttpNovelMemoryService(config.baseUrl, config.getToken) : new DexieNovelMemoryService();
 }
 
-const configuredMemoryBaseUrl = String(import.meta.env.VITE_NOVEL_MEMORY_BASE_URL ?? "").trim();
+const configuredMemoryBaseUrl = String(import.meta.env?.VITE_NOVEL_MEMORY_BASE_URL ?? "").trim();
 export const novelMemoryService: NovelMemoryService = createNovelMemoryService(configuredMemoryBaseUrl ? {
   baseUrl: configuredMemoryBaseUrl,
   getToken: () => sessionStorage.getItem("ymcp-novel-memory-token") ?? undefined,
