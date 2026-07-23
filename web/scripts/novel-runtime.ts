@@ -1,16 +1,43 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
+import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadEnv } from "vite";
 import { NovelRuntimeService } from "../src/novel-runtime/service";
 import { RuntimeRecordConflictError, SqliteNovelStore } from "../src/novel-runtime/sqlite-store";
-import type { LegacyMigrationBundle, RuntimeActor, RuntimeApiError, RuntimeDriver, RuntimeProjectMutationCommand } from "../src/novel-runtime/contracts";
+import type { LegacyMigrationBundle, RuntimeActor, RuntimeApiError, RuntimeDriver, RuntimeExternalReview, RuntimeProjectMutationCommand } from "../src/novel-runtime/contracts";
 import type { CreativeToolName } from "../src/features/novel/creative-tool-gateway";
 
 const DEFAULT_PORT = 4766;
 const ALLOWED_ORIGIN = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
+const RUNTIME_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const RUNTIME_PROTOCOL_VERSION = 2;
+const RUNTIME_SOURCE_ROOTS = ["scripts/novel-runtime.ts", "src/novel-runtime", "src/features/novel", "package.json", "package-lock.json"];
+
+function runtimeSourceEntries(path: string, entries: string[] = []): string[] {
+  let stats;
+  try { stats = statSync(path); } catch { return entries; }
+  if (stats.isDirectory()) {
+    for (const name of readdirSync(path).sort()) {
+      if (name === "__tests__" || name === "node_modules" || name.startsWith(".")) continue;
+      runtimeSourceEntries(resolve(path, name), entries);
+    }
+    return entries;
+  }
+  if (!/\.(?:ts|tsx|mjs|json)$/.test(path) || /(?:\.test|\.spec)\.[^.]+$/.test(path)) return entries;
+  entries.push(`${path.slice(RUNTIME_ROOT.length + 1).replaceAll("\\", "/")}:${stats.size}:${stats.mtimeMs}`);
+  return entries;
+}
+
+function runtimeSourceVersion() {
+  const entries = RUNTIME_SOURCE_ROOTS.flatMap((rel) => runtimeSourceEntries(resolve(RUNTIME_ROOT, rel))).sort();
+  return createHash("sha256").update(entries.join("\n")).digest("hex");
+}
+
+const RUNTIME_SOURCE_VERSION = process.env.YMCP_NOVEL_RUNTIME_SOURCE_VERSION || runtimeSourceVersion();
 
 export function applyRuntimeEnvDefaults(
   target: NodeJS.ProcessEnv = process.env,
@@ -63,17 +90,64 @@ function routePattern(pathname: string, pattern: RegExp) {
   return pathname.match(pattern)?.groups;
 }
 
-export async function createNovelRuntime(options: { databasePath?: string; port?: number; host?: string } = {}) {
+function externalReview(input: Record<string, unknown>): Omit<RuntimeExternalReview, "actor" | "reviewedAt"> {
+  const review = input.review;
+  if (!review || typeof review !== "object" || Array.isArray(review)) throw new HttpError(400, "INVALID_REVIEW", "外部审核必须是结构化对象");
+  const value = review as Record<string, unknown>;
+  if (!(["passed", "revise"] as string[]).includes(String(value.verdict)) || typeof value.reviewRunId !== "string" || !value.reviewRunId.trim() || typeof value.summary !== "string" || !value.summary.trim() || typeof value.artifactFingerprint !== "string" || !value.artifactFingerprint.trim()) {
+    throw new HttpError(400, "INVALID_REVIEW", "外部审核缺少 verdict、reviewRunId、summary 或 artifactFingerprint");
+  }
+  if (!Array.isArray(value.issues)) throw new HttpError(400, "INVALID_REVIEW", "外部审核 issues 必须为数组");
+  const issues = value.issues.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "INVALID_REVIEW", `issues[${index}] 必须为对象`);
+    const issue = raw as Record<string, unknown>;
+    if (typeof issue.id !== "string" || !issue.id.trim() || !["blocker", "major", "warning"].includes(String(issue.severity)) || typeof issue.dimension !== "string" || typeof issue.title !== "string" || typeof issue.evidence !== "string" || typeof issue.suggestion !== "string") {
+      throw new HttpError(400, "INVALID_REVIEW", `issues[${index}] 字段不完整`);
+    }
+    return { id: issue.id, severity: issue.severity as "blocker" | "major" | "warning", dimension: issue.dimension, title: issue.title, evidence: issue.evidence, suggestion: issue.suggestion, evidenceItemId: typeof issue.evidenceItemId === "string" ? issue.evidenceItemId : undefined, evidenceField: typeof issue.evidenceField === "string" ? issue.evidenceField : undefined, evidenceQuote: typeof issue.evidenceQuote === "string" ? issue.evidenceQuote : undefined };
+  });
+  if (value.verdict === "passed" && issues.some((issue) => issue.severity === "blocker" || issue.severity === "major")) {
+    throw new HttpError(400, "INVALID_REVIEW", "passed 外部审核不能包含未解决的 blocker 或 major");
+  }
+  const learning = value.learning;
+  if (!learning || typeof learning !== "object" || Array.isArray(learning)) throw new HttpError(400, "INVALID_REVIEW", "外部审核必须记录本轮经验判断");
+  const learningValue = learning as Record<string, unknown>;
+  if (!(["no-shared-learning", "propose-improvement"] as string[]).includes(String(learningValue.conclusion)) || typeof learningValue.summary !== "string" || !learningValue.summary.trim()) {
+    throw new HttpError(400, "INVALID_REVIEW", "经验判断缺少 conclusion 或 summary");
+  }
+  if (learningValue.conclusion === "propose-improvement" && (!String(learningValue.affectedInputClass ?? "").trim() || !String(learningValue.underlyingMechanism ?? "").trim())) {
+    throw new HttpError(400, "INVALID_REVIEW", "可沉淀经验必须说明影响输入类别和共享机制");
+  }
+  return { reviewRunId: value.reviewRunId, verdict: value.verdict as "passed" | "revise", summary: value.summary, artifactFingerprint: value.artifactFingerprint, issues, learning: { conclusion: learningValue.conclusion as "no-shared-learning" | "propose-improvement", summary: learningValue.summary, affectedInputClass: typeof learningValue.affectedInputClass === "string" ? learningValue.affectedInputClass : undefined, underlyingMechanism: typeof learningValue.underlyingMechanism === "string" ? learningValue.underlyingMechanism : undefined } };
+}
+
+const RUNTIME_STARTED_AT = Date.now();
+
+export async function createNovelRuntime(options: { databasePath?: string; port?: number; host?: string; exitOnAdminRestart?: boolean } = {}) {
   const databasePath = options.databasePath || process.env.YMCP_NOVEL_DB_PATH || join(dataRoot(), "novel-runtime.sqlite");
   const store = new SqliteNovelStore(databasePath);
   const service = new NovelRuntimeService(store);
   await service.initialize();
+  let closeRuntime: (() => Promise<void>) | undefined;
   const server = createServer(async (req, res) => {
     cors(req, res);
     if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
     try {
-      if (req.method === "GET" && url.pathname === "/v1/health") return json(res, 200, { ok: true, service: "ymcp-novel-runtime", version: 1 });
+      if (req.method === "GET" && url.pathname === "/v1/health") return json(res, 200, { ok: true, service: "ymcp-novel-runtime", protocolVersion: RUNTIME_PROTOCOL_VERSION, sourceVersion: RUNTIME_SOURCE_VERSION, startedAt: RUNTIME_STARTED_AT, runtimeRoot: RUNTIME_ROOT });
+      if (req.method === "POST" && url.pathname === "/v1/admin/restart") {
+        const remoteAddress = req.socket.remoteAddress ?? "";
+        const isLoopback = remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress === "::ffff:127.0.0.1";
+        const input = await body(req);
+        if (!isLoopback || input.runtimeRoot !== RUNTIME_ROOT) throw new HttpError(403, "RESTART_FORBIDDEN", "只允许同一源码根目录的本机客户端重启运行时");
+        json(res, 202, { restarting: true });
+        setTimeout(() => {
+          void closeRuntime?.().finally(() => {
+            if (options.exitOnAdminRestart) process.exit(0);
+          });
+        }, 25);
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/v1/projects") return json(res, 200, { projects: await service.listProjects() });
       if (req.method === "POST" && url.pathname === "/v1/projects") {
         const input = await body(req);
@@ -142,6 +216,32 @@ export async function createNovelRuntime(options: { databasePath?: string; port?
       if (req.method === "GET" && operationRoute) return json(res, 200, service.getOperation(operationRoute.operationId, Number(url.searchParams.get("afterSequence") ?? 0)));
       const changeRoute = routePattern(url.pathname, /^\/v1\/changes\/(?<changeId>[^/]+)$/);
       if (req.method === "GET" && changeRoute) return json(res, 200, await service.getChangeDetails(changeRoute.changeId));
+      const changeRevalidateRoute = routePattern(url.pathname, /^\/v1\/changes\/(?<changeId>[^/]+)\/revalidate$/);
+      if (req.method === "POST" && changeRevalidateRoute) {
+        const input = await body(req);
+        const change = store.getChange(changeRevalidateRoute.changeId);
+        if (!change) throw new HttpError(404, "CHANGE_NOT_FOUND", "候选变更不存在");
+        if (typeof input.projectId !== "string" || input.projectId !== change.projectId) throw new HttpError(409, "PROJECT_SCOPE_MISMATCH", "候选变更不属于当前项目");
+        const actor = input.actor as RuntimeActor | undefined;
+        if (!actor || !["user", "external-llm"].includes(actor.type) || typeof actor.id !== "string" || typeof input.artifactFingerprint !== "string") throw new HttpError(400, "INVALID_REVALIDATION", "重新校验必须携带有效 actor 和 artifactFingerprint");
+        return json(res, 200, await service.revalidateChange(decodeURIComponent(changeRevalidateRoute.changeId), actor, input.artifactFingerprint));
+      }
+      const changePatchRoute = routePattern(url.pathname, /^\/v1\/changes\/(?<changeId>[^/]+)\/patch$/);
+      if (req.method === "POST" && changePatchRoute) {
+        const input = await body(req);
+        const change = store.getChange(changePatchRoute.changeId);
+        if (!change) throw new HttpError(404, "CHANGE_NOT_FOUND", "候选变更不存在");
+        if (typeof input.projectId !== "string" || input.projectId !== change.projectId) throw new HttpError(409, "PROJECT_SCOPE_MISMATCH", "候选变更不属于当前项目");
+        const actor = input.actor as RuntimeActor | undefined;
+        if (!actor || !["user", "external-llm"].includes(actor.type) || typeof actor.id !== "string" || typeof input.itemId !== "string" || typeof input.artifactFingerprint !== "string" || typeof input.expectedPayloadFingerprint !== "string" || typeof input.rationale !== "string" || !Array.isArray(input.issueIds) || !input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) {
+          throw new HttpError(400, "INVALID_PATCH", "候选补丁字段不完整");
+        }
+        return json(res, 200, await service.patchChangeItem({
+          changeId: decodeURIComponent(changePatchRoute.changeId), itemId: input.itemId, payload: input.payload as Record<string, unknown>, actor,
+          artifactFingerprint: input.artifactFingerprint, expectedPayloadFingerprint: input.expectedPayloadFingerprint, rationale: input.rationale,
+          issueIds: input.issueIds.filter((id): id is string => typeof id === "string" && Boolean(id.trim())), review: externalReview(input),
+        }));
+      }
       const changeItemRoute = routePattern(url.pathname, /^\/v1\/changes\/(?<changeId>[^/]+)\/items\/(?<itemId>[^/]+)$/);
       if (req.method === "POST" && changeItemRoute) {
         const input = await body(req);
@@ -159,7 +259,7 @@ export async function createNovelRuntime(options: { databasePath?: string; port?
         if (typeof input.projectId !== "string" || input.projectId !== change.projectId) throw new HttpError(409, "PROJECT_SCOPE_MISMATCH", "候选变更不属于当前项目");
         const actor = input.actor as RuntimeActor | undefined;
         if (!actor || !["user", "external-llm"].includes(actor.type) || typeof actor.id !== "string") throw new HttpError(400, "INVALID_ACTOR", "审核必须携带有效 actor");
-        return json(res, 200, await service.reviewChange(reviewRoute.changeId, input.decision as "accept" | "reject" | "revise", typeof input.note === "string" ? input.note : "", actor, req.headers["x-ymcp-request-key"] as string || crypto.randomUUID()));
+        return json(res, 200, await service.reviewChange(reviewRoute.changeId, input.decision as "accept" | "reject" | "revise", typeof input.note === "string" ? input.note : "", actor, req.headers["x-ymcp-request-key"] as string || crypto.randomUUID(), actor.type === "external-llm" ? externalReview(input) : undefined));
       }
       if (req.method === "POST" && url.pathname === "/v1/improvements") return json(res, 201, await service.proposeImprovement(await body(req)));
       const improvementRoute = routePattern(url.pathname, /^\/v1\/projects\/(?<projectId>[^/]+)\/improvements\/(?<candidateId>[^/]+)$/);
@@ -211,12 +311,22 @@ export async function createNovelRuntime(options: { databasePath?: string; port?
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, host, resolve); });
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
-  return { server, service, store, address: { host, port: actualPort }, close: async () => { await new Promise<void>((resolve) => server.close(() => resolve())); store.close(); } };
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    service.prepareForShutdown();
+    server.closeAllConnections();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    store.close();
+  };
+  closeRuntime = close;
+  return { server, service, store, address: { host, port: actualPort }, close };
 }
 
 async function main() {
   applyRuntimeEnvDefaults();
-  const runtime = await createNovelRuntime();
+  const runtime = await createNovelRuntime({ exitOnAdminRestart: true });
   console.error(`[ymcp-novel-runtime] listening on http://${runtime.address.host}:${runtime.address.port}`);
   const shutdown = async () => { await runtime.close(); process.exit(0); };
   process.once("SIGINT", shutdown);

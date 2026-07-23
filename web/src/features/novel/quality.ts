@@ -67,27 +67,69 @@ function countOccurrences(text: string, needle: string) {
   return text.split(needle).length - 1;
 }
 
+function longestCommonSubsequenceLength(left: string, right: string) {
+  const previous = new Array<number>(right.length + 1).fill(0);
+  for (const leftChar of left) {
+    let diagonal = 0;
+    for (let index = 1; index <= right.length; index += 1) {
+      const saved = previous[index];
+      previous[index] = leftChar === right[index - 1]
+        ? diagonal + 1
+        : Math.max(previous[index], previous[index - 1]);
+      diagonal = saved;
+    }
+  }
+  return previous[right.length];
+}
+
 export function countNovelWords(text: string) {
   return (text.match(/[\u3400-\u9fff]|[a-zA-Z0-9]+/g) ?? []).length;
 }
 
 function containsMeaning(text: string, requirement: string) {
-  // 带标点的复合要求必须完整命中所有子句，不能只完成前半动作。
-  const terms = requirement.split(/[，。；、\s]+/).filter((item) => item.length >= 2);
-  if (terms.length > 0 && terms.every((term) => text.includes(term))) return true;
+  // 一条 forbidden 可以由多个语义子句组成；每个子句都必须在正文中落实才算触发。
+  // 指令情态只描述约束极性，不属于事件内容，例如“主角不能死亡”应匹配“主角死亡”。
+  const STOP_WORDS = /必须|不得|需要|应当|应该|禁止|不能|不可|不许|不要|或|并|且|而|的|了|着|过|是|在|与|和/g;
+  const NEGATION_MARKERS = ["没有", "并未", "并不", "不曾", "从未", "未曾", "尚未", "未能", "不能", "无法", "不再", "不要", "不得", "禁止", "拒绝", "避免", "阻止", "防止", "放弃", "取消", "否认"];
+  const normalize = (value: string) => {
+    let compact = value
+      .replace(/死亡|死去|丧生|身亡|毙命/g, "死")
+      .replace(/[，、：；\s]/g, "")
+      .replace(STOP_WORDS, "");
+    // Context clauses often differ only by temporal/location morphology:
+    // “决战中”“决战开始后”“决战期间” all identify the same event context.
+    if (compact.length >= 3) compact = compact.replace(/(?:开始)?(?:之)?(?:中|时|期间|之后|以后|后)$/, "");
+    return compact;
+  };
+  const requirements = requirement
+    .split(/[，。；、\n]+/)
+    .map(normalize)
+    .filter((clause) => clause.length >= 2);
+  if (!requirements.length) return false;
+  const clauses = text
+    .split(/[。！？；，,\n]+/)
+    .map((raw) => ({ raw, compact: normalize(raw) }))
+    .filter((clause) => Boolean(clause.compact));
 
-  // mustHappen / forbidden 常含"必须""禁止""或"等虚词，但不含标点；
-  // 移除虚词后再做 bigram 匹配，避免"无名锈剑必须首次出现"被当作一个不可分割的长词条
-  const STOP_WORDS = /必须|不得|需要|应当|应该|禁止|或|并|且|而|的|了|着|过|是|在|与|和/g;
-  const compact = requirement.replace(/[，。；、\s]/g, "").replace(STOP_WORDS, "");
-  if (compact.length < 2) return false;
+  const matchesClause = (clause: { raw: string; compact: string }, compact: string) => {
+    const addsNegation = NEGATION_MARKERS.some((marker) => {
+      if (countOccurrences(clause.raw, marker) <= countOccurrences(compact, marker)) return false;
+      let markerIndex = clause.raw.indexOf(marker);
+      while (markerIndex >= 0) {
+        const remainder = clause.raw.slice(markerIndex + marker.length);
+        const boundary = remainder.search(/(?:便|就|却|但|随后|然后|最终|反而|转而|继而|再度)/);
+        const negatedScope = normalize(boundary >= 0 ? remainder.slice(0, boundary) : remainder);
+        const scopeCoverage = longestCommonSubsequenceLength(compact, negatedScope) / Math.max(1, Math.min(compact.length, negatedScope.length));
+        if (scopeCoverage >= 0.8) return true;
+        markerIndex = clause.raw.indexOf(marker, markerIndex + marker.length);
+      }
+      return false;
+    });
+    if (addsNegation) return false;
+    return longestCommonSubsequenceLength(compact, clause.compact) / compact.length >= 0.85;
+  };
 
-  const pairs = Array.from({ length: Math.max(0, compact.length - 1) }, (_, index) => compact.slice(index, index + 2));
-  if (pairs.length < 2) return false;
-
-  // 关键实体或单个子句出现不足以证明动作和结果已落实。
-  const matchCount = pairs.filter((pair) => text.includes(pair)).length;
-  return matchCount / pairs.length >= 0.6;
+  return requirements.every((compact) => clauses.some((clause) => matchesClause(clause, compact)));
 }
 
 export function runDeterministicQualityChecks(params: { text: string; blueprint?: ChapterBlueprint }) {

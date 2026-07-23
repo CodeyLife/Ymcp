@@ -4,10 +4,12 @@ import type { StoryProject } from "../types";
 import {
   createCreativeRun,
   enqueueCreativeWork,
+  evaluateCreativeReviewGate,
   executeCreativeCommand,
   inspectCreativeRun,
   startManualCreativeGeneration,
 } from "../creative-execution";
+import type { CreativeReview } from "../types";
 
 describe("CreativeExecutionEngine", () => {
   let db: NovelDatabase;
@@ -24,6 +26,24 @@ describe("CreativeExecutionEngine", () => {
 
   afterEach(async () => {
     await db.delete();
+  });
+
+  it("starts a new review generation when the same proposal ID has a newer revision", () => {
+    const review = (id: string, subjectRevision: number, verdict: CreativeReview["verdict"], issues: CreativeReview["issues"], createdAt: number): CreativeReview => ({
+      id, projectId: "project-1", schemaVersion: 8, revision: 1, createdAt, updatedAt: createdAt, createdBy: "test", updatedBy: "test",
+      creativeRunId: "run-1", workItemId: "work-1", subjectArtifactId: "proposal-1", subjectRevision, reviewer: "internal", verdict, issues, summary: verdict,
+    });
+    const oldIssue = {
+      issueId: "old-major", status: "open" as const, severity: "major" as const, dimension: "continuity" as const,
+      title: "旧修订冲突", description: "旧候选存在时间线冲突", evidence: "旧修订的事件顺序相互矛盾", rule: "continuity.timeline", suggestion: "修订旧候选",
+    };
+    const gate = evaluateCreativeReviewGate([
+      review("review-old", 1, "revise", [oldIssue], 1),
+      review("review-new", 2, "passed", [], 2),
+    ]);
+
+    expect(gate.passed).toBe(true);
+    expect(gate.openIssues).toEqual([]);
   });
 
   it.each(["manual", "segment-auto", "external"] as const)("persists an auditable %s run", async (mode) => {

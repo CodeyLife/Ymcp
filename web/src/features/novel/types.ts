@@ -884,7 +884,8 @@ export interface CreativeRunPolicy {
   auditTrigger: "manual" | "automatic" | "external";
   commitPolicy: "manual" | "quality-gated-auto" | "external-auto";
   qualityThreshold: number;
-  maxIterations: number;
+  /** null is reserved for externally supervised quality loops with no fixed revision cap. */
+  maxIterations: number | null;
 }
 
 export interface CreativeRun extends VersionedRecord {
@@ -920,6 +921,8 @@ export interface CreativeReview extends VersionedRecord {
   creativeRunId: string;
   workItemId: string;
   subjectArtifactId: string;
+  /** Proposal revisions form distinct review generations even when the proposal ID is stable. */
+  subjectRevision?: number;
   reviewer: "internal" | "external-llm" | "user";
   verdict: "passed" | "revise" | "blocked" | "inconclusive";
   issues: Array<GenerationAuditIssue & {

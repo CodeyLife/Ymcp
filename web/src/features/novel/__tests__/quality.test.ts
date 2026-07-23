@@ -28,6 +28,68 @@ describe("novel quality gates", () => {
     expect(result.issues.some((item) => item.rule === "chapter-blueprint.mustHappen")).toBe(false);
   });
 
+  it("does not treat a shared topic as proof that a prohibited relationship occurred", () => {
+    const result = runDeterministicQualityChecks({
+      text: "守门人明确拒绝了请求，并当面说明自己并不信任那名陌生访客。".repeat(80),
+      blueprint: { objective: "拒绝通行", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "身份不明", informationRelease: [], mustHappen: [], flexible: [], forbidden: ["不得让守门人立即完全信任陌生访客"], targetWords: 3000 },
+    });
+
+    expect(result.issues.some((item) => item.rule === "chapter-blueprint.forbidden")).toBe(false);
+  });
+
+  it("does not flag a closely worded statement that explicitly negates the prohibited action", () => {
+    const result = runDeterministicQualityChecks({
+      text: "守门人没有立即完全信任陌生访客，术士也拒绝获得读心能力。".repeat(80),
+      blueprint: { objective: "守住边界", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "诱惑", informationRelease: [], mustHappen: [], flexible: [], forbidden: ["不得让守门人立即完全信任陌生访客", "获得读心能力"], targetWords: 3000 },
+    });
+
+    expect(result.issues.some((item) => item.rule === "chapter-blueprint.forbidden")).toBe(false);
+  });
+
+  it("detects a prohibited action when modifiers are inserted inside the same clause", () => {
+    const result = runDeterministicQualityChecks({
+      text: "术士在仪式后获得一种没有任何代价的读心能力。".repeat(80),
+      blueprint: { objective: "完成仪式", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "能力代价", informationRelease: [], mustHappen: [], flexible: [], forbidden: ["获得读心能力"], targetWords: 3000 },
+    });
+
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "chapter-blueprint.forbidden", severity: "blocker" }),
+    ]));
+  });
+
+  it("does not let an unrelated negation hide a later prohibited action", () => {
+    const result = runDeterministicQualityChecks({
+      text: "术士没有犹豫便获得了读心能力。".repeat(80),
+      blueprint: { objective: "接受仪式", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "能力诱惑", informationRelease: [], mustHappen: [], flexible: [], forbidden: ["获得读心能力"], targetWords: 3000 },
+    });
+
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "chapter-blueprint.forbidden", severity: "blocker" }),
+    ]));
+  });
+
+  it("checks every semantic clause in a composite forbidden requirement", () => {
+    const result = runDeterministicQualityChecks({
+      text: "决战开始后，主角最终杀死了反派。".repeat(80),
+      blueprint: { objective: "结束冲突", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "决战", informationRelease: [], mustHappen: [], flexible: [], forbidden: ["在决战中，主角杀死反派"], targetWords: 3000 },
+    });
+
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "chapter-blueprint.forbidden", severity: "blocker" }),
+    ]));
+  });
+
+  it("treats directive negation as a prohibition instead of required wording", () => {
+    const result = runDeterministicQualityChecks({
+      text: "主角最终死在坍塌的塔下。".repeat(100),
+      blueprint: { objective: "逃离高塔", locationIds: [], characterIds: [], plotThreadIds: [], foreshadowingIds: [], conflict: "坍塌", informationRelease: [], mustHappen: [], flexible: [], forbidden: ["主角不能死亡"], targetWords: 3000 },
+    });
+
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule: "chapter-blueprint.forbidden", severity: "blocker" }),
+    ]));
+  });
+
   it("treats template expression density as a warning, not a blocker", () => {
     const text = Array.from({ length: 5 }, () => "他眼中闪过一丝迟疑，嘴角微微上扬。随后他看向门外。 ").join("\n\n");
     const result = runDeterministicQualityChecks({ text });

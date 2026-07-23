@@ -350,11 +350,12 @@ export async function evaluateCraftRuleOnChapter(input: {
 
   async function completeEvaluationWork(workItemId: string, label: string) {
     const keyRoot = `rule-eval:${candidateId}:${documentId}:${run.id}:${label}`;
-    for (let attempt = 0; attempt <= run.policy.maxIterations; attempt += 1) {
+    const maxIterations = run.policy.maxIterations ?? 0;
+    for (let attempt = 0; attempt <= maxIterations; attempt += 1) {
       await executeCreativeCommand({ runId: run.id, type: "work.start", workItemId, idempotencyKey: `${keyRoot}:start:${attempt}` }, { ...dependencies, db });
       const current = await db.creativeWorkItems.get(workItemId);
       if (current?.status === "completed") return current;
-      if (current?.status !== "blocked" || attempt >= run.policy.maxIterations) {
+      if (current?.status !== "blocked" || attempt >= maxIterations) {
         throw new Error(`${label}评测未通过审核：${current?.summary ?? current?.error ?? "未知原因"}`);
       }
       await executeCreativeCommand({

@@ -50,6 +50,26 @@ describe("creative brief workflow contract", () => {
     }, ["罗渡", "旧渡少年"])).toEqual([]);
   });
 
+  it("distinguishes a delegated pronoun subject from a pronoun used inside the named character's clause", () => {
+    expect(findBlueprintPovConflicts({
+      objective: "顾临的方法让她觉得局势仍有转机",
+    }, ["顾临"])).toEqual([]);
+
+    expect(findBlueprintPovConflicts({
+      objective: "顾临望着她的背影逐渐意识到证词有误",
+    }, ["顾临"]).map((item) => item.field)).toEqual(["章节目标"]);
+  });
+
+  it("recognizes delegated interiority after long modifiers without a distance heuristic", () => {
+    expect(findBlueprintPovConflicts({
+      objective: "顾临的方法让身处绝境的她终于意识到局势有变",
+    }, ["顾临"])).toEqual([]);
+
+    expect(findBlueprintPovConflicts({
+      objective: "顾临让步后望着身处绝境的她终于意识到证词有误",
+    }, ["顾临"]).map((item) => item.field)).toEqual(["章节目标"]);
+  });
+
   it("rejects first-person blueprint fields under a third-person contract", () => {
     expect(findBlueprintPovConflicts({
       objective: "在旧渡口寻找熟悉痕迹",

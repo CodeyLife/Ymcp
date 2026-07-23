@@ -18,7 +18,7 @@
  * 记录，显式 seed 到实验库，使 startChapterWorkflow 能在实验库上找到它们。
  */
 import { documentContentHash, recordBase, type NovelDatabase } from "../db";
-import type { CraftRuleCandidate, CreativeBrief, ManuscriptDocument, NovelConversationThread } from "../types";
+import type { CraftRuleCandidate, CreativeBrief, ManuscriptDocument, NovelConversationThread, WorkflowRun } from "../types";
 import { captureProjectSnapshot, type ProjectSnapshotBundle } from "./project-snapshot";
 import {
   loadProjectSnapshotIntoExperiment,
@@ -108,8 +108,9 @@ export interface PromoteClosedLoopCandidateResult {
  * 3. 加载快照到实验库
  * 4. 在实验库 seed thread + brief
  * 5. startChapterWorkflow(blocking=true) → blueprint-approval 暂停
- * 6. approveWorkflowStage(approved=true) → 推过 blueprint-approval
- * 7. approveWorkflowStage(approved=true) → 推过 manuscript-approval → completed
+ * 6-7. 循环 approveWorkflowStage(approved=true) → 推过所有审批阶段
+ *      （blueprint-approval 可能因 POV 冲突退回后重入、manuscript-approval、
+ *      fact-approval）直到工作流 completed
  * 8. 仅在显式兼容开关下运行旧版 Skill 建议生成；默认由独立规则候选流程负责
  * 9. extractCandidateBundle → 产出 CandidateBundle
  * 10. createPromotionService.inspect(candidate) → 检查基线/完整性
@@ -194,30 +195,52 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
       );
     }
 
-    // 6. 推过 blueprint-approval
-    await approveWorkflowStage(run.id, { approved: true }, workspace.db);
-
-    // 7. 推过 manuscript-approval；若事实阶段留下高风险待决项，自动闭环作为作者代理
-    //    接受这些 pending 候选（bulkSetFactCandidateStatus 内部跳过 conflict=true 的候选，
-    //    冲突事实仍被拒绝），再继续 commit。这保证闭环 CLI 模式下 factAssertions 不为空，
-    //    跨章节连贯性所需的 fact 能被持久化。安全事实已由 autoAcceptSafeFactCandidates 自动接受。
-    let advancedRun = await approveWorkflowStage(run.id, { approved: true }, workspace.db);
-    if (advancedRun.status === "waiting-approval" && advancedRun.currentStage === "fact-approval") {
-      const pendingFactIds = (await workspace.db.factCandidates
-        .where("workflowRunId")
-        .equals(run.id)
-        .and((fact) => fact.status === "pending")
-        .toArray())
-        .map((fact) => fact.id);
-      await bulkSetFactCandidateStatus(pendingFactIds, "accepted", workspace.db, "auto-policy");
+    // 6-7. 循环推过所有审批阶段直到工作流完成。
+    // 工作流可能经历多轮审批：blueprint-approval（可能因 POV 冲突退回蓝图后重新进入）、
+    // manuscript-approval、fact-approval。硬编码两次审批无法覆盖蓝图退回重审的场景——
+    // 第一次审批被蓝图退回消耗后，第二次审批仍推的是 blueprint-approval 而非 manuscript-approval，
+    // 导致工作流停在 manuscript-approval 等待审批而 closed-loop 已认为完成。
+    // 用有限循环覆盖所有 *-approval 阶段，对 fact-approval 做特殊处理
+    // （接受非冲突事实、拒绝冲突事实），确保不因遗留 pending 项阻塞。
+    let advancedRun: WorkflowRun = run;
+    for (let guard = 0; guard < 10; guard += 1) {
+      if (advancedRun.status === "completed") break;
+      if (advancedRun.status === "failed") {
+        throw new Error(`工作流失败：stage=${advancedRun.currentStage} error=${String(advancedRun.error ?? "<no error field>")}`);
+      }
+      if (advancedRun.status !== "waiting-approval") {
+        throw new Error(`工作流预期等待审批或已完成，实际 status=${advancedRun.status} stage=${advancedRun.currentStage}`);
+      }
+      // fact-approval 特殊处理：先接受所有可接受候选（bulkSetFactCandidateStatus 内部跳过
+      // conflict=true 的候选），再将剩余冲突候选显式拒绝（auto-policy 作为作者代理判定
+      // 冲突事实不纳入正式库），确保 fact-approval 不因遗留 pending 项阻塞。
+      // 安全事实已由 autoAcceptSafeFactCandidates 自动接受。
+      if (advancedRun.currentStage === "fact-approval") {
+        const pendingFactIds = (await workspace.db.factCandidates
+          .where("workflowRunId")
+          .equals(run.id)
+          .and((fact) => fact.status === "pending")
+          .toArray())
+          .map((fact) => fact.id);
+        await bulkSetFactCandidateStatus(pendingFactIds, "accepted", workspace.db, "auto-policy");
+        // bulkSetFactCandidateStatus 接受时跳过 conflict=true 的候选，需显式拒绝剩余 pending 项
+        const conflictingFactIds = (await workspace.db.factCandidates
+          .where("workflowRunId")
+          .equals(run.id)
+          .and((fact) => fact.status === "pending")
+          .toArray())
+          .map((fact) => fact.id);
+        if (conflictingFactIds.length) {
+          await bulkSetFactCandidateStatus(conflictingFactIds, "rejected", workspace.db, "auto-policy");
+        }
+      }
       advancedRun = await approveWorkflowStage(run.id, { approved: true }, workspace.db);
     }
 
     // 校验工作流已完成
-    const completedRun = advancedRun;
-    if (!completedRun || completedRun.status !== "completed") {
+    if (!advancedRun || advancedRun.status !== "completed") {
       throw new Error(
-        `工作流预期已完成，实际 status=${completedRun?.status ?? "missing"}`,
+        `工作流预期已完成，实际 status=${advancedRun?.status ?? "missing"} stage=${advancedRun?.currentStage ?? "missing"}`,
       );
     }
 

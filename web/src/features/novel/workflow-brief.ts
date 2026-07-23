@@ -6,6 +6,14 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function hasDelegatedMentalSubject(segment: string) {
+  const causatives = [...segment.matchAll(/使得|迫使|提醒|使|令|叫|让(?!步|路|开|座|位)/g)];
+  const causative = causatives.at(-1);
+  if (!causative || causative.index === undefined) return false;
+  const governed = segment.slice(causative.index + causative[0].length);
+  return /[他她它](?:自己)?/.test(governed);
+}
+
 export function findBlueprintPovConflicts(data: Record<string, unknown>, otherCharacterNames: string[], requireThirdPerson = false) {
   const candidates: Array<{ field: string; text: string }> = [
     { field: "章节目标", text: String(data.objective ?? "") },
@@ -25,7 +33,19 @@ export function findBlueprintPovConflicts(data: Record<string, unknown>, otherCh
   }
   return candidates.flatMap((candidate) => {
     const firstPersonConflict = requireThirdPerson && /(^|[，。；：\s])我(?:在|从|看|听|闻|感|想|走|站|停|伸|抬|低|回|仍|也|只|却)/.test(candidate.text);
-    const otherMindConflict = otherCharacterNames.some((name) => new RegExp(`${escapeRegExp(name)}[^，。；：！？]{0,20}(?:${INTERNAL_STATE_SOURCE})`).test(candidate.text));
+    // 只有代词在使役结构中直接充当心理动词主语时，心理状态才不属于前面的角色名。
+    // 代词作为宾语、领属语或更早句子成分时，不能据此跳过整次匹配。
+    const otherMindConflict = otherCharacterNames.some((name) => {
+      const re = new RegExp(`${escapeRegExp(name)}([^，。；：！？]{0,20})(?:${INTERNAL_STATE_SOURCE})`, "g");
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(candidate.text)) !== null) {
+        const segment = (match[1] ?? "").trim();
+        const delegatedSubject = hasDelegatedMentalSubject(segment);
+        if (delegatedSubject) continue;
+        return true;
+      }
+      return false;
+    });
     return firstPersonConflict || otherMindConflict ? [candidate] : [];
   });
 }

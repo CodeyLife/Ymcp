@@ -1551,7 +1551,7 @@ export async function updateProposalItemPayload(proposalId: string, itemId: stri
   const proposal = await novelDb.proposals.get(proposalId);
   if (!proposal || proposal.status !== "pending") throw new Error("提案已不可编辑");
   proposal.items = proposal.items.map((item) => item.id === itemId ? { ...item, payload, after: payload } : item);
-  await novelDb.proposals.put({ ...proposal, revision: proposal.revision + 1, updatedAt: Date.now() });
+  await novelDb.proposals.put({ ...proposal, auditReport: undefined, revision: proposal.revision + 1, updatedAt: Date.now() });
 }
 
 export async function rejectProposal(proposalId: string) {

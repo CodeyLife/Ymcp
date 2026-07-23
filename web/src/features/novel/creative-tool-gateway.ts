@@ -253,7 +253,7 @@ async function executeCreativeToolCore(
     const objective = typeof args.objective === "string" && args.objective.trim() ? args.objective.trim() : `Bootstrap foundation+planning for ${project.title}`;
     const includeChapterPlan = args.includeChapterPlan === true;
     const mode = args.mode === "manual" ? "manual" : "external";
-    const run = await createCreativeRun({ projectId, mode, objective, policy: { maxIterations: mode === "manual" ? 2 : 3 } }, db);
+    const run = await createCreativeRun({ projectId, mode, objective, policy: mode === "manual" ? { maxIterations: 2 } : undefined }, db);
     // 按 chain 顺序 enqueue，依赖链根据 BOOTSTRAP_TASK_DEPENDENCIES 解析为同 run 内 work item id
     const taskIdToWorkId = new Map<NovelGenerationTaskKey, string>();
     const chain: NovelGenerationTaskKey[] = [...BOOTSTRAP_TASK_CHAIN];

@@ -247,7 +247,9 @@ describe("generation task ownership", () => {
     const project = await createNovelProject({ title: "定位测试", genre: ["悬疑"], premise: "每个人都会遗忘一个名字。" });
     const { proposal: generated } = await runGenerationTask({ projectId: project.id, taskKey: "project-positioning", instruction: "完善项目定位" });
     expect(vi.mocked(callStructuredNovelModel).mock.calls.at(-1)?.[0].prompt).toContain("当前正式项目名为《定位测试》");
+    await novelDb.proposals.update(generated.id, { auditReport: { auditSkillId: "test-audit", mechanism: "internal-iterate", rounds: [], improved: true, remainingMajorCount: 0 } });
     await updateProposalItemPayload(generated.id, generated.items[0].id, { audience: "成年悬疑读者" });
+    expect((await novelDb.proposals.get(generated.id))?.auditReport).toBeUndefined();
     await applyProposalItems(generated.id, [generated.items[0].id]);
     expect((await novelDb.projects.get(project.id))?.audience).toBe("成年悬疑读者");
   });

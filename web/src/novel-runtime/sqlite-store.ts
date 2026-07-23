@@ -51,6 +51,7 @@ export interface NovelStore {
   listEvents(afterSequence: number, projectId?: string): RuntimeEvent[];
   getSetting<T>(key: string): T | undefined;
   setSetting(key: string, value: unknown): void;
+  commitChangeState(db: NovelDatabase, change: RuntimeChange, operation?: RuntimeOperation): Promise<void>;
   commitAcceptedChange(db: NovelDatabase, change: RuntimeChange, operation: RuntimeOperation): Promise<void>;
   importLegacyBundle(bundle: LegacyMigrationBundle, db: NovelDatabase): Promise<{ projectIds: string[]; backupPath: string }>;
   close(): void;
@@ -168,6 +169,20 @@ export class SqliteNovelStore implements NovelStore {
     this.sqlite.prepare("DELETE FROM novel_records WHERE project_id = ?").run(projectId);
     const insert = this.sqlite.prepare("INSERT INTO novel_records(collection,id,project_id,updated_at,payload) VALUES(?,?,?,?,?)");
     for (const record of records) insert.run(record.collection, record.id, record.projectId, record.updatedAt, record.payload);
+  }
+
+  async commitChangeState(db: NovelDatabase, change: RuntimeChange, operation?: RuntimeOperation): Promise<void> {
+    const records = await this.collectProjectRecords(db, change.projectId);
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      this.replaceProjectRecords(change.projectId, records);
+      this.putChange(change);
+      if (operation) this.putOperation(operation);
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async commitAcceptedChange(db: NovelDatabase, change: RuntimeChange, operation: RuntimeOperation): Promise<void> {

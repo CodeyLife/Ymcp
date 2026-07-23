@@ -94,6 +94,27 @@ describe("novel AI HTTP handling", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("cancels a long Retry-After backoff through the request signal", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response("rate limited", {
+      status: 429,
+      headers: { "retry-after": "3600" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const pending = streamNovelModel({
+      model: "test",
+      temperature: 0,
+      role: "writer",
+      prompt: "继续正文",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    controller.abort(new DOMException("用户取消", "AbortError"));
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError", message: "用户取消" });
+  });
+
   it("consumes the final SSE event when the stream closes without a newline", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(unterminatedSse("未丢失的正文"));
     vi.stubGlobal("fetch", fetchMock);

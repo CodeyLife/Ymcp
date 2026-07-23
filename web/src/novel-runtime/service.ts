@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import "./polyfills";
 import { EventEmitter } from "node:events";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { deleteChapter, novelDb } from "../features/novel/db";
 import { setNovelApiConfigProvider } from "../features/novel/api-config";
 import { executeCreativeTool, type CreativeToolName } from "../features/novel/creative-tool-gateway";
@@ -9,10 +9,14 @@ import { updateProposalItemPayload } from "../features/novel/generation";
 import { evaluateCraftRuleOnChapter, evaluateCraftRuleOnFoundation, inspectCraftRuleCandidate } from "../features/novel/craft-rule-evolution";
 import {
   assertRuntimeActor,
+  internalEvidencePasses,
+  latestExternalReview,
   runtimeNextActions,
   runtimePolicies,
   type RuntimeActor,
   type RuntimeCandidateEvidence,
+  type RuntimeExternalReview,
+  type RuntimePatchRecord,
   type RuntimeChange,
   type RuntimeDriver,
   type RuntimeEvent,
@@ -26,6 +30,39 @@ import {
 import type { NovelStore } from "./sqlite-store";
 
 const OPERATION_LEASE_MS = 20 * 60 * 1000;
+
+function fingerprint(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function withInternalGate(evidence: RuntimeCandidateEvidence): RuntimeCandidateEvidence {
+  const hasQualityEvidence = typeof evidence.blockerCount === "number" && typeof evidence.majorCount === "number";
+  const hasArtifactFingerprint = typeof evidence.artifactFingerprint === "string" && evidence.artifactFingerprint.length === 64;
+  const passed = evidence.complete && hasArtifactFingerprint && hasQualityEvidence && evidence.blockerCount === 0 && evidence.majorCount === 0;
+  return {
+    ...evidence,
+    internalGate: {
+      passed,
+      reason: !evidence.complete
+        ? "候选产物不完整"
+        : !hasArtifactFingerprint
+          ? "候选内部审核没有绑定完整产物指纹"
+        : !hasQualityEvidence
+          ? "候选缺少可验证的项目内部质量证据"
+          : passed
+            ? "项目内部质量证据未发现 blocker 或 major"
+            : "项目内部质量证据仍有 blocker 或 major",
+      checkedAt: Date.now(),
+    },
+  };
+}
+
+function externalReviewPasses(change: RuntimeChange): boolean {
+  const review = latestExternalReview(change);
+  const lastPatchAt = change.patches?.at(-1)?.patchedAt ?? 0;
+  const hasBlockingIssue = review?.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major") ?? false;
+  return review?.verdict === "passed" && !hasBlockingIssue && review.reviewedAt >= lastPatchAt;
+}
 
 type Listener = (event: RuntimeEvent) => void;
 
@@ -82,6 +119,7 @@ export class NovelCreationEngine {
   private readonly emitter = new EventEmitter();
   private readonly projectQueues = new Map<string, Promise<void>>();
   private initialized = false;
+  private shuttingDown = false;
 
   constructor(readonly store: NovelStore) {
     setNovelApiConfigProvider(() => {
@@ -110,6 +148,16 @@ export class NovelCreationEngine {
   subscribe(listener: Listener): () => void {
     this.emitter.on("event", listener);
     return () => this.emitter.off("event", listener);
+  }
+
+  prepareForShutdown(): void {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+    const now = Date.now();
+    for (const stored of this.store.listOperations()) {
+      if (stored.status !== "running") continue;
+      this.store.putOperation(recoverInterruptedOperation(normalizeOperation(stored), now));
+    }
   }
 
   private emit(type: string, payload: Record<string, unknown>, projectId?: string, operationId?: string): RuntimeEvent {
@@ -229,16 +277,112 @@ export class NovelCreationEngine {
   async getChangeDetails(id: string) {
     const change = this.store.getChange(id);
     if (!change) throw new Error("候选变更不存在");
+    return { change, ...await this.describeChangeArtifact(change) };
+  }
+
+  private async describeChangeArtifact(change: RuntimeChange) {
     const operation = this.store.getOperation(change.operationId);
     let artifact: unknown;
     const artifactId = change.artifactRefs[0];
     if (artifactId && operation?.runId) {
       artifact = (await executeCreativeTool("novel_artifact_get", { projectId: change.projectId, runId: operation.runId, artifactId })).result;
     }
-    return { change, artifact };
+    const proposalItems = (artifact as { kind?: string; value?: { items?: Array<{ id?: string; payload?: unknown }> } } | undefined)?.kind === "proposal"
+      ? (artifact as { value?: { items?: Array<{ id?: string; payload?: unknown }> } }).value?.items ?? []
+      : [];
+    const itemPayloadFingerprints = Object.fromEntries(proposalItems
+      .filter((item): item is { id: string; payload?: unknown } => typeof item.id === "string" && Boolean(item.id))
+      .map((item) => [item.id, fingerprint(item.payload)]));
+    return { artifact, artifactFingerprint: fingerprint({ artifactRefs: change.artifactRefs, artifact }), itemPayloadFingerprints };
+  }
+
+  async revalidateChange(changeId: string, actor: RuntimeActor, artifactFingerprint: string) {
+    const scopedChange = this.store.getChange(changeId);
+    if (!scopedChange) throw new Error("候选变更不存在");
+    return this.serialize(scopedChange.projectId, async () => {
+      const change = this.store.getChange(changeId);
+      const operation = change ? this.store.getOperation(change.operationId) : undefined;
+      if (!change || change.status !== "pending" || !operation) throw new Error("候选变更已不可重新校验");
+      assertRuntimeActor(normalizeOperation(operation), actor);
+      const details = await this.getChangeDetails(changeId);
+      if (details.artifactFingerprint !== artifactFingerprint) throw new Error("候选内容已变化，请重新读取完整候选后再校验");
+      try {
+        change.evidence = withInternalGate(await this.buildCandidateEvidence(normalizeOperation(operation), change.workItemId, change.artifactRefs));
+        change.artifactFingerprint = details.artifactFingerprint;
+        change.updatedAt = Date.now();
+        await this.store.commitChangeState(novelDb, change);
+      } catch (error) {
+        await this.store.restoreProject(novelDb, change.projectId).catch(() => undefined);
+        throw error;
+      }
+      this.emit("change.internal-revalidated", { changeId, passed: change.evidence.internalGate?.passed }, change.projectId, operation.id);
+      return this.getChangeDetails(changeId);
+    });
+  }
+
+  async patchChangeItem(input: {
+    changeId: string;
+    itemId: string;
+    payload: Record<string, unknown>;
+    actor: RuntimeActor;
+    artifactFingerprint: string;
+    expectedPayloadFingerprint: string;
+    rationale: string;
+    issueIds: string[];
+    review: Omit<RuntimeExternalReview, "actor" | "reviewedAt">;
+  }) {
+    const scopedChange = this.store.getChange(input.changeId);
+    if (!scopedChange) throw new Error("候选变更不存在");
+    return this.serialize(scopedChange.projectId, async () => {
+      const change = this.store.getChange(input.changeId);
+      if (!change || change.status !== "pending") throw new Error("候选变更已不可编辑");
+      const operation = this.store.getOperation(change.operationId);
+      if (!operation) throw new Error("候选变更所属 operation 不存在");
+      assertRuntimeActor(normalizeOperation(operation), input.actor);
+      if (input.review.verdict !== "revise") throw new Error("局部补丁必须附带 revise 外部审核结论");
+      const details = await this.getChangeDetails(input.changeId);
+      if (details.artifactFingerprint !== input.artifactFingerprint) throw new Error("候选内容已变化，请重新读取完整候选后再局部修订");
+      const envelope = details.artifact as { kind?: string; value?: { items?: Array<{ id?: string; payload?: Record<string, unknown> }> } } | undefined;
+      const item = envelope?.kind === "proposal" ? envelope.value?.items?.find((candidate) => candidate.id === input.itemId) : undefined;
+      if (!item?.payload) throw new Error("当前候选不包含可局部修订的 proposal item");
+      if (fingerprint(item.payload) !== input.expectedPayloadFingerprint) throw new Error("候选项内容已变化，请重新读取候选后再局部修订");
+      if (!input.rationale.trim() || !input.issueIds.length) throw new Error("局部修订必须说明理由并关联至少一个审核问题");
+      const review: RuntimeExternalReview = { ...input.review, actor: input.actor, reviewedAt: Date.now() };
+      if (review.artifactFingerprint !== input.artifactFingerprint) throw new Error("外部审核必须针对当前完整候选");
+      const reviewIssueIds = new Set(review.issues.map((issue) => issue.id));
+      if (input.issueIds.some((issueId) => !reviewIssueIds.has(issueId))) throw new Error("局部修订关联了当前外部审核中不存在的问题");
+      let patch: RuntimePatchRecord;
+      try {
+        await updateProposalItemPayload(change.artifactRefs[0]!, input.itemId, input.payload);
+        const patchedDetails = await this.getChangeDetails(input.changeId);
+        patch = {
+          itemId: input.itemId,
+          expectedPayloadFingerprint: input.expectedPayloadFingerprint,
+          rationale: input.rationale.trim(),
+          issueIds: [...new Set(input.issueIds)],
+          actor: input.actor,
+          patchedAt: Date.now(),
+        };
+        change.externalReviews = [...(change.externalReviews ?? []), review];
+        change.patches = [...(change.patches ?? []), patch];
+        change.evidence = {
+          ...(await this.buildCandidateEvidence(normalizeOperation(operation), change.workItemId, change.artifactRefs)),
+          internalGate: { passed: false, reason: "局部补丁已改变候选，必须重新执行项目内部校验", checkedAt: Date.now() },
+        };
+        change.artifactFingerprint = patchedDetails.artifactFingerprint;
+        change.updatedAt = Date.now();
+        await this.store.commitChangeState(novelDb, change);
+      } catch (error) {
+        await this.store.restoreProject(novelDb, change.projectId).catch(() => undefined);
+        throw error;
+      }
+      this.emit("change.item-patched", { changeId: change.id, itemId: input.itemId, issueIds: patch.issueIds, actorId: input.actor.id }, change.projectId, operation.id);
+      return this.getChangeDetails(input.changeId);
+    });
   }
 
   async updateChangeItem(changeId: string, itemId: string, payload: Record<string, unknown>, actor: RuntimeActor) {
+    if (actor.type === "external-llm") throw new Error("外部 LLM 必须使用带内容指纹、审核理由和问题关联的候选补丁接口");
     const scopedChange = this.store.getChange(changeId);
     if (!scopedChange) throw new Error("候选变更不存在");
     return this.serialize(scopedChange.projectId, async () => {
@@ -249,16 +393,34 @@ export class NovelCreationEngine {
       assertRuntimeActor(normalizeOperation(operation), actor);
       const proposalId = change.artifactRefs[0];
       if (!proposalId) throw new Error("候选变更缺少 proposal artifact");
-      await updateProposalItemPayload(proposalId, itemId, payload);
-      await this.store.flushProject(novelDb, change.projectId);
-      change.updatedAt = Date.now();
-      this.store.putChange(change);
+      try {
+        await updateProposalItemPayload(proposalId, itemId, payload);
+        const details = await this.getChangeDetails(changeId);
+        change.artifactFingerprint = details.artifactFingerprint;
+        change.evidence = {
+          ...change.evidence,
+          artifactFingerprint: details.artifactFingerprint,
+          internalGate: { passed: false, reason: "候选内容已被人工修改，必须重新执行项目内部校验", checkedAt: Date.now() },
+        };
+        change.updatedAt = Date.now();
+        await this.store.commitChangeState(novelDb, change);
+      } catch (error) {
+        await this.store.restoreProject(novelDb, change.projectId).catch(() => undefined);
+        throw error;
+      }
       this.emit("change.item-updated", { changeId, itemId, actorId: actor.id }, change.projectId, operation.id);
       return this.getChangeDetails(changeId);
     });
   }
 
-  async reviewChange(changeId: string, decision: "accept" | "reject" | "revise", note: string, actor: RuntimeActor, _requestKey: string = randomUUID()) {
+  async reviewChange(
+    changeId: string,
+    decision: "accept" | "reject" | "revise",
+    note: string,
+    actor: RuntimeActor,
+    _requestKey: string = randomUUID(),
+    externalReview?: Omit<RuntimeExternalReview, "actor" | "reviewedAt">,
+  ) {
     const scopedChange = this.store.getChange(changeId);
     if (!scopedChange) throw new Error("候选变更不存在");
     return this.serialize(scopedChange.projectId, async () => {
@@ -269,7 +431,31 @@ export class NovelCreationEngine {
       const operation = storedOperation ? normalizeOperation(storedOperation) : undefined;
       if (!operation) throw new Error("候选变更所属 operation 不存在");
       assertRuntimeActor(operation, actor);
+      let currentArtifactFingerprint: string | undefined;
+      if (operation.driver === "external-mcp") {
+        if (!externalReview) throw new Error("外部 MCP 审核必须提交结构化外部审核记录");
+        if (!externalReview.reviewRunId.trim() || !externalReview.summary.trim()) throw new Error("外部审核缺少 reviewRunId 或摘要");
+        const details = await this.getChangeDetails(changeId);
+        currentArtifactFingerprint = details.artifactFingerprint;
+        if (externalReview.artifactFingerprint !== details.artifactFingerprint) throw new Error("外部审核未基于当前完整候选，请重新读取候选后审核");
+        if (decision === "accept" && externalReview.verdict !== "passed") throw new Error("接受候选必须使用 passed 外部审核结论");
+        if (externalReview.verdict === "passed" && externalReview.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major")) {
+          throw new Error("passed 外部审核不能包含未解决的 blocker 或 major");
+        }
+        if (decision === "revise" && externalReview.verdict !== "revise") throw new Error("重生成候选必须使用 revise 外部审核结论");
+        change.externalReviews = [...(change.externalReviews ?? []), { ...externalReview, actor, reviewedAt: Date.now() }];
+        change.artifactFingerprint = details.artifactFingerprint;
+        change.updatedAt = Date.now();
+        this.store.putChange(change);
+        this.emit("change.external-reviewed", { changeId, verdict: externalReview.verdict, reviewRunId: externalReview.reviewRunId, issueCount: externalReview.issues.length, learningConclusion: externalReview.learning.conclusion }, change.projectId, operation.id);
+      }
       if (decision === "accept") {
+        if (operation.driver === "external-mcp") {
+          if (!internalEvidencePasses(change.evidence, currentArtifactFingerprint) || change.evidence.internalGate?.passed === false) {
+            throw new Error(`项目内部审核门禁未通过：${change.evidence.internalGate?.reason ?? "候选仍有 blocker 或 major"}`);
+          }
+          if (!externalReviewPasses(change)) throw new Error("当前候选尚无通过的外部独立审核");
+        }
         const currentHash = this.store.snapshotHash(change.projectId);
         if (currentHash !== change.baseSnapshotHash) {
           const error = new Error("正式项目已在候选生成后发生变化，请重新生成或修订候选");
@@ -278,13 +464,19 @@ export class NovelCreationEngine {
         }
         if (!operation.runId) throw new Error("候选变更缺少 runId");
         try {
-          await executeCreativeTool("novel_review_submit", {
+          const submitted = await executeCreativeTool("novel_review_submit", {
             projectId: change.projectId,
             runId: operation.runId,
             workItemId: change.workItemId,
             idempotencyKey: `runtime-change:${change.id}:accept`,
             review: { subjectArtifactId: change.artifactRefs[0], reviewer: actor.type, verdict: "passed", summary: note || "候选已确认", issues: [] },
           });
+          if (operation.driver === "external-mcp") {
+            const result = submitted.result as { workStatus?: string; reviewGate?: { passed?: boolean } };
+            if (result.workStatus !== "completed" || result.reviewGate?.passed !== true) {
+              throw new Error("底层创作审核门未完成候选提交，不能将运行时 change 标记为 accepted");
+            }
+          }
           if (operation.driver === "human") {
             await executeCreativeTool("novel_action_execute", {
               projectId: change.projectId,
@@ -368,10 +560,15 @@ export class NovelCreationEngine {
       if (!operation) throw new Error("operation 不存在");
       assertRuntimeActor(operation, actor);
       if (operation.status !== "failed") throw new Error("只有失败的 operation 可以重试");
-      if (operation.kind === "plan" && operation.runId) {
+      // plan 与 write/revise 共享同一重试路径：若 operation 已有 runId，找到 run 内最近一次失败的
+      // 工作项并调用 work.retry 将其重新排队，同时把 currentWorkItemId 指回该工作项。
+      // 否则 processChapter 会因 runId 已存在但 currentWorkItemId 被清空而直接 complete，
+      // 导致重试空转（不生成任何候选）。没有 runId 的 operation 走 runtimeRecovery 兜底。
+      if (operation.runId) {
         const snapshot = await executeCreativeTool("novel_run_get", { projectId: operation.projectId, runId: operation.runId });
-        const failedWork = (snapshot.result as { workItems?: Array<{ id: string; status: string }> }).workItems?.find((work) => work.status === "failed");
-        if (!failedWork) throw new Error("规划运行没有可重试的失败工作项");
+        const workItems = (snapshot.result as { workItems?: Array<{ id: string; status: string }> }).workItems ?? [];
+        const failedWork = workItems.find((work) => work.status === "failed");
+        if (!failedWork) throw new Error("运行没有可重试的失败工作项");
         let revisionInstruction = note.trim() || operation.error || "修正失败原因后重新生成完整候选";
         const previousChange = this.store.listChanges(operation.projectId)
           .filter((change) => change.operationId === operation.id && change.workItemId === failedWork.id && change.artifactRefs[0])
@@ -397,13 +594,13 @@ export class NovelCreationEngine {
           idempotencyKey: `runtime-operation:${operation.id}:retry:${operation.attempt + 1}`,
         });
         await this.store.flushProject(novelDb, operation.projectId);
+        operation.currentWorkItemId = failedWork.id;
       } else {
         operation.input = { ...operation.input, runtimeRecovery: true };
       }
       operation.status = "queued";
       operation.error = undefined;
       operation.currentChangeId = undefined;
-      operation.currentWorkItemId = undefined;
       operation.leaseExpiresAt = undefined;
       operation.updatedAt = Date.now();
       this.store.putOperation(operation);
@@ -448,7 +645,15 @@ export class NovelCreationEngine {
   }
 
   async reviewImprovement(args: Record<string, unknown>) {
-    return this.executeAdvanced("novel_rule_review_submit", args);
+    const result = await this.executeAdvanced("novel_rule_review_submit", args);
+    const candidateId = typeof args.candidateId === "string" ? args.candidateId : undefined;
+    const projectId = typeof args.projectId === "string" ? args.projectId : undefined;
+    if (!candidateId || !projectId) return result;
+    const inspected = await this.getImprovement(projectId, candidateId);
+    if (!inspected.gate.ready || inspected.candidate.status !== "ready") return result;
+    const promoted = await this.executeAdvanced("novel_rule_promote", { projectId, candidateId, idempotencyKey: `runtime-auto-promote:${candidateId}:${inspected.candidate.proposedVersion}` });
+    this.emit("improvement.auto-promoted", { candidateId, promotedRecordId: (promoted.result as { candidate?: { promotedRecordId?: string } })?.candidate?.promotedRecordId }, projectId);
+    return promoted;
   }
 
   async promoteImprovement(args: Record<string, unknown>) {
@@ -470,6 +675,7 @@ export class NovelCreationEngine {
   }
 
   private schedule(operationId: string) {
+    if (this.shuttingDown) return;
     const operation = this.store.getOperation(operationId);
     if (!operation) return;
     queueMicrotask(() => { void this.serialize(operation.projectId, () => this.process(operationId)); });
@@ -487,6 +693,7 @@ export class NovelCreationEngine {
   }
 
   private async process(operationId: string): Promise<void> {
+    if (this.shuttingDown) return;
     const operation = this.store.getOperation(operationId);
     if (!operation || operation.status !== "queued") return;
     operation.status = "running";
@@ -499,6 +706,7 @@ export class NovelCreationEngine {
       if (operation.kind === "plan") await this.processPlan(operation);
       else await this.processChapter(operation);
     } catch (error) {
+      if (this.shuttingDown) return;
       operation.status = "failed";
       operation.error = error instanceof Error ? error.message : String(error);
       operation.leaseExpiresAt = undefined;
@@ -583,7 +791,21 @@ export class NovelCreationEngine {
       operation.updatedAt = Date.now();
       this.store.putOperation(operation);
     }
-    if (!operation.currentWorkItemId) return this.complete(operation, { runId: operation.runId });
+    if (!operation.currentWorkItemId) {
+      // After a revise decision, reviewChange clears currentWorkItemId but the work item
+      // was re-opened by work.revise (status goes from waiting-review to queued).
+      // Without looking up the run's work items, processChapter would immediately complete
+      // the operation without processing the revised work item, leaving the revision
+      // candidate unreviewed and the chapter content empty.
+      if (!operation.runId) return this.complete(operation, { runId: operation.runId });
+      const snapshot = await executeCreativeTool("novel_run_get", { projectId: operation.projectId, runId: operation.runId });
+      const workItems = (snapshot.result as { workItems: Array<{ id: string; status: string }> }).workItems;
+      const resumable = workItems.find((work) => work.status === "queued" || work.status === "running" || work.status === "waiting-review");
+      if (!resumable) return this.complete(operation, { runId: operation.runId });
+      operation.currentWorkItemId = resumable.id;
+      operation.updatedAt = Date.now();
+      this.store.putOperation(operation);
+    }
     await this.startWork(operation, operation.currentWorkItemId, operation.kind === "write" ? "章节写作候选" : "章节修订候选");
   }
 
@@ -622,20 +844,25 @@ export class NovelCreationEngine {
       this.store.putOperation(operation);
       return;
     }
-    const evidence = await this.buildCandidateEvidence(operation, workItemId, action.artifactRefs ?? []);
+    const evidence = withInternalGate(await this.buildCandidateEvidence(operation, workItemId, action.artifactRefs ?? []));
     const change: RuntimeChange = {
       id: randomUUID(), operationId: operation.id, projectId: operation.projectId, workItemId,
       artifactRefs: action.artifactRefs ?? [], title, summary: action.summary ?? title, status: "pending",
       evidence,
       baseSnapshotHash: this.store.snapshotHash(operation.projectId), createdAt: now, updatedAt: now,
     };
-    this.store.putChange(change);
+    change.artifactFingerprint = evidence.artifactFingerprint;
     operation.status = "awaiting_review";
     operation.currentWorkItemId = workItemId;
     operation.currentChangeId = change.id;
     operation.leaseExpiresAt = undefined;
     operation.updatedAt = now;
-    this.store.putOperation(operation);
+    try {
+      await this.store.commitChangeState(novelDb, change, operation);
+    } catch (error) {
+      await this.store.restoreProject(novelDb, operation.projectId).catch(() => undefined);
+      throw error;
+    }
     this.emit("change.pending", { changeId: change.id, title, artifactRefs: change.artifactRefs }, operation.projectId, operation.id);
   }
 
@@ -643,21 +870,48 @@ export class NovelCreationEngine {
     const fallback: RuntimeCandidateEvidence = { complete: artifactRefs.length > 0, openIssues: [], iteration: 0, maxIterations: operation.reviewPolicy.maxIterations };
     if (!operation.runId || !artifactRefs[0]) return fallback;
     try {
-      const [artifactEnvelope, runEnvelope] = await Promise.all([
-        executeCreativeTool("novel_artifact_get", { projectId: operation.projectId, runId: operation.runId, artifactId: artifactRefs[0] }),
-        executeCreativeTool("novel_run_get", { projectId: operation.projectId, runId: operation.runId }),
-      ]);
+      const artifactEnvelope = await executeCreativeTool("novel_artifact_get", {
+        projectId: operation.projectId,
+        runId: operation.runId,
+        artifactId: artifactRefs[0],
+      });
       const artifact = artifactEnvelope.result as { kind?: string; value?: Record<string, unknown> };
+      const artifactFingerprint = fingerprint({ artifactRefs, artifact });
+      await executeCreativeTool("novel_action_execute", {
+        projectId: operation.projectId,
+        runId: operation.runId,
+        action: "review.request",
+        workItemId,
+        idempotencyKey: `runtime-internal-review:${workItemId}:${artifactFingerprint}`,
+      });
+      const runEnvelope = await executeCreativeTool("novel_run_get", { projectId: operation.projectId, runId: operation.runId });
+      const internalReview = (runEnvelope.result as { reviews?: Array<{ workItemId: string; subjectArtifactId: string; reviewer: string; verdict: string; summary: string; issues: Array<{ severity: string; title: string }> }> }).reviews
+        ?.filter((review) => review.workItemId === workItemId && review.subjectArtifactId === artifactRefs[0] && review.reviewer === "internal")
+        .at(-1);
       const work = (runEnvelope.result as { workItems?: Array<{ id: string; iteration?: number }> }).workItems?.find((item) => item.id === workItemId);
       const quality = (artifact.value?.qualityEvidence ?? (artifact.value?.parameters as Record<string, unknown> | undefined)?.qualityEvidence) as Record<string, unknown> | undefined;
       const topIssues = Array.isArray(quality?.topIssues) ? quality.topIssues : [];
+      const internalIssues = internalReview?.issues ?? [];
+      const blockerCount = internalReview
+        ? internalIssues.filter((issue) => issue.severity === "blocker").length
+        : typeof quality?.blockerCount === "number" ? quality.blockerCount : undefined;
+      let majorCount = internalReview
+        ? internalIssues.filter((issue) => issue.severity === "major").length
+        : typeof quality?.majorCount === "number" ? quality.majorCount : undefined;
+      if (internalReview && internalReview.verdict !== "passed" && blockerCount === 0 && majorCount === 0) majorCount = 1;
       return {
         complete: Boolean(artifact.value),
+        artifactFingerprint,
         artifactKind: artifact.kind,
         qualityScore: typeof quality?.weightedScore === "number" ? quality.weightedScore : undefined,
-        blockerCount: typeof quality?.blockerCount === "number" ? quality.blockerCount : undefined,
-        majorCount: typeof quality?.majorCount === "number" ? quality.majorCount : undefined,
-        openIssues: topIssues.map((issue) => typeof issue === "string" ? issue : String((issue as { summary?: unknown }).summary ?? "候选存在未解决问题")),
+        blockerCount,
+        majorCount,
+        openIssues: internalReview
+          ? [
+              ...internalIssues.map((issue) => issue.title),
+              ...(internalReview.verdict === "passed" || internalIssues.length ? [] : [internalReview.summary]),
+            ]
+          : topIssues.map((issue) => typeof issue === "string" ? issue : String((issue as { summary?: unknown }).summary ?? "候选存在未解决问题")),
         iteration: work?.iteration ?? 0,
         maxIterations: operation.reviewPolicy.maxIterations,
       };

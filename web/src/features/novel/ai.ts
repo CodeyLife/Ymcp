@@ -5,6 +5,18 @@ import { assertModelContextLimit } from "./model-capabilities";
 
 const SYSTEM_INVARIANTS = `你在专业小说创作系统内工作。用户批准的事实库、锁定规则、角色知识边界和审批状态不可被覆盖。输出必须尊重指定格式，不泄露内部推理。`;
 
+/**
+ * 默认文本模型：项目 settings.textModel 缺失或为空时的回退值。
+ * 用户要求所有 LLM 调用强制使用 gpt-5-5，不得在后续操作中更改。
+ */
+const DEFAULT_NOVEL_TEXT_MODEL = "gpt-5-5";
+
+/** 规范化模型字段：空值或空白时回退到默认模型 gpt-5-5。 */
+function resolveModel(model: string | undefined | null): string {
+  const trimmed = (model ?? "").trim();
+  return trimmed || DEFAULT_NOVEL_TEXT_MODEL;
+}
+
 const ROLE_PROMPTS: Record<NovelAgentRole, string> = {
   architect: "你是长篇小说架构师。先经营故事土壤——人物处境、世态人情、情境气味——让戏剧性在布局中自然显现，而不是急于宣告主题或推进剧情。规划时注重循序渐进：每层节点先回答'发生了什么、人物如何感受、世界因此有何不同'，再让因果、转折、伏笔在事件铺陈中浮现。情怀、感情与中文意境是规划期就要考虑的底色，不是正文阶段才补的装饰。",
   writer: "你是小说正文作者。忠实执行已批准蓝图和当前写作契约，只输出一份连续正文，不擅自改变上层规划。",
@@ -34,10 +46,14 @@ async function hashPrompt(value: string) {
 }
 
 const MAX_RETRIES = 3;
+// 429/503 限流需要更多重试次数配合更长退避阶梯（30s/60s/120s/180s/300s）。
+const RATE_LIMIT_MAX_RETRIES = 5;
 const RETRY_BASE_DELAY_MS = 1_000;
-// 默认超时：结构化调用（蓝图/审校/事实）180s，流式正文生成 300s
-const DEFAULT_STRUCTURED_TIMEOUT_MS = 180_000;
-const DEFAULT_STREAM_TIMEOUT_MS = 300_000;
+const MAX_RETRY_DELAY_MS = 300_000;
+// 默认超时：结构化调用（蓝图/审校/事实）600s（需容纳 429 限流重试退避 30+60+120+180+300=690s 的部分场景），
+// 流式正文生成 600s（同理）。
+const DEFAULT_STRUCTURED_TIMEOUT_MS = 600_000;
+const DEFAULT_STREAM_TIMEOUT_MS = 600_000;
 
 function createTimeoutSignal(timeoutMs?: number, external?: AbortSignal): AbortSignal | undefined {
   if (!timeoutMs) return external;
@@ -60,9 +76,16 @@ function isTimeoutAbort(error: unknown): boolean {
 }
 
 class NovelHttpError extends Error {
-  constructor(readonly status: number, readonly responseBody: string) {
+  /** Retry-After 响应头解析后的毫秒数（仅 429/503 等限流响应可能携带）。 */
+  readonly retryAfterMs: number | undefined;
+  constructor(readonly status: number, readonly responseBody: string, retryAfterHeader?: string | null) {
     super(`HTTP ${status}${responseBody ? `: ${responseBody}` : ""}`);
     this.name = "NovelHttpError";
+    if (retryAfterHeader) {
+      const seconds = Number(retryAfterHeader);
+      // Retry-After 既可能是 delta-seconds 也可能是 HTTP-date；这里只处理数字形式。
+      if (Number.isFinite(seconds) && seconds >= 0) this.retryAfterMs = seconds * 1000;
+    }
   }
 }
 
@@ -83,8 +106,51 @@ function isRetryableError(error: unknown): boolean {
   return /terminated|HTTP 5\d\d|HTTP 429|ECONNRESET|ENOTFOUND|fetch failed|socket hang up/i.test(message);
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** 429/503 限流使用更多重试次数（配合更长退避阶梯），其他错误沿用默认次数。 */
+function getMaxRetries(error: unknown): number {
+  if (error instanceof NovelHttpError && (error.status === 429 || error.status === 503)) return RATE_LIMIT_MAX_RETRIES;
+  return MAX_RETRIES;
+}
+
+function sleep(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("调用已取消", "AbortError"));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("调用已取消", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/**
+ * 计算重试前的退避延迟。
+ *
+ * 429/503 限流使用更长的退避阶梯（10s/30s/60s），因为 LLM 提供商的 rate limit
+ * 通常需要 10-60s 恢复；通用错误沿用 1s/2s/4s 指数退避。
+ * 若提供商在 Retry-After 头中显式指定了恢复时间，优先服从。
+ */
+function getRetryDelay(error: unknown, attempt: number): number {
+  const jitter = Math.random() * 500;
+  if (error instanceof NovelHttpError && (error.status === 429 || error.status === 503)) {
+    if (error.retryAfterMs && error.retryAfterMs > 0) {
+      console.error(`[ai.ts] 429 retry attempt=${attempt} waiting ${error.retryAfterMs}ms (Retry-After header)`);
+      return Math.min(error.retryAfterMs, MAX_RETRY_DELAY_MS) + jitter;
+    }
+    // 限流退避阶梯：30s → 60s → 120s → 180s → 300s
+    // LLM 提供商 rate limit 恢复时间差异大（10s-5min），使用更长阶梯确保覆盖。
+    const rateLimitDelays = [30_000, 60_000, 120_000, 180_000, 300_000];
+    const delay = (rateLimitDelays[attempt] ?? 300_000) + jitter;
+    console.error(`[ai.ts] 429 retry attempt=${attempt} waiting ${Math.round(delay)}ms`);
+    return delay;
+  }
+  const delay = RETRY_BASE_DELAY_MS * 2 ** attempt + jitter;
+  console.error(`[ai.ts] retry attempt=${attempt} waiting ${Math.round(delay)}ms (non-429 error: ${error instanceof Error ? error.name : typeof error})`);
+  return delay;
 }
 
 function parseSseEvent(line: string): Record<string, unknown> | undefined {
@@ -118,7 +184,7 @@ async function fetchNonStreamingContent(params: {
     body: JSON.stringify({ ...params.body, stream: false }),
   });
   const responseText = await response.text().catch(() => "");
-  if (!response.ok) throw new NovelHttpError(response.status, responseText);
+  if (!response.ok) throw new NovelHttpError(response.status, responseText, response.headers.get("retry-after"));
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(responseText) as Record<string, unknown>;
@@ -143,17 +209,17 @@ async function fetchNonStreamingContent(params: {
 }
 
 async function fetchNonStreamingContentWithRetry(params: Parameters<typeof fetchNonStreamingContent>[0]) {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+  let attempt = 0;
+  while (true) {
     try {
       return await fetchNonStreamingContent(params);
     } catch (error) {
-      lastError = error;
-      if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
-      await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
+      const maxRetries = getMaxRetries(error);
+      if (!isRetryableError(error) || attempt >= maxRetries - 1) throw error;
+      await sleep(getRetryDelay(error, attempt), params.signal);
+      attempt += 1;
     }
   }
-  throw lastError;
 }
 
 async function fetchAccumulated(params: {
@@ -168,7 +234,7 @@ async function fetchAccumulated(params: {
     signal: params.signal,
     body: JSON.stringify({ ...params.body, stream: true, stream_options: { include_usage: true } }),
   });
-  if (!response.ok) throw new NovelHttpError(response.status, await response.text().catch(() => ""));
+  if (!response.ok) throw new NovelHttpError(response.status, await response.text().catch(() => ""), response.headers.get("retry-after"));
   if (!response.body) throw new Error("AI 响应没有可读取内容");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -211,12 +277,14 @@ async function requestChat(params: {
 }) {
   const config = getNovelApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
-  assertModelContextLimit({ model: params.model, text: params.messages.map((message) => message.content).join("\n"), override: config.modelContextWindow, outputReserve: params.maxTokens ?? 4096 });
-  const body: Record<string, unknown> = { model: params.model, temperature: params.temperature, messages: params.messages };
+  const model = resolveModel(params.model);
+  assertModelContextLimit({ model, text: params.messages.map((message) => message.content).join("\n"), override: config.modelContextWindow, outputReserve: params.maxTokens ?? 4096 });
+  const body: Record<string, unknown> = { model, temperature: params.temperature, messages: params.messages };
   if (params.maxTokens && params.maxTokens > 0) body.max_tokens = params.maxTokens;
   if (params.responseSchema) body.response_format = { type: "json_schema", json_schema: { name: "novel_artifact", strict: true, schema: params.responseSchema } };
   let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+  let attempt = 0;
+  while (true) {
     try {
       try {
         return await fetchAccumulated({ baseUrl: config.baseUrl, apiKey: config.apiKey, body, signal: params.signal });
@@ -238,12 +306,14 @@ async function requestChat(params: {
       }
     } catch (error) {
       lastError = error;
-      if (error instanceof NovelEmptyResponseError && attempt === MAX_RETRIES - 1) {
+      const maxRetries = getMaxRetries(error);
+      if (error instanceof NovelEmptyResponseError && attempt >= maxRetries - 1) {
         const content = await fetchNonStreamingContentWithRetry({ baseUrl: config.baseUrl, apiKey: config.apiKey, body, signal: params.signal });
         return { content, usage: { inputTokens: 0, outputTokens: 0 } };
       }
-      if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
-      await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
+      if (!isRetryableError(error) || attempt >= maxRetries - 1) throw error;
+      await sleep(getRetryDelay(error, attempt), params.signal);
+      attempt += 1;
     }
   }
   throw lastError;
@@ -262,18 +332,20 @@ export async function streamNovelModel(params: {
 }) {
   const config = getNovelApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
+  const model = resolveModel(params.model);
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt].filter(Boolean).join("\n\n");
-  assertModelContextLimit({ model: params.model, text: `${system}\n${params.prompt}`, override: config.modelContextWindow, outputReserve: params.maxTokens ?? 8192 });
+  assertModelContextLimit({ model, text: `${system}\n${params.prompt}`, override: config.modelContextWindow, outputReserve: params.maxTokens ?? 8192 });
   const signal = createTimeoutSignal(params.timeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS, params.signal);
   let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+  let attempt = 0;
+  while (true) {
     let result = "";
     try {
       // Loop 3 实测：revision-stage 重写整章时 LLM 因默认 max_tokens 不足而返回"请分多次发送"拒绝消息
       // 默认 max_tokens（通常 4096）只能输出约 2000-3000 中文字，但章节蓝图目标 5000 字
       // 当 maxTokens 显式提供时传入 API，否则使用 API 提供商默认值
       const requestBody: Record<string, unknown> = {
-        model: params.model,
+        model,
         temperature: params.temperature,
         stream: true,
         messages: [{ role: "system", content: system }, { role: "user", content: params.prompt }],
@@ -285,7 +357,7 @@ export async function streamNovelModel(params: {
         method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` }, signal,
         body: JSON.stringify(requestBody),
       });
-      if (!response.ok) throw new NovelHttpError(response.status, await response.text().catch(() => ""));
+      if (!response.ok) throw new NovelHttpError(response.status, await response.text().catch(() => ""), response.headers.get("retry-after"));
       if (!response.body) throw new Error("AI 响应没有可读取内容");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -325,9 +397,10 @@ export async function streamNovelModel(params: {
       return { content: result.trim(), promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
     } catch (error) {
       lastError = error;
-      if (error instanceof NovelEmptyResponseError && attempt === MAX_RETRIES - 1) {
+      const maxRetries = getMaxRetries(error);
+      if (error instanceof NovelEmptyResponseError && attempt >= maxRetries - 1) {
         const requestBody: Record<string, unknown> = {
-          model: params.model,
+          model,
           temperature: params.temperature,
           messages: [{ role: "system", content: system }, { role: "user", content: params.prompt }],
         };
@@ -336,8 +409,9 @@ export async function streamNovelModel(params: {
         params.onToken?.(content);
         return { content, promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
       }
-      if (!isRetryableError(error) || attempt === MAX_RETRIES - 1) throw error;
-      await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 500);
+      if (!isRetryableError(error) || attempt >= maxRetries - 1) throw error;
+      await sleep(getRetryDelay(error, attempt), signal);
+      attempt += 1;
     }
   }
   throw lastError;
@@ -362,9 +436,10 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
 }) {
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt, "只输出符合 JSON Schema 的 JSON，不要使用 Markdown 代码围栏。"].filter(Boolean).join("\n\n");
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [{ role: "system", content: system }, { role: "user", content: params.prompt }];
+  const model = resolveModel(params.model);
   const validate = new Ajv({ allErrors: true, strict: false }).compile(params.schema as AnySchema);
   const signal = createTimeoutSignal(params.timeoutMs ?? DEFAULT_STRUCTURED_TIMEOUT_MS, params.signal);
-  let response = await requestChat({ ...params, signal, messages, responseSchema: params.schema });
+  let response = await requestChat({ ...params, model, signal, messages, responseSchema: params.schema });
   let parsed: Record<string, unknown> | undefined;
   try { parsed = parseJsonContent(response.content); } catch { parsed = undefined; }
   if (!parsed || !validate(parsed)) {
@@ -374,7 +449,7 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
       const repairPrompt = attempt === 0
         ? `把下面输出修复为严格符合给定 Schema 的 JSON。不得增加原输出没有的故事事实。summary 字段只写候选整体概览，禁止描述修复过程、Schema 约束或被丢弃的字段。\n\nSchema:\n${schemaStr}\n\n校验错误：${errors}\n\n原输出：\n${response.content}`
         : `上一次修复仍然失败。请完全重新生成符合 Schema 的 JSON。只输出 JSON，不要输出任何其他内容。summary 字段只写候选整体概览，禁止描述修复过程、Schema 约束或被丢弃的字段。\n\n必须包含的字段：${Object.keys(params.schema.properties ?? {}).join(", ")}\n\nSchema:\n${schemaStr}\n\n校验错误：${errors}\n\n原输出：\n${response.content}`;
-      const repaired = await requestChat({ model: params.model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: repairPrompt }], signal, responseSchema: params.schema, maxTokens: params.maxTokens });
+      const repaired = await requestChat({ model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: repairPrompt }], signal, responseSchema: params.schema, maxTokens: params.maxTokens });
       response = { content: repaired.content, usage: { inputTokens: response.usage.inputTokens + repaired.usage.inputTokens, outputTokens: response.usage.outputTokens + repaired.usage.outputTokens } };
       try { parsed = parseJsonContent(response.content); } catch { parsed = undefined; }
       if (parsed && validate(parsed)) break;

@@ -5,8 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNovelProject, NovelDatabase, recordBase } from "../db";
 import { RuntimeRecordConflictError, SqliteNovelStore, sha256 } from "@/novel-runtime/sqlite-store";
-import { assertRuntimeActor, runtimeNextActions, runtimePolicies, type LegacyMigrationBundle, type RuntimeChange, type RuntimeOperation } from "@/novel-runtime/contracts";
-import { buildRuntimeRevisionInstruction, recoverInterruptedOperation, selectNextPlanWork } from "@/novel-runtime/service";
+import { assertRuntimeActor, internalEvidencePasses, runtimeNextActions, runtimePolicies, type LegacyMigrationBundle, type RuntimeChange, type RuntimeOperation } from "@/novel-runtime/contracts";
+import { buildRuntimeRevisionInstruction, NovelRuntimeService, recoverInterruptedOperation, selectNextPlanWork } from "@/novel-runtime/service";
 
 describe("SQLite novel runtime store", () => {
   const cleanup: Array<() => Promise<void> | void> = [];
@@ -39,6 +39,7 @@ describe("SQLite novel runtime store", () => {
     cleanup.push(async () => { await source.delete(); await target.delete(); });
     await source.open();
     const project = await createNovelProject({ title: "持久化项目", premise: "跨重启保持", genre: ["测试"] }, source);
+    expect(project.settings.textModel).toBe("gpt-5-5");
     await source.entities.put({ ...recordBase(project.id), kind: "character", name: "林舟", aliases: [], summary: "主角", description: "", tags: [], attributes: {}, lockedFacts: [] });
     const first = new SqliteNovelStore(path.database, path.backups);
     await first.flushProject(source, project.id);
@@ -241,14 +242,83 @@ describe("SQLite novel runtime store", () => {
     expect((await db.projects.get(project.id))?.title).toBe("事务前");
   });
 
+  it("commits a patched candidate and its invalidated evidence atomically", async () => {
+    const path = paths();
+    const db = new NovelDatabase(`runtime-candidate-rollback-${crypto.randomUUID()}`);
+    cleanup.push(() => db.delete());
+    await db.open();
+    const project = await createNovelProject({ title: "候选事务", premise: "补丁原子性", genre: ["测试"] }, db);
+    const proposal = {
+      ...recordBase(project.id), id: "candidate-proposal", title: "候选", operation: "structured:project-positioning", taskKey: "project-positioning" as const,
+      status: "pending" as const, previewMarkdown: "原候选", patches: [], items: [], contextPacketId: "context", model: "test",
+    };
+    await db.proposals.put(proposal);
+    const store = new SqliteNovelStore(path.database, path.backups);
+    cleanup.push(() => store.close());
+    await store.flushProject(db, project.id);
+    await db.proposals.update(proposal.id, { previewMarkdown: "补丁后的候选", revision: 2, updatedAt: Date.now() });
+    const change: RuntimeChange = {
+      id: "candidate-change", operationId: "candidate-operation", projectId: project.id, workItemId: "candidate-work", artifactRefs: [proposal.id], title: "候选", summary: "补丁后的候选",
+      evidence: { complete: true, artifactFingerprint: "a".repeat(64), blockerCount: 0, majorCount: 0, openIssues: [], iteration: 0, maxIterations: null, internalGate: { passed: false, reason: "候选已被补丁修改", checkedAt: 2 } },
+      status: "pending", baseSnapshotHash: store.snapshotHash(project.id), createdAt: 1, updatedAt: 2,
+    };
+    const blocker = new DatabaseSync(path.database);
+    blocker.exec("CREATE TRIGGER reject_candidate_change BEFORE INSERT ON runtime_changes BEGIN SELECT RAISE(ABORT, 'forced candidate failure'); END;");
+    blocker.close();
+
+    await expect(store.commitChangeState(db, change)).rejects.toThrow(/forced candidate failure/);
+
+    expect(store.getChange(change.id)).toBeUndefined();
+    expect(store.getProjectSnapshot(project.id).records.proposals?.[0]?.previewMarkdown).toBe("原候选");
+  });
+
   it("locks review authority to the operation driver and exposes structured next actions", () => {
     const human: RuntimeOperation = { id: "human-op", projectId: "project", kind: "plan", driver: "human", ...runtimePolicies("human"), status: "awaiting_review", input: {}, baseSnapshotHash: "hash", attempt: 1, currentChangeId: "change", createdAt: 1, updatedAt: 2 };
     const change: RuntimeChange = { id: "change", operationId: human.id, projectId: human.projectId, workItemId: "work", artifactRefs: ["artifact"], title: "候选", summary: "候选", evidence: { complete: true, openIssues: [], iteration: 0, maxIterations: 2 }, status: "pending", baseSnapshotHash: "hash", createdAt: 1, updatedAt: 2 };
     expect(() => assertRuntimeActor(human, { type: "external-llm", id: "agent", model: "model" })).toThrow(/不接受/);
     expect(() => assertRuntimeActor(human, { type: "user", id: "author" })).not.toThrow();
-    expect(runtimeNextActions(human, change).map((action) => action.type)).toEqual(["inspect-change", "review-change"]);
+    expect(runtimeNextActions(human, change).map((action) => action.type)).toEqual(["read-agent-guide", "inspect-change", "review-change", "patch-change", "regenerate-change"]);
     const external = { ...human, driver: "external-mcp" as const, ...runtimePolicies("external-mcp") };
     expect(() => assertRuntimeActor(external, { type: "external-llm", id: "agent" })).toThrow(/模型身份/);
+    expect(external.reviewPolicy.maxIterations).toBeNull();
+    expect(external.improvementPolicy.autoPromote).toBe(true);
+  });
+
+  it("does not offer acceptance while the internal candidate gate reports blockers", () => {
+    const operation: RuntimeOperation = { id: "blocked-op", projectId: "project", kind: "write", driver: "external-mcp", ...runtimePolicies("external-mcp"), status: "awaiting_review", input: {}, baseSnapshotHash: "hash", attempt: 1, currentChangeId: "blocked-change", createdAt: 1, updatedAt: 2 };
+    const change: RuntimeChange = {
+      id: "blocked-change", operationId: operation.id, projectId: operation.projectId, workItemId: "work", artifactRefs: ["artifact"], title: "正文候选", summary: "存在连续性问题",
+      evidence: { complete: true, blockerCount: 1, majorCount: 0, openIssues: ["时间线冲突"], iteration: 4, maxIterations: null, internalGate: { passed: false, reason: "项目内部质量证据仍有 blocker 或 major", checkedAt: 3 } },
+      status: "pending", baseSnapshotHash: "hash", createdAt: 1, updatedAt: 2,
+    };
+    const review = runtimeNextActions(operation, change).find((action) => action.type === "review-change");
+    expect(review?.allowedDecisions).toEqual(["revise"]);
+    expect(runtimeNextActions(operation, change).some((action) => action.type === "patch-change")).toBe(true);
+  });
+
+  it("fails closed when internal evidence is missing or explicitly invalidated", () => {
+    const artifactFingerprint = "a".repeat(64);
+    const missing = { complete: true, openIssues: [], iteration: 0, maxIterations: null };
+    const invalidated = { ...missing, blockerCount: 0, majorCount: 0, internalGate: { passed: false, reason: "候选已被补丁修改", checkedAt: 1 } };
+    const passed = { ...missing, artifactFingerprint, blockerCount: 0, majorCount: 0, internalGate: { passed: true, reason: "审核通过", checkedAt: 2 } };
+
+    expect(internalEvidencePasses(missing)).toBe(false);
+    expect(internalEvidencePasses(invalidated)).toBe(false);
+    expect(internalEvidencePasses(passed)).toBe(true);
+    expect(internalEvidencePasses(passed, "b".repeat(64))).toBe(false);
+  });
+
+  it("recovers running operations before closing the runtime store", () => {
+    const path = paths();
+    const store = new SqliteNovelStore(path.database, path.backups);
+    const service = new NovelRuntimeService(store);
+    const operation: RuntimeOperation = { id: "shutdown-op", projectId: "project-1", kind: "write", driver: "external-mcp", ...runtimePolicies("external-mcp"), status: "running", input: {}, baseSnapshotHash: "hash", attempt: 1, leaseExpiresAt: Date.now() + 600_000, createdAt: 1, updatedAt: 2 };
+    store.putOperation(operation);
+
+    service.prepareForShutdown();
+
+    expect(store.getOperation(operation.id)).toMatchObject({ status: "queued", input: { runtimeRecovery: true } });
+    store.close();
   });
 
   it("persists operation leases and idempotency request keys across reopen", () => {

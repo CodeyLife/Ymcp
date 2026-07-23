@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createNovelRuntime } from "./novel-runtime.ts";
 import { createCreativeMcpServer } from "./novel-mcp-server.mjs";
+import { ensureNovelRuntime } from "./novel-runtime-client.mjs";
+import { novelDb, recordBase } from "../src/features/novel/db.ts";
+import { createCreativeRun, enqueueCreativeWork } from "../src/features/novel/creative-execution.ts";
 
 async function harness(context, { profile, sessionId = crypto.randomUUID() } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "ymcp-novel-runtime-test-"));
@@ -36,13 +40,20 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   const { client, runtime } = await harness(context);
   const listed = await client.listTools();
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-    "novel_change_get", "novel_change_review",
+    "novel_agent_guide_get", "novel_autopilot_get", "novel_change_get", "novel_change_patch", "novel_change_revalidate", "novel_change_review",
     "novel_improvement_evaluate", "novel_improvement_get", "novel_improvement_promote", "novel_improvement_propose", "novel_improvement_review", "novel_improvement_rollback",
     "novel_operation_get", "novel_operation_retry", "novel_plan", "novel_project_create", "novel_project_list", "novel_project_select", "novel_revise", "novel_status", "novel_write",
   ]);
   const created = text(await client.callTool({ name: "novel_project_create", arguments: { title: "无浏览器项目", premise: "MCP 直接使用本地运行时", genre: ["现实"] } }));
   assert.equal(created.project.title, "无浏览器项目");
   const runtimeBase = `http://${runtime.address.host}:${runtime.address.port}`;
+  const health = await fetch(`${runtimeBase}/v1/health`).then((response) => response.json());
+  assert.equal(health.service, "ymcp-novel-runtime");
+  assert.equal(typeof health.runtimeRoot, "string");
+  assert.equal(health.protocolVersion, 2);
+  assert.match(health.sourceVersion, /^[a-f0-9]{64}$/);
+  const forbiddenRestart = await fetch(`${runtimeBase}/v1/admin/restart`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runtimeRoot: `${health.runtimeRoot}-other` }) });
+  assert.equal(forbiddenRestart.status, 403);
   const snapshot = await fetch(`${runtimeBase}/v1/projects/${created.project.id}/records`).then((response) => response.json());
   const projectRecord = snapshot.records.projects[0];
   const commandBody = { actor: { type: "user", id: "ui-test" }, mutations: [{ type: "put", collection: "projects", id: projectRecord.id, expectedRevision: projectRecord.revision, value: { ...projectRecord, title: "统一命令项目" } }] };
@@ -55,6 +66,10 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   assert.equal(staleMutation.status, 409);
   const status = text(await client.callTool({ name: "novel_status", arguments: {} }));
   assert.equal(status.project.id, created.project.id);
+  const guide = text(await client.callTool({ name: "novel_agent_guide_get", arguments: {} }));
+  assert.equal(guide.project.id, created.project.id);
+  assert.ok(guide.protocol.requiredOrder.includes("读取完整候选"));
+  assert.ok(guide.protocol.invariants.some((rule) => /内部与外部审核/.test(rule)));
   const missingChange = text(await client.callTool({ name: "novel_change_get", arguments: { changeId: "missing-change" } }));
   assert.equal(missingChange.tool, "novel_change_get");
   assert.match(missingChange.error, /候选变更不存在/);
@@ -75,7 +90,114 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   assert.equal(operation.operation.driver, "external-mcp");
   assert.equal(operation.operation.reviewPolicy.mode, "external-review");
   assert.equal(operation.operation.improvementPolicy.mode, "agent-proposable");
+  assert.equal(operation.operation.reviewPolicy.maxIterations, null);
+  assert.equal(operation.operation.improvementPolicy.autoPromote, true);
   assert.ok(["queued", "running", "failed"].includes(operation.operation.status));
+
+  const gatedProject = text(await client.callTool({ name: "novel_project_create", arguments: { title: "双审核门禁项目", premise: "隔离验证内部审核拦截", genre: ["测试"] } })).project;
+
+  const fingerprintRun = await createCreativeRun({ projectId: gatedProject.id, mode: "external", objective: "验证候选指纹" }, novelDb);
+  const fingerprintWork = await enqueueCreativeWork(fingerprintRun.id, { kind: "generation", taskKey: "project-positioning", instruction: "生成定位候选" }, novelDb);
+  const fingerprintProposal = {
+    ...recordBase(gatedProject.id),
+    id: "fingerprint-proposal",
+    title: "定位候选",
+    operation: "structured:project-positioning",
+    taskKey: "project-positioning",
+    status: "pending",
+    previewMarkdown: "定位候选",
+    patches: [],
+    items: [{ id: "fingerprint-item", label: "定位", operation: "update", targetTable: "projects", targetId: gatedProject.id, payload: { audience: "长篇悬疑读者" }, rationale: "明确读者" }],
+    contextPacketId: "fingerprint-context",
+    model: "test-model",
+  };
+  await novelDb.proposals.put(fingerprintProposal);
+  await novelDb.creativeWorkItems.update(fingerprintWork.id, { status: "waiting-review", artifactRefs: [fingerprintProposal.id] });
+  const fingerprintOperation = {
+    id: "fingerprint-operation", projectId: gatedProject.id, kind: "plan", driver: "external-mcp",
+    reviewPolicy: { mode: "external-review", maxIterations: null }, improvementPolicy: { mode: "agent-proposable", requireCrossScenarioEvidence: true, autoPromote: true },
+    status: "awaiting_review", input: {}, baseSnapshotHash: runtime.store.snapshotHash(gatedProject.id), attempt: 1, runId: fingerprintRun.id, currentWorkItemId: fingerprintWork.id, currentChangeId: "fingerprint-change", createdAt: 1, updatedAt: 1,
+  };
+  runtime.store.putOperation(fingerprintOperation);
+  runtime.store.putChange({ id: "fingerprint-change", operationId: fingerprintOperation.id, projectId: gatedProject.id, workItemId: fingerprintWork.id, artifactRefs: [fingerprintProposal.id], title: "定位候选", summary: "定位候选", evidence: { complete: true, blockerCount: 0, majorCount: 0, openIssues: [], iteration: 0, maxIterations: null, internalGate: { passed: true, reason: "测试候选", checkedAt: 1 } }, status: "pending", baseSnapshotHash: fingerprintOperation.baseSnapshotHash, createdAt: 1, updatedAt: 1 });
+  const fingerprintDetails = await runtime.service.getChangeDetails("fingerprint-change");
+  assert.match(fingerprintDetails.itemPayloadFingerprints["fingerprint-item"], /^[a-f0-9]{64}$/);
+
+  const blockedOperation = {
+    id: "blocked-external-operation", projectId: gatedProject.id, kind: "write", driver: "external-mcp",
+    reviewPolicy: { mode: "external-review", maxIterations: null }, improvementPolicy: { mode: "agent-proposable", requireCrossScenarioEvidence: true, autoPromote: true },
+    status: "awaiting_review", input: {}, baseSnapshotHash: "blocked-base", attempt: 1, currentChangeId: "blocked-external-change", createdAt: 1, updatedAt: 1,
+  };
+  const blockedChange = {
+    id: "blocked-external-change", operationId: blockedOperation.id, projectId: gatedProject.id, workItemId: "blocked-work", artifactRefs: [], title: "阻断候选", summary: "内部连续性冲突",
+    evidence: { complete: true, blockerCount: 1, majorCount: 0, openIssues: ["连续性冲突"], iteration: 4, maxIterations: null, internalGate: { passed: false, reason: "项目内部质量证据仍有 blocker 或 major", checkedAt: 1 } },
+    status: "pending", baseSnapshotHash: "blocked-base", createdAt: 1, updatedAt: 1,
+  };
+  runtime.store.putOperation(blockedOperation);
+  runtime.store.putChange(blockedChange);
+  const blockedDetails = await runtime.service.getChangeDetails(blockedChange.id);
+  const contradictoryReview = await fetch(`${runtimeBase}/v1/changes/${blockedChange.id}/review`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId: gatedProject.id,
+      decision: "accept",
+      actor: { type: "external-llm", id: "reviewer-contradictory", model: "review-model" },
+      review: {
+        reviewRunId: "review-run-contradictory",
+        verdict: "passed",
+        summary: "结论与问题严重度矛盾",
+        artifactFingerprint: blockedDetails.artifactFingerprint,
+        issues: [{ id: "blocking-issue", severity: "blocker", dimension: "continuity", title: "时间线冲突", evidence: "候选违反既有顺序", suggestion: "修订时间线" }],
+        learning: { conclusion: "no-shared-learning", summary: "当前仅能确认候选问题" },
+      },
+    }),
+  });
+  assert.equal(contradictoryReview.status, 400);
+
+  const crossProjectPatch = await fetch(`${runtimeBase}/v1/changes/${blockedChange.id}/patch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId: created.project.id,
+      itemId: "missing-item",
+      artifactFingerprint: blockedDetails.artifactFingerprint,
+      expectedPayloadFingerprint: "0".repeat(64),
+      payload: {},
+      rationale: "验证项目边界",
+      issueIds: ["scope-issue"],
+      actor: { type: "external-llm", id: "reviewer-scope", model: "review-model" },
+      review: {
+        reviewRunId: "review-run-scope",
+        verdict: "revise",
+        summary: "候选需要局部修改",
+        artifactFingerprint: blockedDetails.artifactFingerprint,
+        issues: [{ id: "scope-issue", severity: "major", dimension: "continuity", title: "项目不匹配", evidence: "候选不属于所选项目", suggestion: "选择正确项目" }],
+        learning: { conclusion: "no-shared-learning", summary: "这是调用作用域错误" },
+      },
+    }),
+  });
+  assert.equal(crossProjectPatch.status, 409);
+
+  const crossProjectRevalidate = await fetch(`${runtimeBase}/v1/changes/${blockedChange.id}/revalidate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId: created.project.id,
+      artifactFingerprint: blockedDetails.artifactFingerprint,
+      actor: { type: "external-llm", id: "reviewer-revalidate-scope", model: "review-model" },
+    }),
+  });
+  assert.equal(crossProjectRevalidate.status, 409);
+
+  await assert.rejects(
+    runtime.service.reviewChange(blockedChange.id, "accept", "外部审核通过", { type: "external-llm", id: "reviewer-a", model: "review-model" }, "blocked-accept", {
+      reviewRunId: "review-run-blocked", verdict: "passed", summary: "外部审核未发现问题", issues: [], artifactFingerprint: blockedDetails.artifactFingerprint,
+      learning: { conclusion: "no-shared-learning", summary: "单次连续性问题不足以证明共享流程缺陷" },
+    }),
+    /内部审核门禁未通过/,
+  );
+  assert.equal(runtime.store.getChange(blockedChange.id)?.status, "pending");
 });
 
 test("project selection is isolated between MCP sessions", async (context) => {
@@ -109,4 +231,55 @@ test("advanced tools are opt-in and still use the local runtime", async (context
   assert.ok(tools.tools.some((tool) => tool.name === "novel_run_create"));
   assert.ok(tools.tools.some((tool) => tool.name === "novel_rule_promote"));
   assert.ok(tools.tools.some((tool) => tool.name === "novel_plan"));
+});
+
+test("same-root restart releases the runtime listener", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "ymcp-novel-restart-test-"));
+  const runtime = await createNovelRuntime({ databasePath: join(directory, "runtime.sqlite"), port: 0 });
+  context.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtimeBase = `http://${runtime.address.host}:${runtime.address.port}`;
+  const health = await fetch(`${runtimeBase}/v1/health`).then((response) => response.json());
+
+  const restart = await fetch(`${runtimeBase}/v1/admin/restart`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runtimeRoot: health.runtimeRoot }),
+  });
+  assert.equal(restart.status, 202);
+
+  const deadline = Date.now() + 2_000;
+  let stopped = false;
+  while (Date.now() < deadline && !stopped) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    stopped = await fetch(`${runtimeBase}/v1/health`).then(() => false, () => true);
+  }
+  assert.equal(stopped, true);
+});
+
+test("runtime client fails closed when an old health response omits root ownership", async () => {
+  const legacy = createServer((request, response) => {
+    response.writeHead(request.url === "/v1/health" ? 200 : 404, { "content-type": "application/json" });
+    response.end(JSON.stringify(request.url === "/v1/health"
+      ? { service: "ymcp-novel-runtime", protocolVersion: 1 }
+      : { error: "not found" }));
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    legacy.once("error", rejectListen);
+    legacy.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = legacy.address();
+  assert.notEqual(address, null);
+  const previousUrl = process.env.YMCP_NOVEL_RUNTIME_URL;
+  const previousNoSpawn = process.env.YMCP_NOVEL_RUNTIME_NO_SPAWN;
+  process.env.YMCP_NOVEL_RUNTIME_URL = `http://127.0.0.1:${address.port}`;
+  process.env.YMCP_NOVEL_RUNTIME_NO_SPAWN = "true";
+  try {
+    await assert.rejects(ensureNovelRuntime(), /旧版小说运行时协议/);
+  } finally {
+    await new Promise((resolveClose) => legacy.close(resolveClose));
+    if (previousUrl === undefined) delete process.env.YMCP_NOVEL_RUNTIME_URL;
+    else process.env.YMCP_NOVEL_RUNTIME_URL = previousUrl;
+    if (previousNoSpawn === undefined) delete process.env.YMCP_NOVEL_RUNTIME_NO_SPAWN;
+    else process.env.YMCP_NOVEL_RUNTIME_NO_SPAWN = previousNoSpawn;
+  }
 });

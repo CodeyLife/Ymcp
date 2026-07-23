@@ -5,13 +5,14 @@ export type RuntimeChangeStatus = "pending" | "accepted" | "rejected" | "superse
 
 export interface RuntimeReviewPolicy {
   mode: "human-gated" | "external-review";
-  maxIterations: number;
+  /** null keeps an external quality loop active until it reaches a valid candidate. */
+  maxIterations: number | null;
 }
 
 export interface RuntimeImprovementPolicy {
   mode: "manual" | "agent-proposable";
   requireCrossScenarioEvidence: true;
-  autoPromote: false;
+  autoPromote: boolean;
 }
 
 export interface RuntimeActor {
@@ -21,7 +22,7 @@ export interface RuntimeActor {
 }
 
 export interface RuntimeNextAction {
-  type: "inspect-change" | "review-change" | "wait" | "retry" | "inspect-failure" | "propose-improvement";
+  type: "read-agent-guide" | "inspect-change" | "review-change" | "patch-change" | "regenerate-change" | "wait" | "retry" | "inspect-failure" | "propose-improvement";
   operationId: string;
   changeId?: string;
   allowedDecisions?: Array<"accept" | "reject" | "revise">;
@@ -30,13 +31,54 @@ export interface RuntimeNextAction {
 
 export interface RuntimeCandidateEvidence {
   complete: boolean;
+  artifactFingerprint?: string;
   artifactKind?: string;
   qualityScore?: number;
   blockerCount?: number;
   majorCount?: number;
   openIssues: string[];
   iteration: number;
-  maxIterations: number;
+  maxIterations: number | null;
+  internalGate?: { passed: boolean; reason: string; checkedAt: number };
+}
+
+export interface RuntimeReviewIssue {
+  id: string;
+  severity: "blocker" | "major" | "warning";
+  dimension: string;
+  title: string;
+  evidence: string;
+  suggestion: string;
+  evidenceItemId?: string;
+  evidenceField?: string;
+  evidenceQuote?: string;
+}
+
+export interface RuntimeLearningAssessment {
+  conclusion: "no-shared-learning" | "propose-improvement";
+  summary: string;
+  affectedInputClass?: string;
+  underlyingMechanism?: string;
+}
+
+export interface RuntimeExternalReview {
+  reviewRunId: string;
+  verdict: "passed" | "revise";
+  summary: string;
+  issues: RuntimeReviewIssue[];
+  learning: RuntimeLearningAssessment;
+  artifactFingerprint: string;
+  actor: RuntimeActor;
+  reviewedAt: number;
+}
+
+export interface RuntimePatchRecord {
+  itemId: string;
+  expectedPayloadFingerprint: string;
+  rationale: string;
+  issueIds: string[];
+  actor: RuntimeActor;
+  patchedAt: number;
 }
 
 export interface RuntimeOperation {
@@ -72,6 +114,9 @@ export interface RuntimeChange {
   status: RuntimeChangeStatus;
   baseSnapshotHash: string;
   review?: { decision: "accept" | "reject" | "revise"; note: string; actor: RuntimeActor; reviewedAt: number };
+  artifactFingerprint?: string;
+  externalReviews?: RuntimeExternalReview[];
+  patches?: RuntimePatchRecord[];
   createdAt: number;
   updatedAt: number;
 }
@@ -146,9 +191,25 @@ export function runtimePolicies(driver: RuntimeDriver): Pick<RuntimeOperation, "
         improvementPolicy: { mode: "manual", requireCrossScenarioEvidence: true, autoPromote: false },
       }
     : {
-        reviewPolicy: { mode: "external-review", maxIterations: 3 },
-        improvementPolicy: { mode: "agent-proposable", requireCrossScenarioEvidence: true, autoPromote: false },
+        reviewPolicy: { mode: "external-review", maxIterations: null },
+        improvementPolicy: { mode: "agent-proposable", requireCrossScenarioEvidence: true, autoPromote: true },
       };
+}
+
+export function internalEvidencePasses(evidence: RuntimeCandidateEvidence, expectedArtifactFingerprint?: string): boolean {
+  return evidence.complete
+    && typeof evidence.artifactFingerprint === "string"
+    && evidence.artifactFingerprint.length === 64
+    && (!expectedArtifactFingerprint || evidence.artifactFingerprint === expectedArtifactFingerprint)
+    && evidence.internalGate?.passed === true
+    && typeof evidence.blockerCount === "number"
+    && typeof evidence.majorCount === "number"
+    && evidence.blockerCount === 0
+    && evidence.majorCount === 0;
+}
+
+export function latestExternalReview(change: RuntimeChange): RuntimeExternalReview | undefined {
+  return change.externalReviews?.at(-1);
 }
 
 export function assertRuntimeActor(operation: RuntimeOperation, actor: RuntimeActor): void {
@@ -160,9 +221,15 @@ export function assertRuntimeActor(operation: RuntimeOperation, actor: RuntimeAc
 
 export function runtimeNextActions(operation: RuntimeOperation, change?: RuntimeChange): RuntimeNextAction[] {
   if (operation.status === "awaiting_review" && change?.status === "pending") {
+    const internalPassed = operation.driver === "human"
+      ? change.evidence.complete
+      : internalEvidencePasses(change.evidence, change.artifactFingerprint);
     return [
+      { type: "read-agent-guide", operationId: operation.id, changeId: change.id, reason: "先读取状态相关协议，确认本轮不可跳过的审核门" },
       { type: "inspect-change", operationId: operation.id, changeId: change.id, reason: "先读取完整候选与质量证据" },
-      { type: "review-change", operationId: operation.id, changeId: change.id, allowedDecisions: ["accept", "reject", "revise"], reason: "候选等待当前 driver 提交审核决定" },
+      { type: "review-change", operationId: operation.id, changeId: change.id, allowedDecisions: internalPassed ? ["accept", "revise"] : ["revise"], reason: internalPassed ? "内部质量门已通过，仍需外部 LLM 独立审核" : "内部质量门未通过，外部审核只能选择局部修订或重生成" },
+      { type: "patch-change", operationId: operation.id, changeId: change.id, reason: "问题有稳定 item 定位且可局部修复时，更新待审核候选后重新进入双审核" },
+      { type: "regenerate-change", operationId: operation.id, changeId: change.id, reason: "问题影响结构、连续性或无法安全定位时，携带审核意见重生成完整候选" },
     ];
   }
   if (operation.status === "queued" || operation.status === "running") {

@@ -98,7 +98,7 @@ export interface CreativeExecutionDependencies {
 const MODE_POLICIES: Record<CreativeRunMode, CreativeRunPolicy> = {
   manual: { auditTrigger: "manual", commitPolicy: "manual", qualityThreshold: 3.7, maxIterations: 2 },
   "segment-auto": { auditTrigger: "automatic", commitPolicy: "quality-gated-auto", qualityThreshold: 3.7, maxIterations: 2 },
-  external: { auditTrigger: "external", commitPolicy: "external-auto", qualityThreshold: 3.7, maxIterations: 3 },
+  external: { auditTrigger: "external", commitPolicy: "external-auto", qualityThreshold: 3.7, maxIterations: null },
 };
 
 function resolveRunPolicy(mode: CreativeRunMode, overrides?: Partial<CreativeRunPolicy>): CreativeRunPolicy {
@@ -110,13 +110,14 @@ function resolveRunPolicy(mode: CreativeRunMode, overrides?: Partial<CreativeRun
     throw new Error(`运行模式 ${mode} 的 commitPolicy 不可覆盖`);
   }
   const qualityThreshold = overrides?.qualityThreshold ?? authority.qualityThreshold;
-  const maxIterations = overrides?.maxIterations ?? authority.maxIterations;
+  const maxIterations = overrides?.maxIterations !== undefined ? overrides.maxIterations : authority.maxIterations;
   if (!Number.isFinite(qualityThreshold) || qualityThreshold < 0 || qualityThreshold > 5) {
     throw new Error("qualityThreshold 必须是 0 到 5 之间的有限数值");
   }
-  if (!Number.isInteger(maxIterations) || maxIterations < 0 || maxIterations > 20) {
+  if (maxIterations !== null && (!Number.isInteger(maxIterations) || maxIterations < 0 || maxIterations > 20)) {
     throw new Error("maxIterations 必须是 0 到 20 之间的整数");
   }
+  if (maxIterations === null && mode !== "external") throw new Error("只有 external 运行允许无限质量迭代");
   return { ...authority, qualityThreshold, maxIterations };
 }
 
@@ -232,7 +233,8 @@ export function evaluateCreativeReviewGate(reviews: CreativeReview[]): CreativeR
   if (!reviews.length) return { passed: false, openIssues: [], reason: "尚未产生审核结果" };
   const ordered = [...reviews].sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
   const latest = ordered.at(-1)!;
-  const currentGeneration = ordered.filter((review) => review.subjectArtifactId === latest.subjectArtifactId);
+  const currentGeneration = ordered.filter((review) => review.subjectArtifactId === latest.subjectArtifactId
+    && (latest.subjectRevision === undefined || review.subjectRevision === latest.subjectRevision));
   const supersededIds = new Set(currentGeneration.flatMap((review) => review.issues.map((issue) => issue.supersedesIssueId).filter((id): id is string => Boolean(id))));
   const openIssues = currentGeneration
     .flatMap((review) => review.issues)
@@ -284,7 +286,7 @@ function availableActions(run: CreativeRun, workItems: CreativeWorkItem[], revie
   for (const item of workItems.filter((candidate) => candidate.status === "waiting-review" || candidate.status === "blocked")) {
     actions.push({ type: "review.request", workItemId: item.id }, { type: "review.submit", workItemId: item.id });
     const gate = evaluateCreativeReviewGate(groupedReviews.get(item.id) ?? []);
-    if ((gate.verdict === "revise" || gate.verdict === "blocked") && item.iteration < run.policy.maxIterations) actions.push({ type: "work.revise", workItemId: item.id });
+    if ((gate.verdict === "revise" || gate.verdict === "blocked") && (run.policy.maxIterations === null || item.iteration < run.policy.maxIterations)) actions.push({ type: "work.revise", workItemId: item.id });
     if (run.mode === "manual" || reviewGateAllowsCommit(run, gate)) actions.push({ type: "work.accept", workItemId: item.id });
   }
   return actions;
@@ -501,7 +503,7 @@ async function defaultReviewer(work: CreativeWorkItem, _run: CreativeRun, db: No
         maxTokens: 4096,
         prompt: `# 创作候选审核\n审核以下结构化创作候选是否满足作者指令、项目既有事实、引用完整性和长篇可持续性。只报告有具体证据的问题，不为凑数制造问题。\n\n## 作者指令\n${work.instruction}\n\n## 候选类型\n${proposal.taskKey ?? work.kind}\n\n## 候选内容\n${proposal.previewMarkdown}\n\n## 输出要求\n每个问题给出 severity、dimension、title、evidence 和可执行 suggestion。`,
       });
-      const issues = audited.data.issues.map((issue, index) => ({ ...issue, issueId: `${proposal.id}:manual-audit:${index}` }));
+      const issues = audited.data.issues.map((issue, index) => ({ ...issue, issueId: `${proposal.id}:manual-audit:${proposal.revision}:${index}` }));
       const majorCount = issues.filter((issue) => issue.severity === "blocker" || issue.severity === "major").length;
       return { subjectArtifactId, reviewer: "internal", verdict: majorCount ? "revise" : "passed", summary: audited.data.summary, issues };
     }
@@ -646,9 +648,13 @@ async function storeReview(params: {
   if (typeof input.summary !== "string" || !input.summary.trim()) throw new Error("审核摘要不能为空");
   if (!work.artifactRefs.includes(input.subjectArtifactId)) throw new Error("审核对象不属于当前创作任务");
   const priorReviews = await db.creativeReviews.where("workItemId").equals(work.id).toArray();
+  const subjectRevision = work.kind === "generation" || work.kind === "plot-segment"
+    ? (await db.proposals.get(input.subjectArtifactId))?.revision
+    : undefined;
   const priorIssueIds = new Set(priorReviews.flatMap((review) => review.issues.map((issue) => issue.issueId)));
   const currentArtifactIssueIds = new Set(priorReviews
-    .filter((review) => review.subjectArtifactId === input.subjectArtifactId)
+    .filter((review) => review.subjectArtifactId === input.subjectArtifactId
+      && (subjectRevision === undefined || review.subjectRevision === subjectRevision))
     .flatMap((review) => review.issues.map((issue) => issue.issueId)));
   const issueIds = new Set<string>();
   for (const issue of input.issues) {
@@ -668,6 +674,7 @@ async function storeReview(params: {
     creativeRunId: run.id,
     workItemId: work.id,
     subjectArtifactId: input.subjectArtifactId,
+    subjectRevision,
     reviewer: input.reviewer,
     verdict: input.verdict,
     issues: input.issues.map((issue) => ({ ...structuredClone(issue), status: "open" })),
@@ -790,7 +797,7 @@ export async function executeCreativeCommand(
 
   if (command.type === "work.revise") {
     if (!["waiting-review", "blocked"].includes(work.status)) throw new Error("创作任务当前不能进入下一轮修订");
-    if (work.iteration >= run.policy.maxIterations) throw new Error(`创作任务已达到最大迭代次数：${run.policy.maxIterations}`);
+    if (run.policy.maxIterations !== null && work.iteration >= run.policy.maxIterations) throw new Error(`创作任务已达到最大迭代次数：${run.policy.maxIterations}`);
     const instruction = command.instruction?.trim();
     if (instruction) {
       const baseInstruction = typeof work.parameters.baseInstruction === "string" && work.parameters.baseInstruction.trim()

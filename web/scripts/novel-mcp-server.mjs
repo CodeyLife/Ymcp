@@ -7,6 +7,16 @@ import { z } from "zod";
 import { ensureNovelRuntime, runtimeRequest } from "./novel-runtime-client.mjs";
 
 const projectRefSchema = z.string().min(1).optional().describe("项目 ID 或完整标题；省略时使用当前 MCP 会话已选择的项目");
+const reviewIssueSchema = z.object({
+  id: z.string().min(1), severity: z.enum(["blocker", "major", "warning"]), dimension: z.string().min(1), title: z.string().min(1), evidence: z.string().min(1), suggestion: z.string().min(1),
+  evidenceItemId: z.string().min(1).optional(), evidenceField: z.string().min(1).optional(), evidenceQuote: z.string().min(1).optional(),
+});
+const externalReviewSchema = z.object({
+  reviewRunId: z.string().min(1), verdict: z.enum(["passed", "revise"]), summary: z.string().min(1), artifactFingerprint: z.string().length(64), issues: z.array(reviewIssueSchema),
+  learning: z.object({ conclusion: z.enum(["no-shared-learning", "propose-improvement"]), summary: z.string().min(1), affectedInputClass: z.string().min(1).optional(), underlyingMechanism: z.string().min(1).optional() }).superRefine((value, context) => {
+    if (value.conclusion === "propose-improvement" && (!value.affectedInputClass || !value.underlyingMechanism)) context.addIssue({ code: "custom", message: "可沉淀经验必须说明影响输入类别和共享机制" });
+  }),
+});
 
 function resultContent(value, isError = false) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) };
@@ -81,6 +91,31 @@ export function createCreativeMcpServer(options = {}) {
     activeProjectId = project.id;
     return { project, activeProjectId };
   });
+  register("novel_agent_guide_get", { description: "读取小说 MCP 自迭代协议。每次开始或恢复 operation，以及候选审核前都必须先读取；它只返回运行时允许的推进方式。", inputSchema: { projectRef: projectRefSchema, operationId: z.string().min(1).optional() } }, async (args, extra) => {
+    const project = await resolveProject(args.projectRef, extra.signal);
+    const status = await runtimeRequest(`/v1/projects/${encodeURIComponent(project.id)}/status`, { signal: extra.signal });
+    let operation;
+    if (args.operationId) {
+      operation = await runtimeRequest(`/v1/operations/${encodeURIComponent(args.operationId)}`, { signal: extra.signal });
+      if (operation.operation.projectId !== project.id) throw new Error("operation 不属于当前 MCP 项目");
+    }
+    return {
+      project,
+      protocol: {
+        requiredOrder: ["读取状态与 nextActions", "读取完整候选", "检查项目内部质量证据", "以独立外部审核记录结论", "只选择 accept、patch 或 regenerate", "每轮总结是否存在可跨场景验证的流程经验"],
+        invariants: ["不得仅凭摘要接受候选", "内部与外部审核都通过才可提交", "patch 只能编辑 pending proposal item，且须在补丁后重新校验并重新外审", "不可用单个样例、书名、角色或措辞提炼规则", "失败只可在修复根因后 retry；质量问题应继续 patch 或 regenerate"],
+        learning: "仅当证据指向共享 Skill、系统 Prompt 或流程机制时创建改进候选；满足跨场景证据和独立审核门后会自动晋升项目规则。",
+      },
+      status,
+      operation,
+      nextActions: operation?.nextActions ?? status.nextActions,
+    };
+  });
+  register("novel_autopilot_get", { description: "读取一个 operation 的实时自动推进状态、候选和允许动作；不要自行猜测下一步。", inputSchema: { operationId: z.string().min(1) } }, async (args, extra) => {
+    const payload = await runtimeRequest(`/v1/operations/${encodeURIComponent(args.operationId)}`, { signal: extra.signal });
+    if (activeProjectId && payload.operation.projectId !== activeProjectId) throw new Error("operation 不属于当前 MCP 项目");
+    return { ...payload, loop: { internalGateRequired: true, externalReviewRequired: payload.operation.driver === "external-mcp", unlimitedQualityIterations: payload.operation.reviewPolicy.maxIterations === null, automaticProjectRulePromotion: payload.operation.improvementPolicy.autoPromote } };
+  });
   register("novel_status", { description: "查看当前项目、异步创作进度、待确认候选、失败原因和下一步。", inputSchema: { projectRef: projectRefSchema } }, async (args, extra) => {
     const project = await resolveProject(args.projectRef, extra.signal);
     const status = await runtimeRequest(`/v1/projects/${encodeURIComponent(project.id)}/status`, { signal: extra.signal });
@@ -107,14 +142,24 @@ export function createCreativeMcpServer(options = {}) {
     if (activeProjectId && payload.operation.projectId !== activeProjectId) throw new Error("operation 不属于当前 MCP 项目");
     return runtimeRequest(`/v1/operations/${encodeURIComponent(args.operationId)}/retry`, { body: { note: args.note, includePreviousCandidate: args.includePreviousCandidate, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "operation-retry"), signal: extra.signal });
   });
-  register("novel_change_get", { description: "读取待审核候选的完整产物；审核前应先调用此工具检查实际内容。", inputSchema: { changeId: z.string().min(1) } }, async (args, extra) => {
+  register("novel_change_get", { description: "读取待审核候选的完整产物、artifactFingerprint 和逐 item 的 itemPayloadFingerprints；审核或补丁前必须先调用。", inputSchema: { changeId: z.string().min(1) } }, async (args, extra) => {
     const payload = await runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}`, { signal: extra.signal });
     if (activeProjectId && payload.change.projectId !== activeProjectId) throw new Error("候选变更不属于当前 MCP 项目");
     return payload;
   });
-  register("novel_change_review", { description: "提交外部大模型对候选的审核决定；必须记录审核模型身份，接受前会校验正式项目快照。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), decision: z.enum(["accept", "reject", "revise"]), note: z.string().optional(), reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
+  register("novel_change_revalidate", { description: "局部补丁后重新运行项目内部候选校验；必须使用刚刚读取的完整候选 fingerprint。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), artifactFingerprint: z.string().length(64), reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
     const project = await resolveProject(args.projectRef, extra.signal);
-    return runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}/review`, { body: { projectId: project.id, decision: args.decision, note: args.note, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "change-review"), signal: extra.signal });
+    const payload = await runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}`, { signal: extra.signal });
+    if (payload.change.projectId !== project.id) throw new Error("候选变更不属于当前 MCP 项目");
+    return runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}/revalidate`, { body: { projectId: project.id, artifactFingerprint: args.artifactFingerprint, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "change-revalidate"), signal: extra.signal });
+  });
+  register("novel_change_patch", { description: "对定位明确的小问题修改 pending proposal item。expectedPayloadFingerprint 必须取自 change_get.itemPayloadFingerprints[itemId]；补丁后必须重新校验并外审。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), itemId: z.string().min(1), artifactFingerprint: z.string().length(64), expectedPayloadFingerprint: z.string().length(64), payload: z.record(z.string(), z.unknown()), rationale: z.string().min(1), issueIds: z.array(z.string().min(1)).min(1), review: externalReviewSchema, reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
+    const project = await resolveProject(args.projectRef, extra.signal);
+    return runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}/patch`, { body: { projectId: project.id, itemId: args.itemId, artifactFingerprint: args.artifactFingerprint, expectedPayloadFingerprint: args.expectedPayloadFingerprint, payload: args.payload, rationale: args.rationale, issueIds: args.issueIds, review: args.review, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "change-patch"), signal: extra.signal });
+  });
+  register("novel_change_review", { description: "提交当前完整候选的独立外部审核，并选择 accept 或 regenerate。accept 同时要求项目内部审核通过；不得用此工具跳过补丁后的重新校验。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), decision: z.enum(["accept", "revise"]), note: z.string().optional(), review: externalReviewSchema, reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
+    const project = await resolveProject(args.projectRef, extra.signal);
+    return runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}/review`, { body: { projectId: project.id, decision: args.decision, note: args.note, review: args.review, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "change-review"), signal: extra.signal });
   });
 
   register("novel_improvement_propose", {

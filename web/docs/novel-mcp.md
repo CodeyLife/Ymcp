@@ -32,18 +32,21 @@ MCP adapter 会检查 `http://127.0.0.1:4766/v1/health`，运行时不存在时�
 
 运行时要求 Node.js 24 或更高版本，默认数据库为 `%LOCALAPPDATA%\Ymcp\novel-runtime.sqlite`。
 
-## 默认工作流
+## 自迭代工作流
 
-1. 调用 `novel_project_list`，或用 `novel_project_create` 创建项目。
-2. 用 `novel_project_select` 按完整标题或 ID 选择一次项目；创建项目会自动选择。
-3. 调用 `novel_plan`、`novel_write` 或 `novel_revise`。工具立即返回持久化 `operationId`。
-4. 用 `novel_operation_get` 或 `novel_status` 读取后台进度；失败且根因已修正时，用 `novel_operation_retry` 从原工作项继续。
-5. operation 产生候选后，用 `novel_change_get` 读取并审核完整产物。
-6. 用 `novel_change_review` 接受、拒绝或要求重做，并提供 `reviewerId` 与 `model`；不要仅凭候选摘要盲目接受。
+1. 调用 `novel_project_list`，或用 `novel_project_create` 创建项目；再以 `novel_project_select` 选择项目。
+2. 每次开始、恢复 operation 或处理候选前，先调用 `novel_agent_guide_get`；它返回不可跳过的审核顺序、当前 `nextActions` 与经验沉淀边界。
+3. 调用 `novel_plan`、`novel_write` 或 `novel_revise`。工具立即返回持久化 `operationId`；用 `novel_autopilot_get`、`novel_operation_get` 或 `novel_status` 读取运行时允许的下一步。
+4. operation 产生候选后，必须调用 `novel_change_get` 读取完整产物和 `artifactFingerprint`。项目内部质量门与外部 LLM 审核是两个独立门禁。
+5. 外部审核必须给出 `reviewRunId`、模型身份、结论、问题严重度、证据、建议、完整候选指纹，以及本轮“无需沉淀”或“应提议规则改进”的经验判断。只允许三种处理：
+   - `accept`：用 `novel_change_review` 提交 `passed` 审核。仅项目内部证据没有 blocker/major 且外部审核通过时，才自动写入正式项目。
+   - `patch`：对有稳定 proposal item 定位的小问题调用 `novel_change_patch`。补丁使用 `novel_change_get.itemPayloadFingerprints[itemId]` 返回的原 payload 指纹，并携带关联问题和理由；之后依次调用 `novel_change_revalidate`、`novel_change_get` 和新的外部审核。
+   - `regenerate`：用 `novel_change_review` 提交 `revise` 审核；运行时会带着审核意见回到原 work item 生成完整替代候选。
+6. 外部 MCP 质量循环没有固定轮数。质量问题持续进入 patch 或 regenerate；只有运行失败、快照冲突或不可恢复的契约错误才使用 `novel_operation_retry`。
 
 项目级工具可用 `projectRef` 临时覆盖当前选择。没有选择时不会猜测最近项目；同名项目不会模糊匹配。MCP 创建的 operation 固定为 `external-mcp` driver，只接受带模型身份的 `external-llm` 审核；UI 创建的 operation 固定为 `human` driver，只接受用户审核。接受候选前运行时会校验正式项目快照，检测到并发修改时返回 `SNAPSHOT_CONFLICT`。
 
-`novel_status` 和 `novel_operation_get` 返回结构化 `nextActions`。调用模型只能从这些动作中选择，不应绕过审核门或自行猜测运行状态。
+`novel_status`、`novel_operation_get` 与 `novel_autopilot_get` 返回结构化 `nextActions`。调用模型只能从这些动作中选择，不应绕过审核门、候选指纹或自行猜测运行状态。局部补丁只更新待审核 proposal，不能直接修改正式正文。
 
 ## 规则改进闭环
 
@@ -53,10 +56,10 @@ MCP adapter 会检查 `http://127.0.0.1:4766/v1/health`，运行时不存在时�
 - `novel_improvement_evaluate`：对章节或基础设定任务运行隔离基线/候选 A/B；需要在实质不同的场景上重复执行。
 - `novel_improvement_get`：读取证据、审核记录和未满足的晋升门禁。
 - `novel_improvement_review`：提交剧情、人物、文笔或长篇编辑的独立审核。
-- `novel_improvement_promote`：仅在跨场景证据与全部审核门通过后晋升。
+- `novel_improvement_promote`：仅在跨场景证据与全部审核门通过后晋升；MCP 外部审核补齐最后一个门禁时会自动晋升当前项目候选。
 - `novel_improvement_rollback`：回滚已晋升版本。
 
-单次低分或单个样例不能直接修改正式 Skill、系统 Prompt 或流程。`advanced` profile 继续暴露旧低层工具，只用于诊断与兼容。
+每轮候选终结时都应总结问题是否指向共享机制。单次低分或单个样例不能直接修改正式 Skill、系统 Prompt 或流程；规则候选仍须覆盖多个实质不同场景，并通过四类独立编辑审核。自动晋升只作用于当前项目，仍可用 `novel_improvement_rollback` 回滚。`advanced` profile 继续暴露旧低层工具，只用于诊断与兼容。
 
 ## 断线与恢复
 

@@ -1,0 +1,51 @@
+{
+  "id": "99328e42-f08b-49ac-b867-67690963b2e7",
+  "schemaVersion": 8,
+  "revision": 3,
+  "createdAt": 1784787129785,
+  "updatedAt": 1784796173973,
+  "createdBy": "local-user",
+  "updatedBy": "goal-loop-6-model-fix",
+  "title": "灵气即代码",
+  "subtitle": "穿越程序员重构修仙世界",
+  "premise": "穿越程序员陈墨在修炼世界中发现灵气不仅能聚气成形，更可作为逻辑单元被编排与组合。他凭借编程思维将传统功法重构为可编程的灵气回路，开创出新的修炼体系，并卷入朝堂、江湖与门派围绕灵气本源归属展开的纷争。",
+  "genre": [
+    "玄幻",
+    "武侠",
+    "穿越",
+    "幽默"
+  ],
+  "audience": "喜欢东方玄幻、修仙升级、穿越脑洞、程序员文化、轻幽默与江湖情义故事的成年读者。",
+  "themes": [
+    "秩序与自由",
+    "传承与创新",
+    "经验与理性的冲突",
+    "理解世界的方法与人的情感价值"
+  ],
+  "sellingPoints": [
+    "灵气代码化设定，将修炼体系机制化。",
+    "程序员穿越带来的认知反差与幽默。",
+    "大衍王朝、江湖势力、门派之间围绕灵气秩序展开博弈。",
+    "修炼体系变化推动社会结构变化。",
+    "个人成长与情感纠葛并行。"
+  ],
+  "pov": "第三人称限知",
+  "tense": "过去时叙述",
+  "tone": "克制、清晰、有张力；以程序员视角制造诙谐反差，同时保持江湖恩怨与势力冲突的严肃重量。",
+  "languageStyle": "重视场景行动与人物选择，通过具体器物、环境、动作和对白呈现情绪。技术化设定采用通俗具象的比喻融入叙事，避免说明书式解释。",
+  "targetWords": 2400000,
+  "dailyGoal": 3000,
+  "status": "planning",
+  "coverColor": "#b5483a",
+  "settings": {
+    "textModel": "gpt-4o",
+    "temperature": 0.75,
+    "recentChapterCount": 5,
+    "encrypted": false,
+    "contentProfile": "general-serial",
+    "maxAutoRevisions": 2,
+    "qualityThreshold": 3.7,
+    "approvalMode": "blueprint-and-manuscript"
+  },
+  "currentSnapshotId": "89589d56-74e2-40dd-b6b2-7337a6e5f124"
+}
