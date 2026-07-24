@@ -2,6 +2,7 @@ import { commitAcceptedFacts, createWorkflowSnapshot } from "../facts";
 import { createChapterMemory, sanitizeMemorySummary } from "../memory";
 import { toHtml } from "../manuscript-review";
 import { countNovelWords } from "../quality";
+import { createWorkflowLearningCandidates } from "../learning";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
 export const commitStageHandler: StageHandler = {
@@ -10,6 +11,7 @@ export const commitStageHandler: StageHandler = {
     const { run, document, db } = ctx;
     const draft = await db.workflowArtifacts.get(run.draftArtifactId!);
     if (!draft) throw new Error("最终正文产物不存在");
+    await createWorkflowLearningCandidates({ projectId: run.projectId, workflowRunId: run.id, db });
     await commitAcceptedFacts(run.projectId, run.id, db);
     const [factArtifact, candidates] = await Promise.all([
       db.workflowArtifacts.where("workflowRunId").equals(run.id).and((artifact) => artifact.kind === "fact-delta").last(),

@@ -8,7 +8,8 @@ import type { NovelBootstrapProgress, NovelBootstrapStage } from "@/features/nov
 import { exportNovel, importNovel } from "@/features/novel/export";
 import { buildLegacyMigrationBundle } from "@/features/novel/legacy-runtime-migration";
 import { novelRuntimeClient } from "@/features/novel/runtime-client";
-import { ensureRuntimeProject, refreshRuntimeProjection, refreshRuntimeProjectListProjection, syncNovelRuntimeApiConfig } from "@/features/novel/runtime-records";
+import { retryFailedWorkflowLearning } from "@/features/novel/learning";
+import { refreshRuntimeProjection, refreshRuntimeProjectListProjection, syncNovelRuntimeApiConfig } from "@/features/novel/runtime-records";
 import { useNovelRuntimeEvents } from "@/features/novel/use-runtime-events";
 import "@/features/novel/novel.css";
 
@@ -43,6 +44,7 @@ export default function NovelProjects() {
 
   useEffect(() => {
     void refreshRuntimeProjectListProjection().catch(() => undefined);
+    void retryFailedWorkflowLearning().catch((error) => console.warn("恢复失败的章节 learning 任务失败", error));
   }, []);
 
   function resetCreateDialog() {
@@ -110,8 +112,15 @@ export default function NovelProjects() {
   }
 
   async function removeProject(projectId: string) {
-    await ensureRuntimeProject(projectId);
-    await novelRuntimeClient.deleteProject(projectId);
+    // 运行时删除是尽力而为：不预先 ensureRuntimeProject（那会先把 IndexedDB 项目迁移到 SQLite 再删，多余且在 runtime 不可达时抛错阻塞本地删除）。
+    // runtime 不可达或项目未在 SQLite 时 deleteProject 失败/空操作不阻塞本地清理，保证用户始终能删除项目。
+    try {
+      await novelRuntimeClient.deleteProject(projectId);
+    } catch (error) {
+      // 若项目仍存在于 SQLite，下次 runtime 启动 hydrate 可能恢复；提示用户。
+      message.warning("运行时删除失败，已仅清理本地数据；若运行时仍有该项目记录，重启后可能恢复。");
+      console.warn("runtime deleteProject 失败，仅清理本地 IndexedDB", error);
+    }
     await deleteLocalProject(projectId);
   }
 

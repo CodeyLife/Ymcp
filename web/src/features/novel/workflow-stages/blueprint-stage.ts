@@ -7,14 +7,6 @@ import { formatCreativeBriefContract } from "../workflow-brief";
 import type { GenerationAuditIssue, GenerationAuditReport, GenerationAuditRound, StoryEntity } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
-// 改进 #7：POV 一致性机械后校验
-// Loop 3 发现 reviewer 报告 3 处 POV 越界（mustHappen 包含"萧承渊意识到..."等非 POV 角色内心活动）。
-// 通过 schema 与 prompt 措辞约束 LLM 的效果有限，本函数在 LLM 返回后做机械检测：
-// 扫描 mustHappen 中"非 POV 角色名 + 内心动词"模式，若发现违规，
-// 不修改 mustHappen 原条目（保留 LLM 的节拍语义），但在 forbidden 中追加一条约束，
-// 强制 draft 阶段不得直接描写非 POV 角色内心，必须通过 POV 可观察的外部行为呈现。
-const INTERNAL_VERBS = ["发现", "察觉", "意识到", "判断", "明白", "懂得", "看穿", "看透", "领悟", "惊觉", "想到", "看清", "感到", "觉得", "理解", "醒悟", "省悟", "察觉到", "意识到"];
-const MAX_NAME_TAIL_SCAN = 10;
 const ENDING_HOOK_UNIQUENESS_CONTRACT = `章尾驱动力是最后一个节拍结果的具体呈现，不是额外追加的一场戏。若同一个邀约、警告、发现、决定或关系变化同时出现在 mustHappen 与 endingHook，mustHappen 必须明确它只在 endingHook 指定的时机和形式下兑现；最后一个节拍只能铺垫该结果，不得改换时间、地点、传话人或场景再提前兑现一次。`;
 
 /**
@@ -33,33 +25,6 @@ export function getBlueprintAuditMaxIterations(): number {
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed < 0) return 1;
   return Math.min(3, parsed);
-}
-
-function sanitizePovConsistencyInPlace(data: Record<string, unknown>, povName: string | undefined, otherCharacterNames: string[]): { violations: string[] } {
-  if (!povName || otherCharacterNames.length === 0) return { violations: [] };
-  const mustHappen = Array.isArray(data.mustHappen) ? data.mustHappen as unknown[] : [];
-  const violations: string[] = [];
-  for (const item of mustHappen) {
-    if (typeof item !== "string") continue;
-    for (const name of otherCharacterNames) {
-      if (!name || name === povName || !item.includes(name)) continue;
-      const nameIdx = item.indexOf(name);
-      const tail = item.slice(nameIdx + name.length, nameIdx + name.length + MAX_NAME_TAIL_SCAN);
-      if (INTERNAL_VERBS.some((verb) => tail.includes(verb))) {
-        violations.push(`mustHappen 条目「${item}」中「${name}」作为非 POV 角色使用了内心动词「${tail.slice(0, 6)}」`);
-        break;
-      }
-    }
-  }
-  if (violations.length === 0) return { violations: [] };
-  const forbidden = Array.isArray(data.forbidden) ? data.forbidden as string[] : [];
-  const distinctNames = Array.from(new Set(violations.map((v) => v.match(/「(.*?)」作为非 POV/)?.[1] ?? "").filter(Boolean))).slice(0, 5);
-  const addition = `不得在正文直接描写 ${distinctNames.join("、")} 等非 POV 角色的内心活动、想法或认知（如"意识到/察觉/明白/判断/领悟"等）；上述内容出现在 mustHappen 节拍中时，必须改写为 POV 可观察的外部行为（动作、神态、对白、环境）呈现。`;
-  if (!forbidden.some((rule) => rule.includes("不得在正文直接描写") && rule.includes("非 POV 角色的内心活动"))) {
-    forbidden.push(addition);
-    data.forbidden = forbidden;
-  }
-  return { violations };
 }
 
 /**
@@ -99,7 +64,7 @@ export async function runBlueprintAudit(params: {
   const forbidden = Array.isArray(params.blueprintData.forbidden) ? (params.blueprintData.forbidden as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
   const informationRelease = Array.isArray(params.blueprintData.informationRelease) ? (params.blueprintData.informationRelease as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
   const prompt = `# 审核任务\n审核以下章节蓝图（ChapterBlueprint）的设计质量。\n\n## 章节标题\n${params.documentTitle}\n\n## 章节目标\n${params.blueprintData.objective ?? "无"}\n\n## 当前章节要求\n${params.documentObjective || "尚未规划"}\n\n## 起点\n${params.blueprintData.startingState ?? "无"}\n\n## 节拍\n${beatsBrief}\n\n## 章尾驱动力\n${params.blueprintData.endingHook ?? "无"}\n\n## 必须发生\n${mustHappen}\n\n## 禁止事项\n${forbidden}\n\n## 信息释放\n${informationRelease}\n\n## POV\n${params.povName ?? "未指定（多视角切片或未设置）"}\n\n## 其他在场角色\n${params.otherCharacterNames.join("、") || "无"}\n\n## 创作简报契约\n${params.briefContract}\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- 基于 blueprint-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体字段（objective / beats[N] / mustHappen[N] / endingHook / forbidden[N] 等）作为证据\n- 必须给出具体修订建议\n\n按 schema 输出 summary 和 issues 数组。`;
-  const auditSkillPrompt = `${compileNovelStagePrompt(auditSkills.skills, "review")}\n\n## 章节蓝图审核职责\n根据本章实际功能、项目风格、前后因果、人物主体性和长篇材料余量审核。节拍数量、信息密度、冲突强度和章尾形态没有固定合格公式；只有当具体字段造成因果断裂、人物失真、体验不足、提前透支或后续驱动力缺失时才报告问题。不同题材、视角、章节功能和叙事风格必须分别判断。`;
+  const auditSkillPrompt = `${compileNovelStagePrompt(auditSkills.skills, "review")}\n\n## 章节蓝图审核职责\n根据本章实际功能、项目风格、前后因果、人物主体性和长篇材料余量审核。单 POV 蓝图若直接声明非 POV 角色内心，应要求架构师在保持原事件、人物主动性、信息释放时机和后果不变的前提下，重新设计 POV 可观察的证据；禁止建议做同义词或动词替换。节拍数量、信息密度、冲突强度和章尾形态没有固定合格公式；关系、生活流、余波或阶段闭合章可以用未尽交流、状态变化或有功能的情感与意象余韵收束，不得只因缺少强钩子判错。只有当具体字段造成因果断裂、人物失真、体验不足、提前透支或后续驱动力缺失时才报告问题。不同题材、视角、章节功能和叙事风格必须分别判断。`;
   const result = await callStructuredNovelModel<{ summary: string; issues: GenerationAuditIssue[] }>({
     model: project.settings.textModel,
     temperature: 0.15,
@@ -139,7 +104,7 @@ export const blueprintStageHandler: StageHandler = {
       skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`),
     });
 
-    // 收集章节内角色（用于 POV 一致性后校验）
+    // 收集章节内角色，供 blueprint-audit 判断 POV 设计质量。
     const chapterCharacterIds = Array.from(new Set([
       ...(document.blueprint.characterIds ?? []),
       ...(brief.povCharacterId ? [brief.povCharacterId] : []),
@@ -154,7 +119,7 @@ export const blueprintStageHandler: StageHandler = {
 
     const skillPrompt = compileNovelStagePrompt(skills.skills, "planning");
 
-    const governedBasePrompt = `# 章节蓝图任务\n为“${document.title}”生成可审批章节蓝图。章节目标字数由系统设置为 ${brief.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，不要返回或改写字数。\n\n## 已确认创作简报\n${briefContract}\n\n## 当前章节要求\n${document.blueprint.objective || "尚未规划，请依据冻结材料判断本章在长线中的必要功能"}\n\n创作结构、节拍数量、信息密度、人物与章尾形态以已注入的版本化 planning 指导和项目证据为准。不得使用固定章节公式补齐字段，也不得提前消费尚未到兑现窗口的材料。${feedback ? `\n\n## 用户退回意见\n${feedback.contentMarkdown}` : ""}\n\n## 冻结上下文\n${formatContextPacket(packet)}`;
+    const governedBasePrompt = `# 章节蓝图任务\n为“${document.title}”生成可审批章节蓝图。章节目标字数由系统设置为 ${brief.targetWords || DEFAULT_CHAPTER_TARGET_WORDS} 字，不要返回或改写字数。\n\n## 已确认创作简报\n${briefContract}\n\n## 当前章节要求\n${document.blueprint.objective || "尚未规划，请依据冻结材料判断本章在长线中的必要功能"}\n\n## 架构师职责\n先确定每个事件、选择、发现及其因果语义，再设计当前 POV 能观察、听见、获知或合理推断的呈现证据。若需要外化非 POV 角色内心，必须保持原事件、人物主动性、信息释放时机和后果，重新设计动作、对白或环境反馈；禁止用同义词或动词替换把“发现”机械改成“指出”、把“决定”机械改成“宣布”。章尾形态服从本章功能：悬疑与行动章可留下未解压力，关系、生活流、余波或阶段闭合章可以停在未尽交流、状态变化或有功能的情感与意象余韵，不得为强钩子添加蓝图之外的新危险、选择或信息。\n\n创作结构、节拍数量、信息密度、人物与章尾形态以已注入的版本化 planning 指导和项目证据为准。不得使用固定章节公式补齐字段，也不得提前消费尚未到兑现窗口的材料。${feedback ? `\n\n## 用户退回意见\n${feedback.contentMarkdown}` : ""}\n\n## 冻结上下文\n${formatContextPacket(packet)}`;
 
     /**
      * 调用 LLM 生成 ChapterBlueprint。
@@ -162,7 +127,7 @@ export const blueprintStageHandler: StageHandler = {
      * 返回 result 包含 data/promptHash/usage，由调用方决定是否进入下一轮 audit。
      */
     const generateBlueprint = async (auditFindings?: string) => {
-      const auditBlock = auditFindings ? `\n\n# 上一轮 LLM 审核意见\n请基于以下审核问题重新生成章节蓝图，针对每个 major/blocker 问题在生成时落实修订；不要直接复述审核意见，而是把它转化为具体的节拍调整、POV 一致性改写、endingHook 开放性重构或信息密度调整。\n${auditFindings}` : "";
+      const auditBlock = auditFindings ? `\n\n# 上一轮 LLM 审核意见\n请基于以下审核问题重新生成章节蓝图，针对每个 major/blocker 问题在生成时落实修订；不要直接复述审核意见，而是把它转化为保持事件语义的 POV 呈现重构、具体节拍调整、与章节功能相称的 endingHook 重构或信息密度调整。\n${auditFindings}` : "";
       return callStructuredNovelModel<Record<string, unknown>>({
         model: project.settings.textModel,
         temperature: auditFindings ? 0.35 : 0.55,
@@ -174,13 +139,8 @@ export const blueprintStageHandler: StageHandler = {
       });
     };
 
-    // 初次生成
+    // 初次生成。产物保持模型原样，POV 问题由 audit 反馈后交给架构师完整重生，禁止机械改字段。
     let result = await generateBlueprint();
-    // 改进 #7：POV 一致性机械后校验（在 LLM 返回后扫描 mustHappen 中"非 POV 角色名 + 内心动词"）
-    let povConsistency = sanitizePovConsistencyInPlace(result.data, pov?.name, otherCharacterNames);
-    if (povConsistency.violations.length > 0) {
-      console.warn(`[blueprint-stage] POV 一致性后校验发现 ${povConsistency.violations.length} 处非 POV 角色内心活动（POV=${pov?.name ?? "?"}），已自动追加 forbidden 约束：\n${povConsistency.violations.join("\n")}`);
-    }
 
     // audit+iterate 循环（Loop 3：B 板块闭环）
     // 默认 maxIterations=1（可通过环境变量 NOVEL_BLUEPRINT_AUDIT_MAX_ITER 控制）
@@ -211,10 +171,6 @@ export const blueprintStageHandler: StageHandler = {
         while (hasMajorOrBlocker(round.issues) && iterationsDone < maxAuditIterations) {
           iterationsDone += 1;
           result = await generateBlueprint(formatAuditFindingsForRerun(round));
-          povConsistency = sanitizePovConsistencyInPlace(result.data, pov?.name, otherCharacterNames);
-          if (povConsistency.violations.length > 0) {
-            console.warn(`[blueprint-stage] 第 ${iterationsDone} 轮迭代后 POV 一致性后校验发现 ${povConsistency.violations.length} 处违规，已自动追加 forbidden 约束：\n${povConsistency.violations.join("\n")}`);
-          }
           round = await runBlueprintAudit({
             projectId: run.projectId,
             documentTitle: document.title,

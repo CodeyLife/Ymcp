@@ -42,6 +42,7 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
     "novel_agent_guide_get", "novel_autopilot_get", "novel_change_get", "novel_change_patch", "novel_change_revalidate", "novel_change_review",
     "novel_improvement_evaluate", "novel_improvement_get", "novel_improvement_promote", "novel_improvement_propose", "novel_improvement_review", "novel_improvement_rollback",
+    "novel_learning_target_get",
     "novel_operation_get", "novel_operation_retry", "novel_plan", "novel_project_create", "novel_project_list", "novel_project_select", "novel_revise", "novel_status", "novel_write",
   ]);
   const created = text(await client.callTool({ name: "novel_project_create", arguments: { title: "无浏览器项目", premise: "MCP 直接使用本地运行时", genre: ["现实"] } }));
@@ -95,6 +96,8 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   assert.ok(["queued", "running", "failed"].includes(operation.operation.status));
 
   const gatedProject = text(await client.callTool({ name: "novel_project_create", arguments: { title: "双审核门禁项目", premise: "隔离验证内部审核拦截", genre: ["测试"] } })).project;
+  const learningTarget = text(await client.callTool({ name: "novel_learning_target_get", arguments: { targetKind: "skill", targetId: "story-facts-invariant" } })).target;
+  assert.match(learningTarget.targetContentFingerprint, /^[a-f0-9]{64}$/);
 
   const fingerprintRun = await createCreativeRun({ projectId: gatedProject.id, mode: "external", objective: "验证候选指纹" }, novelDb);
   const fingerprintWork = await enqueueCreativeWork(fingerprintRun.id, { kind: "generation", taskKey: "project-positioning", instruction: "生成定位候选" }, novelDb);
@@ -190,14 +193,32 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   });
   assert.equal(crossProjectRevalidate.status, 409);
 
-  await assert.rejects(
-    runtime.service.reviewChange(blockedChange.id, "accept", "外部审核通过", { type: "external-llm", id: "reviewer-a", model: "review-model" }, "blocked-accept", {
+  const learningReview = {
       reviewRunId: "review-run-blocked", verdict: "passed", summary: "外部审核未发现问题", issues: [], artifactFingerprint: blockedDetails.artifactFingerprint,
-      learning: { conclusion: "no-shared-learning", summary: "单次连续性问题不足以证明共享流程缺陷" },
+      learning: {
+        conclusion: "propose-improvement", summary: "事实状态分类缺少共享门禁", affectedInputClass: "所有引用既有项目事实的生成任务", underlyingMechanism: "生成规则没有统一区分已确认事实、角色认知与待审核建议",
+        proposal: { targetKind: "skill", targetId: "story-facts-invariant", targetVersion: learningTarget.targetVersion, targetContentFingerprint: learningTarget.targetContentFingerprint, afterText: "所有创作阶段必须先区分已确认事实、角色认知、合理推测与尚待审核的创作建议。发生冲突时停止相关提交，并返回冲突来源、影响范围和可执行处理选项。该规则适用于所有引用项目事实的生成任务，不依据具体书名、人物名、章节序号或固定措辞判断；仅在证据状态冲突时阻断，不替代作者的审美选择。", rationale: "把事实分类缺失修复到共享门禁", observedSymptom: "候选可能把建议当成已确认事实", failingLayer: "共享事实门禁", intendedBenefits: ["阻止建议污染正式事实"], boundaries: ["只处理事实状态冲突"], nonGoals: ["不替代审美审核"], regressionRisks: ["过度阻断合理推断"] },
+      },
+    };
+  const beforeLearningCandidates = await novelDb.craftRuleCandidates.where("projectId").equals(gatedProject.id).count();
+  await assert.rejects(
+    runtime.service.reviewChange(blockedChange.id, "accept", "外部审核通过", { type: "external-llm", id: "reviewer-a", model: "review-model" }, "blocked-accept", learningReview),
+    /内部审核门禁未通过/,
+  );
+  await assert.rejects(
+    runtime.service.reviewChange(blockedChange.id, "accept", "外部审核通过", { type: "external-llm", id: "reviewer-a", model: "review-model" }, "blocked-accept-retry", {
+      ...learningReview,
+      reviewRunId: "review-run-stale-learning",
+      learning: { ...learningReview.learning, proposal: { ...learningReview.learning.proposal, targetVersion: "0.0.0" } },
     }),
     /内部审核门禁未通过/,
   );
-  assert.equal(runtime.store.getChange(blockedChange.id)?.status, "pending");
+  const learningCandidates = await novelDb.craftRuleCandidates.where("projectId").equals(gatedProject.id).toArray();
+  assert.equal(learningCandidates.length, beforeLearningCandidates + 1);
+  assert.equal(learningCandidates.at(-1).learningSource.reviewRunId, "review-run-blocked");
+  const persistedBlockedChange = runtime.store.getChange(blockedChange.id);
+  assert.equal(persistedBlockedChange?.status, "pending");
+  assert.match(persistedBlockedChange?.externalReviews?.at(-1)?.learningError ?? "", /目标规则版本已变化/);
 });
 
 test("project selection is isolated between MCP sessions", async (context) => {

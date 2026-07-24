@@ -199,7 +199,7 @@ export async function compileNovelContext(params: {
   };
 
   push(source({ kind: "instruction", id: "instruction", title: "本次任务", content: instruction, weight: 100, layer: "mandatory", pinned: true, reason: "作者本次明确指令", priorityClass: "invariant", authority: "author" }));
-  push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant", authority: "approved", evidenceRefs: [project.id] }));
+  push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle, project.sellingPoints.length ? `卖点（须在合适章节被读者在正文亲历其运作，而非只停留在设定层）：${project.sellingPoints.join("；")}` : ""].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant", authority: "approved", evidenceRefs: [project.id] }));
   if (params.creativeBriefId) {
     const brief = await db.creativeBriefs.get(params.creativeBriefId);
     if (!brief || brief.status !== "confirmed" || brief.projectId !== projectId) throw new Error("创作简报不存在或尚未确认");

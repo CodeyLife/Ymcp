@@ -191,10 +191,14 @@ export default function GenerationComposer({
 
   function closeProposal() {
     if (!proposal) return;
-    if (legacyReadOnly) { message.info("迁移前候选保留为只读资料，不会修改正式项目。"); return; }
+    // 关闭/拒绝候选只改本地 IndexedDB 状态（rejectProposal 不触发 formal mutation），
+    // 即使是迁移前只读候选也允许关闭，否则遗留候选永远无法清除（逻辑死锁）。
+    // legacyReadOnly 仍保留对采纳/重生成/AI审核等 formal mutation 路径的禁用。
     modal.confirm({
       title: "关闭当前候选？",
-      content: "将丢弃当前候选内容，不会自动重新生成。",
+      content: legacyReadOnly
+        ? "将清除该迁移前候选，不会修改正式项目；如需新内容请在创作任务中重新生成。"
+        : "将丢弃当前候选内容，不会自动重新生成。",
       okText: "关闭",
       okButtonProps: { danger: true },
       onOk: async () => {
@@ -272,7 +276,7 @@ export default function GenerationComposer({
       </article>;
       })}</div>
       {creativeReviewState?.latest && <Alert type={creativeReviewState.gate.passed ? "success" : creativeReviewState.latest.verdict === "inconclusive" ? "warning" : "info"} showIcon message={`AI 审核：${creativeReviewState.latest.summary}`} description={creativeReviewState.gate.openIssues.length ? `仍有 ${creativeReviewState.gate.openIssues.length} 个有效问题` : undefined} />}
-      <footer><div className="novel-generation-review-actions"><Button icon={<CloseOutlined />} disabled={busy || legacyReadOnly} onClick={() => closeProposal()}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy || legacyReadOnly} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button><Button icon={<FileSearchOutlined />} disabled={busy || legacyReadOnly || !creativeReviewState?.work} onClick={() => void perform(requestAiReview, "AI 审核已完成")}>AI 审核</Button></div><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={legacyReadOnly || !selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
+      <footer><div className="novel-generation-review-actions"><Button icon={<CloseOutlined />} disabled={busy} onClick={() => closeProposal()}>关闭</Button><Button icon={<ReloadOutlined />} disabled={busy || legacyReadOnly} onClick={() => void perform(rejectAndRegenerate, "已退回并重新生成")}>退回重生成</Button><Button icon={<FileSearchOutlined />} disabled={busy || legacyReadOnly || !creativeReviewState?.work} onClick={() => void perform(requestAiReview, "AI 审核已完成")}>AI 审核</Button></div><Button type="primary" icon={<CheckCircleOutlined />} loading={busy} disabled={legacyReadOnly || !selected.length} onClick={() => void perform(apply)}>采纳所选（{selected.length}）</Button></footer>
     </div>}
     <ProposalReviewDialog item={reviewingItem} draft={reviewingItem ? drafts[reviewingItem.id] : undefined} open={Boolean(reviewingItem)} onClose={() => setReviewingItemId(undefined)} onChange={(next) => {
       if (!reviewingItem) return;

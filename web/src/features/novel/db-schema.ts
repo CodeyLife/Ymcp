@@ -2,7 +2,7 @@
 import type { Transaction } from "dexie";
 import { buildProjectReferenceCatalogs, emptyReferenceCatalog, sanitizeProposalReferencesInPlace, sanitizeReferenceRecordInPlace } from "./reference-integrity";
 
-export const DB_VERSION = 25;
+export const DB_VERSION = 26;
 
 /**
  * 数据记录版本（写入 recordBase.schemaVersion）。
@@ -153,6 +153,11 @@ export const V24_STORES: Record<string, string | null> = {
 export const V25_STORES: Record<string, string | null> = {
   ...V24_STORES,
   creativeToolReceipts: "id, projectId, tool, idempotencyKey, status, createdAt, &[projectId+tool+idempotencyKey]",
+};
+
+export const V26_STORES: Record<string, string | null> = {
+  ...V25_STORES,
+  craftRuleCandidates: "id, projectId, targetKind, targetId, status, updatedAt, [projectId+status], [projectId+targetId], &[projectId+learningSource.fingerprint]",
 };
 
 const RETIRED_PLANNING_TASKS = new Set([

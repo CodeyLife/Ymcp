@@ -1,3 +1,4 @@
+import Dexie from "dexie";
 import { novelDb, recordBase, type NovelDatabase } from "./db";
 import { BUILTIN_NOVEL_SKILLS, getEffectiveSkill, nextPatchVersion, parseNovelSkill, setProjectSkill } from "./skills";
 import { BUILTIN_PROMPT_TEMPLATES, listPromptTemplates } from "./prompt-templates";
@@ -7,13 +8,20 @@ import {
   createCreativeRun,
   enqueueCreativeWork,
   executeCreativeCommand,
+  buildChapterEvaluationContextSnapshot,
   type CreativeExecutionDependencies,
 } from "./creative-execution";
+import { captureProjectSnapshot, verifyProjectSnapshot, type ProjectSnapshotBundle } from "./evaluation/project-snapshot";
 import type {
   CraftRuleCandidate,
   CraftRuleReviewDecision,
   CraftRuleReviewRole,
   CraftRuleScopeAnalysis,
+  CraftRuleLearningSource,
+  CraftRuleReplaySnapshot,
+  FoundationEvaluationTaskKey,
+  LearningAssessment,
+  ManuscriptDocument,
   NovelSkillManifest,
   NovelSkillStage,
   NovelGenerationTaskKey,
@@ -72,9 +80,7 @@ function lengthBand(words: number): string {
   return "extended";
 }
 
-async function deriveChapterScenario(documentId: string, projectId: string, db: NovelDatabase) {
-  const document = await db.documents.get(documentId);
-  if (!document || document.projectId !== projectId || document.deletedAt) throw new Error("证据章节不存在或不属于当前项目");
+function deriveChapterScenarioFromDocument(document: ManuscriptDocument) {
   const profile = {
     characterCountBand: countBand(document.blueprint.characterIds.length),
     mustHappenBand: countBand(document.blueprint.mustHappen.length),
@@ -135,6 +141,7 @@ export function evaluateCraftRuleGate(candidate: CraftRuleCandidate): CraftRuleG
   if (cases.some((item) => item.blockerDelta > 0 || item.majorDelta > 0)) reasons.push("候选规则不得增加 blocker 或 major");
   if (cases.some((item) => item.candidateScore < item.baselineScore - 0.2)) reasons.push("单个场景质量分回退不得超过 0.2");
   if (cases.length >= 3 && averageScoreDelta < 0.1) reasons.push("跨场景平均质量提升必须达到 0.1");
+  if (!candidate.learningSource?.replay && !candidate.promotionReplay) reasons.push("缺少冻结失败场景");
 
   const latestReviews: Partial<Record<CraftRuleReviewRole, CraftRuleReviewDecision>> = {};
   for (const review of candidate.reviews) latestReviews[review.role] = review;
@@ -177,6 +184,9 @@ export async function createCraftRuleCandidate(input: {
   afterText: string;
   rationale: string;
   scope: CraftRuleScopeAnalysis;
+  learningSource?: CraftRuleLearningSource;
+  expectedTargetVersion?: string;
+  expectedTargetContentFingerprint?: string;
 }, db: NovelDatabase = novelDb): Promise<CraftRuleCandidate> {
   if (input.targetKind !== "skill" && input.targetKind !== "system-prompt") throw new Error("规则候选 targetKind 无效");
   if (!input.afterText.trim() || input.afterText.trim().length < 100) throw new Error("规则候选内容过短，无法表达通用机制与边界");
@@ -200,6 +210,8 @@ export async function createCraftRuleCandidate(input: {
     targetStages = template.stages;
   }
   if (!targetStages.length) throw new Error("目标规则没有可评测阶段");
+  if (input.expectedTargetVersion && beforeVersion !== input.expectedTargetVersion) throw new Error("审核期目标规则版本已变化，需要重新评估 learning 提案");
+  if (input.expectedTargetContentFingerprint && await Dexie.waitFor(textFingerprint(beforeText)) !== input.expectedTargetContentFingerprint) throw new Error("审核期目标规则内容已变化，需要重新评估 learning 提案");
   if (beforeText.trim() === input.afterText.trim()) throw new Error("规则候选与当前生效内容相同");
   const candidate: CraftRuleCandidate = {
     ...recordBase(input.projectId),
@@ -214,9 +226,105 @@ export async function createCraftRuleCandidate(input: {
     status: "proposed",
     evidenceCases: [],
     reviews: [],
+    learningSource: input.learningSource ? structuredClone(input.learningSource) : undefined,
   };
   await db.craftRuleCandidates.add(candidate);
   return candidate;
+}
+
+function chapterReplayFingerprintInput(replay: Extract<CraftRuleReplaySnapshot, { subjectKind: "chapter" }>) {
+  const snapshot = replay.chapter.projectSnapshot as ProjectSnapshotBundle;
+  return JSON.stringify({
+    snapshotHash: snapshot.manifest.snapshotHash,
+    subjectId: replay.subjectId,
+    instruction: replay.chapter.instruction,
+    thread: replay.chapter.thread,
+    brief: replay.chapter.brief,
+  });
+}
+
+function foundationReplayFingerprintInput(replay: Extract<CraftRuleReplaySnapshot, { subjectKind: "foundation-task" }>) {
+  return JSON.stringify({
+    subjectId: replay.subjectId,
+    taskKey: replay.foundation.taskKey,
+    instruction: replay.foundation.instruction,
+    projectContext: replay.foundation.projectContext,
+    model: replay.foundation.model,
+  });
+}
+
+async function assertReplayIntegrity(replay: CraftRuleReplaySnapshot): Promise<void> {
+  if (replay.subjectKind === "chapter") {
+    const verification = await verifyProjectSnapshot(replay.chapter.projectSnapshot as ProjectSnapshotBundle);
+    if (!verification.valid) throw new Error(`冻结项目快照校验失败：${verification.issues.join("；")}`);
+  }
+  const fingerprintInput = replay.subjectKind === "chapter" ? chapterReplayFingerprintInput(replay) : foundationReplayFingerprintInput(replay);
+  if (await textFingerprint(fingerprintInput) !== replay.inputFingerprint) throw new Error("冻结失败场景指纹不匹配");
+}
+
+export async function captureChapterRuleReplay(input: {
+  projectId: string;
+  documentId: string;
+  instruction: string;
+  scenarioClass: string;
+}, db: NovelDatabase = novelDb): Promise<Extract<CraftRuleReplaySnapshot, { subjectKind: "chapter" }>> {
+  const document = await db.documents.get(input.documentId);
+  if (!document || document.projectId !== input.projectId || document.deletedAt) throw new Error("无法冻结不存在的章节评测场景");
+  const instruction = input.instruction.trim() || document.blueprint.objective || document.summary || `完成${document.title}`;
+  const [projectSnapshot, context] = await Promise.all([
+    captureProjectSnapshot(db, input.projectId, "replay"),
+    buildChapterEvaluationContextSnapshot(document, instruction, db),
+  ]);
+  const replay: Extract<CraftRuleReplaySnapshot, { subjectKind: "chapter" }> = {
+    subjectKind: "chapter",
+    subjectId: document.id,
+    scenarioClass: input.scenarioClass.trim() || "章节规则评测",
+    capturedAt: Date.now(),
+    inputFingerprint: "",
+    chapter: { projectSnapshot, thread: structuredClone(context.thread), brief: structuredClone(context.brief), instruction },
+  };
+  replay.inputFingerprint = await textFingerprint(chapterReplayFingerprintInput(replay));
+  return replay;
+}
+
+export async function createCraftRuleCandidateFromLearning(input: {
+  projectId: string;
+  learning: LearningAssessment;
+  source: CraftRuleLearningSource;
+}, db: NovelDatabase = novelDb): Promise<CraftRuleCandidate | undefined> {
+  if (input.learning.conclusion === "no-shared-learning") return undefined;
+  const learning = input.learning;
+  return db.transaction("rw", db.craftRuleCandidates, db.skills, db.projectSkills, db.promptTemplateVersions, async () => {
+    const existing = await db.craftRuleCandidates
+      .where("[projectId+learningSource.fingerprint]")
+      .equals([input.projectId, input.source.fingerprint])
+      .first();
+    if (existing) return existing;
+    const { proposal } = learning;
+    if (!proposal.targetVersion || !proposal.targetContentFingerprint) {
+      throw new Error("learning 改进候选缺少审核时规则版本或内容指纹");
+    }
+    return createCraftRuleCandidate({
+      projectId: input.projectId,
+      targetKind: proposal.targetKind,
+      targetId: proposal.targetId,
+      afterText: proposal.afterText,
+      rationale: proposal.rationale,
+      scope: {
+        observedSymptom: proposal.observedSymptom,
+        failingLayer: proposal.failingLayer,
+        underlyingMechanism: learning.underlyingMechanism,
+        affectedInputClass: learning.affectedInputClass,
+        intendedBenefits: proposal.intendedBenefits,
+        boundaries: proposal.boundaries,
+        nonGoals: proposal.nonGoals,
+        regressionRisks: proposal.regressionRisks,
+      },
+      learningSource: input.source,
+      expectedTargetVersion: proposal.targetVersion,
+      expectedTargetContentFingerprint: proposal.targetContentFingerprint,
+    }, db);
+  });
 }
 
 type CandidateQuality = { id?: string; qualityEvidence?: { weightedScore?: number; blockerCount?: number; majorCount?: number } };
@@ -238,7 +346,7 @@ export async function recordCraftRuleEvidence(input: {
 }, db: NovelDatabase = novelDb): Promise<CraftRuleCandidate> {
   const candidate = await db.craftRuleCandidates.get(input.candidateId);
   if (!candidate) throw new Error("规则候选不存在");
-  if (["promoted", "rolled-back"].includes(candidate.status)) throw new Error("已结束的规则候选不能追加证据");
+  if (candidate.status === "rolled-back") throw new Error("已回滚的规则候选不能追加证据");
   if (!input.scenarioClass.trim()) throw new Error("scenarioClass 不能为空");
   const [baselineWork, candidateWork] = await Promise.all([
     db.creativeWorkItems.get(input.baselineWorkItemId),
@@ -275,11 +383,24 @@ export async function recordCraftRuleEvidence(input: {
   if (baselineApplication!.promptFingerprint === candidateApplication!.promptFingerprint) {
     throw new Error("基线与候选 Prompt 指纹相同，不能证明规则文本已发生变化");
   }
+  const baselineReplay = baselineWork.parameters.replaySnapshot as CraftRuleReplaySnapshot | undefined;
+  const candidateReplay = candidateWork.parameters.replaySnapshot as CraftRuleReplaySnapshot | undefined;
+  if (!baselineReplay || !candidateReplay || baselineReplay.inputFingerprint !== candidateReplay.inputFingerprint) {
+    throw new Error("规则评测工作项缺少一致的冻结回放快照");
+  }
+  if ((chapterPair && baselineReplay.subjectKind !== "chapter") || (foundationPair && baselineReplay.subjectKind !== "foundation-task") || baselineReplay.subjectId !== baselineWork.targetId) {
+    throw new Error("冻结回放快照与规则评测目标不匹配");
+  }
+  await assertReplayIntegrity(baselineReplay);
   const baseline = baselineWork.parameters.closedLoopCandidate as CandidateQuality | undefined;
   const changed = candidateWork.parameters.closedLoopCandidate as CandidateQuality | undefined;
   if (!baseline?.qualityEvidence || !changed?.qualityEvidence) throw new Error("评测工作项缺少质量证据");
+  const frozenDocument = baselineReplay.subjectKind === "chapter"
+    ? (baselineReplay.chapter.projectSnapshot as ProjectSnapshotBundle).records.documents.find((item) => item.id === baselineReplay.subjectId) as unknown as ManuscriptDocument | undefined
+    : undefined;
+  if (chapterPair && !frozenDocument) throw new Error("章节冻结回放快照缺少目标正文");
   const scenario = chapterPair
-    ? await deriveChapterScenario(baselineWork.targetId!, candidate.projectId, db)
+    ? deriveChapterScenarioFromDocument(frozenDocument!)
     : {
       profile: structuredClone(baselineWork.parameters.scenarioProfile as Record<string, string>),
       signature: String(baselineWork.parameters.scenarioSignature ?? ""),
@@ -305,6 +426,31 @@ export async function recordCraftRuleEvidence(input: {
     majorDelta: (changed.qualityEvidence.majorCount ?? 0) - (baseline.qualityEvidence.majorCount ?? 0),
     recordedAt: Date.now(),
   };
+  if (candidate.status === "promoted" || candidate.promotionValidation?.status === "pending") {
+    const candidateBlockers = changed.qualityEvidence.blockerCount ?? 0;
+    const candidateMajors = changed.qualityEvidence.majorCount ?? 0;
+    const passed = candidateBlockers === 0 && candidateMajors === 0
+      && evidence.candidateScore >= evidence.baselineScore
+      && evidence.blockerDelta <= 0 && evidence.majorDelta <= 0;
+    candidate.promotionValidation = {
+      status: passed ? "passed" : "failed",
+      subjectKind: evidence.subjectKind,
+      subjectId: evidence.subjectId,
+      scenarioClass: evidence.scenarioClass,
+      activeVersion: candidate.proposedVersion,
+      workItemId: candidateWork.id,
+      artifactId: evidence.candidateArtifactId,
+      summary: passed
+        ? `新版本回归通过：${evidence.baselineScore.toFixed(2)} -> ${evidence.candidateScore.toFixed(2)}`
+        : `新版本回归失败：blocker=${candidateBlockers}, major=${candidateMajors}, score ${evidence.baselineScore.toFixed(2)} -> ${evidence.candidateScore.toFixed(2)}`,
+      checkedAt: Date.now(),
+    };
+    candidate.updatedAt = Date.now();
+    candidate.revision += 1;
+    await db.craftRuleCandidates.put(candidate);
+    return candidate.status === "promoted" && !passed ? rollbackCraftRuleCandidate(candidate.id, db) : candidate;
+  }
+  candidate.promotionReplay ??= structuredClone(baselineReplay);
   candidate.evidenceCases = [...candidate.evidenceCases.filter((item) => item.subjectId !== evidence.subjectId), evidence];
   return refreshStatus(candidate, db);
 }
@@ -313,13 +459,22 @@ export async function evaluateCraftRuleOnChapter(input: {
   candidateId: string;
   documentId: string;
   scenarioClass: string;
+  replay?: Extract<CraftRuleReplaySnapshot, { subjectKind: "chapter" }>;
 }, dependencies: CreativeExecutionDependencies = {}, db: NovelDatabase = novelDb): Promise<CraftRuleCandidate> {
   const candidate = await db.craftRuleCandidates.get(input.candidateId);
-  if (!candidate || ["promoted", "rolled-back"].includes(candidate.status)) throw new Error("规则候选不存在或已结束");
-  const document = await db.documents.get(input.documentId);
+  if (!candidate || candidate.status === "rolled-back") throw new Error("规则候选不存在或已回滚");
+  if (input.replay) {
+    if (input.replay.subjectId !== input.documentId) throw new Error("章节冻结回放快照与目标不匹配");
+    await assertReplayIntegrity(input.replay);
+  }
+  const frozenDocument = input.replay
+    ? (input.replay.chapter.projectSnapshot as ProjectSnapshotBundle).records.documents.find((item) => item.id === input.documentId) as unknown as ManuscriptDocument | undefined
+    : undefined;
+  const document = frozenDocument ?? await db.documents.get(input.documentId);
   if (!document || document.projectId !== candidate.projectId || document.deletedAt) throw new Error("评测章节不存在或不属于当前项目");
   const scenarioClass = input.scenarioClass.trim();
   if (!scenarioClass) throw new Error("创作场景类别不能为空");
+  const replay = input.replay ?? await captureChapterRuleReplay({ projectId: candidate.projectId, documentId: document.id, instruction: document.blueprint.objective || document.summary || `完成${document.title}`, scenarioClass }, db);
   const targetStages = candidate.targetKind === "skill"
     ? (await getEffectiveSkill(candidate.projectId, candidate.targetId, db))?.stages
     : (await listPromptTemplates(candidate.projectId, db)).find((item) => item.templateId === candidate.targetId)?.stages;
@@ -328,6 +483,7 @@ export async function evaluateCraftRuleOnChapter(input: {
   }
   const candidateId = candidate.id;
   const documentId = document.id;
+  const instruction = replay.chapter.instruction;
 
   const run = await createCreativeRun({
     projectId: candidate.projectId,
@@ -338,14 +494,14 @@ export async function evaluateCraftRuleOnChapter(input: {
   const baseline = await enqueueCreativeWork(run.id, {
     kind: "chapter-workflow",
     targetId: documentId,
-    instruction: document.blueprint.objective || document.summary || `完成${document.title}`,
-    parameters: { evaluationRole: "baseline", scenarioClass, ruleCandidateId: candidateId },
+    instruction,
+    parameters: { evaluationRole: "baseline", scenarioClass, ruleCandidateId: candidateId, replaySnapshot: replay },
   }, db);
   const changed = await enqueueCreativeWork(run.id, {
     kind: "chapter-workflow",
     targetId: documentId,
-    instruction: document.blueprint.objective || document.summary || `完成${document.title}`,
-    parameters: { evaluationRole: "candidate", scenarioClass, ruleCandidateId: candidateId },
+    instruction,
+    parameters: { evaluationRole: "candidate", scenarioClass, ruleCandidateId: candidateId, replaySnapshot: replay },
   }, db);
 
   async function completeEvaluationWork(workItemId: string, label: string) {
@@ -425,44 +581,30 @@ export async function evaluateCraftRuleOnFoundation(input: {
   taskKey: typeof FOUNDATION_EVALUATION_TASKS[number];
   scenarioClass: string;
   instruction?: string;
+  replay?: Extract<CraftRuleReplaySnapshot, { subjectKind: "foundation-task" }>;
 }, dependencies: FoundationRuleEvaluationDependencies = {}, db: NovelDatabase = novelDb): Promise<CraftRuleCandidate> {
   const candidate = await db.craftRuleCandidates.get(input.candidateId);
-  if (!candidate || ["promoted", "rolled-back"].includes(candidate.status)) throw new Error("规则候选不存在或已结束");
+  if (!candidate || candidate.status === "rolled-back") throw new Error("规则候选不存在或已回滚");
   if (!FOUNDATION_EVALUATION_TASKS.includes(input.taskKey)) throw new Error("不支持的基础设定评测任务");
   const targetStages = candidate.targetKind === "skill"
     ? (await getEffectiveSkill(candidate.projectId, candidate.targetId, db))?.stages
     : (await listPromptTemplates(candidate.projectId, db)).find((item) => item.templateId === candidate.targetId)?.stages;
   if (!targetStages || !supportsFoundationRuleEvaluation(targetStages)) throw new Error("该规则不适用于基础设定阶段");
-  const project = await db.projects.get(candidate.projectId);
-  if (!project) throw new Error("项目不存在");
-  const task = getGenerationTask(input.taskKey);
   const scenarioClass = input.scenarioClass.trim();
   if (!scenarioClass) throw new Error("创作场景类别不能为空");
-  const instruction = input.instruction?.trim() || task.defaultInstruction;
-  const [architecture, entities, relations, segments, documents] = await Promise.all([
-    db.architectures.where("projectId").equals(candidate.projectId).first(),
-    db.entities.where("projectId").equals(candidate.projectId).toArray(),
-    db.relations.where("projectId").equals(candidate.projectId).toArray(),
-    db.outlineNodes.where("projectId").equals(candidate.projectId).sortBy("order"),
-    db.documents.where("projectId").equals(candidate.projectId).sortBy("order"),
-  ]);
-  const projectContext = JSON.stringify({
-    project: { title: project.title, premise: project.premise, genre: project.genre, audience: project.audience, themes: project.themes, sellingPoints: project.sellingPoints, pov: project.pov, tone: project.tone, languageStyle: project.languageStyle, targetWords: project.targetWords },
-    architecture: architecture ? { centralQuestion: architecture.centralQuestion, centralConflict: architecture.centralConflict, synopsis: architecture.synopsis, phases: architecture.phases } : null,
-    entities: entities.map((entity) => ({ kind: entity.kind, name: entity.name, summary: entity.summary, description: entity.description, character: entity.character })),
-    relations: relations.map((relation) => ({ fromEntityId: relation.fromEntityId, toEntityId: relation.toEntityId, relationType: relation.relationType, publicLabel: relation.publicLabel, privateTruth: relation.privateTruth })),
-    segments: segments.map((segment) => ({ title: segment.title, summary: segment.summary, phaseId: segment.phaseId })),
-    chapters: documents.map((document) => ({ title: document.title, summary: document.summary, status: document.status, objective: document.blueprint.objective })),
-  });
-  const scenarioProfile = {
-    taskKey: input.taskKey,
-    taskScope: task.scope,
-    architectureState: architecture ? "present" : "absent",
-    entityState: countBand(entities.length),
-    relationState: countBand(relations.length),
-    planningState: countBand(segments.length + documents.length),
-  };
-  const scenarioSignature = JSON.stringify(scenarioProfile);
+  if (input.replay) {
+    if (input.replay.subjectId !== `foundation:${input.taskKey}` || input.replay.foundation.taskKey !== input.taskKey) throw new Error("基础任务冻结回放快照与目标不匹配");
+    await assertReplayIntegrity(input.replay);
+  }
+  const liveContext = input.replay ? undefined : await buildFoundationEvaluationContext({ projectId: candidate.projectId, taskKey: input.taskKey, instruction: input.instruction }, db);
+  const project = liveContext?.project ?? await db.projects.get(candidate.projectId);
+  if (!project) throw new Error("项目不存在");
+  const task = liveContext?.task ?? getGenerationTask(input.taskKey);
+  const replay = input.replay ?? await captureFoundationRuleReplay({ projectId: candidate.projectId, taskKey: input.taskKey, instruction: input.instruction, scenarioClass }, db);
+  const instruction = replay.foundation.instruction;
+  const projectContext = replay.foundation.projectContext;
+  const scenarioProfile = liveContext?.scenarioProfile ?? { taskKey: input.taskKey, frozenInputFingerprint: replay.inputFingerprint };
+  const scenarioSignature = liveContext?.scenarioSignature ?? replay.inputFingerprint;
   const generate = dependencies.generate ?? (async (params) => (await callStructuredNovelModel<FoundationEvaluationArtifact>({
     model: params.model,
     temperature: 0.45,
@@ -483,14 +625,14 @@ export async function evaluateCraftRuleOnFoundation(input: {
 
   const run = await createCreativeRun({ projectId: candidate.projectId, mode: "segment-auto", objective: `基础规则评测 ${candidate.targetId}@${candidate.proposedVersion}：${input.taskKey}`, policy: { maxIterations: 0 } }, db);
   const targetId = `foundation:${input.taskKey}`;
-  const commonParameters = { evaluationKind: "foundation-isolated-v1", scenarioClass, scenarioProfile, scenarioSignature, ruleCandidateId: candidate.id };
+  const commonParameters = { evaluationKind: "foundation-isolated-v1", scenarioClass, scenarioProfile, scenarioSignature, ruleCandidateId: candidate.id, replaySnapshot: replay };
   const baseline = await enqueueCreativeWork(run.id, { kind: "generation", taskKey: input.taskKey, targetId, instruction, parameters: { ...commonParameters, evaluationRole: "baseline" } }, db);
   const changed = await enqueueCreativeWork(run.id, { kind: "generation", taskKey: input.taskKey, targetId, instruction, parameters: { ...commonParameters, evaluationRole: "candidate" } }, db);
   const executor = async (work: Parameters<NonNullable<CreativeExecutionDependencies["executor"]>>[0]) => {
     const evaluationRole = work.parameters.evaluationRole === "candidate" ? "candidate" : "baseline";
     const ruleText = evaluationRole === "candidate" ? candidate.afterText : candidate.beforeText;
-    const artifact = await generate({ taskKey: input.taskKey, instruction: work.instruction, projectContext, ruleText, model: project.settings.textModel });
-    const assessment = await assess({ taskKey: input.taskKey, instruction: work.instruction, projectContext, artifact, model: project.settings.textModel });
+    const artifact = await generate({ taskKey: input.taskKey, instruction: work.instruction, projectContext, ruleText, model: replay.foundation.model });
+    const assessment = await assess({ taskKey: input.taskKey, instruction: work.instruction, projectContext, artifact, model: replay.foundation.model });
     const scoreValues = Object.values(assessment.scores);
     const weightedScore = scoreValues.reduce((sum, score) => sum + score, 0) / scoreValues.length;
     const artifactId = `${work.id}:foundation-artifact`;
@@ -554,35 +696,128 @@ export async function submitCraftRuleReview(input: {
   return refreshStatus(candidate, db);
 }
 
-export async function promoteCraftRuleCandidate(candidateId: string, db: NovelDatabase = novelDb): Promise<CraftRuleCandidate> {
-  return db.transaction("rw", db.skills, db.projectSkills, db.promptTemplateVersions, db.craftRuleCandidates, async () => {
-    const candidate = await db.craftRuleCandidates.get(candidateId);
-    if (!candidate) throw new Error("规则候选不存在");
-    const gate = evaluateCraftRuleGate(candidate);
-    if (!gate.ready || candidate.status !== "ready") throw new Error(`规则候选未通过晋升门禁：${gate.reasons.join("；")}`);
-    if (candidate.targetKind === "skill") {
-      const current = await getEffectiveSkill(candidate.projectId, candidate.targetId, db);
-      if (!current || current.version !== candidate.beforeVersion || current.prompt !== candidate.beforeText) throw new Error("Skill 基线已变化，需要重新评测");
-      const next: NovelSkillManifest = { ...current, ...recordBase(candidate.projectId), projectId: candidate.projectId, source: "project", readonly: false, version: candidate.proposedVersion, prompt: candidate.afterText };
-      await db.skills.add(next);
-      await setProjectSkill(candidate.projectId, candidate.targetId, true, next.version, db);
-      candidate.promotedRecordId = next.id;
+export interface CraftRulePromotionDependencies {
+  evaluateChapter?: typeof evaluateCraftRuleOnChapter;
+  evaluateFoundation?: typeof evaluateCraftRuleOnFoundation;
+}
+
+export async function promoteCraftRuleCandidate(candidateId: string, db: NovelDatabase = novelDb, dependencies: CraftRulePromotionDependencies = {}): Promise<CraftRuleCandidate> {
+  let candidate = await db.craftRuleCandidates.get(candidateId);
+  if (!candidate) throw new Error("规则候选不存在");
+  const initialCandidate = candidate;
+  const gate = evaluateCraftRuleGate(candidate);
+  if (!gate.ready || candidate.status !== "ready") throw new Error(`规则候选未通过晋升门禁：${gate.reasons.join("；")}`);
+  const replay = candidate.learningSource?.replay ?? candidate.promotionReplay;
+  if (!replay) throw new Error("规则候选缺少冻结失败场景，不能执行晋升回归");
+  await assertReplayIntegrity(replay);
+  candidate.promotionValidation = {
+    status: "pending",
+    subjectKind: replay.subjectKind,
+    subjectId: replay.subjectId,
+    scenarioClass: replay.scenarioClass,
+    activeVersion: candidate.proposedVersion,
+    summary: "正在以候选新版本重跑冻结失败场景，验证通过前不会激活",
+    checkedAt: Date.now(),
+  };
+  candidate.updatedAt = Date.now();
+  candidate.revision += 1;
+  await db.craftRuleCandidates.put(candidate);
+
+  async function failValidation(error: unknown) {
+    const current = await db.craftRuleCandidates.get(candidateId);
+    if (!current) return initialCandidate;
+    current.status = "rolled-back";
+    current.promotionValidation = {
+      ...(current.promotionValidation ?? initialCandidate.promotionValidation!),
+      status: "failed",
+      summary: error instanceof Error ? error.message : "晋升回归执行失败，新版本未激活",
+      checkedAt: Date.now(),
+    };
+    current.updatedAt = Date.now();
+    current.revision += 1;
+    await db.craftRuleCandidates.put(current);
+    return current;
+  }
+
+  try {
+    if (replay.subjectKind === "chapter") {
+      await (dependencies.evaluateChapter ?? evaluateCraftRuleOnChapter)({ candidateId: candidate.id, documentId: replay.subjectId, scenarioClass: replay.scenarioClass, replay }, {}, db);
     } else {
-      const current = (await listPromptTemplates(candidate.projectId, db)).find((item) => item.templateId === candidate.targetId);
-      if (!current || current.version !== candidate.beforeVersion || current.content !== candidate.beforeText) throw new Error("系统 Prompt 基线已变化，需要重新评测");
-      const activeProject = await db.promptTemplateVersions.where("[projectId+templateId]").equals([candidate.projectId, candidate.targetId]).and((item) => item.active).toArray();
-      await db.promptTemplateVersions.bulkPut(activeProject.map((item) => ({ ...item, active: false, revision: item.revision + 1, updatedAt: Date.now() })));
-      const next: PromptTemplateVersion = { ...current, ...recordBase(candidate.projectId), projectId: candidate.projectId, source: "project", version: candidate.proposedVersion, content: candidate.afterText, active: true, previousVersionId: current.id };
-      await db.promptTemplateVersions.add(next);
-      candidate.promotedRecordId = next.id;
+      await (dependencies.evaluateFoundation ?? evaluateCraftRuleOnFoundation)({ candidateId: candidate.id, taskKey: replay.foundation.taskKey, scenarioClass: replay.scenarioClass, instruction: replay.foundation.instruction, replay }, {}, db);
     }
-    candidate.status = "promoted";
-    candidate.promotedAt = Date.now();
-    candidate.updatedAt = candidate.promotedAt;
-    candidate.revision += 1;
-    await db.craftRuleCandidates.put(candidate);
-    return candidate;
+  } catch (error) {
+    return failValidation(error);
+  }
+
+  candidate = (await db.craftRuleCandidates.get(candidateId)) ?? candidate;
+  if (candidate.promotionValidation?.status !== "passed") {
+    return failValidation(new Error(candidate.promotionValidation?.summary || "冻结失败场景回归未通过，新版本未激活"));
+  }
+
+  return db.transaction("rw", db.skills, db.projectSkills, db.promptTemplateVersions, db.craftRuleCandidates, async () => {
+    const currentCandidate = await db.craftRuleCandidates.get(candidateId);
+    if (!currentCandidate || currentCandidate.status !== "ready" || currentCandidate.promotionValidation?.status !== "passed") throw new Error("规则候选回归状态已变化，不能激活");
+    if (currentCandidate.targetKind === "skill") {
+      const current = await getEffectiveSkill(currentCandidate.projectId, currentCandidate.targetId, db);
+      if (!current || current.version !== currentCandidate.beforeVersion || current.prompt !== currentCandidate.beforeText) throw new Error("Skill 基线已变化，需要重新评测");
+      const next: NovelSkillManifest = { ...current, ...recordBase(currentCandidate.projectId), projectId: currentCandidate.projectId, source: "project", readonly: false, version: currentCandidate.proposedVersion, prompt: currentCandidate.afterText };
+      await db.skills.add(next);
+      await setProjectSkill(currentCandidate.projectId, currentCandidate.targetId, true, next.version, db);
+      currentCandidate.promotedRecordId = next.id;
+    } else {
+      const current = (await listPromptTemplates(currentCandidate.projectId, db)).find((item) => item.templateId === currentCandidate.targetId);
+      if (!current || current.version !== currentCandidate.beforeVersion || current.content !== currentCandidate.beforeText) throw new Error("系统 Prompt 基线已变化，需要重新评测");
+      const activeProject = await db.promptTemplateVersions.where("[projectId+templateId]").equals([currentCandidate.projectId, currentCandidate.targetId]).and((item) => item.active).toArray();
+      await db.promptTemplateVersions.bulkPut(activeProject.map((item) => ({ ...item, active: false, revision: item.revision + 1, updatedAt: Date.now() })));
+      const next: PromptTemplateVersion = { ...current, ...recordBase(currentCandidate.projectId), projectId: currentCandidate.projectId, source: "project", version: currentCandidate.proposedVersion, content: currentCandidate.afterText, active: true, previousVersionId: current.id };
+      await db.promptTemplateVersions.add(next);
+      currentCandidate.promotedRecordId = next.id;
+    }
+    currentCandidate.status = "promoted";
+    currentCandidate.promotedAt = Date.now();
+    currentCandidate.updatedAt = currentCandidate.promotedAt;
+    currentCandidate.revision += 1;
+    await db.craftRuleCandidates.put(currentCandidate);
+    return currentCandidate;
   });
+}
+
+async function buildFoundationEvaluationContext(input: { projectId: string; taskKey: FoundationEvaluationTaskKey; instruction?: string }, db: NovelDatabase) {
+  const project = await db.projects.get(input.projectId);
+  if (!project) throw new Error("项目不存在");
+  const task = getGenerationTask(input.taskKey);
+  const instruction = input.instruction?.trim() || task.defaultInstruction;
+  const [architecture, entities, relations, segments, documents] = await Promise.all([
+    db.architectures.where("projectId").equals(input.projectId).first(),
+    db.entities.where("projectId").equals(input.projectId).toArray(),
+    db.relations.where("projectId").equals(input.projectId).toArray(),
+    db.outlineNodes.where("projectId").equals(input.projectId).sortBy("order"),
+    db.documents.where("projectId").equals(input.projectId).sortBy("order"),
+  ]);
+  const projectContext = JSON.stringify({
+    project: { title: project.title, premise: project.premise, genre: project.genre, audience: project.audience, themes: project.themes, sellingPoints: project.sellingPoints, pov: project.pov, tone: project.tone, languageStyle: project.languageStyle, targetWords: project.targetWords },
+    architecture: architecture ? { centralQuestion: architecture.centralQuestion, centralConflict: architecture.centralConflict, synopsis: architecture.synopsis, phases: architecture.phases } : null,
+    entities: entities.map((entity) => ({ kind: entity.kind, name: entity.name, summary: entity.summary, description: entity.description, character: entity.character })),
+    relations: relations.map((relation) => ({ fromEntityId: relation.fromEntityId, toEntityId: relation.toEntityId, relationType: relation.relationType, publicLabel: relation.publicLabel, privateTruth: relation.privateTruth })),
+    segments: segments.map((segment) => ({ title: segment.title, summary: segment.summary, phaseId: segment.phaseId })),
+    chapters: documents.map((document) => ({ title: document.title, summary: document.summary, status: document.status, objective: document.blueprint.objective })),
+  });
+  const scenarioProfile = { taskKey: input.taskKey, taskScope: task.scope, architectureState: architecture ? "present" : "absent", entityState: countBand(entities.length), relationState: countBand(relations.length), planningState: countBand(segments.length + documents.length) };
+  return { project, task, instruction, projectContext, scenarioProfile, scenarioSignature: JSON.stringify(scenarioProfile) };
+}
+
+export async function captureFoundationRuleReplay(input: { projectId: string; taskKey: FoundationEvaluationTaskKey; instruction?: string; scenarioClass: string }, db: NovelDatabase = novelDb): Promise<Extract<CraftRuleReplaySnapshot, { subjectKind: "foundation-task" }>> {
+  const context = await buildFoundationEvaluationContext(input, db);
+  const replay: Extract<CraftRuleReplaySnapshot, { subjectKind: "foundation-task" }> = {
+    subjectKind: "foundation-task",
+    subjectId: `foundation:${input.taskKey}`,
+    scenarioClass: input.scenarioClass.trim() || `基础任务:${input.taskKey}`,
+    capturedAt: Date.now(),
+    inputFingerprint: "",
+    foundation: { taskKey: input.taskKey, instruction: context.instruction, projectContext: context.projectContext, model: context.project.settings.textModel },
+  };
+  replay.inputFingerprint = await textFingerprint(foundationReplayFingerprintInput(replay));
+  return replay;
 }
 
 export async function rollbackCraftRuleCandidate(candidateId: string, db: NovelDatabase = novelDb): Promise<CraftRuleCandidate> {

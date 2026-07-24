@@ -108,7 +108,7 @@ describe("novel quality gates", () => {
   it("keeps the weighted quality scale normalized to five", () => {
     const deterministic = runDeterministicQualityChecks({ text: "船工收紧缆绳，岸边众人依次登船。".repeat(100) });
     deterministic.issues = [];
-    deterministic.scores = { plot: 5, characterVoice: 5, sceneEmbodiment: 5, dialogue: 5, specificity: 5, hookPayoff: 5, continuity: 5 };
+    deterministic.scores = { plot: 5, characterVoice: 5, sceneEmbodiment: 5, dialogue: 5, specificity: 5, hookPayoff: 5, continuity: 5, readerRetention: 5 };
 
     const result = aggregateQuality({ deterministic, threshold: 5 });
 
@@ -247,6 +247,33 @@ describe("novel quality gates", () => {
 });
 
 describe("prose discipline checks", () => {
+  it("recognizes dialogue at the first character as an opening hook", () => {
+    const text = `“你终于来了。”她把湿透的车票压在桌上。\n\n${"雨水沿着玻璃缓慢滑落，候车室里的人依次抬头，又各自移开目光。".repeat(45)}`;
+    const result = runDeterministicQualityChecks({ text });
+
+    expect(result.issues.some((item) => item.rule === "reader.opening-hook")).toBe(false);
+  });
+
+  it("does not infer reader fatigue from a fixed action-verb vocabulary", () => {
+    const actionParagraphs = [
+      "她奔过月台，鞋跟擦过积水，跃上即将合拢的车门。",
+      "列车掠过桥面，她敲了敲结霜的玻璃，把信递给身旁的人。",
+      "风拂起纸角，他笑了一下，将最后一行折进掌心。",
+      "站台向后退去，两个人都没有立刻解释信里的名字。",
+    ];
+    const reflectiveParagraphs = [
+      "旧城的冬季总比记忆更长，灰色屋脊把天光切成细窄的片。",
+      "那些没有寄出的年月并非空白，它们沉在每一次迟疑背后。",
+      "人们以为沉默等于遗忘，其实许多答案只是尚未找到说法。",
+      "远处钟声越过河面，时间仍按自己的秩序向前。",
+    ];
+
+    for (const paragraphs of [actionParagraphs, reflectiveParagraphs]) {
+      const result = runDeterministicQualityChecks({ text: paragraphs.join("\n\n") });
+      expect(result.issues.some((item) => item.rule === "reader.fatigue-streak")).toBe(false);
+    }
+  });
+
   it("recognizes a pending decision across the final scene instead of judging only the last image", () => {
     const body = "宫门次第合拢，长街上的人声渐渐近了。".repeat(40);
     const ending = [
@@ -258,6 +285,23 @@ describe("prose discipline checks", () => {
     const result = runDeterministicQualityChecks({ text: `${body}\n\n${ending}` });
 
     expect(result.issues.some((item) => item.rule === "style.chapter-ending-hook")).toBe(false);
+  });
+
+  it("flags a truly closed ending and provides revision ranges so it can be auto-revised", () => {
+    // 反例验证：末段没有任何开放信号（无问号、无转折、无未行动信号、无 pendingDecision），
+    // 只有情感余韵的封闭画面——应被标记且带 revisionRanges 锁定末段。
+    const body = "宫门次第合拢，长街上的人声渐渐近了。".repeat(40);
+    const closedEnding = "月光落在空庭里，一切都安静下来，像是什么都没有发生过。";
+
+    const result = runDeterministicQualityChecks({ text: `${body}\n\n${closedEnding}` });
+    const hookIssue = result.issues.find((item) => item.rule === "style.chapter-ending-hook");
+
+    expect(hookIssue).toBeDefined();
+    expect(hookIssue?.severity).toBe("warning");
+    // revisionRanges 是 collectRevisionParagraphs 定位修订窗口的必要条件；
+    // 无 revisionRanges 的 issue 即使升级为 major 也只能触发人工审批而非自动修订。
+    expect(hookIssue?.revisionRanges?.length).toBeGreaterThan(0);
+    expect(hookIssue?.paragraph).toBeDefined();
   });
 
   it("flags emphasis word devaluation when a word exceeds 2 occurrences", () => {
@@ -341,5 +385,59 @@ describe("prose discipline checks", () => {
     expect(result.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ rule: "style.scene-summary-tail", revisionRanges: [{ start: 1, end: 1 }] }),
     ]));
+  });
+
+  // 根因 E：旧检查被过渡词（然而/可是/忽然）欺骗——LLM 撒一个"然而"即通过钩子检查，
+  // 但读者感受不到拉力。修复后只用 HOOK_TENSION_MARKERS（强张力信号）判定。
+  it("flags a chapter ending that relies only on transition words without genuine tension", () => {
+    const body = "宫门次第合拢，长街上的人声渐渐近了。".repeat(40);
+    // 末段只有过渡词和突发词，没有任何强张力信号（无问号、无省略号、无未行动信号、无 pendingDecision）
+    const weakEnding = "然而他没有说话。忽然风吹过庭院，一切归于平静。";
+
+    const result = runDeterministicQualityChecks({ text: `${body}\n\n${weakEnding}` });
+
+    expect(result.issues.some((item) => item.rule === "style.chapter-ending-hook")).toBe(true);
+  });
+
+  it("does not flag a chapter ending with strong tension markers", () => {
+    // 根因 E 反例验证：末段包含省略号（HOOK_TENSION_MARKERS 之一），
+    // 即使没有过渡词也应通过钩子检查——强信号本身构成钩子。
+    const body = "宫门次第合拢，长街上的人声渐渐近了。".repeat(40);
+    const strongEnding = "他看着那封没有署名的信，手指停在封口处……";
+
+    const result = runDeterministicQualityChecks({ text: `${body}\n\n${strongEnding}` });
+
+    expect(result.issues.some((item) => item.rule === "style.chapter-ending-hook")).toBe(false);
+  });
+
+  // 根因 F：反套路手势词被 LLM 机械套用形成新模板。
+  // prose-prompts 教 LLM 用"停步/侧首"替代心理直说（正确方向），但高频重复后读者感知到的是新 AI 腔。
+  it("flags gesture word repetition when a gesture exceeds 2 occurrences", () => {
+    const text = [
+      "他停步在门前，听见里面的争执声，没有推门。",
+      "她停步看了一眼窗外，雨还没停，转身走回桌前。",
+      "那人停步转身，把信递了过来，目光没有停留。",
+    ].join("\n\n");
+
+    const result = runDeterministicQualityChecks({ text });
+    const gestureIssue = result.issues.find((item) => item.rule === "style.gesture-repetition");
+
+    expect(gestureIssue).toBeDefined();
+    expect(gestureIssue?.severity).toBe("warning");
+    expect(gestureIssue?.description).toContain("停步");
+    expect(gestureIssue?.revisionRanges?.length).toBeGreaterThan(0);
+  });
+
+  it("does not flag gesture words within the 2-occurrence threshold", () => {
+    // 根因 F 反例：手势词出现 ≤2 次不算模板化，不应被标记。
+    const text = [
+      "他停步在门前，听见里面的争执声，没有推门。",
+      "她侧首看了一眼窗外，雨还没停，转身走回桌前。",
+      "那人转身把信递了过来，目光没有停留。",
+    ].join("\n\n");
+
+    const result = runDeterministicQualityChecks({ text });
+
+    expect(result.issues.some((item) => item.rule === "style.gesture-repetition")).toBe(false);
   });
 });

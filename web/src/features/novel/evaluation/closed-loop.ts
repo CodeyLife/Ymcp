@@ -68,6 +68,10 @@ export interface ClosedLoopOptions {
    * 默认关闭；这些建议即使生成也不会被 buildAuthorDecision 自动接受。
    */
   proposeLegacySkillIterations?: boolean;
+  /** 晋升回归使用审核时冻结的项目输入；省略时捕获当前正式项目。 */
+  baseSnapshot?: ProjectSnapshotBundle;
+  /** 与冻结项目输入配套的对话/简报快照。 */
+  conversationSnapshot?: { thread: NovelConversationThread; brief: CreativeBrief };
 }
 
 export interface ClosedLoopResult {
@@ -135,16 +139,24 @@ export async function runClosedLoop(options: ClosedLoopOptions): Promise<ClosedL
   const experimentId = options.experimentId ?? `closed-loop-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
 
   // 1. 捕获正式库基线快照（同时得到 hash + bundle）
-  const baseSnapshot = await captureProjectSnapshot(canonicalDb, projectId, "manual");
+  const baseSnapshot = options.baseSnapshot
+    ? structuredClone(options.baseSnapshot)
+    : await captureProjectSnapshot(canonicalDb, projectId, "manual");
+  if (baseSnapshot.sourceProjectId !== projectId) throw new Error("冻结项目快照与评测项目不匹配");
   const canonicalHashBefore = baseSnapshot.manifest.snapshotHash;
 
   // 2. 从正式库读取 thread + brief
-  const [thread, brief] = await Promise.all([
-    canonicalDb.conversationThreads.get(threadId),
-    canonicalDb.creativeBriefs.get(briefId),
-  ]);
+  const [thread, brief] = options.conversationSnapshot
+    ? [structuredClone(options.conversationSnapshot.thread), structuredClone(options.conversationSnapshot.brief)]
+    : await Promise.all([
+      canonicalDb.conversationThreads.get(threadId),
+      canonicalDb.creativeBriefs.get(briefId),
+    ]);
   if (!thread) throw new Error(`thread 不存在于正式库：${threadId}`);
   if (!brief) throw new Error(`brief 不存在于正式库：${briefId}`);
+  if (thread.projectId !== projectId || thread.targetId !== chapterId || brief.threadId !== thread.id || brief.targetDocumentId !== chapterId) {
+    throw new Error("冻结对话/简报与评测章节不匹配");
+  }
   if (brief.status !== "confirmed") {
     throw new Error(`brief 状态必须为 confirmed，当前：${brief.status}`);
   }

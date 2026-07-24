@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NovelDatabase, recordBase } from "../db";
 import {
+  captureChapterRuleReplay,
+  captureFoundationRuleReplay,
   createCraftRuleCandidate,
+  createCraftRuleCandidateFromLearning,
   evaluateCraftRuleOnFoundation,
   evaluateCraftRuleOnChapter,
   evaluateCraftRuleGate,
@@ -25,6 +28,11 @@ const scope = {
   nonGoals: ["不统一题材文风"],
   regressionRisks: ["过度强调代价会让轻松章节失去呼吸"],
 };
+
+async function sha256(text: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 describe("craft rule evolution", () => {
   let db: NovelDatabase;
@@ -53,8 +61,9 @@ describe("craft rule evolution", () => {
       { scenario: "线索铺陈章", documentId: "chapter-3", baseline: 3.7, changed: 3.82 },
     ];
     for (const [index, item] of scenarios.entries()) {
-      const baseline: CreativeWorkItem = { ...recordBase(projectId), id: `baseline-${index}-${candidate.id}`, creativeRunId: `run-b-${index}`, kind: "chapter-workflow", status: "completed", targetId: item.documentId, instruction: "基线", dependsOn: [], iteration: 0, artifactRefs: [`artifact-b-${index}`], parameters: { evaluationRole: "baseline", scenarioClass: item.scenario, ruleCandidateId: candidate.id, ruleApplication: { candidateId: candidate.id, evaluationRole: "baseline", targetKind: candidate.targetKind, targetId: candidate.targetId, version: candidate.proposedVersion, promptFingerprint: `baseline-fingerprint-${index}`, stages: ["drafting"] }, closedLoopCandidate: { id: `artifact-b-${index}`, qualityEvidence: { weightedScore: item.baseline, blockerCount: 0, majorCount: 0 } } } };
-      const changed: CreativeWorkItem = { ...recordBase(projectId), id: `candidate-${index}-${candidate.id}`, creativeRunId: `run-c-${index}`, kind: "chapter-workflow", status: "completed", targetId: item.documentId, instruction: "候选", dependsOn: [], iteration: 0, artifactRefs: [`artifact-c-${index}`], parameters: { evaluationRole: "candidate", scenarioClass: item.scenario, ruleCandidateId: candidate.id, ruleApplication: { candidateId: candidate.id, evaluationRole: "candidate", targetKind: candidate.targetKind, targetId: candidate.targetId, version: candidate.proposedVersion, promptFingerprint: `candidate-fingerprint-${index}`, stages: ["drafting"] }, closedLoopCandidate: { id: `artifact-c-${index}`, qualityEvidence: { weightedScore: item.changed, blockerCount: 0, majorCount: 0 } } } };
+      const replaySnapshot = await captureChapterRuleReplay({ projectId, documentId: item.documentId, instruction: item.scenario, scenarioClass: item.scenario }, db);
+      const baseline: CreativeWorkItem = { ...recordBase(projectId), id: `baseline-${index}-${candidate.id}`, creativeRunId: `run-b-${index}`, kind: "chapter-workflow", status: "completed", targetId: item.documentId, instruction: "基线", dependsOn: [], iteration: 0, artifactRefs: [`artifact-b-${index}`], parameters: { evaluationRole: "baseline", scenarioClass: item.scenario, ruleCandidateId: candidate.id, replaySnapshot, ruleApplication: { candidateId: candidate.id, evaluationRole: "baseline", targetKind: candidate.targetKind, targetId: candidate.targetId, version: candidate.proposedVersion, promptFingerprint: `baseline-fingerprint-${index}`, stages: ["drafting"] }, closedLoopCandidate: { id: `artifact-b-${index}`, qualityEvidence: { weightedScore: item.baseline, blockerCount: 0, majorCount: 0 } } } };
+      const changed: CreativeWorkItem = { ...recordBase(projectId), id: `candidate-${index}-${candidate.id}`, creativeRunId: `run-c-${index}`, kind: "chapter-workflow", status: "completed", targetId: item.documentId, instruction: "候选", dependsOn: [], iteration: 0, artifactRefs: [`artifact-c-${index}`], parameters: { evaluationRole: "candidate", scenarioClass: item.scenario, ruleCandidateId: candidate.id, replaySnapshot, ruleApplication: { candidateId: candidate.id, evaluationRole: "candidate", targetKind: candidate.targetKind, targetId: candidate.targetId, version: candidate.proposedVersion, promptFingerprint: `candidate-fingerprint-${index}`, stages: ["drafting"] }, closedLoopCandidate: { id: `artifact-c-${index}`, qualityEvidence: { weightedScore: item.changed, blockerCount: 0, majorCount: 0 } } } };
       await db.creativeWorkItems.bulkPut([baseline, changed]);
       candidate = await recordCraftRuleEvidence({ candidateId: candidate.id, scenarioClass: item.scenario, baselineWorkItemId: baseline.id, candidateWorkItemId: changed.id }, db);
     }
@@ -64,6 +73,17 @@ describe("craft rule evolution", () => {
     return candidate;
   }
 
+  async function promoteWithPassingRegression(candidate: CraftRuleCandidate) {
+    return promoteCraftRuleCandidate(candidate.id, db, {
+      evaluateChapter: async ({ candidateId, replay }) => {
+        const current = (await db.craftRuleCandidates.get(candidateId))!;
+        current.promotionValidation = { status: "passed", subjectKind: "chapter", subjectId: replay!.subjectId, scenarioClass: replay!.scenarioClass, activeVersion: current.proposedVersion, summary: "冻结失败场景回归通过", checkedAt: Date.now() };
+        await db.craftRuleCandidates.put(current);
+        return current;
+      },
+    });
+  }
+
   it("requires cross-scenario evidence and all four independent reviews", async () => {
     const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
     const candidate = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：人物在高压选择中应呈现代价，但日常与余波章节不强制制造抉择，具体强度服从章节功能和人物处境。`, rationale: "把单章人物问题提升为有边界的选择机制", scope }, db);
@@ -71,6 +91,127 @@ describe("craft rule evolution", () => {
     const ready = await completeGate(candidate);
     expect(ready.status).toBe("ready");
     expect(evaluateCraftRuleGate(ready)).toMatchObject({ ready: true });
+  });
+
+  it("creates one idempotent rule candidate from a complete learning assessment", async () => {
+    const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
+    const learning = {
+      conclusion: "propose-improvement" as const,
+      summary: "多类高压选择场景缺少可见代价。",
+      affectedInputClass: scope.affectedInputClass,
+      underlyingMechanism: scope.underlyingMechanism,
+      proposal: {
+        targetKind: "skill" as const,
+        targetId: skill.skillId,
+        targetVersion: skill.version,
+        targetContentFingerprint: await sha256(skill.prompt),
+        afterText: `${skill.prompt}\n\n补充：高压选择应呈现会改变后续空间的代价；日常、铺陈和余波章节按自身功能决定是否使用，不机械制造抉择。`,
+        rationale: "修复共享选择机制而非单章措辞",
+        observedSymptom: scope.observedSymptom,
+        failingLayer: scope.failingLayer,
+        intendedBenefits: scope.intendedBenefits,
+        boundaries: scope.boundaries,
+        nonGoals: scope.nonGoals,
+        regressionRisks: scope.regressionRisks,
+      },
+    };
+    const source = { kind: "chapter-review" as const, fingerprint: "learning-fingerprint", workflowRunId: "workflow-1", issueIds: ["issue-1"], autoPromote: false };
+    const first = await createCraftRuleCandidateFromLearning({ projectId, learning, source }, db);
+    const replay = await createCraftRuleCandidateFromLearning({ projectId, learning, source }, db);
+    expect(replay?.id).toBe(first?.id);
+    expect(await db.craftRuleCandidates.where("projectId").equals(projectId).count()).toBe(1);
+    expect(first?.scope.underlyingMechanism).toBe(scope.underlyingMechanism);
+  });
+
+  it("rejects a delayed learning proposal when its audited target version has changed", async () => {
+    const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
+    const learning = {
+      conclusion: "propose-improvement" as const,
+      summary: "审核期提案必须绑定规则基线。",
+      affectedInputClass: scope.affectedInputClass,
+      underlyingMechanism: scope.underlyingMechanism,
+      proposal: {
+        targetKind: "skill" as const,
+        targetId: skill.skillId,
+        targetVersion: "0.0.0",
+        targetContentFingerprint: "stale",
+        afterText: `${skill.prompt}\n\n补充：共享规则变更必须绑定审核时基线，目标漂移后重新评估。`,
+        rationale: "阻止旧提案覆盖新规则",
+        observedSymptom: scope.observedSymptom,
+        failingLayer: scope.failingLayer,
+        intendedBenefits: scope.intendedBenefits,
+        boundaries: scope.boundaries,
+        nonGoals: scope.nonGoals,
+        regressionRisks: scope.regressionRisks,
+      },
+    };
+    await expect(createCraftRuleCandidateFromLearning({ projectId, learning, source: { kind: "chapter-review", fingerprint: "stale-learning", workflowRunId: "workflow-stale", issueIds: [], autoPromote: false } }, db))
+      .rejects.toThrow(/目标规则版本已变化/);
+  });
+
+  it("refuses to promote a manual candidate when its frozen replay evidence is missing", async () => {
+    const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
+    let candidate = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：高压选择呈现代价，同时服从章节功能。`, rationale: "验证所有候选都强制回归", scope }, db);
+    candidate = await completeGate(candidate);
+    candidate.promotionReplay = undefined;
+    await db.craftRuleCandidates.put(candidate);
+
+    await expect(promoteCraftRuleCandidate(candidate.id, db)).rejects.toThrow(/缺少冻结失败场景/);
+    expect((await getEffectiveSkill(projectId, skill.skillId, db))?.version).toBe(skill.version);
+  });
+
+  it("keeps chapter and foundation replay inputs immutable after the project changes", async () => {
+    const candidate = await completeGate(await createCraftRuleCandidate({
+      projectId,
+      targetKind: "skill",
+      targetId: "embodied-prose",
+      afterText: `${(await getEffectiveSkill(projectId, "embodied-prose", db))!.prompt}\n\n补充：冻结输入只用于可重复评测，不改变正式项目。`,
+      rationale: "准备跨类型冻结场景",
+      scope,
+    }, db));
+    const chapterReplay = await captureChapterRuleReplay({ projectId, documentId: "chapter-1", instruction: "冻结章节", scenarioClass: "章节快照" }, db);
+    const foundationReplay = await captureFoundationRuleReplay({ projectId, taskKey: "worldview", instruction: "冻结世界观", scenarioClass: "基础任务快照" }, db);
+
+    await db.documents.update("chapter-1", { title: "后来改名的章节" });
+    await db.projects.update(projectId, { premise: "后来修改的项目命题" });
+
+    const frozenDocuments = (chapterReplay.chapter.projectSnapshot as { records: { documents: Array<{ id: string; title: string }> } }).records.documents;
+    expect(frozenDocuments.find((item) => item.id === "chapter-1")?.title).toBe("静态铺陈");
+    expect(foundationReplay.foundation.projectContext).toContain('"premise":"测试"');
+    expect(foundationReplay.foundation.projectContext).not.toContain("后来修改的项目命题");
+
+    const corruptedReplay = structuredClone(chapterReplay);
+    (corruptedReplay.chapter.projectSnapshot as { records: { documents: Array<{ id: string; title: string }> } }).records.documents[0]!.title = "被篡改但未更新 manifest";
+    await expect(evaluateCraftRuleOnChapter({ candidateId: candidate.id, documentId: corruptedReplay.subjectId, scenarioClass: corruptedReplay.scenarioClass, replay: corruptedReplay }, {}, db))
+      .rejects.toThrow(/冻结项目快照校验失败/);
+  });
+
+  it("rolls an activated learning rule back when the post-promotion regression fails", async () => {
+    const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
+    let candidate = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：高压选择呈现代价，但规则强度服从章节功能，并保留日常、铺陈和余波章节的呼吸空间。`, rationale: "验证晋升后失败回滚", scope }, db);
+    candidate = await completeGate(candidate);
+    const rolledBack = await promoteCraftRuleCandidate(candidate.id, db, { evaluateChapter: async ({ candidateId, replay, scenarioClass }) => {
+      const promoted = (await db.craftRuleCandidates.get(candidateId))!;
+      const baseline: CreativeWorkItem = { ...recordBase(projectId), id: "post-baseline", creativeRunId: "post-run", kind: "chapter-workflow", status: "completed", targetId: replay!.subjectId, instruction: "基线", dependsOn: [], iteration: 0, artifactRefs: ["post-b"], parameters: { evaluationRole: "baseline", scenarioClass, ruleCandidateId: promoted.id, replaySnapshot: replay, ruleApplication: { candidateId: promoted.id, evaluationRole: "baseline", targetKind: promoted.targetKind, targetId: promoted.targetId, version: promoted.proposedVersion, promptFingerprint: "post-baseline-fingerprint", stages: ["drafting"] }, closedLoopCandidate: { id: "post-b", qualityEvidence: { weightedScore: 4.1, blockerCount: 0, majorCount: 0 } } } };
+      const changed: CreativeWorkItem = { ...recordBase(projectId), id: "post-candidate", creativeRunId: "post-run", kind: "chapter-workflow", status: "completed", targetId: replay!.subjectId, instruction: "候选", dependsOn: [], iteration: 0, artifactRefs: ["post-c"], parameters: { evaluationRole: "candidate", scenarioClass, ruleCandidateId: promoted.id, replaySnapshot: replay, ruleApplication: { candidateId: promoted.id, evaluationRole: "candidate", targetKind: promoted.targetKind, targetId: promoted.targetId, version: promoted.proposedVersion, promptFingerprint: "post-candidate-fingerprint", stages: ["drafting"] }, closedLoopCandidate: { id: "post-c", qualityEvidence: { weightedScore: 3.2, blockerCount: 0, majorCount: 1 } } } };
+      await db.creativeWorkItems.bulkPut([baseline, changed]);
+      return recordCraftRuleEvidence({ candidateId: promoted.id, scenarioClass, baselineWorkItemId: baseline.id, candidateWorkItemId: changed.id }, db);
+    } });
+    expect(rolledBack.status).toBe("rolled-back");
+    expect(rolledBack.promotionValidation?.status).toBe("failed");
+    expect((await getEffectiveSkill(projectId, skill.skillId, db))?.version).toBe(skill.version);
+  });
+
+  it("does not activate a rule when the asynchronous promotion replay rejects", async () => {
+    const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
+    let candidate = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：晋升只有在冻结失败场景回归成功后才可激活。`, rationale: "验证异步回归异常边界", scope }, db);
+    candidate = await completeGate(candidate);
+
+    const rejected = await promoteCraftRuleCandidate(candidate.id, db, { evaluateChapter: async () => { throw new Error("回归执行器断开"); } });
+
+    expect(rejected.status).toBe("rolled-back");
+    expect(rejected.promotionValidation).toMatchObject({ status: "failed", summary: "回归执行器断开" });
+    expect((await getEffectiveSkill(projectId, skill.skillId, db))?.version).toBe(skill.version);
   });
 
   it("does not treat renamed scenario labels or one self-review identity as independent evidence", async () => {
@@ -129,7 +270,9 @@ describe("craft rule evolution", () => {
       branch: "main",
       yjsDocumentId: "eval-yjs",
     });
-    const evaluated = await evaluateCraftRuleOnChapter({ candidateId: candidate.id, documentId: "chapter-eval", scenarioClass: "人物高压选择" }, {
+    const replay = await captureChapterRuleReplay({ projectId, documentId: "chapter-eval", instruction: "冻结的原始章节审校指令", scenarioClass: "人物高压选择" }, db);
+    await db.documents.update("chapter-eval", { blueprint: { ...(await db.documents.get("chapter-eval"))!.blueprint, objective: "后来修改的目标" } });
+    const evaluated = await evaluateCraftRuleOnChapter({ candidateId: candidate.id, documentId: "chapter-eval", scenarioClass: "人物高压选择", replay }, {
       executor: async (work) => {
         const score = work.parameters.evaluationRole === "candidate" ? 3.9 : 3.6;
         work.parameters.ruleApplication = { candidateId: candidate.id, evaluationRole: work.parameters.evaluationRole, targetKind: candidate.targetKind, targetId: candidate.targetId, version: candidate.proposedVersion, promptFingerprint: `${work.parameters.evaluationRole}-fingerprint`, stages: ["drafting"] };
@@ -143,6 +286,7 @@ describe("craft rule evolution", () => {
     const works = await db.creativeWorkItems.where("projectId").equals(projectId).toArray();
     expect(works.map((item) => item.parameters.evaluationRole).sort()).toEqual(["baseline", "candidate"]);
     expect(works.every((item) => item.status === "completed")).toBe(true);
+    expect(works.every((item) => item.instruction === "冻结的原始章节审校指令")).toBe(true);
   });
 
   it("uses the latest role review and freezes reviews after promotion", async () => {
@@ -154,7 +298,7 @@ describe("craft rule evolution", () => {
     expect(candidate.status).toBe("evaluating");
 
     candidate = await completeGate(candidate);
-    await promoteCraftRuleCandidate(candidate.id, db);
+    await promoteWithPassingRegression(candidate);
     await expect(submitCraftRuleReview({ candidateId: candidate.id, role: "plot-editor", reviewer: "external-llm", reviewerId: "reviewer-a", reviewRunId: "late-run", model: "test-review-model", verdict: "passed", summary: "晋升后不得追加" }, db))
       .rejects.toThrow("已结束的规则候选");
   });
@@ -191,7 +335,7 @@ describe("craft rule evolution", () => {
     const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
     let skillCandidate = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：高压选择必须呈现人物愿意支付的代价；日常、铺陈和余波章节按自身功能保留呼吸。`, rationale: "提升跨章节人物选择质量", scope }, db);
     skillCandidate = await completeGate(skillCandidate);
-    const promotedSkill = await promoteCraftRuleCandidate(skillCandidate.id, db);
+    const promotedSkill = await promoteWithPassingRegression(skillCandidate);
     expect((await getEffectiveSkill(projectId, skill.skillId, db))?.version).toBe(promotedSkill.proposedVersion);
     expect((await db.skills.where("[projectId+skillId]").equals([projectId, skill.skillId]).toArray()).map((item) => item.version)).toContain(promotedSkill.proposedVersion);
     await rollbackCraftRuleCandidate(skillCandidate.id, db);
@@ -200,7 +344,7 @@ describe("craft rule evolution", () => {
     const prompt = (await listPromptTemplates(projectId, db)).find((item) => item.templateId === MASTER_PROMPT_TEMPLATE_ID)!;
     let promptCandidate = await createCraftRuleCandidate({ projectId, targetKind: "system-prompt", targetId: prompt.templateId, afterText: `${prompt.content}\n\n对任何规则修改，必须同时检查剧情因果、人物主体性、文笔意境和百万字尺度的回归风险，不以单章得分替代跨场景证据。`, rationale: "加强系统级规则演进门禁", scope }, db);
     promptCandidate = await completeGate(promptCandidate);
-    await promoteCraftRuleCandidate(promptCandidate.id, db);
+    await promoteWithPassingRegression(promptCandidate);
     expect((await listPromptTemplates(projectId, db)).find((item) => item.templateId === prompt.templateId)?.version).toBe(promptCandidate.proposedVersion);
     await rollbackCraftRuleCandidate(promptCandidate.id, db);
     expect((await listPromptTemplates(projectId, db)).find((item) => item.templateId === prompt.templateId)?.version).toBe(prompt.version);
@@ -210,11 +354,11 @@ describe("craft rule evolution", () => {
     const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
     let first = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：高压选择呈现可见代价，其他章节按功能决定是否采用。`, rationale: "第一版", scope }, db);
     first = await completeGate(first);
-    first = await promoteCraftRuleCandidate(first.id, db);
+    first = await promoteWithPassingRegression(first);
     const active = (await getEffectiveSkill(projectId, skill.skillId, db))!;
     let second = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: active.skillId, afterText: `${active.prompt}\n\n补充：代价必须改变后续选择空间，而不是只增加表面痛苦。`, rationale: "第二版", scope }, db);
     second = await completeGate(second);
-    await promoteCraftRuleCandidate(second.id, db);
+    await promoteWithPassingRegression(second);
 
     await expect(rollbackCraftRuleCandidate(first.id, db)).rejects.toThrow("后续版本替换");
   });

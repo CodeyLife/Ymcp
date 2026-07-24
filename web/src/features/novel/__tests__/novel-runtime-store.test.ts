@@ -5,8 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNovelProject, NovelDatabase, recordBase } from "../db";
 import { RuntimeRecordConflictError, SqliteNovelStore, sha256 } from "@/novel-runtime/sqlite-store";
-import { assertRuntimeActor, internalEvidencePasses, runtimeNextActions, runtimePolicies, type LegacyMigrationBundle, type RuntimeChange, type RuntimeOperation } from "@/novel-runtime/contracts";
+import { assertRuntimeActor, internalEvidencePasses, parseRuntimeLearningAssessment, runtimeNextActions, runtimePolicies, type LegacyMigrationBundle, type RuntimeChange, type RuntimeOperation } from "@/novel-runtime/contracts";
 import { buildRuntimeRevisionInstruction, NovelRuntimeService, recoverInterruptedOperation, selectNextPlanWork } from "@/novel-runtime/service";
+import { buildIterationPrompt } from "../evaluation/skill-iteration";
 
 describe("SQLite novel runtime store", () => {
   const cleanup: Array<() => Promise<void> | void> = [];
@@ -349,3 +350,25 @@ describe("SQLite novel runtime store", () => {
     expect(selectNextPlanWork([waiting, queued])).toBe(waiting);
   });
 });
+  it("requires a complete executable proposal for shared learning", () => {
+    expect(() => parseRuntimeLearningAssessment({ conclusion: "propose-improvement", summary: "共享缺陷", affectedInputClass: "所有章节", underlyingMechanism: "职责缺失" })).toThrow(/完整改进候选/);
+    expect(parseRuntimeLearningAssessment({ conclusion: "no-shared-learning", summary: "仅为单次执行偏差" })).toEqual({ conclusion: "no-shared-learning", summary: "仅为单次执行偏差" });
+  });
+
+  it("feeds the underlying learning mechanism into skill iteration", () => {
+    const prompt = buildIterationPrompt({
+      skills: [],
+      issues: [{ id: "issue-1", dimension: "plot", severity: "major", title: "选择没有代价", description: "人物决定后局面没有变化", rule: "character-choice", suggestion: "让选择改变后续空间", deterministic: false }],
+      draftExcerpt: "人物答应之后，一切照旧。",
+      learning: {
+        conclusion: "propose-improvement",
+        summary: "高压选择缺少后果约束。",
+        affectedInputClass: "人物作出不可逆选择的章节",
+        underlyingMechanism: "生成职责只要求完成动作，没有要求动作收窄后续选项",
+        proposal: { targetKind: "skill", targetId: "embodied-prose", afterText: "完整候选文本".repeat(20), rationale: "补齐选择后果", observedSymptom: "选择没有代价", failingLayer: "drafting skill", intendedBenefits: ["增强人物主体性"], boundaries: ["不强制日常章制造选择"], nonGoals: ["不统一题材文风"], regressionRisks: ["可能压缩安静章节"] },
+      },
+    });
+    expect(prompt).toContain("底层机制：生成职责只要求完成动作，没有要求动作收窄后续选项");
+    expect(prompt).toContain("影响输入类别：人物作出不可逆选择的章节");
+    expect(prompt).toContain("issue 只作为证据");
+  });

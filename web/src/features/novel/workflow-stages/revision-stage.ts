@@ -200,12 +200,15 @@ export function isRevisionRefusal(text: string): boolean {
 
 // R1: 风格类 warning 升级为 major——这些规则虽定为 warning，但直接造成"AI 味"，
 // 若不送修订则永远残留。升级为 major 后进入 blockerAndMajor 列表，LLM 会收到并修订。
+// 根因 F 新增 style.gesture-repetition：反套路手势词高频重复是新出现的 AI 腔，
+// prose-prompts 教的具象手势被 LLM 机械套用形成新模板，不送修订则永远残留。
 export const STYLE_RULES_TO_PROMOTE = new Set([
   "style.interpretive-summary-density",
   "style.emotion-direct",
   "style.emphasis-devaluation",
   "style.template-density",
   "style.aphorism-density",
+  "style.gesture-repetition",
 ]);
 
 // R12/R13: LLM reviewer 生成的 warning 常带自定义 rule 文本（非预定义 rule 名），

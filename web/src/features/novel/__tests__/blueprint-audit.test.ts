@@ -369,6 +369,11 @@ describe("blueprint-audit closed loop", () => {
     const structuredData = blueprintArtifact!.structuredData as Record<string, unknown>;
     // auditReport 应为 undefined（向后兼容场景不写）
     expect(structuredData.auditReport).toBeUndefined();
+    expect(structuredData.mustHappen).toEqual(badBlueprintResponse().data.mustHappen);
+    expect(structuredData.forbidden).toEqual([]);
+    const blueprintCall = vi.mocked(callStructuredNovelModel).mock.calls[0]?.[0];
+    expect(blueprintCall?.prompt).toContain("禁止用同义词或动词替换");
+    expect(blueprintCall?.prompt).toContain("关系、生活流、余波或阶段闭合章");
   });
 
   it("keeps a valid blueprint when the optional audit call fails", async () => {

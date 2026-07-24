@@ -1,6 +1,7 @@
 import { novelDb, recordBase, type NovelDatabase } from "./db";
 import type {
   CreativeBrief,
+  CraftRuleReplaySnapshot,
   CreativeReview,
   CreativeRun,
   CreativeRunEvent,
@@ -13,6 +14,7 @@ import type {
   NovelConversationThread,
   NovelGenerationTaskKey,
 } from "./types";
+import type { ProjectSnapshotBundle } from "./evaluation/project-snapshot";
 
 export interface CreativeWorkInput {
   kind: CreativeWorkKind;
@@ -339,13 +341,12 @@ export async function startManualCreativeGeneration(
   return executeCreativeCommand({ runId: run.id, type: "work.start", workItemId: work.id, idempotencyKey: `manual:start:${work.id}` }, { ...dependencies, db });
 }
 
-async function prepareChapterEvaluationContext(document: ManuscriptDocument, instruction: string, db: NovelDatabase) {
-  return db.transaction("rw", db.conversationThreads, db.creativeBriefs, async () => {
-    let thread = await db.conversationThreads.where("[projectId+targetId]").equals([document.projectId, document.id])
-      .and((item) => item.taskKey === "chapter-workflow" && item.status === "active")
-      .first();
-    if (!thread) {
-      thread = {
+export async function buildChapterEvaluationContextSnapshot(document: ManuscriptDocument, instruction: string, db: NovelDatabase) {
+  let thread = await db.conversationThreads.where("[projectId+targetId]").equals([document.projectId, document.id])
+    .and((item) => item.taskKey === "chapter-workflow" && item.status === "active")
+    .first();
+  if (!thread) {
+    thread = {
         ...recordBase(document.projectId),
         taskKey: "chapter-workflow",
         targetId: document.id,
@@ -355,14 +356,13 @@ async function prepareChapterEvaluationContext(document: ManuscriptDocument, ins
         pinnedSourceIds: [],
         excludedSourceIds: [],
         lastMessageAt: Date.now(),
-      } satisfies NovelConversationThread;
-      await db.conversationThreads.add(thread);
-    }
-    const existingDraft = await db.creativeBriefs.where("threadId").equals(thread.id)
-      .and((item) => item.status === "draft")
-      .reverse()
-      .sortBy("updatedAt");
-    const base = existingDraft[0] ?? {
+    } satisfies NovelConversationThread;
+  }
+  const existingDraft = await db.creativeBriefs.where("threadId").equals(thread.id)
+    .and((item) => item.status === "draft")
+    .reverse()
+    .sortBy("updatedAt");
+  const base = existingDraft[0] ?? {
       ...recordBase(document.projectId),
       threadId: thread.id,
       targetDocumentId: document.id,
@@ -378,9 +378,9 @@ async function prepareChapterEvaluationContext(document: ManuscriptDocument, ins
       referencedMemoryIds: [],
       openQuestions: [],
       sourceMessageIds: [],
-    } satisfies CreativeBrief;
-    const now = Date.now();
-    const brief: CreativeBrief = {
+  } satisfies CreativeBrief;
+  const now = Date.now();
+  const brief: CreativeBrief = {
       ...base,
       goal: instruction.trim(),
       targetWords: document.blueprint.targetWords,
@@ -389,9 +389,16 @@ async function prepareChapterEvaluationContext(document: ManuscriptDocument, ins
       confirmedAt: now,
       revision: base.revision + 1,
       updatedAt: now,
-    };
-    await db.creativeBriefs.put(brief);
-    return { thread, brief };
+  };
+  return { thread, brief };
+}
+
+async function prepareChapterEvaluationContext(document: ManuscriptDocument, instruction: string, db: NovelDatabase) {
+  const context = await buildChapterEvaluationContextSnapshot(document, instruction, db);
+  return db.transaction("rw", db.conversationThreads, db.creativeBriefs, async () => {
+    await db.conversationThreads.put(context.thread);
+    await db.creativeBriefs.put(context.brief);
+    return context;
   });
 }
 
@@ -429,9 +436,15 @@ async function defaultExecutor(work: CreativeWorkItem, _run: CreativeRun, db: No
   }
   if (work.kind === "chapter-workflow") {
     if (!work.targetId) throw new Error("chapter-workflow work 缺少 documentId");
-    const document = await db.documents.get(work.targetId);
+    const replay = work.parameters.replaySnapshot as CraftRuleReplaySnapshot | undefined;
+    if (replay && (replay.subjectKind !== "chapter" || replay.subjectId !== work.targetId)) throw new Error("章节规则评测的冻结回放快照与目标不匹配");
+    const replayBundle = replay?.subjectKind === "chapter" ? replay.chapter.projectSnapshot as ProjectSnapshotBundle : undefined;
+    const frozenDocument = replayBundle?.records.documents.find((item) => item.id === work.targetId) as unknown as ManuscriptDocument | undefined;
+    const document = frozenDocument ?? await db.documents.get(work.targetId);
     if (!document || document.projectId !== work.projectId) throw new Error("章节不存在或不属于当前项目");
-    const { thread, brief: confirmed } = await prepareChapterEvaluationContext(document, work.instruction, db);
+    const { thread, brief: confirmed } = replay?.subjectKind === "chapter"
+      ? { thread: replay.chapter.thread, brief: replay.chapter.brief }
+      : await prepareChapterEvaluationContext(document, work.instruction, db);
     const { runClosedLoop } = await import("./evaluation/closed-loop");
     const ruleCandidateId = typeof work.parameters.ruleCandidateId === "string" ? work.parameters.ruleCandidateId : undefined;
     const ruleCandidate = ruleCandidateId ? await db.craftRuleCandidates.get(ruleCandidateId) : undefined;
@@ -446,6 +459,8 @@ async function defaultExecutor(work: CreativeWorkItem, _run: CreativeRun, db: No
       codeRevision: "creative-engine-v1",
       authorId: "creative-engine",
       dryRun: true,
+      baseSnapshot: replayBundle,
+      conversationSnapshot: replay?.subjectKind === "chapter" ? { thread, brief: confirmed } : undefined,
       ruleOverride: ruleCandidate ? {
         id: ruleCandidate.id,
         targetKind: ruleCandidate.targetKind,

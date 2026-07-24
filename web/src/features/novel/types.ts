@@ -689,7 +689,7 @@ export interface AgentRun extends VersionedRecord {
 export type NovelSkillSource = "builtin" | "user" | "project";
 export type NovelSkillCategory = "ideation" | "character-world" | "long-plan" | "chapter" | "drafting" | "serial" | "review" | "memory";
 export type NovelSkillStage = "foundation" | "planning" | "drafting" | "review" | "revision" | "fact-extraction" | "character-enrichment";
-export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher" | "conversation-assistant" | "memory-curator" | "skill-iterator";
+export type NovelAgentRole = "architect" | "writer" | "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "reader-reviewer" | "revision-editor" | "fact-extractor" | "quality-editor" | "character-enricher" | "conversation-assistant" | "memory-curator" | "skill-iterator";
 
 export interface NovelSkillManifest extends VersionedRecord {
   skillId: string;
@@ -737,6 +737,94 @@ export interface CraftRuleScopeAnalysis {
   regressionRisks: string[];
 }
 
+export interface LearningImprovementProposal {
+  targetKind: CraftRuleTargetKind;
+  targetId: string;
+  afterText: string;
+  rationale: string;
+  observedSymptom: string;
+  failingLayer: string;
+  intendedBenefits: string[];
+  boundaries: string[];
+  nonGoals: string[];
+  regressionRisks: string[];
+  /** 审核方读取目标全文时绑定；本地编排器也会根据自己的目标目录补齐。 */
+  targetVersion?: string;
+  /** 审核时完整目标文本的 SHA-256，用于阻止延迟提交覆盖新版本。 */
+  targetContentFingerprint?: string;
+}
+
+export type FoundationEvaluationTaskKey = "project-positioning" | "architecture" | "story-bible" | "characters" | "relations" | "worldview";
+
+export type CraftRuleReplaySnapshot =
+  | {
+      subjectKind: "chapter";
+      subjectId: string;
+      scenarioClass: string;
+      capturedAt: number;
+      inputFingerprint: string;
+      chapter: {
+        projectSnapshot: unknown;
+        thread: NovelConversationThread;
+        brief: CreativeBrief;
+        instruction: string;
+      };
+    }
+  | {
+      subjectKind: "foundation-task";
+      subjectId: string;
+      scenarioClass: string;
+      capturedAt: number;
+      inputFingerprint: string;
+      foundation: {
+        taskKey: FoundationEvaluationTaskKey;
+        instruction: string;
+        projectContext: string;
+        model: string;
+      };
+    };
+
+export type LearningAssessment =
+  | {
+      conclusion: "no-shared-learning";
+      summary: string;
+      affectedInputClass?: never;
+      underlyingMechanism?: never;
+      proposal?: never;
+    }
+  | {
+      conclusion: "propose-improvement";
+      summary: string;
+      affectedInputClass: string;
+      underlyingMechanism: string;
+      proposal: LearningImprovementProposal;
+    };
+
+export interface CraftRuleLearningSource {
+  kind: "external-review" | "chapter-review";
+  fingerprint: string;
+  operationId?: string;
+  changeId?: string;
+  reviewRunId?: string;
+  workflowRunId?: string;
+  qualityReportId?: string;
+  issueIds: string[];
+  autoPromote: boolean;
+  replay?: CraftRuleReplaySnapshot;
+}
+
+export interface CraftRulePromotionValidation {
+  status: "pending" | "passed" | "failed";
+  subjectKind: "chapter" | "foundation-task";
+  subjectId: string;
+  scenarioClass: string;
+  activeVersion?: string;
+  workItemId?: string;
+  artifactId?: string;
+  summary: string;
+  checkedAt: number;
+}
+
 export interface CraftRuleEvidenceCase {
   caseId: string;
   scenarioClass: string;
@@ -782,6 +870,9 @@ export interface CraftRuleCandidate extends VersionedRecord {
   status: CraftRuleCandidateStatus;
   evidenceCases: CraftRuleEvidenceCase[];
   reviews: CraftRuleReviewDecision[];
+  learningSource?: CraftRuleLearningSource;
+  promotionReplay?: CraftRuleReplaySnapshot;
+  promotionValidation?: CraftRulePromotionValidation;
   promotedRecordId?: string;
   promotedAt?: number;
   rollbackOfCandidateId?: string;
@@ -953,7 +1044,7 @@ export interface CreativeToolReceipt extends VersionedRecord {
   completedAt?: number;
 }
 
-export type QualityDimension = "plot" | "characterVoice" | "sceneEmbodiment" | "dialogue" | "specificity" | "hookPayoff" | "continuity";
+export type QualityDimension = "plot" | "characterVoice" | "sceneEmbodiment" | "dialogue" | "specificity" | "hookPayoff" | "continuity" | "readerRetention";
 
 export interface QualityIssue {
   id: string;
@@ -983,6 +1074,10 @@ export interface QualityReport extends VersionedRecord {
   issues: QualityIssue[];
   metrics: Record<string, number>;
   reviewerRoles: NovelAgentRole[];
+  learning?: LearningAssessment;
+  learningStatus?: "completed" | "failed";
+  learningError?: string;
+  learningReplay?: CraftRuleReplaySnapshot;
 }
 
 export interface FactCandidate extends VersionedRecord {

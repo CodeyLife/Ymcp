@@ -6,7 +6,8 @@ import { deleteChapter, novelDb } from "../features/novel/db";
 import { setNovelApiConfigProvider } from "../features/novel/api-config";
 import { executeCreativeTool, type CreativeToolName } from "../features/novel/creative-tool-gateway";
 import { updateProposalItemPayload } from "../features/novel/generation";
-import { evaluateCraftRuleOnChapter, evaluateCraftRuleOnFoundation, inspectCraftRuleCandidate } from "../features/novel/craft-rule-evolution";
+import { captureChapterRuleReplay, captureFoundationRuleReplay, createCraftRuleCandidateFromLearning, evaluateCraftRuleOnChapter, evaluateCraftRuleOnFoundation, inspectCraftRuleCandidate } from "../features/novel/craft-rule-evolution";
+import { retryFailedWorkflowLearning } from "../features/novel/learning";
 import {
   assertRuntimeActor,
   internalEvidencePasses,
@@ -135,6 +136,9 @@ export class NovelCreationEngine {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     await this.store.hydrate(novelDb);
+    void retryFailedWorkflowLearning({ db: novelDb }).catch((error) => {
+      console.warn("[novel-runtime] 恢复失败的 learning 任务失败", error);
+    });
     const now = Date.now();
     for (const storedOperation of this.store.listOperations()) {
       const normalized = normalizeOperation(storedOperation);
@@ -148,6 +152,34 @@ export class NovelCreationEngine {
   subscribe(listener: Listener): () => void {
     this.emitter.on("event", listener);
     return () => this.emitter.off("event", listener);
+  }
+
+  private async persistReviewLearning(change: RuntimeChange, operation: RuntimeOperation, review: RuntimeExternalReview) {
+    if (review.learning.conclusion === "propose-improvement"
+      && (!review.learning.proposal.targetVersion || !review.learning.proposal.targetContentFingerprint)) {
+      throw new Error("外部 learning 提案缺少审核时规则版本或内容指纹");
+    }
+    const learningFingerprint = fingerprint({ projectId: change.projectId, changeId: change.id, reviewRunId: review.reviewRunId, learning: review.learning });
+    const work = await novelDb.creativeWorkItems.get(change.workItemId);
+    const replay = work?.kind === "chapter-workflow" && work.targetId
+      ? await captureChapterRuleReplay({ projectId: change.projectId, documentId: work.targetId, instruction: work.instruction, scenarioClass: `原失败场景:${operation.kind}` }, novelDb)
+      : work?.kind === "generation" && work.taskKey && ["project-positioning", "architecture", "story-bible", "characters", "relations", "worldview"].includes(work.taskKey)
+        ? await captureFoundationRuleReplay({ projectId: change.projectId, taskKey: work.taskKey as "project-positioning" | "architecture" | "story-bible" | "characters" | "relations" | "worldview", instruction: work.instruction, scenarioClass: `原失败场景:${operation.kind}` }, novelDb)
+        : undefined;
+    return createCraftRuleCandidateFromLearning({
+      projectId: change.projectId,
+      learning: review.learning,
+      source: {
+        kind: "external-review",
+        fingerprint: learningFingerprint,
+        operationId: operation.id,
+        changeId: change.id,
+        reviewRunId: review.reviewRunId,
+        issueIds: review.issues.map((issue) => issue.id),
+        autoPromote: operation.improvementPolicy.autoPromote,
+        replay,
+      },
+    }, novelDb);
   }
 
   prepareForShutdown(): void {
@@ -352,6 +384,8 @@ export class NovelCreationEngine {
       const reviewIssueIds = new Set(review.issues.map((issue) => issue.id));
       if (input.issueIds.some((issueId) => !reviewIssueIds.has(issueId))) throw new Error("局部修订关联了当前外部审核中不存在的问题");
       let patch: RuntimePatchRecord;
+      let learningCandidateId: string | undefined;
+      let learningError: string | undefined;
       try {
         await updateProposalItemPayload(change.artifactRefs[0]!, input.itemId, input.payload);
         const patchedDetails = await this.getChangeDetails(input.changeId);
@@ -371,12 +405,20 @@ export class NovelCreationEngine {
         };
         change.artifactFingerprint = patchedDetails.artifactFingerprint;
         change.updatedAt = Date.now();
+        try {
+          learningCandidateId = (await this.persistReviewLearning(change, normalizeOperation(operation), review))?.id;
+          review.learningCandidateId = learningCandidateId;
+        } catch (error) {
+          learningError = error instanceof Error ? error.message : "审核经验沉淀失败";
+          review.learningError = learningError;
+        }
         await this.store.commitChangeState(novelDb, change);
       } catch (error) {
         await this.store.restoreProject(novelDb, change.projectId).catch(() => undefined);
         throw error;
       }
-      this.emit("change.item-patched", { changeId: change.id, itemId: input.itemId, issueIds: patch.issueIds, actorId: input.actor.id }, change.projectId, operation.id);
+      if (learningError) this.emit("change.learning-failed", { changeId: change.id, reviewRunId: review.reviewRunId, error: learningError }, change.projectId, operation.id);
+      this.emit("change.item-patched", { changeId: change.id, itemId: input.itemId, issueIds: patch.issueIds, actorId: input.actor.id, learningCandidateId }, change.projectId, operation.id);
       return this.getChangeDetails(input.changeId);
     });
   }
@@ -432,6 +474,8 @@ export class NovelCreationEngine {
       if (!operation) throw new Error("候选变更所属 operation 不存在");
       assertRuntimeActor(operation, actor);
       let currentArtifactFingerprint: string | undefined;
+      let learningCandidateId: string | undefined;
+      let learningError: string | undefined;
       if (operation.driver === "external-mcp") {
         if (!externalReview) throw new Error("外部 MCP 审核必须提交结构化外部审核记录");
         if (!externalReview.reviewRunId.trim() || !externalReview.summary.trim()) throw new Error("外部审核缺少 reviewRunId 或摘要");
@@ -443,11 +487,25 @@ export class NovelCreationEngine {
           throw new Error("passed 外部审核不能包含未解决的 blocker 或 major");
         }
         if (decision === "revise" && externalReview.verdict !== "revise") throw new Error("重生成候选必须使用 revise 外部审核结论");
-        change.externalReviews = [...(change.externalReviews ?? []), { ...externalReview, actor, reviewedAt: Date.now() }];
+        const persistedReview: RuntimeExternalReview = { ...externalReview, actor, reviewedAt: Date.now() };
+        change.externalReviews = [...(change.externalReviews ?? []), persistedReview];
         change.artifactFingerprint = details.artifactFingerprint;
         change.updatedAt = Date.now();
-        this.store.putChange(change);
-        this.emit("change.external-reviewed", { changeId, verdict: externalReview.verdict, reviewRunId: externalReview.reviewRunId, issueCount: externalReview.issues.length, learningConclusion: externalReview.learning.conclusion }, change.projectId, operation.id);
+        try {
+          learningCandidateId = (await this.persistReviewLearning(change, operation, persistedReview))?.id;
+        } catch (error) {
+          learningError = error instanceof Error ? error.message : "审核经验沉淀失败";
+          persistedReview.learningError = learningError;
+        }
+        persistedReview.learningCandidateId = learningCandidateId;
+        try {
+          await this.store.commitChangeState(novelDb, change);
+        } catch (error) {
+          await this.store.restoreProject(novelDb, change.projectId).catch(() => undefined);
+          throw error;
+        }
+        if (learningError) this.emit("change.learning-failed", { changeId, reviewRunId: externalReview.reviewRunId, error: learningError }, change.projectId, operation.id);
+        this.emit("change.external-reviewed", { changeId, verdict: externalReview.verdict, reviewRunId: externalReview.reviewRunId, issueCount: externalReview.issues.length, learningConclusion: externalReview.learning.conclusion, learningCandidateId, learningError }, change.projectId, operation.id);
       }
       if (decision === "accept") {
         if (operation.driver === "external-mcp") {
@@ -651,8 +709,10 @@ export class NovelCreationEngine {
     if (!candidateId || !projectId) return result;
     const inspected = await this.getImprovement(projectId, candidateId);
     if (!inspected.gate.ready || inspected.candidate.status !== "ready") return result;
+    if (inspected.candidate.learningSource?.autoPromote !== true) return result;
     const promoted = await this.executeAdvanced("novel_rule_promote", { projectId, candidateId, idempotencyKey: `runtime-auto-promote:${candidateId}:${inspected.candidate.proposedVersion}` });
-    this.emit("improvement.auto-promoted", { candidateId, promotedRecordId: (promoted.result as { candidate?: { promotedRecordId?: string } })?.candidate?.promotedRecordId }, projectId);
+    const promotedCandidate = (promoted.result as { candidate?: { status?: string; promotedRecordId?: string; promotionValidation?: unknown } })?.candidate;
+    this.emit(promotedCandidate?.status === "promoted" ? "improvement.auto-promoted" : "improvement.auto-rolled-back", { candidateId, promotedRecordId: promotedCandidate?.promotedRecordId, promotionValidation: promotedCandidate?.promotionValidation }, projectId);
     return promoted;
   }
 

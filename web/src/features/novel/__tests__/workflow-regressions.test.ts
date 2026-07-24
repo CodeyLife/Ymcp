@@ -13,7 +13,7 @@ import { callStructuredNovelModel, streamNovelModel } from "../ai";
 import { addEntity, createChapter, createNovelProject, novelDb, recordBase, saveApprovedDocumentRevision } from "../db";
 import type { NovelContextPacket, QualityIssue, QualityReport, WorkflowArtifact, WorkflowRun } from "../types";
 import { advanceChapterWorkflow } from "../workflow";
-import { applyRevisionWindows, collectRevisionParagraphs, findIssueParagraph, isBlueprintCoverageIssue, isRevisionRefusal, planRevisionWindows, selectRevisionIssuesForFeedback } from "../workflow-stages/revision-stage";
+import { applyRevisionWindows, collectRevisionParagraphs, findIssueParagraph, isBlueprintCoverageIssue, isRevisionRefusal, planRevisionWindows, selectRevisionIssuesForFeedback, shouldPromoteWarning } from "../workflow-stages/revision-stage";
 import { isQualityRegression } from "../workflow-stages/review-stage";
 
 beforeEach(async () => {
@@ -133,6 +133,40 @@ describe("chapter workflow regressions", () => {
     expect(isRevisionRefusal("他终于完成修订稿，推门走入雨中。")).toBe(false);
   });
 
+  it("keeps heuristic reader-retention warnings out of automatic revision", () => {
+    const openingHookIssue: QualityIssue = {
+      id: "oh", dimension: "readerRetention", severity: "warning",
+      title: "开篇可能缺乏吸引力", description: "前200字未出现问号或反常细节。",
+      paragraph: 1, revisionRanges: [{ start: 1, end: 2 }],
+      rule: "reader.opening-hook", suggestion: "衔接上一章未解压力或抛出反常细节。", deterministic: true,
+    };
+    const endingHookIssue: QualityIssue = {
+      id: "eh", dimension: "hookPayoff", severity: "warning",
+      title: "章尾可能缺乏开放压力", description: "末段停留在封闭画面。",
+      paragraph: 10, revisionRanges: [{ start: 9, end: 10 }],
+      rule: "style.chapter-ending-hook", suggestion: "加入指向未解信息的细节。", deterministic: true,
+    };
+    expect(shouldPromoteWarning(openingHookIssue)).toBe(false);
+    expect(shouldPromoteWarning(endingHookIssue)).toBe(false);
+  });
+
+  it("does not promote non-retention warnings or already-major issues", () => {
+    // 非 reader-retention 的 warning 不应被新规则误升级
+    const unrelatedWarning: QualityIssue = {
+      id: "uw", dimension: "specificity", severity: "warning",
+      title: "段落边界微调", description: "某段可略微压缩。",
+      rule: "style.minor-tweak", suggestion: "压缩。", deterministic: true,
+    };
+    // 已是 major 的 issue 不经 shouldPromoteWarning（函数开头 severity !== warning 直接返回 false）
+    const alreadyMajor: QualityIssue = {
+      id: "am", dimension: "plot", severity: "major",
+      title: "章尾可能缺乏开放压力", description: "末段封闭。",
+      rule: "style.chapter-ending-hook", suggestion: "补钩子。", deterministic: false,
+    };
+    expect(shouldPromoteWarning(unrelatedWarning)).toBe(false);
+    expect(shouldPromoteWarning(alreadyMajor)).toBe(false);
+  });
+
   it("repairs a structurally invalid draft once before saving it into the workflow", async () => {
     const project = await createNovelProject({ title: "段落修复", genre: ["悬疑"], premise: "正文必须以常规段落进入审校。" });
     const document = await createChapter(project.id, "第一章");
@@ -162,7 +196,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-before-format-revision", blueprintArtifactId: "blueprint-format-revision", qualityReportId: "report-format-revision", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft-before-format-revision", stage: "draft", kind: "draft", title: "原稿", contentMarkdown: "风从门缝里灌进来。他压低灯芯，屋里暗了一层。\n\n脚步停在门外。他没有出声，只把短刀移到手边。" });
     const blueprint = artifact(run, { id: "blueprint-format-revision", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图", structuredData: { title: "第一章", objective: "守住屋门", startingState: "屋内", beats: [], endingHook: "门外来人", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
-    const report: QualityReport = { ...recordBase(project.id), id: "report-format-revision", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 2, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, weightedScore: 3.5, blockerCount: 0, passed: false, issues: [{ id: "revise-range", dimension: "plot", severity: "major", title: "动作结果不清", description: "补足人物应对结果。", revisionRanges: [{ start: 1, end: 2 }], rule: "plot.action-result", suggestion: "在原范围内补足结果。", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report-format-revision", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 2, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4, readerRetention: 4 }, weightedScore: 3.5, blockerCount: 0, passed: false, issues: [{ id: "revise-range", dimension: "plot", severity: "major", title: "动作结果不清", description: "补足人物应对结果。", revisionRanges: [{ start: 1, end: 2 }], rule: "plot.action-result", suggestion: "在原范围内补足结果。", deterministic: false }], metrics: {}, reviewerRoles: [] };
     const invalid = ["以下是修订后的正文：", "风停了。", "灯暗了。", "脚步来到门外。"].join("\n\n");
     // 修订输出不足 1000 字时直接保留原文并转人工，不再浪费一轮审校调用。
     vi.mocked(streamNovelModel)
@@ -278,7 +312,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, draftArtifactId: "draft", blueprintArtifactId: "blueprint", qualityReportId: "report", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft", stage: "draft", kind: "draft", title: "正文", contentMarkdown: "第一段。\n\n第二段。" });
     const blueprint = artifact(run, { id: "blueprint", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
-    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "warning", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3, readerRetention: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "warning", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
     await novelDb.qualityReports.add(report);
@@ -297,7 +331,7 @@ describe("chapter workflow regressions", () => {
     const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft", blueprintArtifactId: "blueprint", qualityReportId: "report", factCandidateIds: [], startedAt: Date.now() };
     const draft = artifact(run, { id: "draft", stage: "draft", kind: "draft", title: "正文", contentMarkdown: "第一段。\n\n第二段。" });
     const blueprint = artifact(run, { id: "blueprint", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
-    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "major", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3, readerRetention: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue", dimension: "plot", severity: "major", title: "问题", description: "无法定位", rule: "test", suggestion: "人工判断", deterministic: false }], metrics: {}, reviewerRoles: [] };
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
@@ -321,7 +355,7 @@ describe("chapter workflow regressions", () => {
     const draftContent = "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。\n\n佩剑客从佛像旁走出，衣着整洁，剑穗随步轻摆。那是她曾见过的样式。听潮阁已灭，所以才要寻。他递茶试探，言语温雅却句句指向旧事。\n\n她抬手一挥，桌上的寒灯翻倒。灯油洒在地面，火光被夜风卷起。佩剑客人退了一步。沈雁声借这一瞬掠向侧墙，剑锋擦过她的袖口。";
     const draft = artifact(run, { id: "draft-similar", stage: "draft", kind: "draft", title: "正文", contentMarkdown: draftContent });
     const blueprint = artifact(run, { id: "blueprint-similar", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
-    const report: QualityReport = { ...recordBase(project.id), id: "report-similar", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-similar", dimension: "plot", severity: "major", title: "心理判断句", description: "需要修订", revisionRanges: [{ start: 1, end: 1 }], rule: "style.test", suggestion: "改写第一段", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    const report: QualityReport = { ...recordBase(project.id), id: "report-similar", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3, readerRetention: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-similar", dimension: "plot", severity: "major", title: "心理判断句", description: "需要修订", revisionRanges: [{ start: 1, end: 1 }], rule: "style.test", suggestion: "改写第一段", deterministic: false }], metrics: {}, reviewerRoles: [] };
     // Mock LLM 返回与原文完全相同的内容（相似度 = 1.0 > 0.92）
     vi.mocked(streamNovelModel).mockResolvedValue({ content: draftContent, promptHash: "no-change" });
     await novelDb.contextPackets.add(context);
@@ -340,7 +374,7 @@ describe("chapter workflow regressions", () => {
   });
 
   it("does not regress a revision that removes major issues despite a slightly lower score", () => {
-    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, blockerCount: 0, passed: false, metrics: {}, reviewerRoles: [] };
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4, readerRetention: 4 }, blockerCount: 0, passed: false, metrics: {}, reviewerRoles: [] };
     const major = { id: "major", dimension: "plot", severity: "major", title: "主要问题", description: "问题", rule: "plot.test", suggestion: "修订", deterministic: false } satisfies QualityIssue;
     const previous = { ...base, weightedScore: 4.2, issues: [major] } satisfies QualityReport;
     const current = { ...base, id: "current", weightedScore: 4.1, issues: [] } satisfies QualityReport;
@@ -348,7 +382,7 @@ describe("chapter workflow regressions", () => {
   });
 
   it("regresses a higher-scoring revision that introduces a blocker", () => {
-    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, passed: false, metrics: {}, reviewerRoles: [] };
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4, readerRetention: 4 }, passed: false, metrics: {}, reviewerRoles: [] };
     const blocker = { id: "blocker", dimension: "continuity", severity: "blocker", title: "事实冲突", description: "冲突", rule: "continuity.test", suggestion: "恢复事实", deterministic: false } satisfies QualityIssue;
     const previous = { ...base, weightedScore: 3.8, blockerCount: 0, issues: [] } satisfies QualityReport;
     const current = { ...base, id: "current-blocked", weightedScore: 4.3, blockerCount: 1, issues: [blocker] } satisfies QualityReport;
@@ -356,7 +390,7 @@ describe("chapter workflow regressions", () => {
   });
 
   it("does not compare weighted scores across scoring versions", () => {
-    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4 }, blockerCount: 0, passed: false, issues: [], metrics: {}, reviewerRoles: [] };
+    const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4, readerRetention: 4 }, blockerCount: 0, passed: false, issues: [], metrics: {}, reviewerRoles: [] };
     const previous = { ...base, scoringVersion: 1, weightedScore: 4.4 } satisfies QualityReport;
     const current = { ...base, id: "current-v2", scoringVersion: 2, weightedScore: 3.8 } satisfies QualityReport;
 

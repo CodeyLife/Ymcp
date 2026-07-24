@@ -22,6 +22,7 @@ import type {
   NovelSkillManifest,
   NovelSkillStage,
   QualityIssue,
+  LearningAssessment,
 } from "../types";
 
 /**
@@ -57,11 +58,12 @@ const skillIterationSchema = {
 /**
  * 构造 LLM 输入 prompt：列出当前 skills + review issues，要求选择并修订相关 skill。
  */
-function buildIterationPrompt(params: {
+export function buildIterationPrompt(params: {
   skills: NovelSkillManifest[];
   issues: QualityIssue[];
   blueprintGoal?: string;
   draftExcerpt: string;
+  learning?: LearningAssessment;
 }): string {
   const skillsSection = params.skills
     .map((skill) => {
@@ -88,6 +90,9 @@ ${skill.prompt}`;
     .join("\n");
 
   const blueprintLine = params.blueprintGoal ? `\n章节目标：${params.blueprintGoal}\n` : "";
+  const learningSection = params.learning?.conclusion === "propose-improvement"
+    ? `## 可复用经验判断\n影响输入类别：${params.learning.affectedInputClass}\n底层机制：${params.learning.underlyingMechanism}\n判断摘要：${params.learning.summary}\n边界：${params.learning.proposal.boundaries.join("；")}\n非目标：${params.learning.proposal.nonGoals.join("；")}`
+    : `## 可复用经验判断\n${params.learning?.summary ?? "尚无已验证的共享机制；不得仅凭 issue 症状臆造通用规则。"}`;
 
   return `基于本次章节审校发现的问题，迭代相关 skill 的 prompt，让未来章节生成不再犯同类错误。
 
@@ -99,13 +104,15 @@ ${skillsSection}
 ## 本次审校发现的问题（来自最新 quality report）
 ${issuesSection}
 
+${learningSection}
+
 ## 正文摘录（供参考）
 ${params.draftExcerpt}
 
 ## 任务
 1. 选择 1-3 个与 issues 最直接相关的 skill 进行迭代。优先选择 issue.rule 命中的 skill。
 2. 为每个选中的 skill 提供修订后的完整 prompt（不是 diff，是完整新版本）。
-3. 修订必须直接解决 issue 中指出的问题，可以新增约束、补充示例、调整规则措辞。
+3. 修订必须针对可复用经验中的底层机制和影响输入类别，issue 只作为证据；不得把样例标题、角色、固定措辞或章节位置写成规则。
 4. 不要修改与 issue 无关的部分，保持原 prompt 的整体结构、语气和长度量级。
 5. afterPrompt 必须是完整的 prompt 文本，不能是"在原 prompt 基础上增加..."这样的指令。
 6. rationale 简洁说明本次修订的理由，triggeredByIssueIds 列出触发的 issue id。
@@ -195,6 +202,7 @@ export async function runSkillIteration(params: {
     issues: candidateIssues,
     blueprintGoal: undefined, // 后续可从 blueprintArtifact 读出
     draftExcerpt,
+    learning: qualityReport.learning,
   });
 
   const result = await callStructuredNovelModel<{

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -11,11 +11,26 @@ const reviewIssueSchema = z.object({
   id: z.string().min(1), severity: z.enum(["blocker", "major", "warning"]), dimension: z.string().min(1), title: z.string().min(1), evidence: z.string().min(1), suggestion: z.string().min(1),
   evidenceItemId: z.string().min(1).optional(), evidenceField: z.string().min(1).optional(), evidenceQuote: z.string().min(1).optional(),
 });
+const learningProposalSchema = z.object({
+  targetKind: z.enum(["skill", "system-prompt"]),
+  targetId: z.string().min(1),
+  targetVersion: z.string().min(1),
+  targetContentFingerprint: z.string().length(64).regex(/^[a-f0-9]+$/i),
+  afterText: z.string().min(100),
+  rationale: z.string().min(1),
+  observedSymptom: z.string().min(1),
+  failingLayer: z.string().min(1),
+  intendedBenefits: z.array(z.string().min(1)).min(1),
+  boundaries: z.array(z.string().min(1)).min(1),
+  nonGoals: z.array(z.string().min(1)).min(1),
+  regressionRisks: z.array(z.string().min(1)).min(1),
+});
 const externalReviewSchema = z.object({
   reviewRunId: z.string().min(1), verdict: z.enum(["passed", "revise"]), summary: z.string().min(1), artifactFingerprint: z.string().length(64), issues: z.array(reviewIssueSchema),
-  learning: z.object({ conclusion: z.enum(["no-shared-learning", "propose-improvement"]), summary: z.string().min(1), affectedInputClass: z.string().min(1).optional(), underlyingMechanism: z.string().min(1).optional() }).superRefine((value, context) => {
-    if (value.conclusion === "propose-improvement" && (!value.affectedInputClass || !value.underlyingMechanism)) context.addIssue({ code: "custom", message: "可沉淀经验必须说明影响输入类别和共享机制" });
-  }),
+  learning: z.discriminatedUnion("conclusion", [
+    z.object({ conclusion: z.literal("no-shared-learning"), summary: z.string().min(1) }).strict(),
+    z.object({ conclusion: z.literal("propose-improvement"), summary: z.string().min(1), affectedInputClass: z.string().min(1), underlyingMechanism: z.string().min(1), proposal: learningProposalSchema }).strict(),
+  ]),
 });
 
 function resultContent(value, isError = false) {
@@ -104,7 +119,7 @@ export function createCreativeMcpServer(options = {}) {
       protocol: {
         requiredOrder: ["读取状态与 nextActions", "读取完整候选", "检查项目内部质量证据", "以独立外部审核记录结论", "只选择 accept、patch 或 regenerate", "每轮总结是否存在可跨场景验证的流程经验"],
         invariants: ["不得仅凭摘要接受候选", "内部与外部审核都通过才可提交", "patch 只能编辑 pending proposal item，且须在补丁后重新校验并重新外审", "不可用单个样例、书名、角色或措辞提炼规则", "失败只可在修复根因后 retry；质量问题应继续 patch 或 regenerate"],
-        learning: "仅当证据指向共享 Skill、系统 Prompt 或流程机制时创建改进候选；满足跨场景证据和独立审核门后会自动晋升项目规则。",
+        learning: "仅当证据指向共享 Skill、系统 Prompt 或流程机制时提交 propose-improvement。先用 novel_learning_target_get 读取并绑定 targetVersion、targetContentFingerprint 与当前全文，再提交完整 afterText、根因范围与回归风险；运行时会幂等创建候选并拒绝覆盖审核后更新的规则。",
       },
       status,
       operation,
@@ -146,6 +161,13 @@ export function createCreativeMcpServer(options = {}) {
     const payload = await runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}`, { signal: extra.signal });
     if (activeProjectId && payload.change.projectId !== activeProjectId) throw new Error("候选变更不属于当前 MCP 项目");
     return payload;
+  });
+  register("novel_learning_target_get", { description: "读取 learning 改进目标的当前完整文本、版本和内容指纹；propose-improvement 审核必须原样绑定这些基线字段。", inputSchema: { projectRef: projectRefSchema, targetKind: z.enum(["skill", "system-prompt"]), targetId: z.string().min(1) } }, async (args, extra) => {
+    const project = await resolveProject(args.projectRef, extra.signal);
+    const payload = await runtimeRequest("/v1/advanced", { body: { tool: "novel_rule_target_get", args: { projectId: project.id, targetKind: args.targetKind, targetId: args.targetId } }, signal: extra.signal });
+    const target = payload.result;
+    if (!target || typeof target.text !== "string" || typeof target.version !== "string") throw new Error("规则目标基线不可用");
+    return { project, target: { ...target, targetVersion: target.version, targetContentFingerprint: createHash("sha256").update(target.text).digest("hex") } };
   });
   register("novel_change_revalidate", { description: "局部补丁后重新运行项目内部候选校验；必须使用刚刚读取的完整候选 fingerprint。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), artifactFingerprint: z.string().length(64), reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
     const project = await resolveProject(args.projectRef, extra.signal);

@@ -195,4 +195,20 @@ describe("prose aesthetics skills", () => {
     const resolved = await resolveNovelSkills({ projectId: project.id, stage: "review" });
     expect(resolved.skills.map((s) => s.skillId)).toContain("prose-discipline");
   });
+
+  it("chapter-blueprint schedules selling-point delivery and blueprint-audit checks it", async () => {
+    const project = await createNovelProject({ title: "卖点兑现调度", genre: ["仙侠"], premise: "灵气即代码。" });
+    const planningSkills = (await resolveNovelSkills({ projectId: project.id, stage: "planning" })).skills;
+    const chapterBlueprint = planningSkills.find((s) => s.skillId === "chapter-blueprint")!;
+    expect(chapterBlueprint.prompt).toContain("卖点兑现调度");
+    expect(chapterBlueprint.prompt).toContain("sellingPoints");
+    expect(chapterBlueprint.prompt).toContain("读者通过视角人物当下行动、观察或对白在场亲历其运作");
+    expect(chapterBlueprint.qualityChecks).toContain("处于兑现窗口的卖点是否安排了可被正文在场亲历其运作的节拍而非仅设定陈述或对白转述");
+
+    const reviewSkills = (await resolveNovelSkills({ projectId: project.id, stage: "review", explicitSkillIds: ["blueprint-audit"] })).skills;
+    const blueprintAudit = reviewSkills.find((s) => s.skillId === "blueprint-audit")!;
+    expect(blueprintAudit.prompt).toContain("卖点兑现审核");
+    expect(blueprintAudit.prompt).toContain("hookPayoff");
+    expect(blueprintAudit.qualityChecks).toContain("处于兑现窗口的卖点是否安排可被正文亲历其运作的节拍");
+  });
 });

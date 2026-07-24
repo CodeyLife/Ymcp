@@ -15,6 +15,7 @@ vi.mock("../ai", () => ({
 import { callStructuredNovelModel } from "../ai";
 import { createChapter, createNovelProject, novelDb, recordBase } from "../db";
 import { advanceChapterWorkflow } from "../workflow";
+import { retryFailedWorkflowLearning } from "../learning";
 import { getProseAuditMaxIterations, reconcileProseAuditIssues, reviewStageHandler, runProseAudit, proseAuditIssueToReviewerFinding } from "../workflow-stages/review-stage";
 import type { GenerationAuditIssue, NovelContextPacket, QualityDimension, WorkflowArtifact, WorkflowRun } from "../types";
 
@@ -59,7 +60,7 @@ function buildRun(projectId: string, documentId: string, contextPacketId: string
 }
 
 /**
- * 4 个 reviewer 的默认响应：分数高、无问题。
+ * reviewer 的默认响应：分数高、无问题。
  * 用于主用例——reviewer 都通过，但 prose-audit 报告 major 问题（网文腔）。
  */
 function reviewerCleanResponse(role: string) {
@@ -346,24 +347,26 @@ describe("prose-audit closed loop (review-stage integration)", () => {
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
 
-    // Mock：4 个 reviewer 都 clean（无问题），prose-audit 报告 2 个 major
+    // Mock：reviewer 都 clean（无问题），prose-audit 报告 2 个 major
     vi.mocked(callStructuredNovelModel)
       .mockResolvedValueOnce(reviewerCleanResponse("style-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
-      .mockResolvedValueOnce(proseAuditMajorResponse() as never);
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never)
+      .mockResolvedValueOnce(proseAuditMajorResponse() as never)
+      .mockResolvedValueOnce({ data: { conclusion: "no-shared-learning", summary: "当前证据不足以证明共享规则缺陷。" }, usage: { promptTokens: 1, completionTokens: 1 } } as never);
 
     await advanceChapterWorkflow(run.id);
 
-    // 验证 prose-audit 被调用（至少 5 次 callStructuredNovelModel：4 reviewer + 1 prose-audit）
-    expect(vi.mocked(callStructuredNovelModel).mock.calls.length).toBeGreaterThanOrEqual(5);
+    // 验证 prose-audit 被调用（至少 6 次 callStructuredNovelModel：5 reviewer + 1 prose-audit）
+    expect(vi.mocked(callStructuredNovelModel).mock.calls.length).toBeGreaterThanOrEqual(6);
 
     // 验证 prose-audit 调用使用 quality-editor 角色 + prose-audit skill
-    const proseAuditCall = vi.mocked(callStructuredNovelModel).mock.calls[4]?.[0];
+    const proseAuditCall = vi.mocked(callStructuredNovelModel).mock.calls[5]?.[0];
     expect(proseAuditCall?.role).toBe("quality-editor");
     expect(proseAuditCall?.skillPrompt).toContain("正文元审核");
-    // 验证 prompt 包含 4 个 reviewer 的 findings 摘要
+    // 验证 prompt 包含 reviewer 的 findings 摘要
     expect(proseAuditCall?.prompt).toContain("style-reviewer");
     expect(proseAuditCall?.prompt).toContain("plot-reviewer");
 
@@ -426,12 +429,13 @@ describe("prose-audit closed loop (review-stage integration)", () => {
       .mockResolvedValueOnce(reviewerCleanResponse("style-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
-      .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never);
+      .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never);
 
     await advanceChapterWorkflow(run.id);
 
-    // 只调用 4 个 reviewer，无 prose-audit
-    expect(callStructuredNovelModel).toHaveBeenCalledTimes(4);
+    // 只调用 reviewer，无 prose-audit
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(5);
     // review artifact 不应包含 auditReport
     const reviewArtifact = await novelDb.workflowArtifacts
       .where("workflowRunId").equals(run.id)
@@ -461,17 +465,18 @@ describe("prose-audit closed loop (review-stage integration)", () => {
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
 
-    // 4 个 reviewer clean + prose-audit clean
+    // reviewer clean + prose-audit clean
     vi.mocked(callStructuredNovelModel)
       .mockResolvedValueOnce(reviewerCleanResponse("style-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never)
       .mockResolvedValueOnce(proseAuditCleanResponse() as never);
 
     await advanceChapterWorkflow(run.id);
 
-    expect(callStructuredNovelModel).toHaveBeenCalledTimes(5);
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(6);
     const reviewArtifact = await novelDb.workflowArtifacts
       .where("workflowRunId").equals(run.id)
       .and((item) => item.stage === "review" && item.kind === "review")
@@ -560,22 +565,23 @@ describe("prose-audit failure degradation (M3)", () => {
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
 
-    // 4 个 reviewer clean，prose-audit 调用抛错
+    // reviewer clean，prose-audit 调用抛错
     vi.mocked(callStructuredNovelModel)
       .mockResolvedValueOnce(reviewerCleanResponse("style-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
       .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never)
       .mockRejectedValueOnce(new Error("LLM 调用超时"));
 
     await advanceChapterWorkflow(run.id);
 
-    // 验证 review-stage 没有失败——4 个 reviewer 的 quality report 仍然保存
+    // 验证 review-stage 没有失败——reviewer 的 quality report 仍然保存
     const qualityReport = await novelDb.qualityReports
       .where("workflowRunId").equals(run.id)
       .first();
     expect(qualityReport).toBeDefined();
-    // 4 个 reviewer clean + prose-audit 失败降级 → reviewer 不含 quality-editor
+    // reviewer clean + prose-audit 失败降级 → reviewer 不含 quality-editor
     // （quality report 的 passed 可能因 deterministic check 如篇幅不足而为 false，这不是 prose-audit 的职责）
     // reviewerRoles 不应包含 quality-editor（prose-audit 失败未注入）
     expect(qualityReport!.reviewerRoles).not.toContain("quality-editor");
@@ -591,6 +597,47 @@ describe("prose-audit failure degradation (M3)", () => {
     expect(auditReport.rounds).toHaveLength(0);
     expect(auditReport.improved).toBe(false);
     expect(auditReport.error).toBe("LLM 调用超时");
+  });
+
+  it("records a retryable learning failure without failing the chapter review", async () => {
+    const project = await createNovelProject({ title: "Learning 降级", genre: ["现实题材"], premise: "经验评估故障不得阻断正文审批。" });
+    const document = await createChapter(project.id, "第一章");
+    const ctx = packet(project.id);
+    const run = buildRun(project.id, document.id, ctx.id, "blueprint-learning", "draft-learning");
+    const draft = artifact(run, { id: "draft-learning", stage: "draft", kind: "draft", title: "草稿", contentMarkdown: "她把旧信放回抽屉，窗外的公交车刚好驶过。".repeat(60) });
+    const blueprint = artifact(run, { id: "blueprint-learning", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "# 蓝图", structuredData: { title: "第一章", objective: "处理旧信", startingState: "傍晚", beats: [], endingHook: "来电", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
+    const prompt = artifact(run, { id: "prompt-learning", stage: "context", kind: "prompt", title: "原始指令", contentMarkdown: "审校旧信章节，保留克制叙事与人物迟疑。" });
+    await novelDb.contextPackets.add(ctx);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint, prompt]);
+
+    const style = {
+      ...reviewerCleanResponse("style-reviewer"),
+      data: {
+        ...reviewerCleanResponse("style-reviewer").data,
+        issues: [{ dimension: "specificity", severity: "warning", title: "局部细节可更具体", description: "旧信的触感尚不明确。", rule: "review.detail", suggestion: "补充一个与人物处境有关的物理细节。" }],
+      },
+    };
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(style as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never)
+      .mockRejectedValueOnce(new Error("skill-iterator 暂时不可用"));
+
+    const advanced = await advanceChapterWorkflow(run.id);
+    const report = await novelDb.qualityReports.where("workflowRunId").equals(run.id).first();
+    expect(advanced.status).not.toBe("failed");
+    expect(report).toMatchObject({ learningStatus: "failed", learningError: "skill-iterator 暂时不可用" });
+
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
+      data: { conclusion: "no-shared-learning", summary: "该问题属于本章局部执行偏差。" },
+      usage: { inputTokens: 10, outputTokens: 10 },
+      promptHash: "retry-learning",
+    } as never);
+    await retryFailedWorkflowLearning({ projectId: project.id, db: novelDb });
+    expect(await novelDb.qualityReports.get(report!.id)).toMatchObject({ learningStatus: "completed", learningError: undefined });
   });
 });
 

@@ -30,6 +30,22 @@ describe("context invariants and fact commits", () => {
     expect(packet.sources.some((source) => source.title.includes("事件"))).toBe(false);
   });
 
+  it("surfaces project sellingPoints in the mandatory project source so every stage can deliver them", async () => {
+    const withPoints = await createNovelProject({ title: "卖点兑现", genre: ["仙侠"], premise: "灵气即代码——修士以符箓语法改写天地规则。" });
+    await novelDb.projects.update(withPoints.id, { sellingPoints: ["灵气即代码：以编程逻辑重构修仙体系", "冷峻克制的庙堂权谋"] });
+    const packetWith = await compileNovelContext({ projectId: withPoints.id, task: "planning", instruction: "规划第一章", stage: "planning" });
+    const projectSourceWith = packetWith.sources.find((source) => source.id === `style:${withPoints.id}`)!;
+    expect(projectSourceWith.content).toContain("卖点");
+    expect(projectSourceWith.content).toContain("灵气即代码：以编程逻辑重构修仙体系");
+
+    // 反例：项目未声明卖点时不应注入卖点行，避免污染上下文
+    const withoutPoints = await createNovelProject({ title: "无卖点", genre: ["悬疑"], premise: "一个没有声明卖点的项目。" });
+    const packetWithout = await compileNovelContext({ projectId: withoutPoints.id, task: "planning", instruction: "规划第一章", stage: "planning" });
+    const projectSourceWithout = packetWithout.sources.find((source) => source.id === `style:${withoutPoints.id}`)!;
+    expect(projectSourceWithout.content).not.toContain("卖点（须在合适章节");
+    expect(projectSourceWithout.content).not.toContain("卖点（须在合适章节被读者在正文亲历其运作");
+  });
+
   it("includes complete mandatory rules without applying a project token budget", async () => {
     const project = await createNovelProject({ title: "规则测试", genre: ["奇幻"], premise: "潮水会改变记忆。" });
     const rule: StoryEntity = { ...recordBase(project.id), kind: "rule", name: "潮汐规则", aliases: [], summary: "退潮前不可说出失踪者姓名", description: "潮水".repeat(1200), tags: [], lockedFacts: ["退潮前说出姓名会让说话者失去相关记忆"], attributes: {} };

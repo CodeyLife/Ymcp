@@ -5,6 +5,8 @@ import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { buildChapterReviewPrompt } from "../prose-prompts";
 import { novelMemoryService } from "../memory-service";
 import { novelDb } from "../db";
+import { assessQualityReportLearning, getWorkflowReplayInstruction } from "../learning";
+import { captureChapterRuleReplay } from "../craft-rule-evolution";
 import type { GenerationAuditIssue, GenerationAuditReport, GenerationAuditRound, NovelAgentRole, QualityDimension, QualityIssue, QualityReport } from "../types";
 import { asBlueprint, auditIssueSchema, hasMajorOrBlocker, reviewerSchema, shouldAutoRevise } from "../workflow-shared";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
@@ -202,8 +204,8 @@ export async function runProseAudit(params: {
       const issues = r.issues.map((i, idx) => `  ${idx + 1}. [sourceIssueId=${i.sourceId ?? `${r.role}:${idx}`}] [${i.severity}] ${i.title}：${i.description}${i.suggestion ? `\n     建议：${i.suggestion}` : ""}`).join("\n");
       return `### ${r.role}\n分数：${Object.entries(r.scores).map(([k, v]) => `${k}=${v}`).join(", ") || "未打分"}\n问题：\n${issues || "  无"}`;
     }).join("\n\n")
-    : "（4 个 reviewer 未产出 findings）";
-  const prompt = `# 审核任务\n对章节正文做元审核与综合审核：直接审 draft 正文，同时参考 4 个 reviewer 的报告，做综合判断、遗漏检测、误判检测、报告一致性检查。\n\n## 章节标题\n${params.documentTitle}\n\n## 章节蓝图（Markdown）\n${params.blueprintMarkdown}\n\n## 正文（按段落编号）\n${numberedDraft}\n\n## 4 个 reviewer 的审核发现\n${reviewerSummaries}\n\n## 最近前序章节对照\n${neighboringChapterExcerpts}\n\n比较当前章与前序章节的状态承接、开场框架、核心动作、意象与章尾功能。相同母题若获得新的信息、关系或情绪功能可以保留；若只是换词复用同一时间标记、天气、地点巡看、整理物件、说明顺序或收束方式，应报告跨章模板化，并指出当前章的具体证据。不得因题材共有物件或作者稳定语体本身报错。\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- 基于 prose-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- dimension 由你判断该 issue 属于哪个质量维度（plot/characterVoice/sceneEmbodiment/dialogue/specificity/hookPayoff/continuity）\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体段落编号（如【第N段】）或原文片段作为证据\n- 必须给出具体修订建议\n- origin 字段标注来源：new（本审核新增）/ upgrade（升级 reviewer 判断）/ downgrade（降级 reviewer 判断）；默认 new\n- origin 为 upgrade 或 downgrade 时，sourceIssueId 必须填写 reviewer 报告中的稳定 sourceIssueId\n\n按 schema 输出 summary 和 issues 数组。`;
+    : "（reviewer 未产出 findings）";
+  const prompt = `# 审核任务\n对章节正文做元审核与综合审核：直接审 draft 正文，同时参考 reviewer 的报告，做综合判断、遗漏检测、误判检测、报告一致性检查。\n\n## 章节标题\n${params.documentTitle}\n\n## 章节蓝图（Markdown）\n${params.blueprintMarkdown}\n\n## 正文（按段落编号）\n${numberedDraft}\n\n## reviewer 的审核发现\n${reviewerSummaries}\n\n## 最近前序章节对照\n${neighboringChapterExcerpts}\n\n比较当前章与前序章节的状态承接、开场框架、核心动作、意象与章尾功能。相同母题若获得新的信息、关系或情绪功能可以保留；若只是换词复用同一时间标记、天气、地点巡看、整理物件、说明顺序或收束方式，应报告跨章模板化，并指出当前章的具体证据。不得因题材共有物件或作者稳定语体本身报错。\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- 基于 prose-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- dimension 由你判断该 issue 属于哪个质量维度（plot/characterVoice/sceneEmbodiment/dialogue/specificity/hookPayoff/continuity/readerRetention）\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体段落编号（如【第N段】）或原文片段作为证据\n- 必须给出具体修订建议\n- origin 字段标注来源：new（本审核新增）/ upgrade（升级 reviewer 判断）/ downgrade（降级 reviewer 判断）；默认 new\n- origin 为 upgrade 或 downgrade 时，sourceIssueId 必须填写 reviewer 报告中的稳定 sourceIssueId\n- 不要重复 reader-reviewer 已报告的读者留存问题，只在发现遗漏或与 reader-reviewer 矛盾时报告 readerRetention 维度\n\n按 schema 输出 summary 和 issues 数组。`;
   const auditSkillPrompt = `${compileNovelStagePrompt(auditSkills.skills, "review")}\n\n## 正文元审核与综合审核职责\n综合核对局部审核报告与正文证据，检查遗漏、误判和互相冲突的建议。剧情因果、人物主体性与声音、现场体验、语言准确性、意象功能、章节主导功能及长篇余量需要整体权衡；不得把固定句式、作者风格、章尾类型或所谓通用质感公式当作合格标准。修订建议必须说明局部改动对其他维度的风险。`;
   const result = await callStructuredNovelModel<{ summary: string; issues: GenerationAuditIssue[] }>({
     model: project.settings.textModel,
@@ -239,7 +241,7 @@ export const reviewStageHandler: StageHandler = {
       .map((paragraph, index) => `【第${index + 1}段】\n${paragraph.trim()}`)
       .filter((paragraph) => paragraph.trim())
       .join("\n\n");
-    const roles: Array<Parameters<typeof buildChapterReviewPrompt>[0]["role"]> = ["style-reviewer", "character-reviewer", "continuity-reviewer", "plot-reviewer"];
+    const roles: Array<Parameters<typeof buildChapterReviewPrompt>[0]["role"]> = ["style-reviewer", "character-reviewer", "continuity-reviewer", "plot-reviewer", "reader-reviewer"];
     const reviewPackets = new Map<NovelAgentRole, Awaited<ReturnType<typeof novelMemoryService.compileStageContext>>>();
     const reviewOne = async (role: typeof roles[number]) => {
       const [skills, packet] = await Promise.all([
@@ -278,14 +280,10 @@ export const reviewStageHandler: StageHandler = {
         throw error;
       }
     };
+    // ai.ts 内部已对限流/空内容等可重试错误做了 3-5 次重试 + 短退避（3s/5s/8s/12s/15s），
+    // 外层再补一次重试属冗余，只会放大 HTTP 请求量。
+    // 失败的 reviewer 直接走 reviewer.unavailable 降级路径（见下方 map 分支），不阻塞 review-stage 主流程。
     const settled = await settleWithConcurrency(roles, 2, reviewOne);
-    const failedIndexes = settled.flatMap((result, index) => result.status === "rejected" ? [index] : []);
-    if (failedIndexes.length > 0) {
-      const retries = await settleWithConcurrency(failedIndexes, 1, (index) => reviewOne(roles[index]));
-      retries.forEach((result, retryIndex) => {
-        settled[failedIndexes[retryIndex]] = result;
-      });
-    }
     const reviewers: ReviewerFinding[] = settled.map((result, index) => {
       if (result.status === "fulfilled") return result.value;
       const role = roles[index];
@@ -372,6 +370,26 @@ export const reviewStageHandler: StageHandler = {
       threshold: project.settings.qualityThreshold,
       db: ctx.db,
     });
+    try {
+      report.learning = await assessQualityReportLearning({
+        projectId: run.projectId,
+        workflowRunId: run.id,
+        report,
+        draftExcerpt: draft.contentMarkdown,
+        db: ctx.db,
+      });
+      report.learningReplay = report.learning.conclusion === "propose-improvement"
+        ? await captureChapterRuleReplay({ projectId: run.projectId, documentId: run.targetDocumentId, instruction: await getWorkflowReplayInstruction(run.id, ctx.db), scenarioClass: "正式章节审校失败场景" }, ctx.db)
+        : undefined;
+      report.learningStatus = "completed";
+      report.learningError = undefined;
+    } catch (error) {
+      report.learningStatus = "failed";
+      report.learningError = error instanceof Error ? error.message : "审校经验评估失败";
+    }
+    report.updatedAt = Date.now();
+    report.revision += 1;
+    await db.qualityReports.put(report);
     // 保存质量报告产物到 artifact 账本（与原实现一致：创建但仅用于审计存档）
     // Loop 4：若启用 prose-audit，把 auditReport 写入 review artifact 的 structuredData，便于审计追溯
     const receiptPacket = reviewPackets.get("continuity-reviewer") ?? reviewPackets.values().next().value;
@@ -382,7 +400,9 @@ export const reviewStageHandler: StageHandler = {
       kind: "review",
       title: `质量报告 · 第 ${run.revisionIteration + 1} 轮`,
       contentMarkdown: `# 质量报告\n\n总分：${report.weightedScore} / 5\n\n阻断：${report.blockerCount}\n\n${report.issues.map((item) => `- [${item.severity}] ${item.title}：${item.description}\n  - 建议：${item.suggestion}`).join("\n") || "未发现问题"}`,
-      structuredData: proseAuditReport ? { reportId: report.id, auditReport: proseAuditReport } : { reportId: report.id },
+      structuredData: proseAuditReport
+        ? { reportId: report.id, auditReport: proseAuditReport, learning: report.learning, learningStatus: report.learningStatus, learningError: report.learningError }
+        : { reportId: report.id, learning: report.learning, learningStatus: report.learningStatus, learningError: report.learningError },
       skillRefs: [],
       contextPacketId: receiptPacket?.id,
     });

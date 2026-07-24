@@ -4,7 +4,7 @@ vi.mock("../api-config", () => ({
   getNovelApiConfig: () => ({ baseUrl: "https://example.test/v1", apiKey: "test-key", modelContextWindow: 0 }),
 }));
 
-import { callStructuredNovelModel, streamNovelModel } from "../ai";
+import { callStructuredNovelModel, ROLE_PROMPTS, streamNovelModel } from "../ai";
 
 function sse(content: string) {
   return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content } }], usage: { prompt_tokens: 2, completion_tokens: 3 } })}\n\ndata: [DONE]\n\n`, { status: 200 });
@@ -20,6 +20,55 @@ afterEach(() => {
 });
 
 describe("novel AI HTTP handling", () => {
+  it("gives every non-writer role a complete professional responsibility contract", () => {
+    const roles = [
+      "architect",
+      "writer",
+      "style-reviewer",
+      "character-reviewer",
+      "continuity-reviewer",
+      "plot-reviewer",
+      "reader-reviewer",
+      "revision-editor",
+      "fact-extractor",
+      "quality-editor",
+      "character-enricher",
+      "conversation-assistant",
+      "memory-curator",
+      "skill-iterator",
+    ] as const;
+
+    expect(Object.keys(ROLE_PROMPTS).sort()).toEqual([...roles].sort());
+    for (const role of roles.filter((item) => item !== "writer")) {
+      const prompt = ROLE_PROMPTS[role];
+      expect(prompt, `${role} 缺少职责`).toContain("职责：");
+      expect(prompt, `${role} 缺少专业方法`).toContain("方法：");
+      expect(prompt, `${role} 缺少判断标准`).toContain("判断标准：");
+      expect(prompt, `${role} 缺少职责边界`).toContain("边界：");
+      expect(prompt, `${role} 缺少交付标准`).toContain("交付：");
+      expect(prompt.length, `${role} 身份描述过短`).toBeGreaterThan(250);
+    }
+  });
+
+  it("injects the professional role contract before stage skill instructions", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(sse('{"value":"ok"}'));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await callStructuredNovelModel<{ value: string }>({
+      model: "test",
+      temperature: 0,
+      role: "style-reviewer",
+      skillPrompt: "阶段审校规则",
+      prompt: "审校正文",
+      schema: { type: "object", required: ["value"], properties: { value: { type: "string" } } },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const systemPrompt = String(body.messages[0].content);
+    expect(systemPrompt).toContain(ROLE_PROMPTS["style-reviewer"]);
+    expect(systemPrompt.indexOf(ROLE_PROMPTS["style-reviewer"])).toBeLessThan(systemPrompt.indexOf("阶段审校规则"));
+  });
+
   it("falls back without response_format when the server returns a JSON 400 body", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "json_schema unsupported" } }), { status: 400 }))
@@ -142,14 +191,17 @@ describe("novel AI HTTP handling", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to a non-streaming request after repeated empty stream completions", async () => {
+  it("retries empty stream completions via streaming until success", async () => {
     vi.useFakeTimers();
+    // 非流式降级已移除：空内容 NovelEmptyResponseError 视为限流类错误（RATE_LIMIT_MAX_RETRIES=5），
+    // 即 attempt 0-4 共 5 次请求，第 5 次（attempt=4）失败后直接抛出不再重试。
+    // 本测试模拟 4 次空内容（attempt 0-3）+ 第 5 次（attempt=4）返回有效内容。
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(sse(""))
       .mockResolvedValueOnce(sse(""))
       .mockResolvedValueOnce(sse(""))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: "非流式恢复正文" } }] }), { status: 200 }));
+      .mockResolvedValueOnce(sse(""))
+      .mockResolvedValueOnce(sse("流式恢复正文"));
     vi.stubGlobal("fetch", fetchMock);
 
     const pending = streamNovelModel({
@@ -160,18 +212,22 @@ describe("novel AI HTTP handling", () => {
     });
     await vi.runAllTimersAsync();
 
-    await expect(pending).resolves.toMatchObject({ content: "非流式恢复正文" });
+    await expect(pending).resolves.toMatchObject({ content: "流式恢复正文" });
     expect(fetchMock).toHaveBeenCalledTimes(5);
-    expect(JSON.parse(String(fetchMock.mock.calls[4][1]?.body))).toMatchObject({ stream: false });
+    // 所有请求均保持流式
+    for (const call of fetchMock.mock.calls) {
+      expect(JSON.parse(String(call[1]?.body))).toMatchObject({ stream: true });
+    }
   });
 
-  it("falls back to non-streaming content for structured calls after repeated empty streams", async () => {
+  it("retries empty stream completions for structured calls via streaming fallback", async () => {
     vi.useFakeTimers();
+    // 非流式降级已移除：schema strict 模式返回空内容时，降级为流式 + 去 schema 重试。
+    // 第 1 次空内容 → 触发去 schema 流式降级（第 2 次请求）→ 仍空 → 外层重试 → 第 3 次成功。
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(sse(""))
       .mockResolvedValueOnce(sse(""))
-      .mockResolvedValueOnce(sse(""))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"value":"ok"}' } }] }), { status: 200 }));
+      .mockResolvedValueOnce(sse('{"value":"ok"}'));
     vi.stubGlobal("fetch", fetchMock);
 
     const pending = callStructuredNovelModel<{ value: string }>({
@@ -184,8 +240,11 @@ describe("novel AI HTTP handling", () => {
     await vi.runAllTimersAsync();
 
     await expect(pending).resolves.toMatchObject({ data: { value: "ok" } });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toMatchObject({ stream: false });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // 所有请求均保持流式
+    for (const call of fetchMock.mock.calls) {
+      expect(JSON.parse(String(call[1]?.body))).toMatchObject({ stream: true });
+    }
   });
 
   it("repair prompt forbids summary from describing the schema fix", async () => {

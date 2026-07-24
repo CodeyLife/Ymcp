@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import "./setup";
 
 import { createNovelProject, getCanvasLayout, novelDb, recordBase, saveCanvasLayout, saveStoryArchitecture } from "../db";
-import { DB_VERSION, RECORD_SCHEMA_VERSION, V17_STORES, V18_STORES, V19_STORES, V20_STORES, V21_STORES, V22_STORES, V23_STORES, V24_STORES, V25_STORES } from "../db-schema";
+import { DB_VERSION, RECORD_SCHEMA_VERSION, V17_STORES, V18_STORES, V19_STORES, V20_STORES, V21_STORES, V22_STORES, V23_STORES, V24_STORES, V25_STORES, V26_STORES } from "../db-schema";
 import { importNovel, verifyProjectArchive } from "../export";
 
 beforeEach(async () => {
@@ -14,7 +14,7 @@ beforeEach(async () => {
 
 describe("db-schema v22", () => {
   it("uses the phase/plot-segment/chapter indexes and exposes the iteratedSkills + operationReceipts tables", () => {
-    expect(DB_VERSION).toBe(25);
+    expect(DB_VERSION).toBe(26);
     expect(RECORD_SCHEMA_VERSION).toBe(8);
     expect(V18_STORES.outlineNodes).toContain("phaseId");
     expect(V18_STORES.outlineNodes).toContain("[projectId+phaseId]");
@@ -40,6 +40,7 @@ describe("db-schema v22", () => {
     expect(V23_STORES.creativeToolReceipts).toContain("[projectId+tool+idempotencyKey]");
     expect(V24_STORES.creativeToolReceipts).not.toContain("&[projectId+tool+idempotencyKey]");
     expect(V25_STORES.creativeToolReceipts).toContain("&[projectId+tool+idempotencyKey]");
+    expect(V26_STORES.craftRuleCandidates).toContain("&[projectId+learningSource.fingerprint]");
   });
 
   it("deduplicates v23 tool receipts before installing the unique idempotency index", async () => {

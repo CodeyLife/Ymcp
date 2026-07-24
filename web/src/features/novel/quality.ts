@@ -2,9 +2,9 @@ import { novelDb, recordBase, type NovelDatabase } from "./db";
 import { analyzeDraftStructure } from "./draft-structure";
 import type { ChapterBlueprint, NovelAgentRole, QualityDimension, QualityIssue, QualityReport } from "./types";
 
-const DIMENSIONS: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity"];
-const WEIGHTS: Record<QualityDimension, number> = { plot: 0.19, characterVoice: 0.16, sceneEmbodiment: 0.14, dialogue: 0.11, specificity: 0.14, hookPayoff: 0.11, continuity: 0.15 };
-export const QUALITY_SCORING_VERSION = 2;
+const DIMENSIONS: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity", "readerRetention"];
+const WEIGHTS: Record<QualityDimension, number> = { plot: 0.16, characterVoice: 0.14, sceneEmbodiment: 0.13, dialogue: 0.10, specificity: 0.13, hookPayoff: 0.10, continuity: 0.12, readerRetention: 0.12 };
+export const QUALITY_SCORING_VERSION = 3;
 const TEMPLATE_EXPRESSIONS = ["眼中闪过", "瞳孔微缩", "嘴角微微上扬", "意味深长", "若有所思", "不由自主", "与此同时", "正因如此", "他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "他感到", "她感到", "第一次意识到", "第一次发现", "第一次明白", "第一次感到", "第一次看清", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
 const EMPHASIS_WORDS = ["第一次", "突然", "忽然", "终于", "竟然", "不由得", "不禁"];
 const EMOTION_DIRECT_WORDS = ["他很悲伤", "他很愤怒", "他很高兴", "他很害怕", "他很孤独", "她很悲伤", "她很愤怒", "她很高兴", "她很害怕", "她很孤独", "心如刀割", "心漏跳", "倒吸一口凉气", "眼眶泛红"];
@@ -36,6 +36,15 @@ const SCENE_SUMMARY_TAIL_PATTERNS = [
   /(?:此刻|此时|这一切|这些)[^。，；]{0,12}(?:都|皆|已)[^。，；]{0,16}(?:落在|指向|汇聚|归于|超过)/,
 ];
 const ACTION_MARKER_RE = /[“「『][^”」』]{2,}[”」』]|(?:他|她|它|那人|此人|[\u3400-\u9fff]{2,4})(?:走|抬|放|握|转|看|听|停|推|拉|翻|查|封|记|写|说|问|答|低头|垂手|攥紧|松开)/;
+// 钩子实质信号（根因 E）：指示未解压力、未行动、抉择或期待的强信号。
+// 过渡词（然而/可是/但/却/竟）和突发词（忽然/突然/蓦地/陡然/倏地）不构成钩子——
+// LLM 撒一个"然而"即可通过旧检查，但读者感受不到拉力。只有真正指示"未解/未行动/抉择/期待"
+// 的标记才算钩子实质信号。通用规则，适用任意项目和题材。
+const HOOK_TENSION_MARKERS = ["？", "……", "尚未", "还没", "没说", "没动", "没走", "且看", "即将", "将要"];
+// 反套路手势词（根因 F）：prose-prompts 教 LLM 用这些具体手势替代心理直说（正确方向），
+// 但 LLM 会机械套用形成新模板。读者读到"又停步了？又侧首了？"时感受到的是新 AI 腔。
+// 同一手势词在单章出现 >2 次即视为模板化，与 EMPHASIS_WORDS 同阈值。适用任意项目。
+const GESTURE_WORDS = ["停步", "侧首", "攥紧", "松开", "指尖停", "垂眸", "抬眼", "顿了顿", "脚步顿"];
 const REVIEW_WARNING_MAJOR_PATTERN = /(?:视角|POV|限知|知识边界|感知范围).{0,18}(?:越界|超出|违反|冲突|他人心理|内心|心理解释)|(?:越过|超出|违反|进入|直接呈现|直接解释).{0,18}(?:视角|POV|限知|知识边界|感知范围|他人心理|内心判断)|第二个(?:结尾|开场)|重复(?:推进|事件链|收束)/i;
 const CONDITIONAL_INTERPRETATION_RE = /(?:若|如果|假如|倘若|一旦).{0,24}(?:理解|解读|推断|视为|意味着)/;
 const INTERNAL_STATE_EVIDENCE_RE = /(?:意识到|知道|明白|觉得|认为|想到|想起|决定|判断|确信|察觉|盘算|权衡|内心|心想)/;
@@ -193,6 +202,28 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     const hits = countOccurrences(text, word);
     if (hits > 2) issues.push(issue({ dimension: "specificity", severity: "warning", title: "强调词贬值", description: `“${word}”出现 ${hits} 次，超过单章 2 次上限，强调效果贬值。`, rule: "style.emphasis-devaluation", suggestion: "用具体事件呈现认知转变，或替换为不同表达，删除多余的强调。" }));
   }
+  // 根因 F：反套路手势词高频重复检测。prose-prompts 教 LLM 用"停步/侧首/攥紧"等具体手势替代心理直说（正确方向），
+  // 但 LLM 会机械套用形成新模板——读者读到"又停步了？又侧首了？"时感受到的是新 AI 腔。
+  // 同一手势词在单章出现 >2 次即视为模板化，与 EMPHASIS_WORDS 同阈值。适用任意项目和题材。
+  for (const word of GESTURE_WORDS) {
+    const hits = countOccurrences(text, word);
+    if (hits > 2) {
+      const hitParagraphs: number[] = [];
+      for (let i = 0; i < blocks.length; i += 1) {
+        if (countOccurrences(blocks[i], word) > 0) hitParagraphs.push(i + 1);
+      }
+      issues.push(issue({
+        dimension: "specificity",
+        severity: "warning",
+        title: "反套路手势词重复",
+        description: `“${word}”出现 ${hits} 次，超过单章 2 次上限。该手势本是替代心理直说的具象手段，但高频重复后读者感知到的是新的机械模板。`,
+        excerpt: word,
+        revisionRanges: hitParagraphs.slice(0, 3).map((p) => ({ start: p, end: p })),
+        rule: "style.gesture-repetition",
+        suggestion: `保留首次出现的“${word}”，其余替换为与当前场景、人物状态直接相关的差异化动作或对白反应。`,
+      }));
+    }
+  }
   for (const phrase of EMOTION_DIRECT_WORDS) {
     if (text.includes(phrase)) issues.push(issue({ dimension: "sceneEmbodiment", severity: "warning", title: "情绪直说", description: `检测到“${phrase}”，情绪被直接宣告而非通过行动或意象承载。`, excerpt: phrase, rule: "style.emotion-direct", suggestion: "用一个反常动作、环境意象变化或没说完的话来承载该情绪。" }));
   }
@@ -267,21 +298,54 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
   }
 
   // 章尾钩子常由“压力出现 -> 人物暂不回应 -> 意象收束”跨段完成，不能只检查最后一个意象段。
-  const OPEN_HOOK_MARKERS = ["？", "……", "然而", "可是", "只是", "尚未", "还没", "且看", "即将", "将要", "忽然", "突然", "蓦地", "陡然", "倏地", "身影", "转身", "停步", "回头", "没说", "没动", "没走", "但", "却", "竟"];
+  // 根因 E 修复：只用 HOOK_TENSION_MARKERS（强张力信号）+ pendingDecisionSignal 判定钩子，
+  // 不再被过渡词（然而/可是/但）和突发词（忽然/突然）欺骗。
   const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : "";
   const endingWindow = blocks.slice(-3).join("\n").slice(-800);
   const pendingDecisionSignal = /(?:没有|未|尚未|还没)[^。！？]{0,16}(?:回答|答应|拒绝|决定|选择|行动|动身|离开|交出|打开|喝下)|(?:等着|等待|等候)[^。！？]{0,12}(?:回答|回话|决定|选择)|(?:是否|可愿|要不要|去不去)/.test(endingWindow);
-  const lastBlockHasOpenSignal = OPEN_HOOK_MARKERS.some((marker) => endingWindow.includes(marker)) || pendingDecisionSignal;
+  const lastBlockHasOpenSignal = HOOK_TENSION_MARKERS.some((marker) => endingWindow.includes(marker)) || pendingDecisionSignal;
   if (totalChars >= 600 && lastBlock.length > 0 && !lastBlockHasOpenSignal) {
+    // 章尾钩子检查审视末三段窗口；修订目标锁定末一至二段（钩子落地处）。
+    // 无 revisionRanges 的 issue 即使被 shouldPromoteWarning 升级为 major，
+    // collectRevisionParagraphs 也无法定位 → 只会触发人工审批而非自动修订。
+    const endingStart = Math.max(1, blocks.length - 1);
     issues.push(issue({
       dimension: "hookPayoff",
       severity: "warning",
       title: "章尾可能缺乏开放压力",
       description: "末段未出现问号、转折词、未行动信号或新信息压力，可能停留在情感余韵的封闭画面。",
+      paragraph: blocks.length,
+      revisionRanges: [{ start: endingStart, end: blocks.length }],
       rule: "style.chapter-ending-hook",
       suggestion: "在末段加入指向未解信息、未行动方向或新压力的细节，让读者产生“接下来会发生什么”的期待。可参考章尾钩子十型：信息遮断/关键信息凸显/倒计时/抉择时刻/立场反转/危险前置/目标失效/关系破裂/动机揭露/认知反转。",
     }));
   }
+
+  // readerRetention 机械层基线：开篇吸引力和阅读疲劳点。
+  // 这类检查只识别可观测的文本模式，不替代 reader-reviewer 的语义判断。
+  // 根因 E 修复：只用 HOOK_TENSION_MARKERS（强张力信号）+ pendingDecisionSignal + 开篇对白判定钩子，
+  // 不再被过渡词（然而/可是/但）和突发词（忽然/突然）欺骗——LLM 撒一个"然而"不再算钩子。
+  const openingWindow = blocks.slice(0, 2).join("\n").slice(0, 400);
+  const openingPendingDecision = /(?:没有|未|尚未|还没)[^。！？]{0,16}(?:回答|答应|拒绝|决定|选择|行动|动身|离开|交出|打开|喝下)|(?:等着|等待|等候)[^。！？]{0,12}(?:回答|回话|决定|选择)|(?:是否|可愿|要不要|去不去)/.test(openingWindow);
+  // 开篇 200 字内是否抛出未解压力或反常细节；纯环境/心理回顾开篇缺乏钩子。
+  const openingHasHook = HOOK_TENSION_MARKERS.some((marker) => openingWindow.includes(marker))
+    || openingPendingDecision
+    || /(?:^|\n)\s*["“「『]/.test(openingWindow); // 开篇即对白
+  if (totalChars >= 600 && blocks.length >= 2 && !openingHasHook) {
+    issues.push(issue({
+      dimension: "readerRetention",
+      severity: "warning",
+      title: "开篇可能缺乏吸引力",
+      description: "前 200 字未出现问号、转折词、未行动信号或反常细节，可能以大段环境描写、心理回顾或设定说明开篇，读者缺乏继续读的即时压力。",
+      paragraph: 1,
+      revisionRanges: [{ start: 1, end: Math.min(2, blocks.length) }],
+      rule: "reader.opening-hook",
+      suggestion: "在前 200 字内衔接上一章未解压力或抛出具体反常细节，让读者从“悬着”跌入“紧张”。可用物件反常、人物欲言又止、第三方意外介入或具体认知缺口开篇。",
+    }));
+  }
+
+  // “疲劳”取决于段落承担的信息、情绪与节奏功能，无法从有限动词表可靠推断。
+  // 确定性层只保留可客观计算的结构指标，语义疲劳交给 reader-reviewer 结合章节功能判断。
 
   const scores = Object.fromEntries(DIMENSIONS.map((dimension) => [dimension, 4.2])) as Record<QualityDimension, number>;
   for (const found of issues) {
@@ -410,7 +474,7 @@ export async function saveQualityReport(params: {
 }
 
 export const QUALITY_DIMENSION_LABELS: Record<QualityDimension, string> = {
-  plot: "叙事组织", characterVoice: "人物声音", sceneEmbodiment: "场景具象", dialogue: "对白", specificity: "语言具体性", hookPayoff: "悬念与余韵", continuity: "连续性",
+  plot: "叙事组织", characterVoice: "人物声音", sceneEmbodiment: "场景具象", dialogue: "对白", specificity: "语言具体性", hookPayoff: "悬念与余韵", continuity: "连续性", readerRetention: "读者留存",
 };
 
 export function qualityDimensionLabel(dimension: string) {

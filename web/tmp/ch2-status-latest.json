@@ -1,0 +1,311 @@
+{
+  "operation": {
+    "reviewPolicy": {
+      "mode": "external-review",
+      "maxIterations": null
+    },
+    "improvementPolicy": {
+      "mode": "agent-proposable",
+      "requireCrossScenarioEvidence": true,
+      "autoPromote": true
+    },
+    "id": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+    "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+    "kind": "write",
+    "driver": "external-mcp",
+    "status": "running",
+    "input": {
+      "instruction": "写作第2章《旧阵里的异常变量》。\n\nPOV: 沈青璃(第三人称限知)\n地点: 青篆门\n出场: 陈墨、沈青璃\n\n核心场景:\n1. 沈青璃奉命调查旧阵失效，偶然发现陈墨在阵法附近记录异常。她邀请陈墨协助——对陈墨能力存疑，但陈墨的记录数据与她的判断部分重合。\n2. 两人共同检查阵纹。沈青璃从传承角度理解阵法(阵纹对应师门口诀)，陈墨从工程角度看到节点组合。方法分歧：陈墨认为某处阵纹是'结构错误'应重构，沈青璃指出贸然改变可能导致防护结构失衡。\n3. 两人保守测试部分修复，形成第一次合作默契。\n\n感情线：沈青璃对陈墨是'警惕的好奇'。建立'知性共鸣+阶层差异'张力。参考《我在风花雪月里等你》叶芷型——知性、有阶层差异、对男主既有好奇又有戒备。\n\n伏笔：沈青璃无意识暴露持有的某份残卷(与叶知秋失踪有关)。不揭示内容。\n\n基调：沈青璃视角更冷静理性。陈墨的幽默通过沈青璃视角呈现。\n\n结尾：沈青璃承认陈墨方法'虽奇怪但有可取'，保留警惕。她选择暂时隐瞒陈墨的异常观察方式。\n\n世界观约束(重要)：修炼世界无编程概念，灵气体系对所有人都是黑盒。只有陈墨用编程视角解读(且只在内心独白中使用编程术语，如'逻辑单元''回路''编译'等)。叶知秋残卷等前人发现只用修炼世界语言描述(如'灵气凝而不散''气机相生')。沈青璃描述阵法用师门口诀、灵气流转等修炼世界语言。外人听陈墨说话只觉得他'用词古怪'。\n\n字数: 约6000-8000字。",
+      "target": "2dc0f899-2ec8-44f4-8ee1-736da11c889b",
+      "taskKey": "chapter-workflow",
+      "requestKey": "b7622484-3d5c-404c-9bdb-2ae300e8c702",
+      "runtimeRecovery": true
+    },
+    "baseSnapshotHash": "b4f740754e770f1ee633add64ab6417fca54e5112116e9bc171e1a281adf0b5c",
+    "attempt": 9,
+    "createdAt": 1784802263971,
+    "updatedAt": 1784807261947,
+    "runId": "45a8eb24-28e6-4ed4-ad5d-0b79f92a998f",
+    "currentWorkItemId": "4dd96362-d4cd-4854-8ccb-bab3380380f9",
+    "leaseExpiresAt": 1784808461947
+  },
+  "nextActions": [
+    {
+      "type": "wait",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "reason": "运行时正在生成或推进工作项"
+    }
+  ],
+  "events": [
+    {
+      "sequence": 235,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.queued",
+      "createdAt": 1784802264004,
+      "payload": {
+        "kind": "write"
+      }
+    },
+    {
+      "sequence": 236,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784802264010,
+      "payload": {
+        "attempt": 1
+      }
+    },
+    {
+      "sequence": 237,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784802597282,
+      "payload": {
+        "attempt": 2
+      }
+    },
+    {
+      "sequence": 238,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.failed",
+      "createdAt": 1784802599912,
+      "payload": {
+        "error": "工作流失败：stage=fact-extraction error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}\n[workflowRun 真实错误] workflowRun 27363247-c9c7-4448-adc6-9318460571fc stage=fact-extraction status=failed error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}"
+      }
+    },
+    {
+      "sequence": 239,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.retried",
+      "createdAt": 1784802756497,
+      "payload": {
+        "note": "fact-extraction 阶段 LLM 429 限流，重试以恢复工作流"
+      }
+    },
+    {
+      "sequence": 240,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784802756501,
+      "payload": {
+        "attempt": 2
+      }
+    },
+    {
+      "sequence": 241,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.failed",
+      "createdAt": 1784802769679,
+      "payload": {
+        "error": "工作流启动后预期停在 blueprint-approval，实际 status=failed stage=blueprint。workflowRun.error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}\n[workflowRun 真实错误] workflowRun f47afba6-cf97-4704-898b-078548000157 stage=blueprint status=failed error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}"
+      }
+    },
+    {
+      "sequence": 242,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.retried",
+      "createdAt": 1784802996652,
+      "payload": {
+        "note": "fact-extraction 阶段 LLM 429 限流，重试以恢复工作流"
+      }
+    },
+    {
+      "sequence": 243,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784802996656,
+      "payload": {
+        "attempt": 3
+      }
+    },
+    {
+      "sequence": 244,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.failed",
+      "createdAt": 1784803023848,
+      "payload": {
+        "error": "工作流启动后预期停在 blueprint-approval，实际 status=failed stage=blueprint。workflowRun.error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}\n[workflowRun 真实错误] workflowRun 4aee85d8-bda8-4f22-91a4-7032324f79c2 stage=blueprint status=failed error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}"
+      }
+    },
+    {
+      "sequence": 245,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.retried",
+      "createdAt": 1784803258928,
+      "payload": {
+        "note": "fact-extraction 阶段 LLM 429 限流，重试以恢复工作流"
+      }
+    },
+    {
+      "sequence": 246,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784803258932,
+      "payload": {
+        "attempt": 4
+      }
+    },
+    {
+      "sequence": 247,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.failed",
+      "createdAt": 1784803309760,
+      "payload": {
+        "error": "工作流启动后预期停在 blueprint-approval，实际 status=failed stage=blueprint。workflowRun.error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}\n[workflowRun 真实错误] workflowRun cf4d07d6-f92a-436a-8951-f4ac71d48f75 stage=blueprint status=failed error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}"
+      }
+    },
+    {
+      "sequence": 248,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.retried",
+      "createdAt": 1784803474152,
+      "payload": {
+        "note": "fact-extraction 阶段 LLM 429 限流，重试以恢复工作流"
+      }
+    },
+    {
+      "sequence": 249,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784803474156,
+      "payload": {
+        "attempt": 5
+      }
+    },
+    {
+      "sequence": 250,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.failed",
+      "createdAt": 1784803540852,
+      "payload": {
+        "error": "工作流启动后预期停在 blueprint-approval，实际 status=failed stage=blueprint。workflowRun.error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}\n[workflowRun 真实错误] workflowRun 0846b9d1-249f-4871-b541-ab873e588dca stage=blueprint status=failed error=HTTP 429: {\"error\":{\"message\":\"/backend-api/conversation failed: status=429, body=\",\"type\":\"rate_limit_error\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}"
+      }
+    },
+    {
+      "sequence": 251,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.retried",
+      "createdAt": 1784804030947,
+      "payload": {
+        "note": "fact-extraction 阶段 LLM 429 限流，重试以恢复工作流"
+      }
+    },
+    {
+      "sequence": 252,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784804030953,
+      "payload": {
+        "attempt": 6
+      }
+    },
+    {
+      "sequence": 253,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "change.pending",
+      "createdAt": 1784804573152,
+      "payload": {
+        "changeId": "4327628b-eef0-4e6a-840d-54598772a092",
+        "title": "章节写作候选",
+        "artifactRefs": [
+          "3831cd92-2dd7-4f34-9fe3-f36b3460834e"
+        ]
+      }
+    },
+    {
+      "sequence": 254,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "change.external-reviewed",
+      "createdAt": 1784806173740,
+      "payload": {
+        "changeId": "4327628b-eef0-4e6a-840d-54598772a092",
+        "verdict": "revise",
+        "reviewRunId": "trae-goal-loop6-ch2-review-001",
+        "issueCount": 3,
+        "learningConclusion": "no-shared-learning"
+      }
+    },
+    {
+      "sequence": 255,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "change.superseded",
+      "createdAt": 1784806173794,
+      "payload": {
+        "changeId": "4327628b-eef0-4e6a-840d-54598772a092",
+        "note": "候选整体质量良好（4.54分），沈青璃POV与知性阶层差异感情线建立到位。需修复1个major issue（章尾判断偏向直接总结）和关键warning以提升限知视角一致性。",
+        "workItemId": "4dd96362-d4cd-4854-8ccb-bab3380380f9"
+      }
+    },
+    {
+      "sequence": 256,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784806173798,
+      "payload": {
+        "attempt": 7
+      }
+    },
+    {
+      "sequence": 257,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784806719612,
+      "payload": {
+        "attempt": 8
+      }
+    },
+    {
+      "sequence": 258,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.failed",
+      "createdAt": 1784806739638,
+      "payload": {
+        "error": "工作流启动后预期停在 blueprint-approval，实际 status=failed stage=blueprint。workflowRun.error=model is not defined\n[workflowRun 真实错误] workflowRun 24256227-3084-4995-abe5-2cc30017604f stage=blueprint status=failed error=model is not defined"
+      }
+    },
+    {
+      "sequence": 260,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.retried",
+      "createdAt": 1784807261944,
+      "payload": {
+        "note": "修复 project.settings.textModel=gpt-4o 问题：已通过 mutation 更新为 gpt-5-5，并重启 runtime 加载 resolveModel 兜底。重试以生成修订候选。"
+      }
+    },
+    {
+      "sequence": 261,
+      "projectId": "99328e42-f08b-49ac-b867-67690963b2e7",
+      "operationId": "a3e39743-4ac0-4007-b537-cce1b1c7a0d1",
+      "type": "operation.started",
+      "createdAt": 1784807261950,
+      "payload": {
+        "attempt": 9
+      }
+    }
+  ]
+}

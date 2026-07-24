@@ -34,7 +34,7 @@ export const BUILTIN_CHAPTER_WORKFLOW: WorkflowDefinition = {
   name: "标准章节创作",
   description: "蓝图审批、正文生成、规则与四类专业审校、定向修订、正文审批和事实回写。",
   stages: ["context", "blueprint", "blueprint-approval", "draft", "review", "revision", "manuscript-approval", "fact-extraction", "fact-approval", "commit", "character-enrichment"],
-  requiredSkillIds: ["story-facts-invariant", "chapter-blueprint", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "fact-delta-extraction"],
+  requiredSkillIds: ["story-facts-invariant", "chapter-blueprint", "embodied-prose", "serial-rhythm", "continuity-audit", "style-specificity-audit", "plot-pacing-audit", "reader-audit", "fact-delta-extraction"],
   maxAutoRevisions: 2,
   qualityThreshold: 3.7,
   builtin: true,
@@ -69,7 +69,7 @@ export const auditIssueSchema = {
         required: ["severity", "dimension", "title", "evidence", "suggestion"],
         properties: {
           severity: { enum: ["blocker", "major", "warning"] },
-          dimension: { enum: ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity"] },
+          dimension: { enum: ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity", "readerRetention"] },
           title: { type: "string", minLength: 1 },
           evidence: { type: "string", minLength: 1 },
           suggestion: { type: "string", minLength: 1 },
@@ -114,7 +114,7 @@ export const blueprintSchema = {
   },
 };
 
-const qualityDimensions: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity"];
+const qualityDimensions: QualityDimension[] = ["plot", "characterVoice", "sceneEmbodiment", "dialogue", "specificity", "hookPayoff", "continuity", "readerRetention"];
 
 export const reviewerSchema = {
   type: "object", additionalProperties: false, required: ["scores", "issues"],
@@ -155,21 +155,30 @@ export function blueprintMarkdown(data: Record<string, unknown>, targetWords = D
 }
 
 export function asBlueprint(data: Record<string, unknown>, existing?: ChapterBlueprint): ChapterBlueprint {
-  const beats = data.beats as Array<{ action: string; emotion: string; outcome: string }>;
+  const beats = Array.isArray(data.beats)
+    ? data.beats.filter((item): item is { action: string; emotion: string; outcome: string } => Boolean(item) && typeof item === "object" && typeof (item as { action?: unknown }).action === "string")
+    : [];
+  const strings = (value: unknown, fallback: string[] = []) => Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : fallback;
+  const ids = (key: "locationIds" | "characterIds" | "plotThreadIds" | "foreshadowingIds") => strings(data[key], existing?.[key] ?? []);
+  const storedTargetWords = beats.length === 0 && typeof data.conflict === "string" && typeof data.targetWords === "number"
+    ? data.targetWords
+    : DEFAULT_CHAPTER_TARGET_WORDS;
   return {
-    objective: String(data.objective),
-    endingHook: String(data.endingHook ?? ""),
-    povCharacterId: existing?.povCharacterId,
-    locationIds: existing?.locationIds ?? [],
-    characterIds: existing?.characterIds ?? [],
-    plotThreadIds: existing?.plotThreadIds ?? [],
-    foreshadowingIds: existing?.foreshadowingIds ?? [],
-    conflict: beats.map((item) => item.action).join(" → "),
-    informationRelease: data.informationRelease as string[],
-    mustHappen: data.mustHappen as string[],
-    flexible: data.flexible as string[],
-    forbidden: data.forbidden as string[],
-    targetWords: existing?.targetWords ?? DEFAULT_CHAPTER_TARGET_WORDS,
+    objective: String(data.objective ?? existing?.objective ?? ""),
+    endingHook: String(data.endingHook ?? existing?.endingHook ?? ""),
+    povCharacterId: typeof data.povCharacterId === "string" ? data.povCharacterId : existing?.povCharacterId,
+    locationIds: ids("locationIds"),
+    characterIds: ids("characterIds"),
+    plotThreadIds: ids("plotThreadIds"),
+    foreshadowingIds: ids("foreshadowingIds"),
+    conflict: beats.length > 0 ? beats.map((item) => item.action).join(" → ") : String(data.conflict ?? existing?.conflict ?? ""),
+    informationRelease: strings(data.informationRelease, existing?.informationRelease),
+    mustHappen: strings(data.mustHappen, existing?.mustHappen),
+    flexible: strings(data.flexible, existing?.flexible),
+    forbidden: strings(data.forbidden, existing?.forbidden),
+    targetWords: existing?.targetWords ?? storedTargetWords,
   };
 }
 

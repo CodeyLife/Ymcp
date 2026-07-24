@@ -30,7 +30,8 @@ describe("production prose prompts", () => {
     expect(prompt).toContain("完整成稿须超过 3000 字");
     expect(prompt).toContain("只使用已批准蓝图和正文已经建立");
     expect(prompt).toContain("一个与人物身份、经验或当下责任直接相关的可见触发");
-    expect(prompt).toContain("开放选择不能只停在看景、沉默或泛化情绪");
+    expect(prompt).toContain("不强制制造未完成之事");
+    expect(prompt).toContain("不额外制造钩子");
     expect(prompt).toContain("不得为了制造结果替人物答应、拒绝或完成选择");
     expect(prompt).not.toMatch(/魏成礼|魏公公|东宫|皇子|宦官|仵作|史官|具体不可能的物证细节/);
     expect(prompt).not.toMatch(/剑来|雪中悍刀行|我在风花雪月里等你|烽火戏诸侯/);

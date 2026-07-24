@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadEnv } from "vite";
 import { NovelRuntimeService } from "../src/novel-runtime/service";
 import { RuntimeRecordConflictError, SqliteNovelStore } from "../src/novel-runtime/sqlite-store";
-import type { LegacyMigrationBundle, RuntimeActor, RuntimeApiError, RuntimeDriver, RuntimeExternalReview, RuntimeProjectMutationCommand } from "../src/novel-runtime/contracts";
+import { parseRuntimeLearningAssessment, type LegacyMigrationBundle, type RuntimeActor, type RuntimeApiError, type RuntimeDriver, type RuntimeExternalReview, type RuntimeProjectMutationCommand } from "../src/novel-runtime/contracts";
 import type { CreativeToolName } from "../src/features/novel/creative-tool-gateway";
+import { novelDb } from "../src/features/novel/db";
 
 const DEFAULT_PORT = 4766;
 const ALLOWED_ORIGIN = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
@@ -109,16 +110,10 @@ function externalReview(input: Record<string, unknown>): Omit<RuntimeExternalRev
   if (value.verdict === "passed" && issues.some((issue) => issue.severity === "blocker" || issue.severity === "major")) {
     throw new HttpError(400, "INVALID_REVIEW", "passed 外部审核不能包含未解决的 blocker 或 major");
   }
-  const learning = value.learning;
-  if (!learning || typeof learning !== "object" || Array.isArray(learning)) throw new HttpError(400, "INVALID_REVIEW", "外部审核必须记录本轮经验判断");
-  const learningValue = learning as Record<string, unknown>;
-  if (!(["no-shared-learning", "propose-improvement"] as string[]).includes(String(learningValue.conclusion)) || typeof learningValue.summary !== "string" || !learningValue.summary.trim()) {
-    throw new HttpError(400, "INVALID_REVIEW", "经验判断缺少 conclusion 或 summary");
-  }
-  if (learningValue.conclusion === "propose-improvement" && (!String(learningValue.affectedInputClass ?? "").trim() || !String(learningValue.underlyingMechanism ?? "").trim())) {
-    throw new HttpError(400, "INVALID_REVIEW", "可沉淀经验必须说明影响输入类别和共享机制");
-  }
-  return { reviewRunId: value.reviewRunId, verdict: value.verdict as "passed" | "revise", summary: value.summary, artifactFingerprint: value.artifactFingerprint, issues, learning: { conclusion: learningValue.conclusion as "no-shared-learning" | "propose-improvement", summary: learningValue.summary, affectedInputClass: typeof learningValue.affectedInputClass === "string" ? learningValue.affectedInputClass : undefined, underlyingMechanism: typeof learningValue.underlyingMechanism === "string" ? learningValue.underlyingMechanism : undefined } };
+  let learning;
+  try { learning = parseRuntimeLearningAssessment(value.learning, { requireTargetBaseline: true }); }
+  catch (error) { throw new HttpError(400, "INVALID_REVIEW", error instanceof Error ? error.message : "经验判断无效"); }
+  return { reviewRunId: value.reviewRunId, verdict: value.verdict as "passed" | "revise", summary: value.summary, artifactFingerprint: value.artifactFingerprint, issues, learning };
 }
 
 const RUNTIME_STARTED_AT = Date.now();
@@ -319,6 +314,7 @@ export async function createNovelRuntime(options: { databasePath?: string; port?
     server.closeAllConnections();
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
     store.close();
+    novelDb.close();
   };
   closeRuntime = close;
   return { server, service, store, address: { host, port: actualPort }, close };
