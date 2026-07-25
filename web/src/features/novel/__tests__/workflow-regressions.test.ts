@@ -11,7 +11,7 @@ vi.mock("../ai", () => ({
 
 import { callStructuredNovelModel, streamNovelModel } from "../ai";
 import { addEntity, createChapter, createNovelProject, novelDb, recordBase, saveApprovedDocumentRevision } from "../db";
-import type { NovelContextPacket, QualityIssue, QualityReport, WorkflowArtifact, WorkflowRun } from "../types";
+import type { ContextSource, NovelContextPacket, QualityIssue, QualityReport, WorkflowArtifact, WorkflowRun } from "../types";
 import { advanceChapterWorkflow } from "../workflow";
 import { applyRevisionWindows, collectRevisionParagraphs, findIssueParagraph, isBlueprintCoverageIssue, isRevisionRefusal, planRevisionWindows, selectRevisionIssuesForFeedback, shouldPromoteWarning } from "../workflow-stages/revision-stage";
 import { isQualityRegression } from "../workflow-stages/review-stage";
@@ -30,6 +30,27 @@ function artifact(run: WorkflowRun, input: Pick<WorkflowArtifact, "id" | "stage"
 
 function packet(projectId: string): NovelContextPacket {
   return { ...recordBase(projectId), task: "chapter-draft", instruction: "继续写作", sources: [], estimatedTokens: 0, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
+}
+
+/**
+ * 构造带实体档案源的 contextPacket，用于验证 revision-stage 局部修订注入冻结上下文。
+ */
+function packetWithSources(projectId: string, marker: string): NovelContextPacket {
+  const entitySource: ContextSource = {
+    id: `entity-${marker}`,
+    kind: "entity",
+    title: `角色档案-${marker}`,
+    content: `角色${marker}在第二章已得知密信内容，本章不得重新揭示。`,
+    weight: 1.0,
+    pinned: true,
+    estimatedTokens: 50,
+    reason: "实体档案",
+    contentHash: marker,
+    priorityClass: "invariant",
+    layer: "mandatory",
+    visibilityReason: "跨章连续性",
+  };
+  return { ...recordBase(projectId), task: "chapter-draft", instruction: "继续写作", sources: [entitySource], estimatedTokens: 50, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now() };
 }
 
 describe("chapter workflow regressions", () => {
@@ -373,6 +394,41 @@ describe("chapter workflow regressions", () => {
     expect(revision?.contentMarkdown).toContain("佩剑客从佛像旁走出");
   });
 
+  it("routes all-fidelity-failed revisions above the 1000-word floor to manual approval instead of review loop", async () => {
+    // F-011 修复回归：draft > 1000 字 + 所有局部修订窗口均未通过保真校验（replacements=0、paragraphsToDelete=空）
+    // 修复前：failAgent 未 return → finishAgent 覆盖 failed 状态为 completed → transition(review) 回环浪费 6 次 LLM 调用
+    // 修复后：failAgent + repair + saveArtifact + createApprovalProposal + transition(manuscript-approval) + return
+    const project = await createNovelProject({ title: "全窗口保真失败", genre: ["悬疑"], premise: "F-011 回归覆盖。" });
+    const document = await createChapter(project.id, "第一章");
+    const context = packet(project.id);
+    const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-fidelity", blueprintArtifactId: "blueprint-fidelity", qualityReportId: "report-fidelity", factCandidateIds: [], startedAt: Date.now() };
+    // 构造 > 1000 字的原文，避免落入 <=1000 字分支
+    const longParagraph = "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。佩剑客从佛像旁走出，衣着整洁，剑穗随步轻摆。那是她曾见过的样式。听潮阁已灭，所以才要寻。他递茶试探，言语温雅却句句指向旧事。她抬手一挥，桌上的寒灯翻倒。灯油洒在地面，火光被夜风卷起。佩剑客人退了一步。沈雁声借这一瞬掠向侧墙，剑锋擦过她的袖口。".repeat(6);
+    const draft = artifact(run, { id: "draft-fidelity", stage: "draft", kind: "draft", title: "正文", contentMarkdown: longParagraph });
+    const blueprint = artifact(run, { id: "blueprint-fidelity", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
+    const report: QualityReport = { ...recordBase(project.id), id: "report-fidelity", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3, readerRetention: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-fidelity", dimension: "plot", severity: "major", title: "心理判断句", description: "需要修订", revisionRanges: [{ start: 1, end: 1 }], rule: "style.test", suggestion: "改写第一段", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    // Mock LLM 返回与原文完全相同的内容（unchanged > 0.995）→ 所有窗口保真失败
+    vi.mocked(streamNovelModel).mockResolvedValue({ content: longParagraph, promptHash: "no-change" });
+    await novelDb.contextPackets.add(context);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
+    await novelDb.qualityReports.add(report);
+
+    const waiting = await advanceChapterWorkflow(run.id);
+
+    // 必须停在人工审批，不得回环 review
+    expect(waiting).toMatchObject({ status: "waiting-approval", currentStage: "manuscript-approval" });
+    // agent 必须保留 failed 状态，不被 finishAgent 覆盖为 completed
+    const failedAgent = await novelDb.agentRuns.where("projectId").equals(project.id).and((item) => item.workflowRunId === run.id && item.status === "failed").first();
+    expect(failedAgent).toBeDefined();
+    const completedAgent = await novelDb.agentRuns.where("projectId").equals(project.id).and((item) => item.workflowRunId === run.id && item.status === "completed").first();
+    expect(completedAgent).toBeUndefined();
+    // 必须保存 fallback 修订稿（结构修复后）并转人工
+    const revision = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id).and((item) => item.stage === "revision").first();
+    expect(revision).toBeDefined();
+    expect(revision?.contentMarkdown).toContain("门人录");
+  });
+
   it("does not regress a revision that removes major issues despite a slightly lower score", () => {
     const base = { ...recordBase("project"), workflowRunId: "run", artifactId: "artifact", iteration: 0, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4, readerRetention: 4 }, blockerCount: 0, passed: false, metrics: {}, reviewerRoles: [] };
     const major = { id: "major", dimension: "plot", severity: "major", title: "主要问题", description: "问题", rule: "plot.test", suggestion: "修订", deterministic: false } satisfies QualityIssue;
@@ -405,13 +461,76 @@ describe("chapter workflow regressions", () => {
     const original = artifact(run, { id: "original", stage: "draft", kind: "draft", title: "原稿", contentMarkdown: "原稿内容。" });
     const revised = artifact(run, { id: "revised", stage: "revision", kind: "revision", title: "修订稿", contentMarkdown: "较差修订。", parentArtifactId: original.id });
     const blueprint = artifact(run, { id: "blueprint", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
+    // F-001 修复后，isQualityRegression 调用方必须传入 comparablePreviousScore（previousReport 不可读时为 undefined）。
+    // 要让回归路径生效（previousReport 存在 + scoringVersion 兼容 + 分数下降），必须把 previousReport 加入 db 让其可读。
+    const previousReport: QualityReport = { ...recordBase(project.id), id: "previous-report", workflowRunId: run.id, artifactId: original.id, iteration: 0, scoringVersion: 3, scores: { plot: 4, characterVoice: 4, sceneEmbodiment: 4, dialogue: 4, specificity: 4, hookPayoff: 4, continuity: 4, readerRetention: 4 }, weightedScore: 4.2, blockerCount: 0, passed: false, issues: [], metrics: {}, reviewerRoles: [] };
     await novelDb.contextPackets.add(context);
     await novelDb.workflowRuns.add(run);
     await novelDb.workflowArtifacts.bulkAdd([original, revised, blueprint]);
+    await novelDb.qualityReports.add(previousReport);
 
     const waiting = await advanceChapterWorkflow(run.id);
 
     expect(waiting).toMatchObject({ status: "waiting-approval", currentStage: "manuscript-approval", draftArtifactId: original.id, qualityReportId: "previous-report" });
     expect((await novelDb.proposals.where("projectId").equals(project.id).and((item) => item.targetId === run.id).first())?.artifactId).toBe(original.id);
+  });
+
+  it("injects contextPacket digest into the local revision prompt (audit Loop 1 问题 A 修复验证)", async () => {
+    // 验证 revision-stage 局部修订 LLM 调用 prompt 包含冻结上下文摘要。
+    // 修复前：局部修订 prompt 不注入 contextPacket，跨章连续性修订缺前章事实。
+    // 修复后：通过 buildRevisionContextDigest(packet) 注入 formatReviewerContext 摘要。
+    const project = await createNovelProject({ title: "上下文注入验证", genre: ["悬疑"], premise: "局部修订需注入冻结上下文。" });
+    const document = await createChapter(project.id, "第一章");
+    const context = packetWithSources(project.id, "沈雁声");
+    const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-ctx", blueprintArtifactId: "blueprint-ctx", qualityReportId: "report-ctx", factCandidateIds: [], startedAt: Date.now() };
+    const draftContent = "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。\n\n佩剑客从佛像旁走出，衣着整洁，剑穗随步轻摆。那是她曾见过的样式。听潮阁已灭，所以才要寻。他递茶试探，言语温雅却句句指向旧事。";
+    const draft = artifact(run, { id: "draft-ctx", stage: "draft", kind: "draft", title: "正文", contentMarkdown: draftContent });
+    const blueprint = artifact(run, { id: "blueprint-ctx", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
+    const report: QualityReport = { ...recordBase(project.id), id: "report-ctx", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3, readerRetention: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-ctx", dimension: "continuity", severity: "major", title: "跨章事实", description: "需要核对前章", revisionRanges: [{ start: 1, end: 1 }], rule: "continuity.cross-chapter", suggestion: "核对沈雁声已知信息", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    vi.mocked(streamNovelModel).mockResolvedValue({ content: "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌。", promptHash: "ctx-fix" });
+    await novelDb.contextPackets.add(context);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
+    await novelDb.qualityReports.add(report);
+
+    await advanceChapterWorkflow(run.id);
+
+    // streamNovelModel 必须被调用（局部修订路径触发）
+    expect(streamNovelModel).toHaveBeenCalled();
+    const revisionCall = vi.mocked(streamNovelModel).mock.calls.find((call) => (call[0] as { role?: string }).role === "revision-editor");
+    expect(revisionCall).toBeDefined();
+    const prompt = (revisionCall![0] as { prompt: string }).prompt;
+    // 修复验证：prompt 必须包含冻结上下文段，且包含 contextPacket 中的实体档案内容
+    expect(prompt).toContain("冻结上下文");
+    expect(prompt).toContain("沈雁声在第二章已得知密信内容");
+    // 修订契约第 2 条必须要求以冻结上下文为准
+    expect(prompt).toContain('修订涉及跨章事实时必须以"冻结上下文"为准');
+  });
+
+  it("falls back to explicit no-context hint when contextPacket has no sources (audit Loop 1 问题 A 边界验证)", async () => {
+    // 边界场景：contextPacket 存在但 sources 为空 → formatReviewerContext 返回空 → buildRevisionContextDigest 返回 undefined
+    // 修复后：prompt 注入显式提示"本章无冻结上下文...不得新增原文与蓝图中都不存在的事实"
+    const project = await createNovelProject({ title: "空上下文边界", genre: ["悬疑"], premise: "空 packet 不得阻塞修订。" });
+    const document = await createChapter(project.id, "第一章");
+    const context = packet(project.id);
+    const run: WorkflowRun = { ...recordBase(project.id), workflowId: "standard-chapter-v2", targetDocumentId: document.id, status: "running", currentStage: "revision", stageIndex: 6, revisionIteration: 0, contextPacketId: context.id, draftArtifactId: "draft-empty-ctx", blueprintArtifactId: "blueprint-empty-ctx", qualityReportId: "report-empty-ctx", factCandidateIds: [], startedAt: Date.now() };
+    const draftContent = "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌，桌上放着一壶热茶。她从怀中取出门人录，陆无名三个字静静留在那里。\n\n佩剑客从佛像旁走出，衣着整洁，剑穗随步轻摆。那是她曾见过的样式。听潮阁已灭，所以才要寻。";
+    const draft = artifact(run, { id: "draft-empty-ctx", stage: "draft", kind: "draft", title: "正文", contentMarkdown: draftContent });
+    const blueprint = artifact(run, { id: "blueprint-empty-ctx", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "蓝图" });
+    const report: QualityReport = { ...recordBase(project.id), id: "report-empty-ctx", workflowRunId: run.id, artifactId: draft.id, iteration: 0, scores: { plot: 3, characterVoice: 3, sceneEmbodiment: 3, dialogue: 3, specificity: 3, hookPayoff: 3, continuity: 3, readerRetention: 3 }, weightedScore: 3, blockerCount: 0, passed: false, issues: [{ id: "issue-empty-ctx", dimension: "specificity", severity: "major", title: "碎片", description: "需要修订", revisionRanges: [{ start: 1, end: 1 }], rule: "style.short", suggestion: "改写第一段", deterministic: false }], metrics: {}, reviewerRoles: [] };
+    vi.mocked(streamNovelModel).mockResolvedValue({ content: "寒灯挂在庙檐下，火苗被风吹得摇晃。沈雁声推门进去，庙中有一张旧木桌。", promptHash: "empty-ctx" });
+    await novelDb.contextPackets.add(context);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
+    await novelDb.qualityReports.add(report);
+
+    await advanceChapterWorkflow(run.id);
+
+    const revisionCall = vi.mocked(streamNovelModel).mock.calls.find((call) => (call[0] as { role?: string }).role === "revision-editor");
+    expect(revisionCall).toBeDefined();
+    const prompt = (revisionCall![0] as { prompt: string }).prompt;
+    // 边界验证：空 packet 时注入显式提示，不得臆造事实
+    expect(prompt).toContain("本章无冻结上下文");
+    expect(prompt).toContain("不得新增原文与蓝图中都不存在的事实");
   });
 });

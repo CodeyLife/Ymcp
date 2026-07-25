@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../ai", () => ({
+  callStructuredNovelModel: vi.fn(async () => ({
+    data: { summary: "审核完成", issues: [] },
+    usage: { inputTokens: 1, outputTokens: 1 },
+    promptHash: "audit",
+  })),
+}));
+
+import { callStructuredNovelModel } from "../ai";
 import { NovelDatabase } from "../db";
-import type { StoryProject } from "../types";
+import type { StoryProject, NovelContextPacket, ContextSource } from "../types";
 import {
   createCreativeRun,
+  defaultReviewer,
   enqueueCreativeWork,
   evaluateCreativeReviewGate,
   executeCreativeCommand,
@@ -22,6 +33,7 @@ describe("CreativeExecutionEngine", () => {
       title: "测试项目", subtitle: "", premise: "测试", genre: ["测试"], audience: "读者", themes: [], sellingPoints: [], pov: "第三人称限知", tense: "过去时", tone: "克制", languageStyle: "具象", targetWords: 100000, dailyGoal: 3000, status: "planning", coverColor: "#000000",
       settings: { textModel: "test", temperature: 0.7, recentChapterCount: 5, encrypted: false, contentProfile: "general-serial", maxAutoRevisions: 2, qualityThreshold: 3.7, approvalMode: "blueprint-and-manuscript" },
     } satisfies StoryProject);
+    vi.mocked(callStructuredNovelModel).mockClear();
   });
 
   afterEach(async () => {
@@ -346,5 +358,77 @@ describe("CreativeExecutionEngine", () => {
     expect(result.workStatus).toBe("blocked");
     expect(result.status).toBe("paused");
     expect(accepter).not.toHaveBeenCalled();
+  });
+
+  it("injects contextPacket digest into fallback audit prompt (audit Loop 1 问题 B 修复验证)", async () => {
+    // 验证 defaultReviewer fallback 路径注入 proposal.contextPacketId 对应的冻结上下文。
+    // 修复前：fallback 审核 prompt 不注入项目事实库，却要求"项目既有事实一致性"。
+    // 修复后：通过 formatReviewerContext 注入冻结上下文摘要。
+    const entitySource: ContextSource = {
+      id: "entity-shen",
+      kind: "entity",
+      title: "角色档案-沈雁声",
+      content: "沈雁声在第二章已得知密信内容，本章不得重新揭示。",
+      weight: 1.0,
+      pinned: true,
+      estimatedTokens: 50,
+      reason: "实体档案",
+      contentHash: "shen",
+      priorityClass: "invariant",
+      layer: "mandatory",
+      visibilityReason: "跨章连续性",
+    };
+    const packetRecord: NovelContextPacket = {
+      id: "packet-b-fallback", projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      task: "chapter-draft", instruction: "继续写作", sources: [entitySource], estimatedTokens: 50, omittedSourceIds: [], skillRefs: [], compiledAt: Date.now(),
+    };
+    await db.contextPackets.put(packetRecord);
+    await db.proposals.put({
+      id: "proposal-b-fallback", projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      title: "剧情段候选", operation: "plot-segment", taskKey: "plot-threads", status: "pending", previewMarkdown: "沈雁声翻开密信，第一次得知陆无名已死。", patches: [], items: [], contextPacketId: "packet-b-fallback", model: "test",
+    });
+    const work = {
+      id: "work-b-fallback", projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      creativeRunId: "run-b-fallback", kind: "plot-segment" as const, status: "running" as const, instruction: "生成下一剧情段", parameters: {}, dependsOn: [], iteration: 0, artifactRefs: ["proposal-b-fallback"],
+    };
+    const run = {
+      id: "run-b-fallback", projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      mode: "segment-auto" as const, objective: "生成剧情段", status: "running" as const, policy: { auditTrigger: "automatic" as const, commitPolicy: "quality-gated-auto" as const, qualityThreshold: 3.7, maxIterations: 3 }, lastEventSequence: 0,
+    };
+
+    await defaultReviewer(work, run, db);
+
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(callStructuredNovelModel).mock.calls[0][0] as { prompt: string };
+    // 修复验证：prompt 必须包含冻结上下文段，且包含 contextPacket 中的实体档案内容
+    expect(callArgs.prompt).toContain("项目冻结上下文");
+    expect(callArgs.prompt).toContain("沈雁声在第二章已得知密信内容");
+    // 输出要求必须约束 evidence 引用冻结上下文条目
+    expect(callArgs.prompt).toContain("涉及项目既有事实的 issue 必须在 evidence 中引用");
+  });
+
+  it("falls back to explicit no-context hint when proposal has no contextPacket (audit Loop 1 问题 B 边界验证)", async () => {
+    // 边界场景：proposal.contextPacketId 对应的 packet 不存在 → fallbackContextDigest 为空
+    // 修复后：prompt 注入显式提示"本次候选无冻结上下文...不得臆造项目既有事实"
+    await db.proposals.put({
+      id: "proposal-b-no-ctx", projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      title: "剧情段候选", operation: "plot-segment", taskKey: "plot-threads", status: "pending", previewMarkdown: "候选内容。", patches: [], items: [], contextPacketId: "nonexistent-packet", model: "test",
+    });
+    const work = {
+      id: "work-b-no-ctx", projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      creativeRunId: "run-b-no-ctx", kind: "plot-segment" as const, status: "running" as const, instruction: "生成剧情段", parameters: {}, dependsOn: [], iteration: 0, artifactRefs: ["proposal-b-no-ctx"],
+    };
+    const run = {
+      id: "run-b-no-ctx", projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      mode: "segment-auto" as const, objective: "生成剧情段", status: "running" as const, policy: { auditTrigger: "automatic" as const, commitPolicy: "quality-gated-auto" as const, qualityThreshold: 3.7, maxIterations: 3 }, lastEventSequence: 0,
+    };
+
+    await defaultReviewer(work, run, db);
+
+    expect(callStructuredNovelModel).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(callStructuredNovelModel).mock.calls[0][0] as { prompt: string };
+    // 边界验证：无 packet 时注入显式提示，不得臆造事实
+    expect(callArgs.prompt).toContain("本次候选无冻结上下文");
+    expect(callArgs.prompt).toContain("不得臆造项目既有事实");
   });
 });

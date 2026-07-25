@@ -498,7 +498,7 @@ async function defaultExecutor(work: CreativeWorkItem, _run: CreativeRun, db: No
   throw new Error(`work kind 尚未接入默认执行器：${work.kind}`);
 }
 
-async function defaultReviewer(work: CreativeWorkItem, _run: CreativeRun, db: NovelDatabase): Promise<CreativeReviewInput> {
+export async function defaultReviewer(work: CreativeWorkItem, _run: CreativeRun, db: NovelDatabase): Promise<CreativeReviewInput> {
   const subjectArtifactId = work.artifactRefs[0];
   if (!subjectArtifactId) throw new Error("创作任务没有可审核产物");
   if (work.kind === "plot-segment" || work.kind === "generation") {
@@ -510,13 +510,30 @@ async function defaultReviewer(work: CreativeWorkItem, _run: CreativeRun, db: No
       if (!project) return { subjectArtifactId, reviewer: "internal", verdict: "inconclusive", summary: "项目不存在", issues: [] };
       const { callStructuredNovelModel } = await import("./ai");
       const { auditIssueSchema } = await import("./workflow-shared");
+      // 审计 Loop 1 问题 B 修复：fallback 审核 prompt 要求"项目既有事实一致性"但未注入事实库。
+      // 通过 proposal.contextPacketId 读取生成该候选时冻结的 contextPacket，
+      // 用 formatReviewerContext 排除 skill 源后注入，与 review-stage/reviewerContext 保持一致。
+      const { formatReviewerContext } = await import("./context");
+      const REVIEW_FALLBACK_CONTEXT_MAX_CHARS = 6000;
+      const fallbackPacket = proposal.contextPacketId ? await db.contextPackets.get(proposal.contextPacketId) : undefined;
+      const fallbackContextDigest = fallbackPacket
+        ? (() => {
+          const full = formatReviewerContext(fallbackPacket).trim();
+          if (!full) return "";
+          if (full.length <= REVIEW_FALLBACK_CONTEXT_MAX_CHARS) return full;
+          return `${full.slice(0, REVIEW_FALLBACK_CONTEXT_MAX_CHARS)}\n[冻结上下文已截断，仅保留高权威源摘要]`;
+        })()
+        : "";
+      const fallbackContextBlock = fallbackContextDigest
+        ? `\n\n## 项目冻结上下文（只读，用于事实一致性核对）\n${fallbackContextDigest}`
+        : "\n\n## 项目冻结上下文\n（本次候选无冻结上下文，仅按候选内容自洽性审核；不得臆造项目既有事实）";
       const audited = await callStructuredNovelModel<{ summary: string; issues: GenerationAuditIssue[] }>({
         model: project.settings.textModel,
         temperature: 0.15,
         role: "quality-editor",
         schema: auditIssueSchema,
         maxTokens: 4096,
-        prompt: `# 创作候选审核\n审核以下结构化创作候选是否满足作者指令、项目既有事实、引用完整性和长篇可持续性。只报告有具体证据的问题，不为凑数制造问题。\n\n## 作者指令\n${work.instruction}\n\n## 候选类型\n${proposal.taskKey ?? work.kind}\n\n## 候选内容\n${proposal.previewMarkdown}\n\n## 输出要求\n每个问题给出 severity、dimension、title、evidence 和可执行 suggestion。`,
+        prompt: `# 创作候选审核\n审核以下结构化创作候选是否满足作者指令、项目既有事实、引用完整性和长篇可持续性。只报告有具体证据的问题，不为凑数制造问题。\n\n## 作者指令\n${work.instruction}\n\n## 候选类型\n${proposal.taskKey ?? work.kind}\n\n## 候选内容\n${proposal.previewMarkdown}${fallbackContextBlock}\n\n## 输出要求\n每个问题给出 severity、dimension、title、evidence 和可执行 suggestion；涉及项目既有事实的 issue 必须在 evidence 中引用"项目冻结上下文"中的具体条目作为依据。`,
       });
       const issues = audited.data.issues.map((issue, index) => ({ ...issue, issueId: `${proposal.id}:manual-audit:${proposal.revision}:${index}` }));
       const majorCount = issues.filter((issue) => issue.severity === "blocker" || issue.severity === "major").length;

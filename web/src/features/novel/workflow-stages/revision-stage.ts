@@ -1,11 +1,45 @@
 import { streamNovelModel } from "../ai";
+import { formatReviewerContext } from "../context";
 import { DEFAULT_CHAPTER_TARGET_WORDS } from "../db";
 import { countNovelWords } from "../quality";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { asBlueprint } from "../workflow-shared";
-import type { QualityIssue } from "../types";
+import type { NovelContextPacket, QualityIssue } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 import { repairDraftStructureOnce } from "./draft-structure-repair";
+
+/**
+ * 局部修订上下文摘要上限（字符数）。
+ *
+ * 局部修订只需保证修订不破坏跨章连续性（人物/事实/前章已交付物件），
+ * 不需要完整 contextPacket。用 formatReviewerContext 排除 skill 源后，
+ * 截断到上限，避免 prompt 膨胀挤占 maxTokens 预算。
+ *
+ * 选 4000 字符：足够覆盖实体档案+前章摘要+剧情线/伏笔关键条目，
+ * 同时为 mustHappen/forbidden/issue 列表/相邻段落/修订契约留出余量。
+ */
+const REVISION_CONTEXT_DIGEST_MAX_CHARS = 4000;
+
+/**
+ * 构造局部修订用的冻结上下文摘要。
+ *
+ * 设计依据：审计 Loop 1 问题 A——revision-stage.ts:482 局部修订未注入 contextPacket，
+ * 导致 LLM 在修订涉及跨章连续性的 issue 时缺乏前章事实/实体档案/剧情线/伏笔参照。
+ *
+ * 复用 formatReviewerContext（与 review-stage 一致，排除 skill 源），
+ * 然后按字符上限截断，保留头部高权威源（实体/前章摘要/剧情线等通常排在前面）。
+ *
+ * 返回 undefined 表示无 packet 或摘要为空——调用方不应在 prompt 中插入空段落。
+ */
+function buildRevisionContextDigest(packet: NovelContextPacket | undefined): string | undefined {
+  if (!packet) return undefined;
+  const full = formatReviewerContext(packet).trim();
+  if (!full) return undefined;
+  if (full.length <= REVISION_CONTEXT_DIGEST_MAX_CHARS) return full;
+  // 头部优先：formatReviewerContext 输出的 source 顺序由 allocateContext 决定，
+  // 高权威/强制层源（实体档案/前章摘要/剧情线）通常排在前面，截断尾部低权威源更安全。
+  return `${full.slice(0, REVISION_CONTEXT_DIGEST_MAX_CHARS)}\n[冻结上下文已截断，仅保留高权威源摘要；如需完整背景请参考 review-stage 审校结论]`;
+}
 
 export function splitParagraphs(text: string): string[] {
   return text.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
@@ -252,16 +286,20 @@ export const revisionStageHandler: StageHandler = {
   stage: "revision",
   async execute(ctx: StageContext): Promise<StageResult> {
     const { run, project, document, db } = ctx;
-    const [draft, blueprint, report, feedback, skills] = await Promise.all([
+    const [draft, blueprint, report, feedback, skills, contextPacket] = await Promise.all([
       db.workflowArtifacts.get(run.draftArtifactId!),
       db.workflowArtifacts.get(run.blueprintArtifactId!),
       db.qualityReports.get(run.qualityReportId!),
       ctx.latestArtifact(run.id, ["review"]),
       resolveNovelSkills({ projectId: run.projectId, stage: "revision", explicitSkillIds: ["embodied-prose", "style-specificity-audit", "imagery-aesthetics"], db: ctx.db }),
+      // 审计 Loop 1 问题 A 修复：局部修订需注入冻结上下文摘要，保证跨章连续性修订有前章事实/实体档案/剧情线参照。
+      // 与 review-stage 保持一致（review-stage 也读 run.contextPacketId），不重算 contextPacket，复用 draft-stage 已冻结的版本。
+      run.contextPacketId ? db.contextPackets.get(run.contextPacketId) : undefined,
     ]);
     if (!draft || !report) throw new Error("修订输入不完整");
     const blueprintData = blueprint?.structuredData ? asBlueprint(blueprint.structuredData) : undefined;
     const targetWords = document.blueprint.targetWords || blueprintData?.targetWords || DEFAULT_CHAPTER_TARGET_WORDS;
+    const revisionContextDigest = buildRevisionContextDigest(contextPacket);
 
     const originalParagraphs = splitParagraphs(draft.contentMarkdown);
     let workingText = draft.contentMarkdown;
@@ -488,6 +526,9 @@ ${draft.contentMarkdown.slice(-1600)}
           maxTokens: Math.min(4096, Math.max(1024, Math.ceil(sourceWords * 3))),
           prompt: `只修订原章第 ${window.start + 1}-${window.end + 1} 段。相邻段落仅供衔接，不得重写；输出必须且只能是替换目标段落的连续正文。${mustHappenBlock}${forbiddenBlock}
 
+## 冻结上下文（只读，用于跨章连续性核对）
+${revisionContextDigest ?? "（本章无冻结上下文，按 issue 描述与相邻段落修订；不得新增原文与蓝图中都不存在的事实）"}
+
 ## 必须处理的问题
 ${issueListFor(window.issues)}
 
@@ -502,7 +543,7 @@ ${after}
 
 ## 局部修订契约
 1. 保留目标段落承担的事件、信息、人物声音与视角，只解决列出的问题。
-2. 不得新增原文与已批准蓝图中都不存在的物件、行动、关系、线索或事实。
+2. 不得新增原文与已批准蓝图中都不存在的物件、行动、关系、线索或事实；修订涉及跨章事实时必须以"冻结上下文"为准，不得臆造前章已交付的物件、已确定的关系或已发生的事件。
 3. 不得把局部问题扩写成新场景，不得复述相邻段落，不得解释修订过程。
 4. ${targetWords} 字只是整章容量参考；本窗口以自然、准确、富有中文韵律为准，不凑字数。
 5. 边界不复述硬约束：修订输出不得逐句复述"上一段"或"下一段"。若需要衔接，只用必要的动作、时间或场景状态自然承接，不得复制相邻段落的完整句子。
@@ -530,7 +571,27 @@ ${feedback?.stage === "manuscript-approval" ? `\n## 用户意见\n${feedback.con
 
     const revisedText = applyRevisionWindows(originalParagraphs, replacements, paragraphsToDelete).join("\n\n");
     if (replacements.length === 0 && paragraphsToDelete.size === 0) {
+      // 全窗口保真失败：failAgent 标记 agent 状态后必须终止控制流，否则后续 finishAgent 会覆盖 failed 状态、
+      // saveArtifact 会保存与原文实质相同的修订稿并回环 review，浪费 1 轮 6 次 LLM 调用且丢失失败审计记录。
+      // 与 <=1000 字分支一致的兜底：修复结构后转人工审批，不再回环自动复审。
       await ctx.failAgent(agent, new Error("所有局部修订窗口均未通过保真校验"));
+      const fallbackRepaired = await repairDraftStructureOnce({ content: workingText, model: project.settings.textModel, skillPrompt });
+      const fallbackIteration = run.revisionIteration + 1;
+      const fallbackArtifact = await ctx.saveArtifact({ ...run, revisionIteration: fallbackIteration }, {
+        projectId: run.projectId,
+        workflowRunId: run.id,
+        stage: "revision",
+        kind: "revision",
+        title: `${document.title}全窗口保真失败回退 ${fallbackIteration}`,
+        contentMarkdown: fallbackRepaired.content,
+        parentArtifactId: draft.id,
+        model: project.settings.textModel,
+        skillRefs: [],
+        contextPacketId: run.contextPacketId ?? undefined,
+      });
+      await ctx.createApprovalProposal(run, fallbackArtifact, "workflow-manuscript", "所有局部修订窗口均未通过保真校验，已保留修订前正文并转交人工审阅");
+      const fallbackRun = await ctx.transition(run, "manuscript-approval", "waiting-approval", { draftArtifactId: fallbackArtifact.id, revisionIteration: fallbackIteration });
+      return { run: fallbackRun, continueLoop: false };
     }
     if (countNovelWords(revisedText) <= 1000) {
       await ctx.failAgent(agent, new Error(`局部修订后仅 ${countNovelWords(revisedText)} 字，未超过 1000 字最低篇幅`));

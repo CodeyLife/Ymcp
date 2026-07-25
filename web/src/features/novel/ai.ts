@@ -111,6 +111,62 @@ async function hashPrompt(value: string) {
   return [...new Uint8Array(bytes)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * 预留的 LLM 上下文调用扩展点（审计 Loop 1 扩展点 C）。
+ *
+ * 背景：项目内所有 LLM 调用都是无状态 web 对话，服务端不保留会话记忆。
+ * 该接口为未来需要"上下文感知"的调用（多轮对话、长篇连续创作、Responses API
+ * 服务端会话）预留扩展点；现有 stateless 调用点无需改动，行为不变。
+ *
+ * 设计原则：
+ * - `priorMessages`：客户端回放历史。把多轮对话历史作为 messages 数组追加到
+ *   system 与本轮 user 之间。与现有 `/chat/completions` 端点兼容，所有 provider
+ *   都支持，今天即可使用。
+ * - `previousResponseId`：服务端会话引用（Responses API 的 `previous_response_id`）。
+ *   TODO P1: 当前未实现 `/responses` 端点路由，字段仅预留。实现时需在
+ *   `streamNovelModel`/`requestChat` 内根据此字段选择端点，并处理 provider 不支持
+ *   `/responses` 的降级（fallback 到 priorMessages 回放或显式报错）。
+ *
+ * 两者同时提供时，priorMessages 作为 previousResponseId 不可用时的降级路径；
+ * 实现层应优先尝试 previousResponseId（若已接入），失败再回退 priorMessages。
+ */
+export interface NovelConversationContext {
+  /** 客户端回放历史。追加到 system 与本轮 user 之间，复用现有 /chat/completions 端点。 */
+  priorMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+  /**
+   * Responses API 服务端会话引用。
+   * TODO P1: 未实现 /responses 端点路由；当前 buildConversationMessages 完全不消费此字段
+   * （无论 priorMessages 是否为空），需在接入 /responses 路由后由 streamNovelModel/requestChat 处理。
+   * 调用方在 TODO P1 落地前不应仅依赖此字段——应同时提供 priorMessages 作为降级路径。
+   */
+  previousResponseId?: string;
+}
+
+/**
+ * 构造单轮调用的 messages 数组：system + 可选的回放历史 + 本轮 user。
+ *
+ * - 不传 conversationContext 或 priorMessages 为空时，输出与原 streamNovelModel/
+ *   callStructuredNovelModel 行为完全一致（system+user 两条消息），保证现有调用点零回归。
+ * - previousResponseId 当前不在此函数消费（TODO P1），由调用方在实现 /responses 路由时处理。
+ */
+function buildConversationMessages(params: {
+  system: string;
+  userPrompt: string;
+  conversationContext?: NovelConversationContext;
+}): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: params.system },
+  ];
+  const prior = params.conversationContext?.priorMessages;
+  if (prior && prior.length > 0) {
+    for (const msg of prior) {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+  }
+  messages.push({ role: "user", content: params.userPrompt });
+  return messages;
+}
+
 const MAX_RETRIES = 3;
 // 429/503 限流需要更多重试次数，但退避间隔已大幅缩短（3s/5s/8s/12s/15s）。
 // 原阶梯 30/60/120/180/300s 总退避 690s，新版总退避 43s，显著减少等待时间。
@@ -326,7 +382,11 @@ async function requestChat(params: {
       }
     } catch (error) {
       const maxRetries = getMaxRetries(error);
-      if (!isRetryableError(error) || attempt >= maxRetries - 1) throw error;
+      // attempt 从 0 起算：首次失败 attempt=0，重试到 attempt=maxRetries 时停止。
+      // 这样 maxRetries 即"重试次数（不含首次）"，与 RATE_LIMIT_MAX_RETRIES=5 + 退避数组 5 项对齐：
+      // 限流场景执行 1 次首调 + 5 次重试 = 6 次尝试，退避 3s/5s/8s/12s/15s 总 43s；
+      // 通用错误 1 次首调 + 3 次重试 = 4 次尝试，退避 1s/2s/4s 总 7s。
+      if (!isRetryableError(error) || attempt >= maxRetries) throw error;
       await sleep(getRetryDelay(error, attempt), params.signal);
       attempt += 1;
     }
@@ -343,12 +403,22 @@ export async function streamNovelModel(params: {
   timeoutMs?: number;
   maxTokens?: number;
   onToken?: (text: string) => void;
+  /**
+   * 可选的对话上下文扩展点（审计 Loop 1 扩展点 C）。
+   * 不传或 priorMessages 为空时行为与原版完全一致（system+user 单轮）。
+   */
+  conversationContext?: NovelConversationContext;
 }) {
   const config = getNovelApiConfig();
   if (!config.apiKey) throw new Error("请先在设置中配置 API Key");
   const model = resolveModel(params.model);
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt].filter(Boolean).join("\n\n");
-  assertModelContextLimit({ model, text: `${system}\n${params.prompt}`, override: config.modelContextWindow, outputReserve: params.maxTokens ?? 8192 });
+  const messages = buildConversationMessages({
+    system,
+    userPrompt: params.prompt,
+    conversationContext: params.conversationContext,
+  });
+  assertModelContextLimit({ model, text: messages.map((m) => m.content).join("\n"), override: config.modelContextWindow, outputReserve: params.maxTokens ?? 8192 });
   const signal = createTimeoutSignal(params.timeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS, params.signal);
   let attempt = 0;
   while (true) {
@@ -361,7 +431,7 @@ export async function streamNovelModel(params: {
         model,
         temperature: params.temperature,
         stream: true,
-        messages: [{ role: "system", content: system }, { role: "user", content: params.prompt }],
+        messages,
       };
       if (params.maxTokens && params.maxTokens > 0) {
         requestBody.max_tokens = params.maxTokens;
@@ -407,10 +477,12 @@ export async function streamNovelModel(params: {
       if (!result.trim()) {
         throw new NovelEmptyResponseError(`AI 未返回有效内容（SSE events=${eventCount}, finish=${[...finishReasons].join("|") || "none"}, delta=${[...deltaFields].join("|") || "none"}, outputTokens=${reportedOutputTokens}）`);
       }
-      return { content: result.trim(), promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
+      return { content: result.trim(), promptHash: await hashPrompt(messages.map((m) => m.content).join("\n")) };
     } catch (error) {
       const maxRetries = getMaxRetries(error);
-      if (!isRetryableError(error) || attempt >= maxRetries - 1) throw error;
+      // 同 requestChat：attempt 从 0 起算，重试到 attempt=maxRetries 时停止。
+      // 限流场景 1 次首调 + 5 次重试 = 6 次尝试，退避 3s/5s/8s/12s/15s 总 43s。
+      if (!isRetryableError(error) || attempt >= maxRetries) throw error;
       await sleep(getRetryDelay(error, attempt), signal);
       attempt += 1;
     }
@@ -433,13 +505,32 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
   signal?: AbortSignal;
   timeoutMs?: number;
   maxTokens?: number;
+  /**
+   * 可选的对话上下文扩展点（审计 Loop 1 扩展点 C）。
+   * 不传或 priorMessages 为空时行为与原版完全一致（system+user 单轮）。
+   * 注意：schema 修复重试不携带 conversationContext——修复是独立的 schema 校验循环，
+   * 不应回放对话历史，避免把多轮历史塞进修复 prompt 造成混淆。
+   */
+  conversationContext?: NovelConversationContext;
 }) {
   const system = [SYSTEM_INVARIANTS, ROLE_PROMPTS[params.role], params.skillPrompt, "只输出符合 JSON Schema 的 JSON，不要使用 Markdown 代码围栏。"].filter(Boolean).join("\n\n");
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [{ role: "system", content: system }, { role: "user", content: params.prompt }];
+  const messages = buildConversationMessages({
+    system,
+    userPrompt: params.prompt,
+    conversationContext: params.conversationContext,
+  });
   const model = resolveModel(params.model);
   const validate = new Ajv({ allErrors: true, strict: false }).compile(params.schema as AnySchema);
   const signal = createTimeoutSignal(params.timeoutMs ?? DEFAULT_STRUCTURED_TIMEOUT_MS, params.signal);
-  let response = await requestChat({ ...params, model, signal, messages, responseSchema: params.schema });
+  // 显式构造 requestChat 入参，避免把 conversationContext/schema/prompt 等本函数专用字段透传给底层。
+  let response = await requestChat({
+    model,
+    temperature: params.temperature,
+    messages,
+    signal,
+    responseSchema: params.schema,
+    maxTokens: params.maxTokens,
+  });
   let parsed: Record<string, unknown> | undefined;
   try { parsed = parseJsonContent(response.content); } catch { parsed = undefined; }
   if (!parsed || !validate(parsed)) {
@@ -456,5 +547,5 @@ export async function callStructuredNovelModel<T extends Record<string, unknown>
     }
     if (!parsed || !validate(parsed)) throw new Error(`AI 结构化输出无效：${validate.errors?.map((item) => `${item.instancePath || "root"} ${item.message}`).join("；") ?? "JSON 解析失败"}`);
   }
-  return { data: parsed as T, usage: response.usage, promptHash: await hashPrompt(`${system}\n${params.prompt}`) };
+  return { data: parsed as T, usage: response.usage, promptHash: await hashPrompt(messages.map((m) => m.content).join("\n")) };
 }
