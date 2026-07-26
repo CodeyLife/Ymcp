@@ -38,6 +38,7 @@ import {
   createCheckpoint,
   createChapter,
   deleteChapter,
+  deletePlotThread,
   novelDb,
   recordBase,
   saveDocumentContent,
@@ -61,7 +62,6 @@ import CharacterCard from "@/features/novel/CharacterCard";
 import "@/features/novel/novel.css";
 
 const SkillCenter = lazy(() => import("@/features/novel/SkillCenter"));
-const WorkflowCenter = lazy(() => import("@/features/novel/WorkflowCenter"));
 const FactLedger = lazy(() => import("@/features/novel/FactLedger"));
 const AIWorkbench = lazy(() => import("@/features/novel/AIWorkbench"));
 const RuntimeOperationsPanel = lazy(() => import("@/features/novel/RuntimeOperationsPanel"));
@@ -296,6 +296,15 @@ function ContinuityView({ projectId, type }: { projectId: string; type: "threads
   const threads = useLiveQuery(() => novelDb.plotThreads.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const clues = useLiveQuery(() => novelDb.foreshadowing.where("projectId").equals(projectId).toArray(), [projectId]) ?? [];
   const events = useLiveQuery(() => novelDb.timelineEvents.where("projectId").equals(projectId).sortBy("narrativeOrder"), [projectId]) ?? [];
+  const characters = useLiveQuery(() => novelDb.entities.where("projectId").equals(projectId).and((item) => item.kind === "character").toArray(), [projectId]) ?? [];
+  const { message, modal } = App.useApp();
+  const [threadDraft, setThreadDraft] = useState<PlotThread>();
+  useEffect(() => {
+    if (!threadDraft) return;
+    const current = threads.find((item) => item.id === threadDraft.id);
+    if (!current) setThreadDraft(undefined);
+    else if (current.revision !== threadDraft.revision) setThreadDraft(structuredClone(current));
+  }, [threads, threadDraft?.id]);
   async function add() {
     if (type === "threads") { const item: PlotThread = { ...recordBase(projectId), kind: "subplot", title: "新剧情线", summary: "", status: "planned", priority: 50, participantIds: [], progress: 0, nextMove: "" }; await commitFormalRecordChanges(projectId, [{ collection: "plotThreads", after: item as unknown as Record<string, unknown> }]); }
     if (type === "foreshadowing") { const item: Foreshadowing = { ...recordBase(projectId), title: "新伏笔", clue: "", truth: "", status: "seeded", urgency: 50, notes: "" }; await commitFormalRecordChanges(projectId, [{ collection: "foreshadowing", after: item as unknown as Record<string, unknown> }]); }
@@ -305,9 +314,53 @@ function ContinuityView({ projectId, type }: { projectId: string; type: "threads
     const next = { ...item, ...changes, revision: item.revision + 1, updatedAt: Date.now() };
     await commitFormalRecordChanges(projectId, [{ collection, before: item as unknown as Record<string, unknown>, after: next as unknown as Record<string, unknown> }]);
   }
+  async function saveThread() {
+    if (!threadDraft) return;
+    const current = await novelDb.plotThreads.get(threadDraft.id);
+    if (!current) {
+      setThreadDraft(undefined);
+      message.error("剧情线已不存在");
+      return;
+    }
+    const title = threadDraft.title.trim();
+    if (!title) {
+      message.warning("请填写剧情线标题");
+      return;
+    }
+    const editableKeys: Array<keyof Pick<PlotThread, "kind" | "title" | "summary" | "status" | "priority" | "participantIds" | "progress" | "nextMove">> = ["kind", "title", "summary", "status", "priority", "participantIds", "progress", "nextMove"];
+    const fieldChanges = Object.fromEntries(editableKeys.filter((key) => JSON.stringify(current[key]) !== JSON.stringify(threadDraft[key])).map((key) => [key, { before: current[key], after: threadDraft[key] }]));
+    if (!Object.keys(fieldChanges).length) {
+      setThreadDraft(undefined);
+      return;
+    }
+    await commitFormalRecordChanges(projectId, [{
+      collection: "plotThreads",
+      before: current as unknown as Record<string, unknown>,
+      after: { ...current, ...threadDraft, title, revision: current.revision + 1, updatedAt: Date.now(), updatedBy: current.updatedBy } as unknown as Record<string, unknown>,
+      fieldChanges,
+    }]);
+    setThreadDraft(undefined);
+    message.success("剧情线已保存");
+  }
+  function confirmDeleteThread(thread: PlotThread) {
+    modal.confirm({
+      title: `删除“${thread.title}”？`,
+      content: "相关章节和场景将解除这条剧情线的引用。",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        await deletePlotThread(thread.id);
+        if (threadDraft?.id === thread.id) setThreadDraft(undefined);
+        message.success("剧情线已删除");
+      },
+    });
+  }
   const title = type === "threads" ? "剧情线" : type === "foreshadowing" ? "伏笔管理" : "故事时间线";
   return <div className="novel-view-content"><SectionTitle eyebrow="CONTINUITY" title={title} description="把跨章节变化从记忆负担变成可追踪的连续性数据。" action={<Button type="primary" icon={<PlusOutlined />} onClick={() => void add()}>新增</Button>} />
-    {type === "threads" && <div className="novel-continuity-list">{threads.map((item) => <article key={`${item.id}:${item.revision}`}><div className="novel-continuity-marker"><span>{item.kind.slice(0, 1).toUpperCase()}</span></div><div><Input variant="borderless" defaultValue={item.title} onBlur={(event) => void updateRecord("plotThreads", item, { title: event.target.value })} /><Input.TextArea variant="borderless" autoSize defaultValue={item.summary} placeholder="这条剧情线在解决什么问题？" onBlur={(event) => void updateRecord("plotThreads", item, { summary: event.target.value })} /><Input variant="borderless" addonBefore="下一步" defaultValue={item.nextMove} onBlur={(event) => void updateRecord("plotThreads", item, { nextMove: event.target.value })} /></div><div><Tag>{item.status}</Tag><Progress type="circle" size={54} percent={item.progress} /></div></article>)}</div>}
+    {type === "threads" && <div className="novel-continuity-list">{threads.map((item) => {
+      const editing = threadDraft?.id === item.id;
+      const draft = editing ? threadDraft : item;
+      return <article key={item.id} className={editing ? "is-editing" : ""}><div className="novel-continuity-marker"><span>{draft.kind.slice(0, 1).toUpperCase()}</span></div><div className="novel-continuity-content">{editing ? <><Input value={draft.title} placeholder="剧情线标题" onChange={(event) => setThreadDraft({ ...draft, title: event.target.value })} /><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} value={draft.summary} placeholder="这条剧情线在解决什么问题？" onChange={(event) => setThreadDraft({ ...draft, summary: event.target.value })} /><Input value={draft.nextMove} addonBefore="下一步" placeholder="下一步如何推进" onChange={(event) => setThreadDraft({ ...draft, nextMove: event.target.value })} /><div className="novel-continuity-edit-fields"><Select value={draft.kind} options={["main", "subplot", "romance", "growth", "mystery", "antagonist", "conspiracy"].map((value) => ({ value, label: value }))} onChange={(kind: PlotThread["kind"]) => setThreadDraft({ ...draft, kind })} /><Select value={draft.status} options={["planned", "active", "paused", "resolved", "abandoned"].map((value) => ({ value, label: value }))} onChange={(status: PlotThread["status"]) => setThreadDraft({ ...draft, status })} /><InputNumber value={draft.priority} min={0} max={100} addonBefore="优先级" onChange={(priority) => setThreadDraft({ ...draft, priority: priority ?? 0 })} /><InputNumber value={draft.progress} min={0} max={100} addonBefore="进度" onChange={(progress) => setThreadDraft({ ...draft, progress: progress ?? 0 })} /><Select mode="multiple" value={draft.participantIds} placeholder="参与角色" options={characters.map((character) => ({ value: character.id, label: character.name }))} onChange={(participantIds) => setThreadDraft({ ...draft, participantIds })} /></div></> : <><strong>{item.title}</strong><p>{item.summary || "等待补充剧情线摘要"}</p><small>下一步：{item.nextMove || "等待确定下一步动作"}</small></>}</div><div className="novel-continuity-meta">{editing ? <><Tooltip title="保存剧情线"><Button aria-label="保存剧情线" type="primary" icon={<SaveOutlined />} onClick={() => void saveThread()} /></Tooltip><Tooltip title="取消编辑"><Button aria-label="取消编辑" onClick={() => setThreadDraft(undefined)}>取消</Button></Tooltip></> : <><Tag>{item.status}</Tag><Progress type="circle" size={54} percent={item.progress} /><Tooltip title="编辑剧情线"><Button aria-label="编辑剧情线" type="text" icon={<EditOutlined />} onClick={() => setThreadDraft(structuredClone(item))} /></Tooltip><Tooltip title="删除剧情线"><Button aria-label="删除剧情线" danger type="text" icon={<DeleteOutlined />} onClick={() => confirmDeleteThread(item)} /></Tooltip></>}</div></article>;
+    })}</div>}
     {type === "foreshadowing" && <div className="novel-clue-table"><div className="head"><span>伏笔</span><span>线索</span><span>真相</span><span>状态</span><span>紧迫度</span></div>{clues.map((item) => <div key={`${item.id}:${item.revision}`}><Input variant="borderless" defaultValue={item.title} onBlur={(event) => void updateRecord("foreshadowing", item, { title: event.target.value })} /><Input variant="borderless" defaultValue={item.clue} placeholder="读者看到什么" onBlur={(event) => void updateRecord("foreshadowing", item, { clue: event.target.value })} /><Input variant="borderless" defaultValue={item.truth} placeholder="背后的真相" onBlur={(event) => void updateRecord("foreshadowing", item, { truth: event.target.value })} /><Select variant="borderless" value={item.status} onChange={(status) => void updateRecord("foreshadowing", item, { status })} options={["seeded", "reminded", "misdirected", "advanced", "revealed", "resolved", "abandoned"].map((value) => ({ value }))} /><Progress percent={item.urgency} size="small" /></div>)}</div>}
     {type === "timeline" && <div className="novel-timeline">{events.map((item, index) => <article key={`${item.id}:${item.revision}`}><div><span>{String(index + 1).padStart(2, "0")}</span></div><section><Input variant="borderless" defaultValue={item.storyDate} onBlur={(event) => void updateRecord("timelineEvents", item, { storyDate: event.target.value })} /><Input variant="borderless" defaultValue={item.title} onBlur={(event) => void updateRecord("timelineEvents", item, { title: event.target.value })} /><Input.TextArea variant="borderless" autoSize defaultValue={item.description} placeholder="事件经过、原因与结果" onBlur={(event) => void updateRecord("timelineEvents", item, { description: event.target.value })} /></section><ClockCircleOutlined /></article>)}</div>}
     {((type === "threads" && threads.length === 0) || (type === "foreshadowing" && clues.length === 0) || (type === "timeline" && events.length === 0)) && <EmptyPanel title={`还没有${title}`} description="新增一条记录，开始追踪跨章节连续性。" />}
@@ -456,8 +509,8 @@ function WritingWorkspace({ projectId, documents, selectedDocument, onSelectDocu
     setDraggedId(undefined);
   }
   const chapterList = <aside className="novel-chapter-list"><header><div><span>章节</span><strong>章节管理</strong><small>{documents.length} 章 · 拖动可排序</small></div><Tooltip title="新增待整理章节"><Button aria-label="新增章节" type="text" icon={<PlusOutlined />} onClick={async () => { const chapter = await createChapter(projectId); onSelectDocument(chapter.id); }} /></Tooltip></header>{documents.map((doc) => <div className={`novel-chapter-row${selectedDocument?.id === doc.id ? " active" : ""}`} key={doc.id} draggable onDragStart={() => setDraggedId(doc.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void dropChapter(doc.id)}><button onClick={() => onSelectDocument(doc.id)}><span>{String(doc.order + 1).padStart(2, "0")}</span><div><strong>{doc.title}</strong><small>{doc.wordCount.toLocaleString()} 字 · {DOCUMENT_STATUS_LABEL[doc.status]}</small></div></button><div><Tooltip title="上移章节"><Button aria-label="上移章节" type="text" icon={<ArrowUpOutlined />} onClick={() => void moveChapter(doc, -1)} /></Tooltip><Tooltip title="下移章节"><Button aria-label="下移章节" type="text" icon={<ArrowDownOutlined />} onClick={() => void moveChapter(doc, 1)} /></Tooltip><Tooltip title="删除章节"><Button aria-label="删除章节" danger type="text" icon={<DeleteOutlined />} onClick={() => modal.confirm({ title: `删除“${doc.title}”？`, content: "本章场景、正文版本和章节流程将一并删除，所属剧情段会保留。", okButtonProps: { danger: true }, onOk: async () => { if (selectedDocument?.id === doc.id) { onSelectDocument(documents.find((item) => item.id !== doc.id)?.id ?? ""); await new Promise((resolve) => setTimeout(resolve, 0)); } await deleteChapter(doc.id); } })} /></Tooltip></div></div>)}{!documents.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无章节，请在全书规划中建立剧情段与章节" />}</aside>;
-  const content = mode === "manuscript" ? <div className="novel-manuscript-with-command"><GenerationComposer projectId={projectId} scope="writing" targetId={selectedDocument?.id} taskKeys={["chapter-draft"]} actionLabel="生成正文草稿" compact /><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div> : <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载章节流程</span></div>}><WorkflowCenter projectId={projectId} document={selectedDocument} /></Suspense>;
-  return <div className="novel-writing-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "manuscript", label: "正文编辑" }, { value: "workflow", label: "自动流程" }]} /></div><div className="novel-writing-body">{chapterList}{content}</div></div>;
+  const content = mode === "manuscript" ? <div className="novel-manuscript-with-command"><GenerationComposer projectId={projectId} scope="writing" targetId={selectedDocument?.id} taskKeys={["chapter-draft"]} actionLabel="生成正文草稿" compact /><ChapterEditor document={selectedDocument} onSaved={() => undefined} /></div> : <Suspense fallback={<div className="novel-studio-loading"><Spin /><span>加载统一章节流程</span></div>}><RuntimeOperationsPanel projectId={projectId} document={selectedDocument} compact /></Suspense>;
+  return <div className="novel-writing-workspace"><div className="novel-workspace-tabs"><Segmented value={mode} onChange={(value) => setMode(value as typeof mode)} options={[{ value: "manuscript", label: "正文编辑" }, { value: "workflow", label: "统一流程" }]} /></div><div className="novel-writing-body">{chapterList}{content}</div></div>;
 }
 
 function LibraryWorkspace({ projectId }: { projectId: string }) {

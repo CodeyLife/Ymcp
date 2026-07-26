@@ -30,7 +30,7 @@ const externalReviewSchema = z.object({
   learning: z.discriminatedUnion("conclusion", [
     z.object({ conclusion: z.literal("no-shared-learning"), summary: z.string().min(1) }).strict(),
     z.object({ conclusion: z.literal("propose-improvement"), summary: z.string().min(1), affectedInputClass: z.string().min(1), underlyingMechanism: z.string().min(1), proposal: learningProposalSchema }).strict(),
-  ]),
+  ]).describe("审核经验沉淀判定。仅当证据指向共享 Skill、系统 Prompt 或流程机制的共享缺陷时提交 propose-improvement，偶发内容失误或项目特有事实返回 no-shared-learning。提交前必须先用 novel_learning_target_get 读取并绑定 targetVersion、targetContentFingerprint 与当前全文，再提交完整 afterText（保留无关内容后的完整规则全文，不是 diff）、根因范围（underlyingMechanism/affectedInputClass）与回归风险。架构层硬约束违规（turningPoint 不可逆性、ecological 曲线独立性、反馈链步数、伏笔日常化等）可归因于 foundation-craft-guidance（system-prompt）；章节正文与审校问题可归因于对应阶段的 skill 或 system-prompt。"),
 });
 
 function resultContent(value, isError = false) {
@@ -136,17 +136,30 @@ export function createCreativeMcpServer(options = {}) {
     const status = await runtimeRequest(`/v1/projects/${encodeURIComponent(project.id)}/status`, { signal: extra.signal });
     return { project, ...status };
   });
+  // novel_plan 单独注册：plan 类 operation 用 taskKey 标识规划子任务类别
+  //（project-positioning/architecture/story-bible/characters/relations/worldview），
+  // 不再用 target 字段塞入类别标识——target 语义应保留给 write/revise 的章节定位。
+  // taskKey 同时是 UI 识别"全书架构候选"并跳转结构化审阅的依据，缺失会导致候选无法被正确分类。
+  register("novel_plan", { description: "按目标规划小说；运行在后台，每一步形成待确认候选。taskKey 标识本次规划的子任务类别，UI 会根据它决定候选的审阅入口（architecture/project-positioning 进入全书架构结构化审阅，其他进入 Markdown 预览）。", inputSchema: { projectRef: projectRefSchema, instruction: z.string().min(1), taskKey: z.enum(["project-positioning", "architecture", "story-bible", "characters", "relations", "worldview"]) } }, async (args, extra) => {
+    const project = await resolveProject(args.projectRef, extra.signal);
+    const payload = await runtimeRequest("/v1/operations", { body: { projectId: project.id, kind: "plan", instruction: args.instruction, taskKey: args.taskKey, driver: "external-mcp" }, requestKey: requestKey(sessionId, extra, "novel_plan"), signal: extra.signal });
+    return { project, ...payload };
+  });
   for (const [name, kind, description] of [
-    ["novel_plan", "plan", "按目标规划小说；运行在后台，每一步形成待确认候选。"],
     ["novel_write", "write", "写作指定章节或下一章；返回持久化 operation，断开 MCP 后仍继续。"],
     ["novel_revise", "revise", "根据要求修订指定章节；先生成候选，不直接覆盖正式稿。"],
   ]) {
-    register(name, { description, inputSchema: { projectRef: projectRefSchema, instruction: z.string().min(1), target: kind === "plan" ? z.string().optional() : z.string().default("next") } }, async (args, extra) => {
+    register(name, { description, inputSchema: { projectRef: projectRefSchema, instruction: z.string().min(1), target: z.string().default("next") } }, async (args, extra) => {
       const project = await resolveProject(args.projectRef, extra.signal);
       const payload = await runtimeRequest("/v1/operations", { body: { projectId: project.id, kind, instruction: args.instruction, target: args.target, driver: "external-mcp" }, requestKey: requestKey(sessionId, extra, name), signal: extra.signal });
       return { project, ...payload };
     });
   }
+  register("novel_chapter_review", { description: "对已定稿章节启动审校优化工作流：从 review 阶段半截启动，复用正式生成的 review→revision→commit 闭环（含 fact-extraction 与 chapter memory）。前置条件：章节 status=final、无活跃工作流、存在历史 blueprint。instruction 可指定审核重点（如「文风一致性」「感情线推进」），省略则默认严苛读者视角审校与文案优化。\n\nexternalDraft 支持外部 LLM 主动重写章节正文——提供时 draft artifact 用此内容替代 document.plainText，走标准 review→revision→commit 闭环审核重写质量，不直接覆盖正式稿。这是 chapter 层'外部 LLM 主动重写'工作方式的核心入口：外部 LLM 审核原章节后可自行决定走哪条路径——(1) 不提供 externalDraft，让原流程 review→revision 修订；(2) 提供 externalDraft 自己重写正文，让 review-stage 审核重写质量（若有 issues 则 revision-stage 基于重写版本修订，若达标则 commit）；(3) 直接 accept 原章节不改。选择基于 issues 性质：结构性问题/文风调整/内容深度不足时提供 externalDraft 自己改，小问题让原流程修订。", inputSchema: { projectRef: projectRefSchema, documentId: z.string().min(1), instruction: z.string().optional(), externalDraft: z.string().optional(), blocking: z.boolean().optional() } }, async (args, extra) => {
+    const project = await resolveProject(args.projectRef, extra.signal);
+    const payload = await runtimeRequest("/v1/advanced", { body: { tool: "novel_chapter_review", args: { projectId: project.id, documentId: args.documentId, instruction: args.instruction, externalDraft: args.externalDraft, blocking: args.blocking } }, requestKey: requestKey(sessionId, extra, "chapter-review"), signal: extra.signal });
+    return { project, ...payload };
+  });
   register("novel_operation_get", { description: "读取 operation、当前候选和增量事件。", inputSchema: { operationId: z.string().min(1), afterSequence: z.number().int().nonnegative().optional() } }, async (args, extra) => {
     const payload = await runtimeRequest(`/v1/operations/${encodeURIComponent(args.operationId)}?afterSequence=${args.afterSequence ?? 0}`, { signal: extra.signal });
     if (activeProjectId && payload.operation.projectId !== activeProjectId) throw new Error("operation 不属于当前 MCP 项目");
@@ -175,11 +188,11 @@ export function createCreativeMcpServer(options = {}) {
     if (payload.change.projectId !== project.id) throw new Error("候选变更不属于当前 MCP 项目");
     return runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}/revalidate`, { body: { projectId: project.id, artifactFingerprint: args.artifactFingerprint, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "change-revalidate"), signal: extra.signal });
   });
-  register("novel_change_patch", { description: "对定位明确的小问题修改 pending proposal item。expectedPayloadFingerprint 必须取自 change_get.itemPayloadFingerprints[itemId]；补丁后必须重新校验并外审。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), itemId: z.string().min(1), artifactFingerprint: z.string().length(64), expectedPayloadFingerprint: z.string().length(64), payload: z.record(z.string(), z.unknown()), rationale: z.string().min(1), issueIds: z.array(z.string().min(1)).min(1), review: externalReviewSchema, reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
+  register("novel_change_patch", { description: "外部 LLM 主动修改 pending proposal item 的 payload——支持局部小问题 patch 与整候选重写两种模式。expectedPayloadFingerprint 必须取自 change_get.itemPayloadFingerprints[itemId]；补丁后必须重新校验并外审。\n\n工作方式选择指引（基于审核 issues 性质自行决定）：\n- 局部 patch（字段级 typo / 单个结构缺失 / 局部数值调整）：修改 item 的特定字段，保留 payload 主体结构\n- 整候选重写（结构性问题 / 多字段联动重构 / 内容深度不足需重新组织）：替换 item 的整个 payload，但必须保留 issues 未要求删除的结构强项（如已通过审核的 powerCenters/phases/romanceProgress 等），不得以重写为由丢弃前序已通过审核的有效内容\n- 让原流程重生成（需要 LLM 创意重做 / issues 涉及创作方向而非结构修补）：改用 novel_change_review 提交 revise decision\n\n本工具是'外部 LLM 主动修改'工作方式的核心入口——外部 LLM 审核候选后可自行决定走 patch（自己改）或 review.revise（让原流程改），形成'外部 LLM 审核→外部 LLM 修改→外部 LLM 再审核'闭环。patch 后 change 仍 pending，必须 revalidate 后再审核。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), itemId: z.string().min(1), artifactFingerprint: z.string().length(64), expectedPayloadFingerprint: z.string().length(64), payload: z.record(z.string(), z.unknown()), rationale: z.string().min(1), issueIds: z.array(z.string().min(1)).min(1), review: externalReviewSchema, reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
     const project = await resolveProject(args.projectRef, extra.signal);
     return runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}/patch`, { body: { projectId: project.id, itemId: args.itemId, artifactFingerprint: args.artifactFingerprint, expectedPayloadFingerprint: args.expectedPayloadFingerprint, payload: args.payload, rationale: args.rationale, issueIds: args.issueIds, review: args.review, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "change-patch"), signal: extra.signal });
   });
-  register("novel_change_review", { description: "提交当前完整候选的独立外部审核，并选择 accept 或 regenerate。accept 同时要求项目内部审核通过；不得用此工具跳过补丁后的重新校验。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), decision: z.enum(["accept", "revise"]), note: z.string().optional(), review: externalReviewSchema, reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
+  register("novel_change_review", { description: "提交当前完整候选的独立外部审核，并选择 accept 或 revise。accept 同时要求项目内部审核通过；不得用此工具跳过补丁后的重新校验。review.learning 用于经验沉淀：仅当证据指向共享 Skill、系统 Prompt 或流程机制缺陷时提交 propose-improvement，先用 novel_learning_target_get 绑定基线再提交完整 afterText；架构硬约束违规可归因于 foundation-craft-guidance。\n\n工作方式选择指引（审核后基于 issues 性质自行决定走哪条修复路径，形成'审核→修改→再审核'闭环）：\n- accept：issues 全部为 warning 或无 issues，候选质量达标\n- review.revise（让原流程重生成）：issues 涉及创作方向、内容深度、需要 LLM 创意重做（如情节重构、人物深化、文风调整）——把 issues 通过 review.issues 提交，原 LLM 会基于 formatReviewIssuesForInstruction 注入的定向反馈重生成\n- novel_change_patch（外部 LLM 自己改）：issues 是字段级问题、结构性缺失、数值调整，外部 LLM 能明确定义修复后的 payload（如补充缺失的 romanceProgress/techGeneration 字段、修正 feedbackLoops 引用、调整 phase 数量）——先提交 review.verdict=revise + issues，再调用 novel_change_patch 用新 payload 替换 item.payload\n- novel_operation_retry：候选生成失败（HTTP 5xx / upstream_error），需要重试\n\n判定原则：当 issues 性质是'外部 LLM 能直接写出修复后的内容'时优先用 novel_change_patch 自己改（更快、更精准、避免原 LLM 非确定性退步）；当 issues 性质是'需要 LLM 创意重做'时用 review.revise 让原流程改。两种路径都形成闭环，选择基于 issues 性质而非固定流程。", inputSchema: { projectRef: projectRefSchema, changeId: z.string().min(1), decision: z.enum(["accept", "revise"]), note: z.string().optional(), review: externalReviewSchema, reviewerId: z.string().min(1), model: z.string().min(1) } }, async (args, extra) => {
     const project = await resolveProject(args.projectRef, extra.signal);
     return runtimeRequest(`/v1/changes/${encodeURIComponent(args.changeId)}/review`, { body: { projectId: project.id, decision: args.decision, note: args.note, review: args.review, actor: { type: "external-llm", id: args.reviewerId, model: args.model } }, requestKey: requestKey(sessionId, extra, "change-review"), signal: extra.signal });
   });

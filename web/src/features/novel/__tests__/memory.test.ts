@@ -71,3 +71,37 @@ describe("hierarchical memory lifecycle", () => {
     expect((await novelDb.derivedMemories.get(sequence.id))?.status).toBe("stale");
   });
 });
+
+// F-019 回归测试：invalidateMemoryAncestors 的 BFS 传播链中存在已 superseded 的中间节点时，
+// 该节点不应被重写为 stale。superseded 表示"已被新版本取代、保留为历史"，
+// 重写为 stale 会丢失取代关系审计链并误导后续整合判断。
+describe("F-019: invalidateMemoryAncestors preserves superseded memories", () => {
+  it("does not rewrite superseded memories to stale during BFS propagation", async () => {
+    const project = await createNovelProject({ title: "superseded 保留", genre: ["悬疑"], premise: "测试 superseded 记忆不被重写。" });
+    const hierarchy = await seedHierarchy(project.id);
+    const chapter = await createChapter(project.id, "第一章");
+    await assignChapterToSequence(chapter.id, hierarchy.sequence.id);
+    const approved = await saveApprovedDocumentRevision({ ...chapter, primaryNarrativeUnitId: hierarchy.sequence.id, plainText: "正文", contentHtml: "<p>正文</p>", wordCount: 2, status: "review" }, "批准", "ai");
+    const leaf = await createChapterMemory({ projectId: project.id, documentId: chapter.id, sourceRevisionId: approved.revision.id, summary: "章节摘要" });
+    const sequence = await consolidateDerivedMemory({ projectId: project.id, level: "sequence", narrativeUnitId: hierarchy.sequence.id, sourceMemoryIds: [leaf.id], summary: "序列摘要" });
+
+    // 模拟 sequence 被新版本取代（superseded）
+    const sequenceMemory = await novelDb.derivedMemories.get(sequence.id);
+    expect(sequenceMemory).toBeDefined();
+    await novelDb.derivedMemories.update(sequence.id, {
+      status: "superseded",
+      validation: { passed: true, issues: [], checkedAt: Date.now() },
+    });
+
+    // 触发 leaf 失效传播：BFS 应跳过 superseded 的 sequence，不重写为 stale
+    await saveApprovedDocumentRevision({ ...approved.document, plainText: "新正文", contentHtml: "<p>新正文</p>", wordCount: 3 }, "重新批准", "manual");
+
+    // leaf 应被重写为 stale（它本身不是 superseded）
+    expect((await novelDb.derivedMemories.get(leaf.id))?.status).toBe("stale");
+    // sequence 应保持 superseded 状态，不被重写为 stale
+    const sequenceAfter = await novelDb.derivedMemories.get(sequence.id);
+    expect(sequenceAfter?.status).toBe("superseded");
+    // superseded 记忆的 validation.issues 应保持空数组，不应被写入"下层来源已变化"误导信息
+    expect(sequenceAfter?.validation.issues).toEqual([]);
+  });
+});

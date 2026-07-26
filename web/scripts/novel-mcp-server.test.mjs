@@ -41,6 +41,7 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   const listed = await client.listTools();
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
     "novel_agent_guide_get", "novel_autopilot_get", "novel_change_get", "novel_change_patch", "novel_change_revalidate", "novel_change_review",
+    "novel_chapter_review",
     "novel_improvement_evaluate", "novel_improvement_get", "novel_improvement_promote", "novel_improvement_propose", "novel_improvement_review", "novel_improvement_rollback",
     "novel_learning_target_get",
     "novel_operation_get", "novel_operation_retry", "novel_plan", "novel_project_create", "novel_project_list", "novel_project_select", "novel_revise", "novel_status", "novel_write",
@@ -86,9 +87,10 @@ test("default MCP exposes only intent-level tools and works without a browser", 
   assert.equal(inspected.candidate.scope.failingLayer, "共享事实门禁");
   assert.ok(inspected.gate.reasons.some((reason) => /真实基线/.test(reason)));
 
-  const operation = text(await client.callTool({ name: "novel_plan", arguments: { instruction: "建立完整故事规划" } }));
+  const operation = text(await client.callTool({ name: "novel_plan", arguments: { instruction: "建立完整故事规划", taskKey: "architecture" } }));
   assert.equal(operation.operation.projectId, created.project.id);
   assert.equal(operation.operation.driver, "external-mcp");
+  assert.equal(operation.operation.input.taskKey, "architecture");
   assert.equal(operation.operation.reviewPolicy.mode, "external-review");
   assert.equal(operation.operation.improvementPolicy.mode, "agent-proposable");
   assert.equal(operation.operation.reviewPolicy.maxIterations, null);

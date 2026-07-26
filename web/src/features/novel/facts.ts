@@ -307,7 +307,11 @@ export function classifyFactRisk(fact: ExtractedFact): Pick<FactCandidate, "risk
   if (fact.truthStatus && fact.truthStatus !== "objective") return { risk: "high", riskReason: "陈述、争议或开放谜题必须人工确认" };
   if (fact.knowledgeDeltas?.length) return { risk: "high", riskReason: "角色认知变化必须人工确认" };
   // 新人物新建：kind=character 的 entity 新建，字段形态合法且置信度足够时走 safe
-  if (fact.novelty === "new" && fact.targetTable === "entities" && fact.field === "record") {
+  // F-018 修复：追加 !fact.targetId 守卫。原条件只检查 novelty=new + field=record，
+  // 当 LLM 违反"新人物新建时 targetId 省略"输出带 targetId 的矛盾候选时，classifyFactRisk 仍判 safe，
+  // 但 commitAcceptedFacts 会因 targetId 存在走更新路径，applyField 写入 entity.record 这一虚拟字段，
+  // 导致 entity 静默腐化。追加 !fact.targetId 让矛盾组合落入下方 high 分支，需人工确认。
+  if (fact.novelty === "new" && !fact.targetId && fact.targetTable === "entities" && fact.field === "record") {
     const payload = fact.after as Record<string, unknown> | undefined;
     if (payload && typeof payload === "object" && !Array.isArray(payload) && payload.kind === "character" && typeof payload.name === "string" && payload.name.trim()) {
       if (fact.confidence < 0.9) return { risk: "high", riskReason: "新人物提取置信度不足 90%" };
@@ -803,6 +807,14 @@ export async function commitAcceptedFacts(projectId: string, workflowRunId: stri
     }
     if (current.projectId !== projectId) {
       skip(candidate, `update-target-project-mismatch:${candidate.targetTable}:${targetId}`);
+      continue;
+    }
+    // F-018 修复：field=record 是"整条记录创建"的虚拟字段，语义上不能作为单字段更新。
+    // 当 LLM 输出 novelty=new+targetId+field=record 的矛盾组合时（classifyFactRisk 已降为 high，
+    // 但人工确认后仍会进入此路径），applyField 会写入 entity.record 这一不存在的虚拟字段，
+    // Dexie 无 schema 约束会持久化该字段，导致 entity 静默腐化。防御性 skip 阻止该写入。
+    if (candidate.field === "record") {
+      skip(candidate, "update-record-field-not-allowed");
       continue;
     }
     const next = applyField(current, candidate.field, candidate.after);

@@ -37,19 +37,28 @@ export interface GenerationTaskDefinition {
   refinable?: boolean;
 }
 
+// 标题文学性共享约束（书名与章节标题复用同一规则）。
+// 根因：直陈式命名把故事核心机制/职业/技术名词直接搬进标题，丢失隐喻空间与文学意境。
+// 通用规则，适用任意题材：标题须通过文学手法指向主题，而非直陈故事机制；
+// 具体手法（典籍化用/现代意象/科幻隐喻/悬疑双关）由项目题材与文风决定，不在本层硬编码。
+const NAMING_LITERARY_CONSTRAINT = `【标题文学性约束】书名与章节标题须通过隐喻、意象、对偶、双关或化用等文学手法指向主题，不得直陈故事核心机制、职业、技术名词或事件摘要作为标题主体。
+- 标题须能独立成趣，有韵律感与回味空间；与项目设定的文风、时代、地域保持一致——古风/历史题材可化用典籍诗词，都市/现代题材用当代意象，科幻/悬疑题材用未来感隐喻或双关，不得跨题材套用不属当时代的词汇。
+- 章节标题禁止"第X章：事件摘要"式纯说明性白话；须让标题成为本章的意境落点或情感锚点，而非功能标签。
+- 判定标准：(a) 若把标题替换为事件摘要后读者感受不变，则违规；(b) 若标题只是把故事核心机制/职业/技术名词直接搬上去而缺乏隐喻转化，则违规。改写路径：保留主题内核，寻找能承载该内核的意象、典故或对偶结构。`;
+
 const TASKS: GenerationTaskDefinition[] = [
-  { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: "根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。", refinable: true },
-  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成与项目体量相称、可持续展开的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。每个阶段的 turningPoint 字段必须用文学化叙事书写，同时落到具体资源控制、秘密公开、组织裂变或关系承诺的不可逆变化；不得只写抽象感悟，也不得写成\"接下来会发生什么\"的事件预告。\n\n【架构层硬约束】(1) 多权力中心：权力网络容量必须与项目体量相称；百万字长篇至少包含 5 个独立权力中心（不限于商界/政界/武林/朝廷/家族/宗教/超自然势力/技术集团，依题材而定），每个权力中心有自己的利益、资源、行动能力与底线，能独立推动剧情——不可全部围绕主角或单一反派。权力中心之间至少存在一组非二元对立关系（既有合作又有冲突），避免简单正邪分明的阵营结构。(2) 跨组织反馈：百万字长篇至少包含 3 条反馈链，写明触发条件、跨中心传导步骤、受影响中心与故事压力；affectedCenters 必须引用已建模中心的 id 或准确名称。(3) 长线伏笔钩子：百万字长篇至少留出 3 条可在后续百章缓慢发酵的长线伏笔钩子，以日常细节形态埋设，不自我标榜；其回收路径不得在架构阶段就被锁死单一解释，affectedCenters 同样必须闭合引用。(4) 张力线交织：架构中的多条张力线（主线/支线/对抗线/共谋线/感情线等）必须通过共享人物、资源、秘密或选择相互改变，不得只是平行推进。(5) 第二增长曲线（结构化字段强制）：百万字长篇必须有至少 2 条独立增长曲线，必须在 payload.growthCurves 数组中显式声明——1 条 kind=\"main\"（主线增长曲线）+ 至少 1 条 kind=\"ecological\"（生态增长曲线）。每条曲线必须填写：subject（生态主体，如权力生态、商业生态、制度生态、修炼体系、江湖格局、社会变革、行业演化等，依题材而定）、resourceLoop（资源循环——此曲线运转所依赖的资源获取/流转/消耗机制）、stageGoals（此曲线在架构各阶段的推进目标）、irreversibleChange（此曲线结束时世界已回不去的结构性变化）。ecological 曲线的四个字段必须独立于主线主角命运——判定标准：若删除主线后，该 ecological 曲线能否独立支撑至少一个阶段的推进？若不能，则重构。每个 phase 的 primaryCurveId 必须引用 growthCurves[].id，标注此阶段主要由哪条曲线推进；至少 1 个 phase 的 primaryCurveId 必须引用 ecological 曲线（即至少一个阶段主要由生态曲线推进，而非全部围绕主线）。若作品涉及感情线，架构层的感情阶段绑定与多权力中心约束见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
-  { key: "plot-design", label: "设计剧情段与章节", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "documents"], defaultInstruction: "在选中的幕下设计一个剧情段及其章节。章节数量由剧情段需要承载的独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报共同决定，不按固定范围凑数或压缩。若剧情段跨越多种功能或强度，应安排行动、余波、蓄势、兑现等有差异的呼吸；若它本身是单一过渡、完整高潮、短促插曲或实验性结构，则服从该功能，不强制补入低强度章。每章都必须有不可替代的叙事职责和清晰落点。" },
+  { key: "project-positioning", label: "完善项目定位", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["projects"], defaultInstruction: `根据核心创意完善题材定位、目标读者、主题、卖点、叙事视角、基调和语言风格。${NAMING_LITERARY_CONSTRAINT}`, refinable: true },
+  { key: "architecture", label: "生成全书架构", scope: "architecture", role: "architect", skillStage: "foundation", allowedTables: ["architectures"], defaultInstruction: "为长篇生成与项目体量相称、可持续展开的全书架构。先勾勒人物处境、世态背景与情感底色，再由此自然引出贯穿全书的张力线与阶段流向；核心问题与冲突应藏在人物境遇与选择里，而非作为主题宣告直白写出。每个阶段的 turningPoint 字段必须用文学化叙事书写，同时落到具体资源控制、秘密公开、组织裂变或关系承诺的不可逆变化；不得只写抽象感悟，也不得写成\"接下来会发生什么\"的事件预告。\n\n【架构层硬约束】(1) 多权力中心：权力网络容量必须与项目体量相称；百万字长篇至少包含 5 个独立权力中心（不限于商界/政界/武林/朝廷/家族/宗教/超自然势力/技术集团，依题材而定），每个权力中心有自己的利益、资源、行动能力与底线，能独立推动剧情——不可全部围绕主角或单一反派。权力中心之间至少存在一组非二元对立关系（既有合作又有冲突），避免简单正邪分明的阵营结构。(2) 跨组织反馈：百万字长篇至少包含 3 条反馈链，写明触发条件、跨中心传导步骤、受影响中心与故事压力；affectedCenters 必须引用已建模中心的 id 或准确名称。(3) 长线伏笔钩子：百万字长篇至少留出 3 条可在后续百章缓慢发酵的长线伏笔钩子，以日常细节形态埋设，不自我标榜；其回收路径不得在架构阶段就被锁死单一解释，affectedCenters 同样必须闭合引用。(4) 张力线交织：架构中的多条张力线（主线/支线/对抗线/共谋线/感情线等）必须通过共享人物、资源、秘密或选择相互改变，不得只是平行推进。(5) 第二增长曲线（结构化字段强制）：百万字长篇必须有至少 2 条独立增长曲线，必须在 payload.growthCurves 数组中显式声明——1 条 kind=\"main\"（主线增长曲线）+ 至少 1 条 kind=\"ecological\"（生态增长曲线）。每条曲线必须填写：subject（生态主体，如权力生态、商业生态、制度生态、修炼体系、江湖格局、社会变革、行业演化等，依题材而定）、resourceLoop（资源循环——此曲线运转所依赖的资源获取/流转/消耗机制）、stageGoals（此曲线在架构各阶段的推进目标）、irreversibleChange（此曲线结束时世界已回不去的结构性变化）。ecological 曲线的四个字段必须独立于主线主角命运——判定标准：若删除主线后，该 ecological 曲线能否独立支撑至少一个阶段的推进？若不能，则重构。每个 phase 的 primaryCurveId 必须引用 growthCurves[].id，标注此阶段主要由哪条曲线推进；至少 1 个 phase 的 primaryCurveId 必须引用 ecological 曲线（即至少一个阶段主要由生态曲线推进，而非全部围绕主线）。(6) 穿插节奏约束：架构层应规划剧情段之间的穿插节奏——相邻主线推进剧情段之间应有非主线推进剧情段（世界观穿插/群像塑造/支线编织/呼吸节奏）穿插，稀释主线推进速度。单一 phase 内，主线推进剧情段不建议连续超过 2 个而不穿插。非主线推进剧情段也必须有自身完整的人物处境、矛盾和因果链，不能只是主线休息站或填充章。支线可以独立承担世界观铺陈或群像塑造，不必机械反哺主线。若作品涉及感情线，架构层的感情阶段绑定与多权力中心约束见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
+  { key: "plot-design", label: "设计剧情段与章节", scope: "plot-design", role: "architect", skillStage: "planning", allowedTables: ["outlineNodes", "documents"], defaultInstruction: "在选中的幕下设计一个剧情段及其章节。先明确本剧情段的功能类型（主线推进型/世界观穿插型/群像塑造型/支线编织型/呼吸节奏型），在 summary 首行用【功能类型】标注。功能类型决定本剧情段是否推进主线：主线推进型承担阶段转折或关键事件；世界观穿插型纯铺陈世界、群像塑造型深化人物、支线编织型讲支线小故事、呼吸节奏型积累日常与情感——后四者不必推进主线，但必须有自身完整的人物处境、矛盾和因果链。参考前序剧情段的功能类型，若已有连续主线推进剧情段，建议生成交织型剧情段稀释推进速度。章节数量由剧情段需要承载的独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报共同决定，不按固定范围凑数或压缩。若剧情段跨越多种功能或强度，应安排行动、余波、蓄势、兑现等有差异的呼吸；若它本身是单一过渡、完整高潮、短促插曲或实验性结构，则服从该功能，不强制补入低强度章。每章都必须有不可替代的叙事职责和清晰落点。" },
   { key: "story-bible", label: "生成故事资料", scope: "bible", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "生成故事所需的核心角色、地点、组织、物品与世界规则，并建立关键关系。", refinable: true },
   { key: "characters", label: "设计角色", scope: "characters", role: "architect", skillStage: "foundation", allowedTables: ["entities"], defaultInstruction: "为本作设计至少 5 位核心角色，每位角色作为独立的 entity 提案项返回（百万字长篇群像规模硬约束——这是首要要求，不得只返回 1-2 位）。每位角色必须有：明确欲望(desire)、恐惧(weakness)、错误信念、秘密(secret)、人物弧(arc)和差异化声音(voice)；完整的初始 state（location 引用世界观已有 location 实体名 / physical 具体身体状态 / emotional 具体情绪基调 / objective 即时目标 / inventory 随身物品，均不可写\"未指定\"）。角色名不得与地名、朝代名、年号、官职、典章制度重名——古风/历史/架空题材尤其要避免用都城名（长安、洛阳、汴梁、建康等）作人名，因为读者会先想到城市而非人物。\n\n【群像独立性硬约束】核心角色之间必须至少存在两组非二元对立关系（既有合作又有冲突），避免所有关系都收敛至主角与单一反派的对立。至少 1 位核心角色应能独立推动一条非主线驱动的生态增长曲线（如权力生态、商业生态、江湖格局等），其欲望、资源与行动不服务主角目标。判定标准：若所有核心角色的欲望都服务或阻碍同一主角目标，则群像缺失独立性，应重构。若作品涉及感情线，主恋爱角色的恋爱维度字段要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
   { key: "relations", label: "设计人物关系", scope: "relations", role: "architect", skillStage: "foundation", allowedTables: ["relations"], defaultInstruction: "为已生成的核心角色设计至少 5 条会推动选择和冲突的人物关系，每条关系作为独立的 relation 提案项返回（这是首要要求，不得只返回 1-2 条）。每条关系需有 publicLabel（明面关系）和 privateTruth（私下隐情），关系类型(relationType)不得雷同。若作品涉及感情线，主恋爱关系的 bond 字段需标注当前感情阶段与关系状态（中文描述），privateTruth 承载尚未公开的情感真相；具体要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
   { key: "timeline", label: "规划时间线", scope: "timeline", role: "architect", skillStage: "planning", allowedTables: ["timelineEvents"], defaultInstruction: "生成有明确先后、持续时间、原因和后果的故事时间线。", refinable: true },
   { key: "worldview", label: "完善世界观", scope: "worldview", role: "architect", skillStage: "foundation", allowedTables: ["entities", "relations"], defaultInstruction: "完善地点、组织、阵营、物品、物种、规则、能力与术语，并保持世界设定之间的关系一致。百万字长篇至少返回 8 个可独立引用的世界观实体，其中至少包含 2 个地点、3 个组织或阵营、2 个规则/能力/术语；不能用一个总称替代所有地域文化圈，也不能只生成名称而缺少生产方式、制度职责、资源依赖或能力边界。", refinable: true },
-  { key: "plot-threads", label: "规划剧情线", scope: "threads", role: "architect", skillStage: "planning", allowedTables: ["plotThreads"], defaultInstruction: "为本作规划至少 4 条剧情线，每条剧情线作为独立的 plotThread 提案项返回（百万字长篇必备结构：1 主线(kind=main) + 1 支线(kind=subplot) + 1 对抗线(kind=antagonist) + 1 共谋线(kind=conspiracy)——这是首要要求，不得只返回 1-2 条；若作品含感情线可额外增加 kind=romance）。每条剧情线需明确参与者、当前状态、优先级与下一步推进。\n\n【剧情线硬约束】(1) 支线反哺三问：每条支线必须回答以下三问中的至少一问：(a) 它如何改变了主线人物的选择？(b) 它如何改变了主线人物的认知或信念？(c) 它如何为主线提供了关键资源、秘密或盟友？若一条支线对这三个问题都回答\"否\"，则该支线只是主线休息站，不应规划为独立剧情线。支线不得只通过\"同时发生\"与主线关联（如\"主角在做 A 时，配角在做 B\"），必须通过因果链关联（如\"配角在 B 中获得的信息改变了主角在 A 中的选择\"）。(2) 对抗线独立生态：对抗线（kind=antagonist 或独立反派支线）必须有自己的独立生态——反派有自己的目标、资源、行动能力、底线与盟友，不能只是\"阻碍主角\"的工具人。nextMove 字段强制约束：对抗线的 nextMove 必须描述反派推进自身目标的行动（如\"整合北境三族兵力，完成南征准备\"\"收编西域商路，截断对手财源\"），不得以主角为行动对象或主语（如\"派人监视主角\"\"判断主角是否危险\"\"阻止主角获取 X\"等均违规——这些只是阻碍主角，不是推进自身目标）。判定标准：若删除 nextMove 中的主角名字后，该行动是否仍有独立的战略意义？若没有，则该行动只是\"给主角制造困难\"，应改为推进反派自身目标的行动。反派至少有一条不碰的行为底线（这是读者共情的关键），反派的核心信念应形成前后不矛盾的闭环。(3) 共谋线独立生态：百万字长篇必须有至少 1 条 kind=conspiracy 的共谋线——一群角色暗中结盟或共谋，有独立于对抗线的目标、参与者(participantIds)、当前状态(status)与下一步推进(nextMove)。共谋线与对抗线的区别：对抗线是明面反派推进自身目标，共谋线是隐藏联盟暗中操纵/布局/合谋，其存在与目的在前期对主角和其他势力不可见。nextMove 字段强制约束：共谋线的 nextMove 必须描述共谋者推进其阴谋的行动（如\"暗中收买三名长老，在下次议事时联合发难\"\"伪造传承凭证，为篡夺正统铺路\"），不得以主角为行动对象或主语。判定标准：若删除 nextMove 中的主角名字后，该行动是否仍有独立的阴谋推进意义？共谋线必须与主线存在延迟揭示关系——其真相在中后期才被主角察觉，前期只以异常迹象呈现。若作品涉及感情线，romance 剧情线的字段级要求（kind=romance、priority、nextMove 标注感情阶段、progress 映射弧光进度）见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
+  { key: "plot-threads", label: "规划剧情线", scope: "threads", role: "architect", skillStage: "planning", allowedTables: ["plotThreads"], defaultInstruction: "为本作规划至少 4 条剧情线，每条剧情线作为独立的 plotThread 提案项返回（百万字长篇必备结构：1 主线(kind=main) + 1 支线(kind=subplot) + 1 对抗线(kind=antagonist) + 1 共谋线(kind=conspiracy)——这是首要要求，不得只返回 1-2 条；若作品含感情线可额外增加 kind=romance）。每条剧情线需明确参与者、当前状态、优先级与下一步推进。\n\n【剧情线硬约束】(1) 支线独立性约束：支线可以独立承担世界观铺陈、群像塑造、生态厚度或主题回声，不必机械反哺主线；但支线必须有自身完整的人物处境、矛盾和因果链，不能只是主线休息站或同时发生的平行事件。支线与主线的关联方式灵活：可通过共享人物、资源、秘密或选择相互改变，也可只通过主题对照或世界厚度独立成立。(2) 对抗线独立生态：对抗线（kind=antagonist 或独立反派支线）必须有自己的独立生态——反派有自己的目标、资源、行动能力、底线与盟友，不能只是\"阻碍主角\"的工具人。nextMove 字段强制约束：对抗线的 nextMove 必须描述反派推进自身目标的行动（如\"整合北境三族兵力，完成南征准备\"\"收编西域商路，截断对手财源\"），不得以主角为行动对象或主语（如\"派人监视主角\"\"判断主角是否危险\"\"阻止主角获取 X\"等均违规——这些只是阻碍主角，不是推进自身目标）。判定标准：若删除 nextMove 中的主角名字后，该行动是否仍有独立的战略意义？若没有，则该行动只是\"给主角制造困难\"，应改为推进反派自身目标的行动。反派至少有一条不碰的行为底线（这是读者共情的关键），反派的核心信念应形成前后不矛盾的闭环。(3) 共谋线独立生态：百万字长篇必须有至少 1 条 kind=conspiracy 的共谋线——一群角色暗中结盟或共谋，有独立于对抗线的目标、参与者(participantIds)、当前状态(status)与下一步推进(nextMove)。共谋线与对抗线的区别：对抗线是明面反派推进自身目标，共谋线是隐藏联盟暗中操纵/布局/合谋，其存在与目的在前期对主角和其他势力不可见。nextMove 字段强制约束：共谋线的 nextMove 必须描述共谋者推进其阴谋的行动（如\"暗中收买三名长老，在下次议事时联合发难\"\"伪造传承凭证，为篡夺正统铺路\"），不得以主角为行动对象或主语。判定标准：若删除 nextMove 中的主角名字后，该行动是否仍有独立的阴谋推进意义？共谋线必须与主线存在延迟揭示关系——其真相在中后期才被主角察觉，前期只以异常迹象呈现。若作品涉及感情线，romance 剧情线的字段级要求（kind=romance、priority、nextMove 标注感情阶段、progress 映射弧光进度）见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
   { key: "foreshadowing", label: "规划伏笔", scope: "foreshadowing", role: "architect", skillStage: "planning", allowedTables: ["foreshadowing"], defaultInstruction: "为本作规划至少 4 条伏笔，每条伏笔作为独立的 foreshadowing 提案项返回（百万字长篇至少 1 条跨百章长线伏笔——这是首要要求，不得只返回 1-2 条）。每条伏笔涵盖线索(clue)、真相(truth)、误导、提醒与回收节点。\n\n【伏笔硬约束】(1) 延迟回收范式：伏笔埋设时必须以日常细节形态存在，不得自我标榜（禁止\"他不知道这个决定将改变一切\"\"这个细节后来证明至关重要\"等作者预告）；提醒应以不经意方式呈现（人物偶然瞥见、他人随口提及），不得让人物主动追查（除非该人物有明确动机）；回收应让读者产生\"原来如此\"的恍然，而非\"终于揭晓\"的被动接受——回收瞬间应触发情感爆发，而非信息确认。判定标准：若读者重读埋设段落时能立刻认出这是伏笔，则埋设过于刻意。(2) 长线伏笔多义真相：长篇（百万字以上）需至少规划 1 条跨百章以上的长线伏笔。truth 字段写最终真相，但 notes 字段必须显式列出至少 1 个中期误导解释（读者在百章以内可能推断出的错误结论）。长线伏笔不得全部服务同一条主线（如全部指向同一案件真相），至少 1 条应独立关联权力格局、人物关系或世界规则，能在回收时改变角色关系或权力平衡。所有长线伏笔的 truth 不得收敛至同一解释。短篇或单元剧不强制此要求。若作品涉及感情线，至少规划 1 条服务感情线弧光的伏笔，notes 标注关联感情阶段与回收方式；具体要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
   { key: "story-control", label: "生成剧情控制资料", scope: "review", role: "architect", skillStage: "planning", allowedTables: ["plotThreads", "foreshadowing", "timelineEvents"], defaultInstruction: "根据已生成的剧情线(plot-threads 任务)、伏笔(foreshadowing 任务)和时间线(timeline 任务)，交叉校验三者一致性并补充控制元数据。严禁重复生成已存在的 plotThreads/foreshadowing/timelineEvents 记录——只允许对已有记录执行 update 操作。\n\n【story-control 职责边界】(1) 一致性校验：检查剧情线参与者在时间线事件中是否一致、伏笔回收节点是否与剧情线进度匹配、时间线因果链是否与剧情线 nextMove 对齐。(2) 控制元数据补充：为伏笔补充回收节点映射（哪个剧情段/章节回收）、为剧情线补充进度同步点（哪条时间线事件标志剧情线进度变化）、为时间线补充因果约束标注。(3) 冲突标注：识别并标注三者之间的逻辑冲突（如伏笔回收早于埋设、剧情线 nextMove 与时间线顺序矛盾），以 update 操作修正 status/progress/nextMove 字段。\n\n【保留性更新合同】只提交确有必要的字段补丁。不得用较短的控制说明覆盖已经更完整的 title、summary、description、clue 或 truth；已有 participantIds、locationId、causeIds、consequenceIds 一致时必须省略这些字段。向 notes 增加回收映射时，只提交以“控制映射：”开头的追加段即可，系统会把正式原 notes 确定性地置于前面；也可返回“原 notes + 控制映射”，但不能用 clue、truth、状态或映射文本替换原说明。没有矛盾的记录无需为了显得有改动而更新。\n\n【禁止行为】(a) 禁止创建新的 plotThreads 记录（kind/title/summary 不得与已有记录重复）。(b) 禁止创建新的 foreshadowing 记录（clue/truth 不得与已有记录重复）。(c) 禁止创建新的 timelineEvents 记录。如发现已有记录存在质量问题，应通过 update 操作修正字段值，而非创建新记录。", refinable: true },
-  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: "结合已批准架构、故事大纲和当前写作进度，确定本章唯一的主导叙事功能与兑现边界；允许本章主要用于背景、人物、关系、情感、蓄势或余波。若本章 povCharacterId 是单一角色（第三人称限知 POV），则 mustHappen 中的所有动作必须是该 POV 角色亲自可观察、可推断或可被告知的事项，或该 POV 角色自身的内心动作——不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等）。如需呈现多角色内心：方案 A 保持单 POV，把他人内心外化为 POV 角色可观察的行动；方案 B 显式标注本章为\"多视角切片\"，povCharacterId 留空，characterIds 列出全部视角人物，beats 中标注每个节拍的 POV。\n\n【POV 模式互斥硬约束】方案 A 与方案 B 互斥，不得混用：(1) 若 povCharacterId 填入具体角色 ID（非空、非\"multi\"），则必须使用方案 A——所有 mustHappen 项不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等），只能包含 POV 角色可观察、可推断、可被告知的外部事项，或 POV 角色自身的决定/记忆/误读/回避。(2) 若本章需要呈现 ≥2 个角色的内心活动（如\"三线切片\"\"群像章节\"），则必须使用方案 B——povCharacterId 必须为空或填入\"multi\"占位，不得填具体角色 ID；characterIds 必须列出全部视角人物；beats 中每个节拍必须显式标注其 POV（如\"[POV:A] ...\"\"[POV:B] ...\"）。(3) 违规判定：povCharacterId 填具体角色 ID 但 mustHappen 含非 POV 角色内心动作 = 违规；povCharacterId 为空但 beats 未标注 POV = 违规；声称\"多视角切片\"但 povCharacterId 仍填单一角色 = 违规。若作品涉及感情线，章节 romance beat 的形态与字段级要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。", refinable: true },
+  { key: "chapter-plan", label: "规划当前章节", scope: "chapters", role: "architect", skillStage: "planning", allowedTables: ["documents"], defaultInstruction: `结合已批准架构、故事大纲和当前写作进度，确定本章唯一的主导叙事功能与兑现边界；允许本章主要用于背景、人物、关系、情感、蓄势或余波。若本章 povCharacterId 是单一角色（第三人称限知 POV），则 mustHappen 中的所有动作必须是该 POV 角色亲自可观察、可推断或可被告知的事项，或该 POV 角色自身的内心动作——不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等）。如需呈现多角色内心：方案 A 保持单 POV，把他人内心外化为 POV 角色可观察的行动；方案 B 显式标注本章为\"多视角切片\"，povCharacterId 留空，characterIds 列出全部视角人物，beats 中标注每个节拍的 POV。\n\n【POV 模式互斥硬约束】方案 A 与方案 B 互斥，不得混用：(1) 若 povCharacterId 填入具体角色 ID（非空、非\"multi\"），则必须使用方案 A——所有 mustHappen 项不得包含非 POV 角色的内心动作（\"X 意识到 / X 发现 / X 察觉 / X 心想\"等），只能包含 POV 角色可观察、可推断、可被告知的外部事项，或 POV 角色自身的决定/记忆/误读/回避。(2) 若本章需要呈现 ≥2 个角色的内心活动（如\"三线切片\"\"群像章节\"），则必须使用方案 B——povCharacterId 必须为空或填入\"multi\"占位，不得填具体角色 ID；characterIds 必须列出全部视角人物；beats 中每个节拍必须显式标注其 POV（如\"[POV:A] ...\"\"[POV:B] ...\"）。(3) 违规判定：povCharacterId 填具体角色 ID 但 mustHappen 含非 POV 角色内心动作 = 违规；povCharacterId 为空但 beats 未标注 POV = 违规；声称\"多视角切片\"但 povCharacterId 仍填单一角色 = 违规。若作品涉及感情线，章节 romance beat 的形态与字段级要求见 stage prompt 的 ## 感情线 section（属于创作契约，非叙事事实）。\n\n${NAMING_LITERARY_CONSTRAINT}`, refinable: true },
   { key: "scene-design", label: "设计场景", scope: "scenes", role: "architect", skillStage: "planning", allowedTables: ["scenes"], defaultInstruction: "为当前章节规划场景顺序、功能、冲突、结果、角色和行动节拍。", refinable: true },
   { key: "chapter-draft", label: "生成章节正文", scope: "writing", role: "writer", skillStage: "drafting", allowedTables: ["documents"], defaultInstruction: "依据当前章节蓝图和场景计划生成完整正文。" },
   { key: "review", label: "审校并提出修订", scope: "review", role: "quality-editor", skillStage: "review", allowedTables: ["documents"], defaultInstruction: "检查故事与正文的因果、人物、连续性、节奏和文风，并提供可选择采纳的定向修订。" },
@@ -69,7 +78,7 @@ export function tasksForScope(scope: NovelGenerationScope) {
 
 const payloadContract = `字段契约：
 - projects: title, subtitle, premise, genre, audience, themes, sellingPoints, pov, tense, tone, languageStyle, targetWords
-- architectures: framework, status, centralQuestion, centralConflict, synopsis, powerCenters[{id,name,interest,resources,actionCapacity,bottomLine,relationshipDynamics}], feedbackLoops[{id,name,trigger,transmission,affectedCenters,storyPressure}], longHorizonHooks[{id,surfaceDetail,possibleInterpretations,affectedCenters,payoffWindow}], phases[{id,title,purpose,turningPoint,order,locked,primaryCurveId}], growthCurves[{id,kind,subject,resourceLoop,stageGoals,irreversibleChange}]；数量按项目体量决定，百万字长篇至少为 powerCenters 5 个、feedbackLoops 3 条、longHorizonHooks 3 条；affectedCenters 只能引用 powerCenters 中已有 id 或准确名称；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔；phases.turningPoint 还必须落到资源、秘密、组织或关系承诺的具体不可逆变化；phases.primaryCurveId 引用 growthCurves[].id，标注此阶段主要由哪条增长曲线推进；growthCurves 至少 2 条（kind=main 主线 + 至少 1 条 kind=ecological 生态曲线），ecological 曲线的 subject/resourceLoop/stageGoals/irreversibleChange 必须独立于主线主角命运——若删除主线后该曲线能否独立支撑至少一个阶段的推进
+- architectures: framework, status, centralQuestion, centralConflict, synopsis, powerCenters[{id,name,kind,interest,resources,actionCapacity,bottomLine,relationshipDynamics}], feedbackLoops[{id,name,trigger,transmission,affectedCenters,storyPressure,returnPath}], longHorizonHooks[{id,surfaceDetail,possibleInterpretations,affectedCenters,payoffWindow}], phases[{id,title,purpose,turningPoint,order,locked,primaryCurveId,stages[{title,summary}],romanceProgress[{romanceLineId,relationshipStage,irreversibleEvent,crossOverWith}],techGeneration{generation,name,unlockCondition,narrativeFunction},originTruthLayer{layer,revelation,revealerCenterId,consequence}}], growthCurves[{id,kind,subject,resourceLoop,stageGoals,irreversibleChange}], ideologicalFactions[{id,name,position,affectedCenterIds}]；数量按项目体量决定，百万字长篇至少为 powerCenters 5 个、feedbackLoops 3 条、longHorizonHooks 3 条；powerCenters.kind 标识势力存在层级（human-organization 人类组织 / supernatural 跨位面超自然存在 / ancient-legacy 跨纪元远古组织），百万字长篇至少 1 个 supernatural 类型以形成空间纵深，与人类组织型势力形成质的差异；affectedCenters 只能引用 powerCenters 中已有 id 或准确名称；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔；phases.turningPoint 必须写成可验证不可逆模板：[谁]失去/获得[具体资源/秘密/关系]，导致[什么组织]永久[裂变/公开/承诺/摧毁]，世界无法回到[什么状态]（至少30字）；禁止"获得...资格""承认...可能""成为...问题"等方向性描述；phases.primaryCurveId 引用 growthCurves[].id，标注此阶段主要由哪条增长曲线推进；phases.stages 为该幕的子阶段拆分，百万字长篇每幕必须提供 2-4 个 stages，每个 stage.summary 必须写出该子段自身矛盾与推进（谁面对什么阻力、付出什么代价、做出什么选择，至少20字），禁止只用一句事件摘要如"陈墨发现灵气规律。"，且全书必须在第三幕末或第四幕初的某个 stage 中设计一个中段崩塌点（all-is-lost，主角处境跌至最低、资源/关系/认知全面失守后再回升），不得只给单一 turningPoint 平铺直叙；feedbackLoops 必须形成闭环而非线性因果链——transmission 写跨中心传导步骤（至少 4 步），returnPath 必须写明闭合回触发源的不可逆状态变化（哪一方被迫永久改变什么行为/规则/结构，至少20字），禁止"新的X改变Y""X反过来影响Y"等无具体主体的套话；longHorizonHooks.possibleInterpretations 必须排除实际真相本身——真相不得作为候选解释之一直接出现，possibleInterpretations 至少 2 项且其中至少 1 项必须是读者中期可能误推的错误解释（误导项），surfaceDetail 以日常细节形态存在不自我标榜，不得用"这个细节后来证明至关重要"式预告；growthCurves 至少 2 条（kind=main 主线 + 至少 1 条 kind=ecological 生态曲线），ecological 曲线的 subject/resourceLoop/stageGoals/irreversibleChange 必须独立于主线主角命运——若删除主线后该曲线能否独立支撑至少一个阶段的推进，且 ecological 曲线必须在至少 2 个 phases 中作为 primaryCurveId 推进（不得只在单一 phase 从属主线）；当 growthCurves 主线涉及"本源真相"或核心谜题揭示时，stageGoals 必须把真相揭示分层绑定到多个技术代际/能力升级节点，不得在单一 phase 一次性揭晓；当项目涉及感情线时，phases.romanceProgress 必须为每个有感情进展的 phase 填写——romanceLineId 引用感情线标识、relationshipStage 标注该阶段关系阶段（如相识/相知/公开同盟/裂变/归宿）、irreversibleEvent 写明该阶段发生的不可逆情感事件（承诺/背叛/公开/牺牲），多线交叉用 crossOverWith 引用同期推进的其他 romanceLineId；当项目涉及技术/能力体系代际演进时，phases.techGeneration 必须绑定该阶段解锁的技术代际——generation 代际编号、name 代际名称、unlockCondition 解锁条件（须有前置代际基础）、narrativeFunction 该代际在叙事中的结构功能（推动哪条线/改变哪个权力中心），使技术升级有阶段纵深而非平铺字符串；当项目涉及多层真相递进揭示时，phases.originTruthLayer 必须绑定该阶段揭示的真相层级——layer 层级编号、revelation 揭示内容、revealerCenterId 揭示方 powerCenter id、consequence 揭示后果（哪一方永久失去/获得什么），使真相揭示分层绑定到各幕而非单点压缩在单一 phase；ideologicalFactions 必须填写（至少 3 个跨权力中心思想流派，无条件要求）——每个派系含 id/name/position/affectedCenterIds，affectedCenterIds 引用 powerCenters 中已有 id 且至少跨 2 个权力中心，position 须写出该派系的具体主张（非标签化如"灵气公有派"应写"灵气逻辑应公开传播，任何组织不得独占编译方法"）
 - outlineNodes: phaseId, title, summary, order；每条记录只表示一个剧情段，phaseId 必须引用全书架构中的真实幕 ID
 - documents: order, plotSegmentId(可用 ref:剧情段临时ID), title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,plotThreadIds,foreshadowingIds,conflict,informationRelease,mustHappen,flexible,forbidden}；正文任务可额外给 plainText；章节目标字数由系统设置，不得返回 targetWords
 - scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, outcome, wordTarget, beats[{id,text,order}]
@@ -88,12 +97,54 @@ const characterSchema = {
     state: { type: "object", additionalProperties: false, required: ["location", "physical", "emotional", "objective", "inventory"], properties: { location: { type: "string" }, physical: { type: "string" }, emotional: { type: "string" }, objective: { type: "string" }, inventory: stringArraySchema, relationshipNotes: stringArraySchema, lastChangedChapterId: { type: "string" } } },
   },
 } as const;
-const architecturePowerCenterSchema = { type: "object", additionalProperties: false, required: ["id", "name", "interest", "resources", "actionCapacity", "bottomLine", "relationshipDynamics"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, interest: { type: "string", minLength: 1 }, resources: { ...stringArraySchema, minItems: 1 }, actionCapacity: { type: "string", minLength: 1 }, bottomLine: { type: "string", minLength: 1 }, relationshipDynamics: { type: "string", minLength: 1 } } } as const;
-const architectureFeedbackLoopSchema = { type: "object", additionalProperties: false, required: ["id", "name", "trigger", "transmission", "affectedCenters", "storyPressure"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, trigger: { type: "string", minLength: 1 }, transmission: { ...stringArraySchema, minItems: 2 }, affectedCenters: { ...stringArraySchema, minItems: 2 }, storyPressure: { type: "string", minLength: 1 } } } as const;
+// Layer 13 根因修复（Class B 类型多样性缺失）：
+// 根因：powerCenters schema 不区分势力存在层级，LLM 只产出同质化人类组织型 center（朝堂/门派/商会/江湖盟），
+// 缺少跨位面/超自然存在级别势力（如灵气本源意识、上古研究者集体意识），导致世界观空间纵深不足。
+// 修复层：新增 kind enum 字段（human-organization | supernatural | ancient-legacy）并加入 required，
+// 让 LLM "能"产出 supernatural 类型（解除 additionalProperties:false 的 HARD constraint）；
+// 配合 validateArchitectureHardConstraints 新增 supernatural 检查让 LLM "必须"产出（强制生成而非可选）。
+// 通用机制：不针对 origin_will 具体名称，LLM 可自由命名，只要 kind=supernatural。
+// 回归风险：旧候选 powerCenters 无 kind 字段，refine/update 时 Ajv 校验失败 → DB migration 补默认值 human-organization
+// 或 ArchitecturePayload 类型加 optional kind；新 operation "全新重生成" 不受影响。
+const architecturePowerCenterSchema = { type: "object", additionalProperties: false, required: ["id", "name", "kind", "interest", "resources", "actionCapacity", "bottomLine", "relationshipDynamics"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, kind: { enum: ["human-organization", "supernatural", "ancient-legacy"] }, interest: { type: "string", minLength: 1 }, resources: { ...stringArraySchema, minItems: 1 }, actionCapacity: { type: "string", minLength: 1 }, bottomLine: { type: "string", minLength: 1 }, relationshipDynamics: { type: "string", minLength: 1 } } } as const;
+// Loop 2 根因修复：returnPath 移入 required + transmission minItems 2→4。
+// 根因（required）：payloadContract 文本承诺 returnPath 闭环但 schema 未要求 → strict-mode LLM 系统性缺失。
+// 根因（minItems）：payloadContract 承诺 transmission 至少 4 步，但 schema minItems=2 → LLM 恰好产出 2 步（schema 最小值）
+// → validateArchitectureHardConstraints 反复拦截。修复层：让 schema minItems 与契约下限一致（名实相符）。
+// 回归风险：旧 feedbackLoop 记录 transmission < 4 步时，refine/update 路径 Ajv 校验会要求补步数；架构任务默认"全新重生成"不受影响。
+const architectureFeedbackLoopSchema = { type: "object", additionalProperties: false, required: ["id", "name", "trigger", "transmission", "affectedCenters", "storyPressure", "returnPath"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, trigger: { type: "string", minLength: 1 }, transmission: { ...stringArraySchema, minItems: 4 }, affectedCenters: { ...stringArraySchema, minItems: 3 }, storyPressure: { type: "string", minLength: 1 }, returnPath: { type: "string", minLength: 1 } } } as const;
+// Loop 5 根因修复（回退 Loop 4 的 minLength 内容深度层）：
+// Loop 4 在 returnPath/turningPoint/stages.summary/resourceLoop/stageGoals 上添加 minLength:20/30，
+// 意图强制 LLM 产出深度内容。iter6 确实改善（11→6 issues），但 iter7 因 LLM 偶尔产出短 stageGoals
+// 触发 minLength 硬验证失败，整个生成被阻断——无候选可供 review，operation 卡住。
+// 根因：strict-mode JSON schema 的 minLength 是 HARD constraint，将概率性的 LLM 输出长度转化为
+// 硬性生成失败。失败的生成比短字段候选更糟（无 review 反馈循环）。
+// 修复策略：移除 minLength>1 的字符串约束，保留 required（字段存在）+ minItems（数组下限），
+// 因 LLM 可靠满足这两类结构性约束。内容深度交给 payloadContract 模板（引导）+ review 层（软强制+反馈循环）。
+// review 反馈循环才是改善主驱动（iter4:11→iter5:11→iter6:6 的改善来自 review issues 被携带进 instruction）。
 const architectureLongHorizonHookSchema = { type: "object", additionalProperties: false, required: ["id", "surfaceDetail", "possibleInterpretations", "affectedCenters", "payoffWindow"], properties: { id: { type: "string", minLength: 1 }, surfaceDetail: { type: "string", minLength: 1 }, possibleInterpretations: { ...stringArraySchema, minItems: 2 }, affectedCenters: { ...stringArraySchema, minItems: 1 }, payoffWindow: { type: "string", minLength: 1 } } } as const;
 const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>> = {
   projects: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, subtitle: { type: "string" }, premise: { type: "string" }, genre: stringArraySchema, audience: { type: "string" }, themes: stringArraySchema, sellingPoints: stringArraySchema, pov: { type: "string" }, tense: { type: "string" }, tone: { type: "string" }, languageStyle: { type: "string" }, targetWords: { type: "number", minimum: 1 } } },
-  architectures: { type: "object", additionalProperties: false, properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, powerCenters: { type: "array", minItems: 1, items: architecturePowerCenterSchema }, feedbackLoops: { type: "array", minItems: 1, items: architectureFeedbackLoopSchema }, longHorizonHooks: { type: "array", minItems: 1, items: architectureLongHorizonHookSchema }, phases: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked", "primaryCurveId"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string" }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" }, primaryCurveId: { type: "string", minLength: 1 } } } }, growthCurves: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["id", "kind", "subject", "resourceLoop", "stageGoals", "irreversibleChange"], properties: { id: { type: "string", minLength: 1 }, kind: { enum: ["main", "ecological"] }, subject: { type: "string", minLength: 1 }, resourceLoop: { type: "string", minLength: 1 }, stageGoals: { type: "string", minLength: 1 }, irreversibleChange: { type: "string", minLength: 1 } } } } } },
+  // Loop 2 根因修复：phases.stages 移入 required + stages minItems: 2。
+  // 根因（required）：payloadContract 承诺每幕须 2-4 个子阶段，但 schema 仅把 stages 声明为可选 property →
+  // strict-mode LLM 系统性缺失 → 中段崩塌点无法落地 → 内部质量门反复拦截。
+  // 根因（minItems）：stages 入 required 后 LLM 恰好产出 1 个 stage（schema 无 minItems 时的最小值）→
+  // validateArchitectureHardConstraints 仍拦截（< 2）。修复层：schema minItems 与契约下限一致。
+  // 回归风险：短篇架构也须 ≥2 stages/phase（slightly over-structured 但提升结构思维）；旧记录 refine 时需补 stages。
+  // Layer 12 根因修复（Class A 结构缺失收尾）：
+  // 根因：ideologicalFactions 在 schema 中是 optional property（无 required + 无 minItems），
+  // strict-mode LLM 系统性不产出（Layer 10 已证 optional 字段 LLM 不填）。
+  // 修复层：(1) 把 ideologicalFactions 加入 architectures 顶层 required 数组（驱动 LLM 必须产出）；
+  // (2) 给 ideologicalFactions 数组加 minItems:3（与 payloadContract "至少 3 个跨权力中心思想流派" 一致）。
+  // 依据：Layer 10 已证明 schema required 是驱动 LLM 填充 optional 字段的唯一可靠机制
+  // （romanceProgress/techGeneration/originTruthLayer 从 0/N 提升到 required 后 LLM 首次产出）。
+  // 回归风险：旧候选无 ideologicalFactions 时 refine/update 路径 Ajv 校验失败；新 operation "全新重生成" 不受影响。
+  architectures: { type: "object", additionalProperties: false, required: ["ideologicalFactions"], properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, powerCenters: { type: "array", minItems: 7, items: architecturePowerCenterSchema }, feedbackLoops: { type: "array", minItems: 1, items: architectureFeedbackLoopSchema }, longHorizonHooks: { type: "array", minItems: 1, items: architectureLongHorizonHookSchema }, phases: { type: "array", minItems: 5, items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked", "primaryCurveId", "stages", "romanceProgress", "techGeneration", "originTruthLayer"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string", minLength: 1 }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" }, primaryCurveId: { type: "string", minLength: 1 }, stages: { type: "array", minItems: 3, items: { type: "object", additionalProperties: false, required: ["title", "summary"], properties: { title: { type: "string", minLength: 1 }, summary: { type: "string", minLength: 1 } } } }, romanceProgress: { type: "array", minItems: 2, items: { type: "object", additionalProperties: false, required: ["romanceLineId", "relationshipStage", "irreversibleEvent"], properties: { romanceLineId: { type: "string", minLength: 1 }, relationshipStage: { type: "string", minLength: 1 }, irreversibleEvent: { type: "string", minLength: 1 }, crossOverWith: stringArraySchema } } }, techGeneration: { type: "object", additionalProperties: false, required: ["generation", "name"], properties: { generation: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, unlockCondition: { type: "string", minLength: 1 }, narrativeFunction: { type: "string", minLength: 1 } } }, originTruthLayer: { type: "object", additionalProperties: false, required: ["layer", "revelation"], properties: { layer: { type: "string", minLength: 1 }, revelation: { type: "string", minLength: 1 }, revealerCenterId: { type: "string", minLength: 1 }, consequence: { type: "string", minLength: 1 } } } } } }, growthCurves: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["id", "kind", "subject", "resourceLoop", "stageGoals", "irreversibleChange"], properties: { id: { type: "string", minLength: 1 }, kind: { enum: ["main", "ecological"] }, subject: { type: "string", minLength: 1 }, resourceLoop: { type: "string", minLength: 1 }, stageGoals: { type: "string", minLength: 1 }, irreversibleChange: { type: "string", minLength: 1 } } } }, ideologicalFactions: { type: "array", minItems: 3, items: { type: "object", additionalProperties: false, required: ["id", "name", "position", "affectedCenterIds"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, position: { type: "string", minLength: 1 }, affectedCenterIds: { ...stringArraySchema, minItems: 2 } } } } } },
+  // Loop 5 回退 Loop 4 minLength：移除 turningPoint/summary/resourceLoop/stageGoals 的 minLength:20/30。
+  // 根因：strict-mode JSON schema minLength 是 HARD constraint，LLM 偶尔产出短字符串时整个生成失败（iter7 stageGoals<20 字触发），
+  // 无候选可供 review。required（字段存在）+ minItems（数组下限）是 LLM 可靠满足的结构性约束，保留。
+  // 内容深度交给 payloadContract 模板（L81 区域的操作化判据）+ review 层反馈循环（iter4:11→iter5:11→iter6:6 的改善主驱动）。
+  // 回归风险：LLM 可能再次产出短字符串，但 review 层会标记为 issue 并在 regenerate 时反馈，不会阻断生成。
   outlineNodes: { type: "object", additionalProperties: false, properties: { phaseId: { type: "string", minLength: 1 }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 } } },
   documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, plotSegmentId: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
   scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
@@ -570,12 +621,293 @@ export function validatePlotDesignItems(items: ProposalItem[], phaseId: string, 
   return { segment, chapters };
 }
 
+/** 架构层硬约束校验 issue（与 RuntimeReviewIssue 结构兼容，dimension 为自定义字符串）。 */
+export interface ArchitectureConstraintIssue {
+  severity: "blocker" | "major" | "warning";
+  dimension: string;
+  title: string;
+  evidence: string;
+  suggestion: string;
+}
+
+/**
+ * 校验架构候选 payload 是否满足架构层硬约束的语义要求。
+ *
+ * schema 校验只验证字段存在与类型正确，但 LLM 生成的候选可能形式满足 schema
+ * 而内容违反硬约束（如 turningPoint 是事件摘要而非不可逆变化、ecological 曲线
+ * 依附主线、反馈链仅 2 步、伏笔含暗示词）。本函数在 internalGate 阶段拦截
+ * 这类「形式合规但内容违规」的候选，减少 externalReview 往返。
+ *
+ * 通用规则，不针对特定书名/角色/题材：检查逻辑基于字段结构而非具体内容。
+ */
+export function validateArchitectureHardConstraints(payload: Record<string, unknown>): ArchitectureConstraintIssue[] {
+  const issues: ArchitectureConstraintIssue[] = [];
+  // turningPoint 不可逆性：必须落到资源转移/秘密公开/组织裂变/关系承诺
+  const IRREVERSIBLE_MARKERS = ["失去", "获得", "裂变", "公开", "承诺", "不可逆", "永久", "回不到", "剥夺", "交出", "签署", "摧毁", "破灭"];
+  const phases = Array.isArray(payload.phases) ? payload.phases as Array<Record<string, unknown>> : [];
+  for (const phase of phases) {
+    const tp = typeof phase.turningPoint === "string" ? phase.turningPoint : "";
+    if (tp && !IRREVERSIBLE_MARKERS.some((m) => tp.includes(m))) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.turningPoint",
+        title: `阶段 ${String(phase.id ?? "?")} turningPoint 未落到不可逆变化`,
+        evidence: tp,
+        suggestion: "重写为：[谁]失去/获得[具体资源]→[组织]永久[裂变/公开/承诺]→世界回不到[什么状态]",
+      });
+    }
+  }
+  // 子阶段拆分（长篇硬约束）：powerCenters>=5 视为长篇信号，每幕必须有 stages（2-4 个），全书必须有中段崩塌点
+  const powerCentersForCapacity = Array.isArray(payload.powerCenters) ? payload.powerCenters as unknown[] : [];
+  const isLongForm = powerCentersForCapacity.length >= 5;
+  const COLLAPSE_MARKERS = ["崩塌", "失守", "最低", "一无所有", "跌至", "溃败", "失去一切", "全盘", "倾覆", "陷落", "all-is-lost"];
+  let hasMidCollapse = false;
+  if (isLongForm) {
+    // Layer 13 根因修复（Class B 类型多样性缺失）：
+    // 长篇硬约束：至少 1 个 powerCenter.kind === "supernatural"，强制跨位面/超自然存在级别势力，
+    // 与人类组织型势力形成质的差异，避免世界观空间纵深不足（所有 center 同质化为朝堂/门派/商会）。
+    // 通用机制：不针对具体名称（如 origin_will），LLM 可自由命名，只要 kind=supernatural。
+    const powerCentersTyped = powerCentersForCapacity as Array<Record<string, unknown>>;
+    const hasSupernatural = powerCentersTyped.some((center) => center.kind === "supernatural");
+    if (!hasSupernatural) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.powerCenters.supernatural",
+        title: "缺少跨位面/超自然存在级别权力中心",
+        evidence: `powerCenters 共 ${powerCentersTyped.length} 个，kind 分布：${powerCentersTyped.map((c) => String(c.kind ?? "未设置")).join(", ") || "空"}`,
+        suggestion: "至少新增 1 个 kind=supernatural 的 powerCenter，作为跨位面/超自然存在级别势力（如灵气本源意识、上古研究者集体意识、沉睡的远古意志体），与人类组织型势力形成质的差异，使第4-5幕有真正的'世界扩大'感",
+      });
+    }
+    for (const phase of phases) {
+      const stages = Array.isArray(phase.stages) ? phase.stages as Array<Record<string, unknown>> : [];
+      if (stages.length < 2) {
+        issues.push({
+          severity: "major",
+          dimension: "structure.phase.stages",
+          title: `阶段 ${String(phase.id ?? "?")} 缺少子阶段拆分`,
+          evidence: `stages 仅 ${stages.length} 个`,
+          suggestion: "百万字长篇每幕拆分为 2-4 个子阶段，每个 stage 用文学化叙事写该子阶段的人物处境与局部不可逆变化",
+        });
+      }
+      for (const stage of stages) {
+        const summary = typeof stage.summary === "string" ? stage.summary : "";
+        if (COLLAPSE_MARKERS.some((m) => summary.includes(m))) hasMidCollapse = true;
+      }
+    }
+    if (phases.length >= 3 && !hasMidCollapse) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.phase.midCollapse",
+        title: "全书缺少中段崩塌点（all-is-lost）",
+        evidence: "所有 phases.stages[].summary 均未体现中段崩塌语义",
+        suggestion: "在第三幕末或第四幕初的某个 stage 设计中段崩塌点：主角处境跌至最低、资源/关系/认知全面失守后再回升",
+      });
+    }
+  }
+  // ecological 曲线独立性：resourceLoop/stageGoals 不得依赖主线主角或主线技术
+  const growthCurves = Array.isArray(payload.growthCurves) ? payload.growthCurves as Array<Record<string, unknown>> : [];
+  const eco = growthCurves.find((g) => g.kind === "ecological");
+  if (eco) {
+    const MAIN_DEPENDENCY = ["陈墨", "主角", "编译体系", "编译技术", "灵气编译"];
+    const resourceLoop = typeof eco.resourceLoop === "string" ? eco.resourceLoop : "";
+    const stageGoals = typeof eco.stageGoals === "string" ? eco.stageGoals : "";
+    if (MAIN_DEPENDENCY.some((d) => resourceLoop.includes(d) || stageGoals.includes(d))) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.growthCurve.ecological",
+        title: "ecological 曲线依赖主线主角或主线技术",
+        evidence: `resourceLoop: ${resourceLoop}`,
+        suggestion: "重设独立驱动力（灵脉枯竭/商会代际交接/人口结构变化），删除主线后仍能独立推进至少一个 phase",
+      });
+    }
+    // ecological 曲线多阶段推进：长篇下必须在 >=2 个 phases 作为 primaryCurveId，不得只在单一 phase 从属主线
+    if (isLongForm && typeof eco.id === "string") {
+      const ecoPrimaryCount = phases.filter((p) => p.primaryCurveId === eco.id).length;
+      if (ecoPrimaryCount < 2) {
+        issues.push({
+          severity: "major",
+          dimension: "structure.growthCurve.ecological.primaryScope",
+          title: "ecological 曲线缺少多阶段独立推进",
+          evidence: `ecological(${eco.id}) 仅在 ${ecoPrimaryCount} 个 phase 作为 primaryCurveId`,
+          suggestion: "让 ecological 曲线在至少 2 个 phases 作为 primaryCurveId 推进，使其在主线之外独立制造剧情压力",
+        });
+      }
+    }
+  }
+  // 反馈链步数：transmission 至少 4 步
+  const feedbackLoops = Array.isArray(payload.feedbackLoops) ? payload.feedbackLoops as Array<Record<string, unknown>> : [];
+  for (const fl of feedbackLoops) {
+    const transmission = Array.isArray(fl.transmission) ? fl.transmission as unknown[] : [];
+    if (transmission.length < 4) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.feedbackLoop",
+        title: `反馈链 ${String(fl.id ?? "?")} 传导步数不足`,
+        evidence: `transmission 仅 ${transmission.length} 步`,
+        suggestion: "扩展至 4-6 步传导，跨 3+ 中心形成闭环（甲→乙→丙→丁→甲）",
+      });
+    }
+    // 反馈链闭环：returnPath 必须显式写明回压路径，否则只是线性因果链
+    const returnPath = typeof fl.returnPath === "string" ? fl.returnPath.trim() : "";
+    if (!returnPath) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.feedbackLoop.returnPath",
+        title: `反馈链 ${String(fl.id ?? "?")} 缺少闭环回压路径`,
+        evidence: `returnPath 为空；transmission=${transmission.join(" -> ")}`,
+        suggestion: "补 returnPath 字段，写明 transmission 最后一步如何回压到 trigger 源头或改变 trigger 的再发生条件，使反馈形成闭环",
+      });
+    }
+  }
+  // 伏笔日常化：surfaceDetail 不得含暗示词
+  const FORESHADOW_HINT_WORDS = ["异常", "关键", "无法解释", "神秘", "奇怪", "单独", "不该有", "可疑"];
+  const longHorizonHooks = Array.isArray(payload.longHorizonHooks) ? payload.longHorizonHooks as Array<Record<string, unknown>> : [];
+  for (const hook of longHorizonHooks) {
+    const surfaceDetail = typeof hook.surfaceDetail === "string" ? hook.surfaceDetail : "";
+    if (FORESHADOW_HINT_WORDS.some((w) => surfaceDetail.includes(w))) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.foreshadowing",
+        title: `伏笔 ${String(hook.id ?? "?")} 含暗示词`,
+        evidence: surfaceDetail,
+        suggestion: "删除暗示词，伪装为完全不引人注意的日常细节（如账册中某条正常的例行记录）",
+      });
+    }
+  }
+  // 权力中心非二元关系：至少 1 组 relationshipDynamics 同时含「合作」与「冲突」语义
+  const powerCenters = Array.isArray(payload.powerCenters) ? payload.powerCenters as Array<Record<string, unknown>> : [];
+  const COOP_MARKERS = ["合作", "协同", "联盟", "联合", "互利"];
+  const CONFLICT_MARKERS = ["冲突", "对抗", "竞争", "矛盾", "分歧"];
+  const hasNonBinary = powerCenters.some((pc) => {
+    const rd = typeof pc.relationshipDynamics === "string" ? pc.relationshipDynamics : "";
+    return COOP_MARKERS.some((m) => rd.includes(m)) && CONFLICT_MARKERS.some((m) => rd.includes(m));
+  });
+  if (powerCenters.length >= 2 && !hasNonBinary) {
+    issues.push({
+      severity: "warning",
+      dimension: "structure.powerCenter.relationship",
+      title: "权力中心间缺少非二元对立的合作+冲突关系",
+      evidence: "所有 powerCenters 的 relationshipDynamics 未同时包含合作与冲突语义",
+      suggestion: "为至少 1 组权力中心对建模复合关系（如 A 与 B 在 X 上合作，在 Y 上冲突）",
+    });
+  }
+  // 结构化字段软门：当项目内容信号表明涉及感情线/技术代际/真相递进时，检查 phases 是否填写对应结构化字段。
+  // 检测基于项目自身内容的通用语义标记（非题材/书名特定），缺失时标记为 major 驱动 LLM 在 regenerate 时补全。
+  const centralQuestion = typeof payload.centralQuestion === "string" ? payload.centralQuestion : "";
+  const centralConflict = typeof payload.centralConflict === "string" ? payload.centralConflict : "";
+  const synopsis = typeof payload.synopsis === "string" ? payload.synopsis : "";
+  const projectText = `${centralQuestion} ${centralConflict} ${synopsis}`;
+  const ROMANCE_SIGNALS = ["感情", "爱情", "恋", "情感", "承诺", "关系", "姻", "侣", "知己", "红颜", "挚爱"];
+  const TECH_SIGNALS = ["代际", "技术", "体系", "升级", "演进", "编译", "修炼体系", "力量体系", "迭代", "突破"];
+  const TRUTH_SIGNALS = ["真相", "谜", "本源", "秘密", "揭示", "深层", "层层", "递进", "隐秘", "起源"];
+  const hasRomanceSignal = ROMANCE_SIGNALS.some((s) => projectText.includes(s));
+  const hasTechSignal = TECH_SIGNALS.some((s) => projectText.includes(s)) || growthCurves.some((g) => {
+    const sg = typeof g.stageGoals === "string" ? g.stageGoals : "";
+    return TECH_SIGNALS.some((s) => sg.includes(s));
+  });
+  const hasTruthSignal = TRUTH_SIGNALS.some((s) => projectText.includes(s));
+  if (hasRomanceSignal) {
+    const phasesWithRomance = phases.filter((p) => Array.isArray(p.romanceProgress) && p.romanceProgress.length > 0).length;
+    if (phasesWithRomance === 0) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.phase.romanceProgress",
+        title: "项目涉及感情线但 phases.romanceProgress 全部缺失",
+        evidence: `centralQuestion/Conflict 含感情信号但 0/${phases.length} phase 填写 romanceProgress`,
+        suggestion: "为每个有感情进展的 phase 填写 romanceProgress：romanceLineId/relationshipStage/irreversibleEvent，多线交叉用 crossOverWith",
+      });
+    }
+  }
+  if (hasTechSignal) {
+    const phasesWithTech = phases.filter((p) => p.techGeneration && typeof p.techGeneration === "object").length;
+    if (phasesWithTech === 0) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.phase.techGeneration",
+        title: "项目涉及技术/能力代际演进但 phases.techGeneration 全部缺失",
+        evidence: `growthCurves/centralQuestion 含技术代际信号但 0/${phases.length} phase 填写 techGeneration`,
+        suggestion: "为每个解锁新技术代际的 phase 填写 techGeneration：generation/name/unlockCondition/narrativeFunction",
+      });
+    }
+  }
+  if (hasTruthSignal) {
+    const phasesWithTruth = phases.filter((p) => p.originTruthLayer && typeof p.originTruthLayer === "object").length;
+    if (phasesWithTruth === 0) {
+      issues.push({
+        severity: "major",
+        dimension: "structure.phase.originTruthLayer",
+        title: "项目涉及多层真相递进但 phases.originTruthLayer 全部缺失",
+        evidence: `centralQuestion/Conflict 含真相递进信号但 0/${phases.length} phase 填写 originTruthLayer`,
+        suggestion: "为每个揭示真相层级的 phase 填写 originTruthLayer：layer/revelation/revealerCenterId/consequence",
+      });
+    }
+  }
+  return issues;
+}
+
 function plotDesignContext(phase: ArchitecturePhase, segments: Array<{ id: string; title: string; summary: string; order: number }>, chapters: Array<{ title: string; summary: string; plotSegmentId?: string; order: number }>) {
   return [
     `当前幕：${phase.title}\n叙事使命：${phase.purpose || "暂无"}\n不可逆转折：${phase.turningPoint || "暂无"}`,
     `已有剧情段：\n${segments.map((segment) => `- ${segment.title}：${segment.summary || "暂无概要"}`).join("\n") || "暂无"}`,
     `最近章节：\n${chapters.slice(-6).map((chapter) => `- ${chapter.title}：${chapter.summary || "暂无摘要"}`).join("\n") || "暂无"}`,
   ].join("\n\n");
+}
+
+/**
+ * instruction 长度上限（字符数）。超过此值时触发分段，避免上游 API HTTP 500。
+ * 选择 6000 是因为本次会话中架构生成 instruction 累积超 8000 字符触发 500；
+ * 6000 留出 sectionContextBlock + payloadContract + formatContextPacket 的余量。
+ */
+export const MAX_INSTRUCTION_CHARS = 6000;
+
+/**
+ * instruction 过长时分段：把「详细审核意见」段从核心指令中分离。
+ *
+ * 分割协议（通用，不依赖特定书名/题材）：
+ * 1. 查找 markdown 标题标记（# 审核意见 / # 审核反馈 / # 修订意见 / # 历史审核 / # 历史问题 / # 重生成意见）
+ * 2. 找到标记时，标记及之后的内容移入 reviewFeedback，之前的内容作为核心指令
+ * 3. 未找到标记但 instruction 超长时，保留前 MAX_INSTRUCTION_CHARS - 500 字符作为核心，剩余移入 reviewFeedback
+ * 4. 未超长时返回 { core: instruction, detail: undefined }
+ *
+ * 返回的 core 末尾会追加指引，让 LLM 知道详细意见在 contextPacket.review-feedback source 中。
+ */
+export function splitInstruction(instruction: string): { core: string; detail?: string } {
+  if (instruction.length <= MAX_INSTRUCTION_CHARS) return { core: instruction };
+  // 常见审核意见段落标记（通用，不针对特定项目）
+  const SECTION_MARKERS = [
+    "# 审核意见",
+    "# 审核反馈",
+    "# 修订意见",
+    "# 历史审核",
+    "# 历史问题",
+    "# 重生成意见",
+    "# 详细审核",
+    "# 本次审核",
+  ];
+  for (const marker of SECTION_MARKERS) {
+    const index = instruction.indexOf(marker);
+    if (index > 0) {
+      const core = instruction.slice(0, index).trim();
+      const detail = instruction.slice(index).trim();
+      if (core.length > 0 && detail.length > 0) {
+        return {
+          core: `${core}\n\n# 详细审核意见\n见 contextPacket 中的「详细审核反馈」source（review-feedback kind），必须阅读并执行。`,
+          detail,
+        };
+      }
+    }
+  }
+  // 无标记但超长：保留前段作为核心，后段移入 detail
+  const keepChars = MAX_INSTRUCTION_CHARS - 500;
+  const core = instruction.slice(0, keepChars).trim();
+  const detail = instruction.slice(keepChars).trim();
+  if (core.length > 0 && detail.length > 0) {
+    return {
+      core: `${core}\n\n# 详细审核意见\n见 contextPacket 中的「详细审核反馈」source（review-feedback kind），必须阅读并执行。`,
+      detail,
+    };
+  }
+  return { core: instruction };
 }
 
 /**
@@ -737,7 +1069,7 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
   const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
   const agent: AgentRun = { ...recordBase(params.projectId), goal: instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-plot-design-v2", contextPacketId: packet.id, role: "architect", skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: "设计剧情段与章节", tool: "model.structured", status: "running" }] };
   await novelDb.agentRuns.add(agent);
-  const basePrompt = `# 任务\n在幕“${phase.title}”下设计下一个剧情段，并把剧情段拆成可直接进入创作流程的章节。\n\n# 作者要求\n${instruction}\n\n# 当前规划上下文\n${plotDesignContext(phase, segments, documents)}\n\n# 结构要求\n1. 只创建 1 个 outlineNodes 剧情段，phaseId 必须为 ${phase.id}，order 必须为 ${segmentOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾、需要积累的体验和结束时允许发生的变化。\n3. 创建至少 1 个 documents 章节；数量由独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报决定，不得为固定范围凑数或压缩。plotSegmentId 必须使用 ref:剧情段tempId，order 从 ${chapterOrder} 连续排列。\n4. documents.title 就是正式章节标题；summary 说明本章主导叙事功能与结束状态；blueprint 写入探索或积累方向、本章兑现边界，以及相关 characterIds、plotThreadIds、foreshadowingIds。\n5. 每章只承担一个清晰的主导叙事功能；可以推进事件，也可以建立背景与常态、深化人物关系、积累情感压力或消化后果。章节之间必须可连续写作，不得把后续节点提前压入当前章节。\n6. 当剧情段确实跨越多种功能或强度时，安排有差异的行动、余波、蓄势或兑现节奏；单一过渡、完整高潮、短促插曲或实验性结构无需为满足模板强行补入低强度章。\n7. 不得创建幕、场景、时间线事件或其它资料表，也不得更新已有资料。\n8. 每章目标字数由系统统一设为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字，不得返回 targetWords。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+  const basePrompt = `# 任务\n在幕“${phase.title}”下设计下一个剧情段，并把剧情段拆成可直接进入创作流程的章节。\n\n# 作者要求\n${instruction}\n\n# 当前规划上下文\n${plotDesignContext(phase, segments, documents)}\n\n# 结构要求\n1. 只创建 1 个 outlineNodes 剧情段，phaseId 必须为 ${phase.id}，order 必须为 ${segmentOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾、需要积累的体验和结束时允许发生的变化。\n3. 创建至少 1 个 documents 章节；数量由独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报决定，不得为固定范围凑数或压缩。plotSegmentId 必须使用 ref:剧情段tempId，order 从 ${chapterOrder} 连续排列。\n4. documents.title 就是正式章节标题；summary 说明本章主导叙事功能与结束状态；blueprint 写入探索或积累方向、本章兑现边界，以及相关 characterIds、plotThreadIds、foreshadowingIds。\n5. 每章只承担一个清晰的主导叙事功能；可以推进事件，也可以建立背景与常态、深化人物关系、积累情感压力或消化后果。章节之间必须可连续写作，不得把后续节点提前压入当前章节。\n5.5. 剧情段 summary 首行必须用【功能类型】标注，五类任选其一：主线推进型/世界观穿插型/群像塑造型/支线编织型/呼吸节奏型。功能类型决定本剧情段是否推进当前 phase 主线。参考前序剧情段功能类型：若前序已有连续主线推进剧情段，本次建议生成交织型剧情段（世界观穿插/群像塑造/支线编织/呼吸节奏）稀释推进速度。非主线推进剧情段也必须有自身完整的人物处境、矛盾和因果链，不能只是主线休息站。\n6. 当剧情段确实跨越多种功能或强度时，安排有差异的行动、余波、蓄势或兑现节奏；世界观穿插型/群像塑造型/呼吸节奏型剧情段的内部章节可全部为低强度铺陈章，只要它们深化读者对世界、人物或关系的理解，无需强行补入行动章。单一过渡、完整高潮、短促插曲或实验性结构无需为满足模板强行补入低强度章。\n7. 不得创建幕、场景、时间线事件或其它资料表，也不得更新已有资料。\n8. 每章目标字数由系统统一设为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字，不得返回 targetWords。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
   const auditEnabled = !!params.audit;
   const maxAuditIterations = Math.max(0, Math.min(3, params.audit?.maxIterations ?? 1));
   try {
@@ -945,12 +1277,19 @@ function validateArchitectureSystems(payload: Record<string, unknown>, targetWor
   if (longHorizonHooks.length < required.longHorizonHooks) return `longHorizonHooks 只有 ${longHorizonHooks.length} 条，${isMillionWordProject ? "百万字" : "当前体量"}架构至少需要 ${required.longHorizonHooks} 条长期钩子；每条需以具体 surfaceDetail 出现，并保留至少两种 possibleInterpretations。`;
 
   const knownCenters = new Set(centerRefs);
+  // 根因修复（iter14 引用完整性循环）：原错误消息只说"引用了未建模中心"，
+  // 没列出已有合法 powerCenter 的 id/name，LLM 难以决定是"新增 center"还是"改引用"，
+  // 导致连续 3 次重复同一错误。修复：错误消息列出已有合法 id/name 供 LLM 直接引用，
+  // 同时给出"新增 center 须补全字段"的可操作指引，降低 LLM 决策成本。
+  // 判定信号：validateArchitectureSystems 连续拦截 affectedCenters 引用未建模中心，
+  // 且重试消息不含已有合法选项列表 → LLM 无可操作路径 → 重复错误。
+  const knownCenterList = centerRefs.length ? centerRefs.join("、") : "（当前 powerCenters 为空）";
   for (const [collectionName, records] of [["feedbackLoops", feedbackLoops], ["longHorizonHooks", longHorizonHooks]] as const) {
     for (const record of records) {
       const affectedCenters = Array.isArray(record.affectedCenters) ? record.affectedCenters.map(String) : [];
       const unknownCenters = affectedCenters.filter((center) => !knownCenters.has(center));
       if (unknownCenters.length > 0) {
-        return `${collectionName} 中 ${String(record.id ?? record.name ?? "未命名项")} 的 affectedCenters 引用了未建模中心：${unknownCenters.join("、")}。请先把这些中心加入 powerCenters，或改为已有中心的 id/准确名称。`;
+        return `${collectionName} 中 ${String(record.id ?? record.name ?? "未命名项")} 的 affectedCenters 引用了未建模中心：${unknownCenters.join("、")}。当前已建模的合法 powerCenter id/名称为：${knownCenterList}。修复方式（二选一）：(A) 把 affectedCenters 中的未建模引用改为上述已有 id/名称之一；(B) 若该未建模中心确属故事必需的独立行动者，在 powerCenters 数组中新增完整条目（含 id/name/interest/resources/actionCapacity/bottomLine/relationshipDynamics 全部必填字段），然后保留该引用。不得在 feedbackLoops/longHorizonHooks 中引用未在 powerCenters 建模的势力。`;
       }
     }
   }
@@ -1081,13 +1420,17 @@ export async function runGenerationTask(params: {
   if (!project) throw new Error("项目不存在");
   const skills = await resolveNovelSkills({ projectId: params.projectId, stage: task.skillStage });
   if (skills.conflicts.length) throw new Error(`Skill 冲突：${skills.conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")}`);
+  // P1-1: instruction 过长时分段，避免上游 API HTTP 500。
+  // 核心指令保留在 instruction，详细审核意见移入 contextPacket 的 review-feedback source。
+  const { core: coreInstruction, detail: reviewFeedbackDetail } = splitInstruction(params.instruction);
   const packet = await compileNovelContext({
     projectId: params.projectId,
     task: params.taskKey,
-    instruction: params.instruction,
+    instruction: coreInstruction,
     targetDocumentId: params.targetId,
     stage: task.skillStage,
     resolvedSkills: skills.skills,
+    reviewFeedback: reviewFeedbackDetail,
   });
   const inventory = await existingInventory(params.projectId, task.allowedTables);
   const availableReferences = await referenceInventory(params.projectId);
@@ -1110,6 +1453,15 @@ export async function runGenerationTask(params: {
       ? `本项目体量对应的架构容量为：powerCenters 至少 ${capacity.powerCenters} 个、feedbackLoops 至少 ${capacity.feedbackLoops} 条、longHorizonHooks 至少 ${capacity.longHorizonHooks} 条；每条 feedbackLoops.affectedCenters 至少引用 ${capacity.feedbackAffectedCenters} 个已建模中心。`
       : "本项目不是百万字长篇：结构数量服从真实叙事需要，不得为长篇门槛强行扩张。";
     sectionContextBlock += `\n# 架构字段落点\n- ${architectureCapacity}\n- centralConflict 或 synopsis 必须呈现可辨认的权力中心，以及各自的利益、关键资源、行动能力和底线；至少一组关系必须同时包含合作与冲突。\n- 必须写清资源如何在这些权力中心之间流转、短缺或被截断，以及局部行动如何反馈到其他中心，不能只写抽象的“旧秩序”与“新秩序”。feedbackLoops 和 longHorizonHooks 的 affectedCenters 只能引用 powerCenters 中已有的 id 或准确名称，不得引用只在散文中出现、却没有建模的势力。\n- 长期钩子须以允许多种解释的具体异常或日常细节出现，供后续伏笔阶段展开；不得提前锁死唯一回收答案。\n- phases.purpose 必须分别说明该阶段由哪项资源、秘密、关系或不可兼得的选择把主线、群像行动和感情线连在一起；若含感情线，写出由双方职责、边界或价值承诺导致的关系阶段变化。\n- phases.turningPoint 保持文学表达，但必须明确哪项资源控制已经易手、哪桩秘密已经公开、哪个组织已经裂变，或哪份关系承诺已经使旧选择不再可能；不能只写“人物理解了”“世界改变了”等抽象感悟。\n`;
+    // 根因修复（iter15 发现）：payloadContract 的"当项目涉及..."条件指令太含糊，
+    // LLM 不认为项目"涉及"该要素 → 不填充 optional 字段。LLM 注意力位置偏差假设已证伪
+    // （iter13 issues 置首 techGeneration/originTruthLayer，iter14/15 仍 0/5）。
+    // 修复：百万字长篇项目无条件要求填充 phases.romanceProgress/techGeneration/originTruthLayer。
+    // 百万字长篇几乎必然涉及感情线/技术代际/真相递进；若个别项目不涉及，LLM 可填"不适用"。
+    // 判定信号：schema 已解锁 + issues 已注入 + maxTokens 充足 + 仍不填充 → 条件指令解读失败。
+    if (enforceMillionWordStructure) {
+      sectionContextBlock += `\n# 百万字长篇结构化字段强制填充（无条件）\n百万字长篇项目必须为每个 phase 填写以下三个结构化字段，不得留空，不得以"本项目不涉及"为由跳过：\n- phases[].romanceProgress：每个 phase 必须至少 1 条 romanceProgress（romanceLineId/relationshipStage/irreversibleEvent）。即使本 phase 感情线无进展，也须填写 relationshipStage="停滞" + irreversibleEvent="无" + crossOverWith=[]，标注该阶段感情线状态。\n- phases[].techGeneration：每个 phase 必须绑定 1 个 techGeneration（generation/name/unlockCondition/narrativeFunction）。即使本 phase 无技术升级，也须填写 generation="延续" + name="前代技术延续" + unlockCondition="无新解锁" + narrativeFunction="维持既有技术格局"。\n- phases[].originTruthLayer：每个 phase 必须绑定 1 个 originTruthLayer（layer/revelation/revealerCenterId/consequence）。即使本 phase 无真相揭示，也须填写 layer="延续" + revelation="无新揭示" + revealerCenterId="无" + consequence="维持既有认知"。\n上述字段是百万字长篇结构化展开的硬性要求，不是可选建议。缺失任何一个 phase 的任何一个字段都会被审核标记为 major issue。\n`;
+    }
   }
   if (params.taskKey === "worldview") {
     const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
@@ -1160,6 +1512,13 @@ export async function runGenerationTask(params: {
         signal: params.signal,
         // Loop 7 修复 #11：角色生成需输出 5 个角色完整字段（appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state），180s 默认超时不足
         timeoutMs: params.taskKey === "characters" ? 300_000 : undefined,
+        // Loop 20 修复：Layer 10 把 romanceProgress/techGeneration/originTruthLayer 提升为 schema required 后，
+        // 每个 phase 的 token 成本显著上升（含 stages + 3 个结构化字段对象）。默认 maxTokens=8192 下 LLM
+        // 为产出完整合法 JSON 会自我截断 phases 数组长度（iter21 退化到 1 phase）。
+        // 通用规则：schema required 越多 → 单项 token 成本越高 → 固定预算下可容纳 item 数越少；
+        // 需让 maxTokens 随结构丰富度缩放。architecture 是最复杂的结构化生成任务，提升到 16384。
+        // TODO P2：可按 architectureSystemCapacity(project.targetWords) 动态计算 maxTokens，而非硬编码。
+        maxTokens: params.taskKey === "architecture" ? 16384 : undefined,
       });
       items = parseProposalItems(result.data);
       const nextRetryReason = getGenerationRetryReason(params.taskKey, items, minItems, project.targetWords);

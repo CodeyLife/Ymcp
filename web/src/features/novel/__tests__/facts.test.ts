@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { addEntity, createChapter, createNovelProject, novelDb, recordBase } from "../db";
 import { autoAcceptSafeFactCandidates, bulkSetFactCandidateStatus, classifyFactRisk, commitAcceptedFacts, dedupeCharacterFactCandidates, filterAcceptableFactIds, filterSafeAcceptableFactIds, findExistingCharacter, formatFactCandidateValue, listFactAssertionsWithMeta, listKnowledgeAssertionsWithMeta, prepareFactCandidates, setFactCandidateStatus, storeFactCandidates } from "../facts";
-import type { FactAssertion, WorkflowRun } from "../types";
+import type { FactAssertion, StoryEntity, WorkflowRun } from "../types";
 import type { ExtractedFact } from "../facts";
 
 beforeEach(async () => {
@@ -408,6 +408,40 @@ describe("classifyFactRisk - 新人物新建判定", () => {
     };
     expect(classifyFactRisk(fact)).toMatchObject({ risk: "high" });
   });
+
+  // F-018 回归测试：novelty=new + targetId 已存在 + field=record 是矛盾组合
+  // （新人物新建应省略 targetId，由系统生成 id）。classifyFactRisk 必须判 high，
+  // 否则 commitAcceptedFacts 会走更新路径写入 entity.record 虚拟字段导致 entity 静默腐化。
+  it("marks novelty=new + targetId + field=record as high to prevent entity corruption (F-018)", () => {
+    const fact: ExtractedFact = {
+      targetTable: "entities",
+      targetId: "existing-entity-id",
+      field: "record",
+      after: { kind: "character", name: "新角色", aliases: [], summary: "", description: "" },
+      evidence: "新角色登场。",
+      confidence: 0.99,
+      novelty: "new",
+      conflict: false,
+    };
+    const result = classifyFactRisk(fact);
+    expect(result.risk).toBe("high");
+    // 不应再返回"正文首次出现的重要人物新建"的 safe 理由
+    expect(result.riskReason).not.toBe("正文首次出现的重要人物新建");
+  });
+
+  it("still marks novelty=new + no targetId + field=record as safe when payload is valid character (F-018 regression)", () => {
+    // 反例：正常新人物新建路径（无 targetId）仍应判 safe
+    const fact: ExtractedFact = {
+      targetTable: "entities",
+      field: "record",
+      after: { kind: "character", name: "李淳罡", aliases: ["老黄"], summary: "剑神", description: "" },
+      evidence: "李淳罡登场。",
+      confidence: 0.92,
+      novelty: "new",
+      conflict: false,
+    };
+    expect(classifyFactRisk(fact)).toMatchObject({ risk: "safe", riskReason: "正文首次出现的重要人物新建" });
+  });
 });
 
 describe("commitAcceptedFacts - 新人物新建", () => {
@@ -472,6 +506,48 @@ describe("commitAcceptedFacts - 新人物新建", () => {
 
     const committed = await commitAcceptedFacts(project.id, run.id);
     expect(committed.committedCandidateIds).toHaveLength(0);
+  });
+
+  // F-018 回归测试：commitAcceptedFacts 更新路径必须防御性 skip field=record 候选，
+  // 防止 applyField 写入 entity.record 虚拟字段导致 entity 静默腐化。
+  // 即使人通过 fact-approval 强制采纳矛盾组合（novelty=new+targetId+field=record），
+  // commit 也不应执行该写入。
+  it("skips field=record candidates on update path to prevent entity corruption (F-018)", async () => {
+    const project = await createNovelProject({ title: "field=record 防御", genre: ["武侠"], premise: "测试 field=record 防御性 skip。" });
+    const run = makeRun(project.id);
+    await novelDb.workflowRuns.add(run);
+    // 先创建一个已存在的 entity 作为 targetId 目标
+    const existingEntity: StoryEntity = {
+      ...recordBase(project.id),
+      kind: "character",
+      name: "原角色",
+      aliases: [],
+      summary: "原有角色",
+      description: "",
+      tags: [],
+      lockedFacts: [],
+      attributes: {},
+    };
+    await novelDb.entities.add(existingEntity);
+    // 构造矛盾候选：novelty=new + targetId 指向已存在 entity + field=record
+    // classifyFactRisk 已判 high（F-018 修复），但人工确认后仍进入 commit 更新路径
+    await addAcceptedCandidate(project.id, run.id, {
+      targetTable: "entities",
+      targetId: existingEntity.id,
+      field: "record",
+      after: { kind: "character", name: "新角色名", aliases: [], summary: "", description: "" },
+      novelty: "new",
+    });
+
+    const committed = await commitAcceptedFacts(project.id, run.id);
+    // 应被防御性 skip，不写入
+    expect(committed.committedCandidateIds).toHaveLength(0);
+    expect(committed.skipped).toHaveLength(1);
+    expect(committed.skipped[0]?.reason).toBe("update-record-field-not-allowed");
+    // 验证原 entity 未被腐化——record 虚拟字段不应被写入
+    const entityAfter = await novelDb.entities.get(existingEntity.id) as Record<string, unknown> | undefined;
+    expect(entityAfter?.record).toBeUndefined();
+    expect(entityAfter?.name).toBe("原角色");
   });
 });
 

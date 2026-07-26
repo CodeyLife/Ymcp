@@ -67,7 +67,8 @@ const TURN_SCHEMA = {
           title: { type: "string" },
           content: { type: "string" },
           confidence: { type: "number", minimum: 0, maximum: 1 },
-          evidenceQuote: { type: "string" },
+          // F-020 修复：evidenceQuote 必须非空，LLM 不能返回空字符串绕过证据契约
+          evidenceQuote: { type: "string", minLength: 1 },
         },
       },
     },
@@ -385,7 +386,11 @@ const MEMORY_EXTRACTOR_VERSION = "explicit-author-evidence-v1";
 async function savePreferenceMemory(params: { thread: NovelConversationThread; messageId: string; authorContent: string; title: string; content: string; confidence: number; evidenceQuote?: string }) {
   const normalized = params.content.trim();
   if (!normalized) return;
+  // F-020 修复：evidenceQuote 是"逐字复制本轮原话"的契约要求，不允许为空。
+  // 原实现 quote 为空时 evidenceQuotes 存储为 []，违反"必须带证据"契约，且未利用 authorContent 校验逐字匹配。
+  // 空证据直接跳过创建——无证据的偏好不应被存储。
   const quote = params.evidenceQuote?.trim() ?? "";
+  if (!quote) return;
   const status: ConversationMemory["status"] = "pending";
   const existing = await novelDb.conversationMemories.where("projectId").equals(params.thread.projectId).and((memory) => ["active", "pending"].includes(memory.status) && memory.kind === "preference").toArray();
   const duplicate = existing.find((memory) => memory.content.trim() === normalized && memory.status === status);
@@ -393,7 +398,7 @@ async function savePreferenceMemory(params: { thread: NovelConversationThread; m
   const memory: ConversationMemory = {
     ...recordBase(params.thread.projectId), threadId: params.thread.id, targetId: params.thread.targetId, scope: "project", scopeKey: `project:${params.thread.projectId}`,
     kind: "preference", title: params.title.trim() || "作者偏好", content: normalized, status, confidence: Math.max(0, Math.min(1, params.confidence)),
-    sourceMessageIds: [params.messageId], evidenceQuotes: quote ? [quote] : [], extractorVersion: MEMORY_EXTRACTOR_VERSION,
+    sourceMessageIds: [params.messageId], evidenceQuotes: [quote], extractorVersion: MEMORY_EXTRACTOR_VERSION,
     autoApplied: false,
   };
   await novelDb.conversationMemories.add(memory);
@@ -442,6 +447,9 @@ export async function runPendingMemoryJobs(projectId: string) {
           const payload = job.payload as { threadId?: string; messageId?: string; title?: string; content?: string; confidence?: number; evidenceQuote?: string };
           const [thread, message] = await Promise.all([payload.threadId ? novelDb.conversationThreads.get(payload.threadId) : undefined, payload.messageId ? novelDb.conversationMessages.get(payload.messageId) : undefined]);
           if (!thread || !message || message.role !== "user" || !payload.title || !payload.content) throw new Error("记忆提炼任务来源无效");
+          // F-020 修复：memory-extraction 任务必须带非空 evidenceQuote，否则抛错触发重试。
+          // 契约要求"必须带 evidenceQuote（逐字复制本轮原话）"，空证据不应被静默跳过。
+          if (!payload.evidenceQuote?.trim()) throw new Error("记忆提炼任务缺少证据引用");
           await savePreferenceMemory({ thread, messageId: message.id, authorContent: message.content, title: payload.title, content: payload.content, confidence: payload.confidence ?? 0, evidenceQuote: payload.evidenceQuote });
         } else {
           const exhaustive: never = job.jobType;

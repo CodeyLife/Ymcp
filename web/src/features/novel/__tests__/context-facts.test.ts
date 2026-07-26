@@ -203,3 +203,147 @@ describe("context invariants and fact commits", () => {
     expect(packet.sources.find((item) => item.id === character.id)?.content).not.toContain("第十章才抵达的南港");
   });
 });
+
+// F-003 回归测试：ROLE_SOURCE_KINDS 必须覆盖所有 NovelAgentRole，
+// 且 push() 必须按角色白名单过滤 source kind——不允许"角色已指定但白名单缺省"
+// 被等同于"角色未指定"而无差别注入所有 source kind。
+describe("F-003: ROLE_SOURCE_KINDS covers all NovelAgentRole and filters by role", () => {
+  it("quality-editor role does not receive architecture/outline sources outside its whitelist", async () => {
+    const project = await createNovelProject({ title: "审校角色过滤", genre: ["悬疑"], premise: "测试 quality-editor 角色白名单生效。" });
+    const architecture = (await novelDb.architectures.where("projectId").equals(project.id).first())!;
+    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase-1", title: "第一幕", purpose: "破局", turningPoint: "线索显现", order: 0, locked: false, primaryCurveId: "main" }] });
+    await addOutlineNode(project.id, "phase-1", "破局起点", 0);
+    const chapter = await createChapter(project.id, "线索之夜");
+
+    const packet = await compileNovelContext({
+      projectId: project.id,
+      task: "chapter-review",
+      instruction: "审校第一章",
+      targetDocumentId: chapter.id,
+      stage: "review",
+      consumer: { workflowRunId: undefined, stage: "review", role: "quality-editor" },
+    });
+
+    // quality-editor 白名单应包含 instruction/style/document 等审校核心来源
+    expect(packet.sources.some((s) => s.kind === "instruction")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "style")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "document")).toBe(true);
+    // quality-editor 白名单不包含 outline（不在白名单中），应被过滤
+    expect(packet.sources.some((s) => s.kind === "outline")).toBe(false);
+  });
+
+  it("memory-curator role only receives curation-relevant sources", async () => {
+    const project = await createNovelProject({ title: "记忆策展过滤", genre: ["都市"], premise: "测试 memory-curator 角色白名单生效。" });
+    const architecture = (await novelDb.architectures.where("projectId").equals(project.id).first())!;
+    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase-1", title: "开端", purpose: "相遇", turningPoint: "雨夜", order: 0, locked: false, primaryCurveId: "main" }] });
+    await addOutlineNode(project.id, "phase-1", "相遇", 0);
+    const chapter = await createChapter(project.id, "雨夜");
+
+    const packet = await compileNovelContext({
+      projectId: project.id,
+      task: "memory-curation",
+      instruction: "策展本章记忆",
+      targetDocumentId: chapter.id,
+      stage: "review",
+      consumer: { workflowRunId: undefined, stage: "review", role: "memory-curator" },
+    });
+
+    // memory-curator 白名单：instruction/document/entity/relation/fact/knowledge/memory/creative-brief/skill
+    expect(packet.sources.some((s) => s.kind === "instruction")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "document")).toBe(true);
+    // memory-curator 不在白名单中的来源应被过滤
+    expect(packet.sources.some((s) => s.kind === "outline")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "scene")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "taste")).toBe(false);
+  });
+
+  it("conversation-assistant role receives minimal conversational sources", async () => {
+    const project = await createNovelProject({ title: "对话助理过滤", genre: ["古风"], premise: "测试 conversation-assistant 角色白名单生效。" });
+
+    const packet = await compileNovelContext({
+      projectId: project.id,
+      task: "conversation",
+      instruction: "与作者对话",
+      stage: "drafting",
+      consumer: { workflowRunId: undefined, stage: "review", role: "conversation-assistant" },
+    });
+
+    // conversation-assistant 白名单：instruction/style/document/creative-brief/skill/conversation-memory
+    expect(packet.sources.some((s) => s.kind === "instruction")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "style")).toBe(true);
+    // conversation-assistant 不应看到 architecture/entity/outline 等结构化来源
+    expect(packet.sources.some((s) => s.kind === "architecture")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "entity")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "outline")).toBe(false);
+  });
+
+  it("reader-reviewer role does not receive entity/relation/outline sources", async () => {
+    const project = await createNovelProject({ title: "读者审校过滤", genre: ["悬疑"], premise: "测试 reader-reviewer 角色白名单生效。" });
+    const entity: StoryEntity = { ...recordBase(project.id), kind: "character", name: "主角", aliases: [], summary: "侦探", description: "", tags: [], lockedFacts: [], attributes: {} };
+    await novelDb.entities.add(entity);
+    const architecture = (await novelDb.architectures.where("projectId").equals(project.id).first())!;
+    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase-1", title: "开端", purpose: "破案", turningPoint: "现场", order: 0, locked: false, primaryCurveId: "main" }] });
+    await addOutlineNode(project.id, "phase-1", "案发现场", 0);
+    const chapter = await createChapter(project.id, "第一案");
+
+    const packet = await compileNovelContext({
+      projectId: project.id,
+      task: "chapter-review",
+      instruction: "从读者视角审校",
+      targetDocumentId: chapter.id,
+      stage: "review",
+      consumer: { workflowRunId: undefined, stage: "review", role: "reader-reviewer" },
+    });
+
+    // reader-reviewer 白名单：instruction/style/taste/document/thread/foreshadowing/creative-brief/skill/conversation-memory
+    expect(packet.sources.some((s) => s.kind === "instruction")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "style")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "document")).toBe(true);
+    // reader-reviewer 不应看到 entity/relation/architecture/outline（不在白名单中）
+    expect(packet.sources.some((s) => s.kind === "entity")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "architecture")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "outline")).toBe(false);
+  });
+
+  it("skill-iterator role only receives skill/style/taste/document sources", async () => {
+    const project = await createNovelProject({ title: "技能迭代过滤", genre: ["科幻"], premise: "测试 skill-iterator 角色白名单生效。" });
+
+    const packet = await compileNovelContext({
+      projectId: project.id,
+      task: "skill-iteration",
+      instruction: "评估审校经验并提议技能改进",
+      stage: "review",
+      consumer: { workflowRunId: undefined, stage: "review", role: "skill-iterator" },
+    });
+
+    // skill-iterator 白名单：instruction/style/taste/document/creative-brief/skill
+    // 注：skill source 注入依赖项目有 skill，空项目可能不注入，只验证 instruction 必存在
+    expect(packet.sources.some((s) => s.kind === "instruction")).toBe(true);
+    // skill-iterator 不应看到 entity/relation/outline/scene 等结构化来源
+    expect(packet.sources.some((s) => s.kind === "entity")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "outline")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "scene")).toBe(false);
+    expect(packet.sources.some((s) => s.kind === "fact")).toBe(false);
+  });
+
+  it("undefined role (no consumer) injects all source kinds without filtering", async () => {
+    // 反例：未指定 role 时 allowedKinds 为 undefined，push() 跳过过滤，所有 source kind 都可注入
+    const project = await createNovelProject({ title: "无角色过滤", genre: ["都市"], premise: "测试未指定 role 时不过滤。" });
+    const architecture = (await novelDb.architectures.where("projectId").equals(project.id).first())!;
+    await saveStoryArchitecture({ ...architecture, status: "approved", phases: [{ id: "phase-1", title: "第一幕", purpose: "相遇", turningPoint: "雨夜", order: 0, locked: false, primaryCurveId: "main" }] });
+    await addOutlineNode(project.id, "phase-1", "相遇", 0);
+
+    const packet = await compileNovelContext({
+      projectId: project.id,
+      task: "planning",
+      instruction: "规划章节",
+      stage: "planning",
+      // 不传 consumer，role 为 undefined
+    });
+
+    // 未指定 role 时不过滤，architecture/outline 等都可以注入
+    expect(packet.sources.some((s) => s.kind === "architecture")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "outline")).toBe(true);
+    expect(packet.sources.some((s) => s.kind === "instruction")).toBe(true);
+  });
+});

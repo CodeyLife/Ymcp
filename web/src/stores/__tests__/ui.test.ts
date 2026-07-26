@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/config/defaults", () => ({
-  DEFAULT_BASE_URL: "https://gpt.eromaa.com/v1",
+  DEFAULT_BASE_URL: "https://chat.yujin8.top/v1",
   DEFAULT_API_KEY: "",
 }));
 

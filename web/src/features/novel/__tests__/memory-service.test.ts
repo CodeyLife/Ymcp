@@ -234,6 +234,73 @@ describe("NovelMemoryService", () => {
     expect(await novelDb.memoryJobs.where("projectId").equals(project.id).and((item) => item.status === "pending").count()).toBe(0);
   });
 
+  // F-020 回归测试：savePreferenceMemory 必须拒绝空 evidenceQuote，
+  // memory-extraction 任务处理必须对空 evidenceQuote 抛错触发重试，
+  // TURN_SCHEMA 的 evidenceQuote 必须有 minLength: 1。
+  describe("F-020: evidenceQuote non-empty enforcement", () => {
+    it("savePreferenceMemory skips creation when evidenceQuote is empty (F-020)", async () => {
+      const { project, first } = await seed();
+      const thread = await service.getOrCreateThread({ projectId: project.id, targetDocumentId: first.id });
+      const message = await service.appendMessage({ threadId: thread.id, role: "user", content: "我偏好短句。" });
+      // 模拟 LLM 返回空 evidenceQuote——savePreferenceMemory 应跳过创建
+      const job = await scheduleMemoryJob({ projectId: project.id, jobType: "memory-extraction", idempotencyKey: "extract:empty-quote", payload: { threadId: thread.id, messageId: message.id, title: "句式偏好", content: "偏好短句", confidence: 0.95, evidenceQuote: "" } });
+      await runPendingMemoryJobs(project.id);
+
+      // 任务应失败（throw 触发重试），不应静默完成
+      const jobAfter = await novelDb.memoryJobs.get(job.id);
+      expect(jobAfter?.status).toBe("pending");
+      expect(jobAfter?.lastError).toContain("证据引用");
+      // 不应创建任何 preference memory
+      const memories = await novelDb.conversationMemories.where("projectId").equals(project.id).toArray();
+      expect(memories).toHaveLength(0);
+    });
+
+    it("savePreferenceMemory skips creation when evidenceQuote is whitespace-only (F-020)", async () => {
+      const { project, first } = await seed();
+      const thread = await service.getOrCreateThread({ projectId: project.id, targetDocumentId: first.id });
+      const message = await service.appendMessage({ threadId: thread.id, role: "user", content: "我偏好短句。" });
+      // 模拟 LLM 返回纯空白 evidenceQuote——trim() 后为空，应跳过
+      const job = await scheduleMemoryJob({ projectId: project.id, jobType: "memory-extraction", idempotencyKey: "extract:whitespace-quote", payload: { threadId: thread.id, messageId: message.id, title: "句式偏好", content: "偏好短句", confidence: 0.95, evidenceQuote: "   " } });
+      await runPendingMemoryJobs(project.id);
+
+      const jobAfter = await novelDb.memoryJobs.get(job.id);
+      expect(jobAfter?.status).toBe("pending");
+      expect(jobAfter?.lastError).toContain("证据引用");
+      const memories = await novelDb.conversationMemories.where("projectId").equals(project.id).toArray();
+      expect(memories).toHaveLength(0);
+    });
+
+    it("savePreferenceMemory skips creation when evidenceQuote is undefined (F-020)", async () => {
+      const { project, first } = await seed();
+      const thread = await service.getOrCreateThread({ projectId: project.id, targetDocumentId: first.id });
+      const message = await service.appendMessage({ threadId: thread.id, role: "user", content: "我偏好短句。" });
+      // 模拟 payload 未提供 evidenceQuote
+      const job = await scheduleMemoryJob({ projectId: project.id, jobType: "memory-extraction", idempotencyKey: "extract:undefined-quote", payload: { threadId: thread.id, messageId: message.id, title: "句式偏好", content: "偏好短句", confidence: 0.95 } });
+      await runPendingMemoryJobs(project.id);
+
+      const jobAfter = await novelDb.memoryJobs.get(job.id);
+      expect(jobAfter?.status).toBe("pending");
+      expect(jobAfter?.lastError).toContain("证据引用");
+      const memories = await novelDb.conversationMemories.where("projectId").equals(project.id).toArray();
+      expect(memories).toHaveLength(0);
+    });
+
+    it("still creates memory when evidenceQuote is non-empty (F-020 regression)", async () => {
+      // 反例：非空 evidenceQuote 仍应正常创建记忆
+      const { project, first } = await seed();
+      const thread = await service.getOrCreateThread({ projectId: project.id, targetDocumentId: first.id });
+      const message = await service.appendMessage({ threadId: thread.id, role: "user", content: "我偏好克制短句。" });
+      const job = await scheduleMemoryJob({ projectId: project.id, jobType: "memory-extraction", idempotencyKey: "extract:valid-quote", payload: { threadId: thread.id, messageId: message.id, title: "句式偏好", content: "偏好克制短句", confidence: 0.95, evidenceQuote: "我偏好克制短句" } });
+      await runPendingMemoryJobs(project.id);
+
+      const jobAfter = await novelDb.memoryJobs.get(job.id);
+      expect(jobAfter?.status).toBe("completed");
+      const memory = await novelDb.conversationMemories.where("projectId").equals(project.id).first();
+      expect(memory).toBeDefined();
+      expect(memory?.evidenceQuotes).toEqual(["我偏好克制短句"]);
+    });
+  });
+
   it("keeps polling until a backoff-delayed memory job succeeds", async () => {
     const { project } = await seed();
     vi.mocked(upsertEmbedding).mockRejectedValueOnce(new Error("temporary outage")).mockResolvedValueOnce(undefined);

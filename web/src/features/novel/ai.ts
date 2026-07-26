@@ -99,11 +99,15 @@ export const ROLE_PROMPTS: Readonly<Record<NovelAgentRole, string>> = {
 交付：返回语法完整、职责明确、优先级一致的完整 skill prompt；rationale 能从证据追溯到机制和规则，triggeredByIssueIds 准确覆盖实际触发项。`,
 };
 
+// TODO P1：DEFAULT_BASE_URL 在 ai.ts/defaults.ts/service.ts 三处硬编码且 endpoint() 用字符串等式判断 proxy 走向；
+// URL 变更会静默失效（proxy 不走 / 外部直连）。应集中到单一 config 常量并由此派生 endpoint 判定，避免散落同步。
+const DEV_PROXY_BASE_URL = "https://chat.yujin8.top/v1";
+
 export function endpoint(baseUrl: string) {
   const normalized = baseUrl.replace(/\/+$/, "");
   // 浏器 dev 模式下走 Vite proxy 避免 CORS；但 Node/SSR 环境（如 novel:closed-loop / novel:20chapters CLI）
   // 没有 window.location，fetch 无法解析相对 URL，必须直连 baseUrl。
-  if (normalized === "https://gpt.eromaa.com/v1" && import.meta.env?.DEV && typeof window !== "undefined") return "/ai-proxy";
+  if (normalized === DEV_PROXY_BASE_URL && import.meta.env?.DEV && typeof window !== "undefined") return "/ai-proxy";
   return normalized;
 }
 async function hashPrompt(value: string) {

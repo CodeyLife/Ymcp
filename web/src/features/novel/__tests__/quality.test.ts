@@ -441,3 +441,149 @@ describe("prose discipline checks", () => {
     expect(result.issues.some((item) => item.rule === "style.gesture-repetition")).toBe(false);
   });
 });
+
+// F-007 回归测试：STYLE_RULES_TO_PROMOTE 中的 6 条 style 规则 + PROMOTABLE_WARNING_PATTERNS
+// 匹配的 style.paragraph-variation，被 shouldPromoteWarning 升级为 major 后必须有 revisionRanges
+// 才能被 revision-stage 的 collectRevisionParagraphs 定位。否则升级是空操作——issue 进入 unlocated
+// 列表，LLM 修订 prompt 收不到定位信息，风格问题持续残留。
+describe("F-007: promotable style warnings must carry revisionRanges", () => {
+  // 辅助：找出指定 rule 的 issue
+  function findIssue(text: string, rule: string) {
+    return runDeterministicQualityChecks({ text }).issues.find((item) => item.rule === rule);
+  }
+
+  it("style.template-density emits revisionRanges pointing to paragraphs with template expressions", () => {
+    // 构造足够多模板表达触发密度阈值（templateHits / totalChars * 1000 > 2）
+    const text = [
+      "他眼中闪过一丝犹豫，瞳孔微缩，嘴角微微上扬。",
+      "她若有所思地看着远方，不由自主地叹了口气。",
+      "他意味深长地看了一眼，与此同时，正因如此。",
+      "她第一次意识到问题的严重性，心如刀割。",
+      "他倒吸一口凉气，眼眶泛红，说不话来。",
+      "独立的第三段叙述，没有任何模板表达内容。",
+    ].join("\n\n");
+    const issue = findIssue(text, "style.template-density");
+    expect(issue).toBeDefined();
+    expect(issue?.revisionRanges?.length).toBeGreaterThan(0);
+    // revisionRanges 应指向含模板表达的段落（前 3 段命中，slice(0,3)）
+    for (const range of issue!.revisionRanges!) {
+      expect(range.start).toBeGreaterThanOrEqual(1);
+      expect(range.end).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("style.emphasis-devaluation emits revisionRanges pointing to paragraphs with the emphasized word", () => {
+    // "第一次" 出现 3 次 > 2 阈值
+    const text = [
+      "他第一次意识到夜色的重量。",
+      "她第一次发现雨声里有别的东西。",
+      "他第一次感到脊背发凉。",
+      "第四段没有这个词的叙述。",
+      "第五段继续推进故事，没有强调词。",
+      "第六段独立的结尾，没有任何强调。",
+    ].join("\n\n");
+    const issue = findIssue(text, "style.emphasis-devaluation");
+    expect(issue).toBeDefined();
+    expect(issue?.excerpt).toBe("第一次");
+    expect(issue?.revisionRanges?.length).toBe(3);
+    // 应指向前 3 段（命中段落 slice(0,3)）
+    const starts = issue!.revisionRanges!.map((r) => r.start);
+    expect(starts).toEqual([1, 2, 3]);
+  });
+
+  it("style.emotion-direct emits revisionRanges pointing to paragraphs with the direct emotion word", () => {
+    const text = [
+      "他走在长街上，灯笼一盏盏亮起来。",
+      "他很悲伤，独自坐在窗前。",
+      "她收拾好碗筷，没有说话。",
+      "他很愤怒，把杯子摔在地上。",
+      "他继续朝前走，雨渐渐小了。",
+      "第六段是故事的收束。",
+    ].join("\n\n");
+    const issue = findIssue(text, "style.emotion-direct");
+    expect(issue).toBeDefined();
+    expect(issue?.excerpt).toBe("他很悲伤");
+    // 第 2 段含"他很悲伤"，第 4 段含"他很愤怒"——但"他很愤怒"也匹配 EMOTION_DIRECT_WORDS
+    // 这里只验证 style.emotion-direct issue 有 revisionRanges 且指向含情绪直说的段落
+    expect(issue?.revisionRanges?.length).toBeGreaterThan(0);
+    for (const range of issue!.revisionRanges!) {
+      expect(range.start).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("style.aphorism-density emits revisionRanges pointing to paragraphs with aphorism endings", () => {
+    // 构造 > 3 处格言式收尾
+    const aphorism = "也许离开就是答案。";
+    const text = [
+      `他走了很远的路。${aphorism}`,
+      `她回头看了最后一眼。所谓离别不过如此。`,
+      `雨停了。这便是结局。`,
+      `他没说话。或许沉默才是回答。`,
+      `第五段独立的推进，没有格言。`,
+      `第六段继续故事，没有金句。`,
+    ].join("\n\n");
+    const issue = findIssue(text, "style.aphorism-density");
+    expect(issue).toBeDefined();
+    expect(issue?.revisionRanges?.length).toBeGreaterThan(0);
+    // 应指向前 4 段中的前 3 段（slice(0,3)）
+    expect(issue?.revisionRanges?.length).toBeLessThanOrEqual(3);
+    for (const range of issue!.revisionRanges!) {
+      expect(range.start).toBeGreaterThanOrEqual(1);
+      expect(range.start).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("style.interpretive-summary-density emits revisionRanges pointing to paragraphs with interpretive summaries", () => {
+    // 复用已有通过的 interpretive-summary 测试文本模式（totalChars >= 600，hits >= 4）
+    const text = Array.from({ length: 16 }, (_, index) => index % 2 === 0
+      ? `他把第${index + 1}枚钥匙藏回袖中，没有看桌对面的人。他自己也清楚，这意味着两个人之间又多了一道门。`
+      : `她收起第${index + 1}块没有修好的表，站到门边。她终于意识到，这说明他仍旧想替所有人作决定。`
+    ).join("\n\n");
+    const issue = findIssue(text, "style.interpretive-summary-density");
+    expect(issue).toBeDefined();
+    expect(issue?.revisionRanges?.length).toBeGreaterThan(0);
+    // slice(0,3) 限制，最多 3 个
+    expect(issue?.revisionRanges?.length).toBeLessThanOrEqual(3);
+    for (const range of issue!.revisionRanges!) {
+      expect(range.start).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("style.paragraph-variation emits revisionRanges pointing to the first 3 uniform paragraphs", () => {
+    // 构造 6 段长度几乎相同的段落，触发 paragraphVariation < 0.18
+    const uniform = "船工收紧缆绳，岸边众人依次登船。".repeat(10);
+    const text = Array.from({ length: 6 }, () => uniform).join("\n\n");
+    const issue = findIssue(text, "style.paragraph-variation");
+    expect(issue).toBeDefined();
+    expect(issue?.revisionRanges?.length).toBe(3);
+    // 应指向前 3 段（整体节奏问题，取连续 3 段作为修订目标）
+    const starts = issue!.revisionRanges!.map((r) => r.start);
+    expect(starts).toEqual([1, 2, 3]);
+  });
+
+  it("does not add revisionRanges when style rules don't trigger", () => {
+    // 所有风格规则都不触发的干净文本
+    // 段落长度差异要足够大（CV >= 0.18），避免触发 style.paragraph-variation
+    const text = [
+      "他走在长街上。",
+      "她回头看了他一眼，没有说话，转身朝另一个方向走去，脚步很快。",
+      "雨。",
+      "他继续朝前走，脚步放慢了一些，街灯一盏盏亮起来，照出他长长的影子。",
+      "跟着。",
+      "街角的茶铺还开着，热气从门缝里冒出来，老板娘正在擦桌子，准备打烊。",
+    ].join("\n\n");
+    const result = runDeterministicQualityChecks({ text });
+    // 6 条规则的 issue 都不应出现
+    const promotableRules = [
+      "style.template-density",
+      "style.emphasis-devaluation",
+      "style.emotion-direct",
+      "style.aphorism-density",
+      "style.interpretive-summary-density",
+      "style.paragraph-variation",
+    ];
+    for (const rule of promotableRules) {
+      expect(result.issues.some((item) => item.rule === rule)).toBe(false);
+    }
+  });
+});

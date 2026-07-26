@@ -18,7 +18,7 @@ vi.mock("@/stores/ui", async (importOriginal) => {
   return {
     ...actual,
     getEffectiveApiConfig: () => ({
-      baseUrl: "https://gpt.eromaa.com:443/v1",
+      baseUrl: "https://chat.yujin8.top/v1",
       apiKey: DEFAULT_API_KEY,
       usesDefaultBaseUrl: false,
       hasOwnKey: true,

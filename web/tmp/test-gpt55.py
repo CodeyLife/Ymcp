@@ -5,7 +5,7 @@ import sys
 import urllib.request
 
 # 从环境获取 API 配置
-BASE_URL = "https://gpt.eromaa.com/v1"
+BASE_URL = "https://chat.yujin8.top/v1"
 API_KEY = None
 
 # 尝试从 .env 读取

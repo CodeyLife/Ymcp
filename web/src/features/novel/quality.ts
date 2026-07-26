@@ -187,8 +187,36 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       suggestion: "只补足完成本章叙事功能所必需的场景、人物体验、关系过程或行动后果，不得为接近参考目标而凑篇幅。",
     }));
   }
-  if (blocks.length >= 6 && paragraphVariation < 0.18) issues.push(issue({ dimension: "specificity", severity: "warning", title: "段落节奏过于均匀", description: "段落长度变化很小，可能产生模型化节奏。", rule: "style.paragraph-variation", suggestion: "按动作速度和情绪停顿重新划分段落，而非机械打散。" }));
-  if (totalChars > 0 && templateHits / totalChars * 1000 > 2) issues.push(issue({ dimension: "specificity", severity: "warning", title: "模板化表达偏多", description: `检测到 ${templateHits} 处常见模板表达。`, rule: "style.template-density", suggestion: "结合人物身体状态、环境和具体目标替换重复动作。" }));
+  // F-007 修复：style.paragraph-variation 匹配 PROMOTABLE_WARNING_PATTERNS 的"节奏.{0,6}均匀"，
+  // 会被 shouldPromoteWarning 升级为 major，升级后须有 revisionRanges 才能被 revision-stage 定位。
+  // 这是整体节奏问题，选取前 3 段连续段落作为修订目标（paragraphVariation < 0.18 时所有段落长度都接近，
+  // 前 3 段足以代表机械均匀特征，LLM 可重新划分这些段落的边界）。
+  if (blocks.length >= 6 && paragraphVariation < 0.18) issues.push(issue({
+    dimension: "specificity",
+    severity: "warning",
+    title: "段落节奏过于均匀",
+    description: "段落长度变化很小，可能产生模型化节奏。",
+    revisionRanges: blocks.slice(0, 3).map((_, i) => ({ start: i + 1, end: i + 1 })),
+    rule: "style.paragraph-variation",
+    suggestion: "按动作速度和情绪停顿重新划分段落，而非机械打散。",
+  }));
+  // F-007 修复：style.template-density 在 STYLE_RULES_TO_PROMOTE 中，升级为 major 后必须有 revisionRanges 才能被 revision-stage 定位。
+  // 与 style.gesture-repetition 同策略：收集含模板表达的段落，slice(0, 3) 限制修订窗口数量。
+  if (totalChars > 0 && templateHits / totalChars * 1000 > 2) {
+    const templateHitParagraphs: number[] = [];
+    for (let i = 0; i < blocks.length; i += 1) {
+      if (TEMPLATE_EXPRESSIONS.some((word) => countOccurrences(blocks[i], word) > 0)) templateHitParagraphs.push(i + 1);
+    }
+    issues.push(issue({
+      dimension: "specificity",
+      severity: "warning",
+      title: "模板化表达偏多",
+      description: `检测到 ${templateHits} 处常见模板表达。`,
+      revisionRanges: templateHitParagraphs.slice(0, 3).map((p) => ({ start: p, end: p })),
+      rule: "style.template-density",
+      suggestion: "结合人物身体状态、环境和具体目标替换重复动作。",
+    }));
+  }
   const openings = blocks.map((block) => block.slice(0, 8));
   for (let index = 2; index < openings.length; index += 1) {
     const starts = openings.slice(index - 2, index + 1).map((value) => value.match(/^[\u3400-\u9fff]{2,4}/)?.[0]);
@@ -198,9 +226,25 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
     }
   }
 
+  // F-007 修复：style.emphasis-devaluation 在 STYLE_RULES_TO_PROMOTE 中，升级后须有 revisionRanges。
   for (const word of EMPHASIS_WORDS) {
     const hits = countOccurrences(text, word);
-    if (hits > 2) issues.push(issue({ dimension: "specificity", severity: "warning", title: "强调词贬值", description: `“${word}”出现 ${hits} 次，超过单章 2 次上限，强调效果贬值。`, rule: "style.emphasis-devaluation", suggestion: "用具体事件呈现认知转变，或替换为不同表达，删除多余的强调。" }));
+    if (hits > 2) {
+      const emphasisHitParagraphs: number[] = [];
+      for (let i = 0; i < blocks.length; i += 1) {
+        if (countOccurrences(blocks[i], word) > 0) emphasisHitParagraphs.push(i + 1);
+      }
+      issues.push(issue({
+        dimension: "specificity",
+        severity: "warning",
+        title: "强调词贬值",
+        description: `“${word}”出现 ${hits} 次，超过单章 2 次上限，强调效果贬值。`,
+        excerpt: word,
+        revisionRanges: emphasisHitParagraphs.slice(0, 3).map((p) => ({ start: p, end: p })),
+        rule: "style.emphasis-devaluation",
+        suggestion: "用具体事件呈现认知转变，或替换为不同表达，删除多余的强调。",
+      }));
+    }
   }
   // 根因 F：反套路手势词高频重复检测。prose-prompts 教 LLM 用"停步/侧首/攥紧"等具体手势替代心理直说（正确方向），
   // 但 LLM 会机械套用形成新模板——读者读到"又停步了？又侧首了？"时感受到的是新 AI 腔。
@@ -224,23 +268,61 @@ export function runDeterministicQualityChecks(params: { text: string; blueprint?
       }));
     }
   }
+  // F-007 修复：style.emotion-direct 在 STYLE_RULES_TO_PROMOTE 中，升级后须有 revisionRanges。
+  // 原 excerpt 长度 < 8 字（如"他很悲伤"=4 字），findIssueParagraph 的 token 匹配不可靠。
   for (const phrase of EMOTION_DIRECT_WORDS) {
-    if (text.includes(phrase)) issues.push(issue({ dimension: "sceneEmbodiment", severity: "warning", title: "情绪直说", description: `检测到“${phrase}”，情绪被直接宣告而非通过行动或意象承载。`, excerpt: phrase, rule: "style.emotion-direct", suggestion: "用一个反常动作、环境意象变化或没说完的话来承载该情绪。" }));
+    if (text.includes(phrase)) {
+      const emotionHitParagraphs: number[] = [];
+      for (let i = 0; i < blocks.length; i += 1) {
+        if (blocks[i].includes(phrase)) emotionHitParagraphs.push(i + 1);
+      }
+      issues.push(issue({
+        dimension: "sceneEmbodiment",
+        severity: "warning",
+        title: "情绪直说",
+        description: `检测到“${phrase}”，情绪被直接宣告而非通过行动或意象承载。`,
+        excerpt: phrase,
+        revisionRanges: emotionHitParagraphs.slice(0, 3).map((p) => ({ start: p, end: p })),
+        rule: "style.emotion-direct",
+        suggestion: "用一个反常动作、环境意象变化或没说完的话来承载该情绪。",
+      }));
+    }
   }
+  // F-007 修复：style.aphorism-density 在 STYLE_RULES_TO_PROMOTE 中，升级后须有 revisionRanges。
+  // 同时记录命中段落的 excerpt，便于 LLM 修订时定位具体金句。
   let aphorismEndings = 0;
-  for (const block of blocks) {
-    const trimmedBlock = block.trim();
-    if (APHORISM_PATTERNS.some((pattern) => pattern.test(trimmedBlock))) aphorismEndings += 1;
+  const aphorismHitParagraphs: number[] = [];
+  for (let i = 0; i < blocks.length; i += 1) {
+    const trimmedBlock = blocks[i].trim();
+    if (APHORISM_PATTERNS.some((pattern) => pattern.test(trimmedBlock))) {
+      aphorismEndings += 1;
+      aphorismHitParagraphs.push(i + 1);
+    }
   }
-  if (aphorismEndings > 3) issues.push(issue({ dimension: "specificity", severity: "warning", title: "金句收尾过密", description: `检测到 ${aphorismEndings} 处格言式收尾，超过单章 3 处上限。`, rule: "style.aphorism-density", suggestion: "将部分金句改为行动或沉默收尾，让行为本身承载主题。" }));
+  if (aphorismEndings > 3) issues.push(issue({
+    dimension: "specificity",
+    severity: "warning",
+    title: "金句收尾过密",
+    description: `检测到 ${aphorismEndings} 处格言式收尾，超过单章 3 处上限。`,
+    revisionRanges: aphorismHitParagraphs.slice(0, 3).map((p) => ({ start: p, end: p })),
+    rule: "style.aphorism-density",
+    suggestion: "将部分金句改为行动或沉默收尾，让行为本身承载主题。",
+  }));
+  // F-007 修复：style.interpretive-summary-density 在 STYLE_RULES_TO_PROMOTE 中，升级后须有 revisionRanges。
+  // 遍历段落找出命中解释性总结模式的段落，slice(0, 3) 限制修订窗口数量。
   const imageryHits = IMAGERY_WORDS.reduce((sum, word) => sum + countOccurrences(text, word), 0);
   const interpretiveSummaryHits = INTERPRETIVE_SUMMARY_PATTERNS.reduce((sum, pattern) => sum + (text.match(pattern) ?? []).length, 0);
   if (totalChars >= 600 && interpretiveSummaryHits >= 2 && interpretiveSummaryHits / totalChars * 1000 >= 0.75) {
+    const summaryHitParagraphs: number[] = [];
+    for (let i = 0; i < blocks.length; i += 1) {
+      if (INTERPRETIVE_SUMMARY_PATTERNS.some((pattern) => pattern.test(blocks[i]))) summaryHitParagraphs.push(i + 1);
+    }
     issues.push(issue({
       dimension: "specificity",
       severity: "warning",
       title: "解释性总结偏多",
       description: `检测到 ${interpretiveSummaryHits} 处替读者归纳人物认知或文本含义的表达。`,
+      revisionRanges: summaryHitParagraphs.slice(0, 3).map((p) => ({ start: p, end: p })),
       rule: "style.interpretive-summary-density",
       suggestion: "删除动作或对白之后的解释句，让人物后续选择、关系反应和具体后果承载含义。",
     }));

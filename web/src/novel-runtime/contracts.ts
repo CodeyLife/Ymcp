@@ -9,6 +9,10 @@ export interface RuntimeReviewPolicy {
   mode: "human-gated" | "external-review";
   /** null keeps an external quality loop active until it reaches a valid candidate. */
   maxIterations: number | null;
+  /** 允许 external-llm 对 human driver operation 提交非约束性审核意见（advisory review）。
+   * advisory review 不改变 operation.status，只把审核意见附加到 change.externalReviews，
+   * user 仍保留最终决策权。默认 false，UI 可开启。 */
+  allowAdvisoryReview?: boolean;
 }
 
 export interface RuntimeImprovementPolicy {
@@ -158,6 +162,10 @@ export interface RuntimeOperation {
   result?: Record<string, unknown>;
   error?: string;
   attempt: number;
+  /** 自动重试次数（仅记录 HTTP 500 等临时故障的自动重试，与用户显式 retryOperation 的 attempt 区分）。 */
+  autoRetryCount?: number;
+  /** instruction+target+taskKey+projectId 的 sha256，用于 enqueueIntent 去重，避免相同指令重复入队。 */
+  instructionHash?: string;
   leaseExpiresAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -174,7 +182,10 @@ export interface RuntimeChange {
   evidence: RuntimeCandidateEvidence;
   status: RuntimeChangeStatus;
   baseSnapshotHash: string;
-  review?: { decision: "accept" | "reject" | "revise"; note: string; actor: RuntimeActor; reviewedAt: number };
+  // decision 扩展 "superseded"：supersedeObsoleteOperations 用此值标记系统自动取代的 pending change，
+  // 与用户审核的 "revise" 区分，避免污染 learning 闭环的 revise 模式统计。
+  // reviewChange 用户审核入口仍只接受 "accept" | "reject" | "revise"，"superseded" 仅由内部 supersede 路径写入。
+  review?: { decision: "accept" | "reject" | "revise" | "superseded"; note: string; actor: RuntimeActor; reviewedAt: number };
   artifactFingerprint?: string;
   externalReviews?: RuntimeExternalReview[];
   patches?: RuntimePatchRecord[];
@@ -277,7 +288,17 @@ export function assertRuntimeActor(operation: RuntimeOperation, actor: RuntimeAc
   if (!actor.id.trim()) throw new Error("审核 actor.id 不能为空");
   if (actor.type === "external-llm" && !actor.model?.trim()) throw new Error("外部 LLM 审核必须记录模型身份");
   const expected = operation.driver === "human" ? "user" : "external-llm";
-  if (actor.type !== expected) throw new Error(`operation driver ${operation.driver} 不接受 ${actor.type} 审核`);
+  if (actor.type === expected) return;
+  // advisory-review 路径：允许 external-llm 对 human driver operation 提交非约束性审核意见
+  if (operation.driver === "human" && actor.type === "external-llm" && operation.reviewPolicy?.allowAdvisoryReview === true) {
+    return;
+  }
+  throw new Error(`operation driver ${operation.driver} 不接受 ${actor.type} 审核`);
+}
+
+/** 判断当前审核是否为 advisory review（external-llm 对 human driver operation 的非约束性审核）。 */
+export function isAdvisoryReview(operation: RuntimeOperation, actor: RuntimeActor): boolean {
+  return operation.driver === "human" && actor.type === "external-llm" && operation.reviewPolicy?.allowAdvisoryReview === true;
 }
 
 export function runtimeNextActions(operation: RuntimeOperation, change?: RuntimeChange): RuntimeNextAction[] {

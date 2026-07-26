@@ -3,6 +3,33 @@ import type { LegacyMigrationBundle, RuntimeActor, RuntimeChange, RuntimeEvent, 
 const configuredBaseUrl = String(import.meta.env?.VITE_NOVEL_RUNTIME_URL ?? "").trim().replace(/\/+$/, "");
 const BASE_URL = configuredBaseUrl || "/novel-api";
 
+/**
+ * 全书架构类 taskKey 集合。
+ * runtime pending change 的 owner operation 命中这两个 taskKey 时，视为全书架构候选，
+ * 在 AI 任务中心点击会跳转到全书架构板块结构化审阅（RuntimeArchitectureReview），
+ * 而不是 Markdown 预览 Modal。
+ */
+export const ARCHITECTURE_TASK_KEYS = new Set(["architecture", "project-positioning"]);
+
+/**
+ * 判断 operation 是否为全书架构类任务。
+ *
+ * 优先检查 input.taskKey（MCP 入口标准化后的正规字段）；
+ * 回退检查 input.target（历史数据：MCP 入口曾用 target 塞入类别标识，现已废弃）。
+ * 回退只识别 "architecture" / "project-positioning" 两个值，避免误吞章节 ID。
+ *
+ * TODO P2（架构阶段·数据迁移）：架构阶段准则不兼容旧代码逻辑，此处回退检查 input.target 是为
+ * 兼容已落库的旧 operation 记录（taskKey=undefined, target="architecture"）。完成数据迁移脚本
+ * （把旧 op.input.target 回填到 op.input.taskKey 并清空 target）后应删除此回退分支，强制只认 taskKey。
+ */
+export function isArchitectureOperation(operation: RuntimeOperation | undefined): boolean {
+  if (!operation) return false;
+  if (ARCHITECTURE_TASK_KEYS.has(String(operation.input.taskKey ?? ""))) return true;
+  // 兼容历史数据：旧 MCP 入口未传 taskKey，而是把类别塞进 target
+  const target = String(operation.input.target ?? "");
+  return ARCHITECTURE_TASK_KEYS.has(target);
+}
+
 export class NovelRuntimeHttpError extends Error {
   constructor(readonly code: string, message: string, readonly retryable = false) { super(message); }
 }

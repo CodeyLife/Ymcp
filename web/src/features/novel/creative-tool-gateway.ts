@@ -23,6 +23,7 @@ import {
   supportsChapterRuleEvaluation,
 } from "./craft-rule-evolution";
 import type { CraftRuleReviewRole, CraftRuleScopeAnalysis } from "./types";
+import { startChapterReviewWorkflow } from "./workflow";
 
 export const CREATIVE_TOOL_NAMES = [
   "novel_run_create",
@@ -48,6 +49,8 @@ export const CREATIVE_TOOL_NAMES = [
   "novel_project_delete",
   "novel_bootstrap_run",
   "novel_foundation_export",
+  // 章节审校工作流入口：从 review 阶段半截启动，复用正式生成的 review→revision→commit 闭环。
+  "novel_chapter_review",
 ] as const;
 
 export type CreativeToolName = typeof CREATIVE_TOOL_NAMES[number];
@@ -55,7 +58,7 @@ export type CreativeToolName = typeof CREATIVE_TOOL_NAMES[number];
 const MUTATING_TOOLS = new Set<CreativeToolName>([
   "novel_run_create", "novel_action_execute", "novel_review_submit", "novel_rule_candidate_create",
   "novel_rule_evidence_submit", "novel_rule_foundation_evaluate", "novel_rule_review_submit", "novel_rule_promote", "novel_rule_rollback",
-  "novel_project_create", "novel_project_delete", "novel_bootstrap_run",
+  "novel_project_create", "novel_project_delete", "novel_bootstrap_run", "novel_chapter_review",
 ]);
 
 // 无 projectId 的工具（项目生命周期管理）：通过 broker.requestAnyConnected 路由到任意已连接浏览器宿主执行。
@@ -307,6 +310,20 @@ async function executeCreativeToolCore(
         entityIndex: entities.map((entity) => ({ id: entity.id, kind: entity.kind, name: entity.name })),
       },
     };
+  }
+
+  if (tool === "novel_chapter_review") {
+    // 章节审校 MCP 入口：从 review 阶段半截启动 WorkflowRun，复用正式生成的 review→revision→commit 闭环。
+    // 前置条件（document.status==="final"、无活跃工作流、存在历史 blueprint）由 startChapterReviewWorkflow 强制校验。
+    // externalDraft 支持外部 LLM 主动重写章节正文：提供时 draft artifact 用此内容替代 document.plainText，
+    // 走标准 review→revision→commit 闭环审核重写质量，不直接覆盖正式稿。
+    const projectId = requiredString(args, "projectId");
+    const documentId = requiredString(args, "documentId");
+    const instruction = typeof args.instruction === "string" && args.instruction.trim() ? args.instruction.trim() : undefined;
+    const blocking = args.blocking === false ? false : true;
+    const externalDraft = typeof args.externalDraft === "string" && args.externalDraft.trim() ? args.externalDraft.trim() : undefined;
+    const run = await startChapterReviewWorkflow({ projectId, documentId, instruction, blocking, externalDraft }, db);
+    return { ok: true, tool, result: { workflowRunId: run.id, projectId: run.projectId, targetDocumentId: run.targetDocumentId, status: run.status, currentStage: run.currentStage, externalDraftApplied: Boolean(externalDraft) } };
   }
 
   if (tool === "novel_run_create") {

@@ -120,7 +120,7 @@ function printHelp(): void {
   --experiment <id>  实验 ID（默认自动生成）
   --seed <path>      完整闭环 fixture JSON（由"导出评测快照"生成，必填）
   --api-key <key>    LLM API Key（默认读 process.env.OPENAI_API_KEY 或 VITE_DEFAULT_API_KEY）
-  --base-url <url>   LLM Base URL（默认读 process.env.OPENAI_BASE_URL 或 https://gpt.eromaa.com/v1）
+  --base-url <url>   LLM Base URL（默认读 process.env.OPENAI_BASE_URL ）
   --chat-model <id>  Chat 模型 ID（默认 gpt-5-5）
   --help, -h         显示本帮助
 

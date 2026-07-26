@@ -99,7 +99,12 @@ async function invalidateMemoryAncestors(projectId: string, sourceIds: string[],
       }
     }
   }
-  const ancestors = all.filter((memory) => stale.has(memory.id) && !sourceIds.includes(memory.id) && memory.status !== "stale");
+  // F-019 修复：过滤条件追加 memory.status !== "superseded"，与 db.ts:markDerivedMemoriesStale 对齐。
+  // superseded 表示"已被新版本取代、保留为历史"，stale 表示"下层来源变化、需重新整合"。
+  // 原条件只跳过 stale，BFS 传播链中存在已 superseded 的中间节点时会被重写为 stale，
+  // 丢失取代关系审计链，且使 validation.issues 从空数组变为 ["下层来源已变化，需要重新整合"]，
+  // 误导后续整合判断。
+  const ancestors = all.filter((memory) => stale.has(memory.id) && !sourceIds.includes(memory.id) && memory.status !== "stale" && memory.status !== "superseded");
   const now = Date.now();
   await db.derivedMemories.bulkPut(ancestors.map((memory) => ({ ...memory, status: "stale" as const, validation: { passed: false, issues: ["下层来源已变化，需要重新整合"], checkedAt: now }, revision: memory.revision + 1, updatedAt: now })));
   return ancestors.map((memory) => memory.id);

@@ -136,6 +136,10 @@ export interface GrowthCurve {
   irreversibleChange: string;
 }
 
+export interface ArchitecturePhaseStage {
+  title: string;
+  summary: string;
+}
 export interface ArchitecturePhase {
   id: string;
   title: string;
@@ -145,6 +149,9 @@ export interface ArchitecturePhase {
   locked: boolean;
   /** 引用 growthCurves[].id，标注此阶段主要由哪条增长曲线推进 */
   primaryCurveId: string;
+  /** 子阶段：百万字长篇每幕需拆分为 2-4 个子阶段，其中含一个中段崩塌点（all-is-lost）。
+   *  旧记录可缺省；新生成由 payloadContract 与 validateArchitectureHardConstraints 强制。 */
+  stages?: ArchitecturePhaseStage[];
 }
 
 export interface ArchitecturePowerCenter {
@@ -164,6 +171,9 @@ export interface ArchitectureFeedbackLoop {
   transmission: string[];
   affectedCenters: string[];
   storyPressure: string;
+  /** 闭环回压路径：transmission 最后一步如何回压到 trigger 源头或改变 trigger 的再发生条件，
+   *  使反馈链形成闭环而非线性因果链。旧记录可缺省；新生成由 payloadContract 与 validateArchitectureHardConstraints 强制。 */
+  returnPath?: string;
 }
 
 export interface ArchitectureLongHorizonHook {
@@ -337,6 +347,7 @@ export const CONTEXT_SOURCE_KINDS = [
   "memory",
   "conversation-memory",
   "creative-brief",
+  "review-feedback",
 ] as const;
 
 export type ContextSourceKind = (typeof CONTEXT_SOURCE_KINDS)[number];
@@ -1075,7 +1086,8 @@ export interface QualityReport extends VersionedRecord {
   metrics: Record<string, number>;
   reviewerRoles: NovelAgentRole[];
   learning?: LearningAssessment;
-  learningStatus?: "completed" | "failed";
+  learningStatus?: "pending" | "completed" | "failed";
+  learningStartedAt?: number;
   learningError?: string;
   learningReplay?: CraftRuleReplaySnapshot;
 }

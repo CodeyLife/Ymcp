@@ -121,6 +121,11 @@ function proseAuditCleanResponse() {
 }
 
 describe("getProseAuditMaxIterations", () => {
+  it("reads the Vite-prefixed browser configuration", () => {
+    vi.stubEnv("VITE_NOVEL_PROSE_AUDIT_MAX_ITER", "2");
+    expect(getProseAuditMaxIterations()).toBe(2);
+  });
+
   it("returns 1 by default when env var is unset (aligned with blueprint-audit)", () => {
     vi.unstubAllEnvs();
     expect(getProseAuditMaxIterations()).toBe(1);
@@ -551,6 +556,41 @@ describe("runProseAudit function", () => {
 });
 
 describe("prose-audit failure degradation (M3)", () => {
+  it("does not leave the chapter run in review/running while learning is still pending", async () => {
+    const project = await createNovelProject({ title: "后台经验评估", genre: ["科幻"], premise: "经验沉淀不得阻塞已完成的正文审校。" });
+    const document = await createChapter(project.id, "第一章");
+    await novelDb.projects.update(project.id, { settings: { ...project.settings, maxAutoRevisions: 0 } });
+    const ctx = packet(project.id);
+    const run = buildRun(project.id, document.id, ctx.id, "blueprint-pending-learning", "draft-pending-learning");
+    const draft = artifact(run, { id: "draft-pending-learning", stage: "draft", kind: "draft", title: "草稿", contentMarkdown: "舷窗外的灯逐个熄灭，她仍握着没有发出的讯息。".repeat(80) });
+    const blueprint = artifact(run, { id: "blueprint-pending-learning", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "# 蓝图", structuredData: { title: "第一章", objective: "发出讯息", startingState: "夜航", beats: [], endingHook: "回信", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
+    await novelDb.contextPackets.add(ctx);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint]);
+
+    const style = {
+      ...reviewerCleanResponse("style-reviewer"),
+      data: {
+        ...reviewerCleanResponse("style-reviewer").data,
+        issues: [{ dimension: "specificity", severity: "warning", title: "讯息缺少物理细节", description: "讯息载体不够具体。", rule: "review.detail", suggestion: "补充与场景有关的可观察细节。" }],
+      },
+    };
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(style as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never)
+      .mockImplementationOnce(() => new Promise(() => undefined));
+
+    const result = await Promise.race([
+      advanceChapterWorkflow(run.id),
+      new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 250)),
+    ]);
+    expect(result).not.toBe("timed-out");
+    expect(await novelDb.workflowRuns.get(run.id)).toMatchObject({ currentStage: "manuscript-approval", status: "waiting-approval" });
+  });
+
   it("degrades gracefully when prose-audit LLM call throws, does not block review-stage", async () => {
     // 启用 prose-audit
     vi.stubEnv("NOVEL_PROSE_AUDIT_MAX_ITER", "1");
@@ -627,9 +667,9 @@ describe("prose-audit failure degradation (M3)", () => {
       .mockRejectedValueOnce(new Error("skill-iterator 暂时不可用"));
 
     const advanced = await advanceChapterWorkflow(run.id);
-    const report = await novelDb.qualityReports.where("workflowRunId").equals(run.id).first();
     expect(advanced.status).not.toBe("failed");
-    expect(report).toMatchObject({ learningStatus: "failed", learningError: "skill-iterator 暂时不可用" });
+    const report = await novelDb.qualityReports.where("workflowRunId").equals(run.id).first();
+    await vi.waitFor(async () => expect(await novelDb.qualityReports.get(report!.id)).toMatchObject({ learningStatus: "failed", learningError: "skill-iterator 暂时不可用" }));
 
     vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
       data: { conclusion: "no-shared-learning", summary: "该问题属于本章局部执行偏差。" },
@@ -638,6 +678,95 @@ describe("prose-audit failure degradation (M3)", () => {
     } as never);
     await retryFailedWorkflowLearning({ projectId: project.id, db: novelDb });
     expect(await novelDb.qualityReports.get(report!.id)).toMatchObject({ learningStatus: "completed", learningError: undefined });
+  });
+
+  it("refreshes learningStartedAt on completeQualityReportLearning entry to prevent stale re-evaluation (F-005)", async () => {
+    // F-005 回归：completeQualityReportLearning 入口必须续期 learningStartedAt，
+    // 否则 revision-stage 链路耗时 >120s 后 commit-stage 会因 stale 判定误重评。
+    const project = await createNovelProject({ title: "F-005 续期", genre: ["现实题材"], premise: "learningStartedAt 必须覆盖整个评估生命周期。" });
+    const document = await createChapter(project.id, "第一章");
+    const ctx = packet(project.id);
+    const run = buildRun(project.id, document.id, ctx.id, "blueprint-f005", "draft-f005");
+    const draft = artifact(run, { id: "draft-f005", stage: "draft", kind: "draft", title: "草稿", contentMarkdown: "她把旧信放回抽屉，窗外的公交车刚好驶过。".repeat(60) });
+    const blueprint = artifact(run, { id: "blueprint-f005", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "# 蓝图", structuredData: { title: "第一章", objective: "处理旧信", startingState: "傍晚", beats: [], endingHook: "来电", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
+    const prompt = artifact(run, { id: "prompt-f005", stage: "context", kind: "prompt", title: "原始指令", contentMarkdown: "审校旧信章节。" });
+    await novelDb.contextPackets.add(ctx);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint, prompt]);
+
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(reviewerCleanResponse("style-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never)
+      .mockResolvedValueOnce({ data: { conclusion: "no-shared-learning", summary: "局部执行偏差。" }, usage: { inputTokens: 10, outputTokens: 10 }, promptHash: "f005" } as never);
+
+    await advanceChapterWorkflow(run.id);
+    const report = await novelDb.qualityReports.where("workflowRunId").equals(run.id).first();
+    await vi.waitFor(async () => expect(await novelDb.qualityReports.get(report!.id)).toMatchObject({ learningStatus: "completed" }));
+
+    // 验证 completeQualityReportLearning 入口续期了 learningStartedAt（不应等于 review-stage 启动时的值）
+    // 入口续期时间 > review-stage 启动时间（因为多了 updateQualityReportLearning 调用）
+    const finalReport = await novelDb.qualityReports.get(report!.id);
+    expect(finalReport?.learningStartedAt).toBeDefined();
+    expect(finalReport?.learningStartedAt).toBeGreaterThan(0);
+    // revision 应该至少 +3：review-stage 启动 put + completeQualityReportLearning 入口 put + 完成时 put
+    // （saveQualityReport 创建时 revision=0，后续每次 updateQualityReportLearning 都 revision+1）
+    expect(finalReport?.revision).toBeGreaterThanOrEqual(3);
+  });
+
+  it("uses transactional updateQualityReportLearning in createWorkflowLearningCandidates to prevent lost-update (F-004)", async () => {
+    // F-004 回归：createWorkflowLearningCandidates 必须通过 updateQualityReportLearning 写入，
+    // 不能直接 report.revision += 1; db.put(report)。验证 revision 单调递增且无回退。
+    // mockReset 清除前序测试（F-005 completeQualityReportLearning fire-and-forget）可能残留的 once mock
+    vi.mocked(callStructuredNovelModel).mockReset();
+    const project = await createNovelProject({ title: "F-004 事务", genre: ["现实题材"], premise: "并发写入不应丢失更新。" });
+    const document = await createChapter(project.id, "第一章");
+    const ctx = packet(project.id);
+    const run = buildRun(project.id, document.id, ctx.id, "blueprint-f004", "draft-f004");
+    const draft = artifact(run, { id: "draft-f004", stage: "draft", kind: "draft", title: "草稿", contentMarkdown: "她把旧信放回抽屉，窗外的公交车刚好驶过。".repeat(60) });
+    const blueprint = artifact(run, { id: "blueprint-f004", stage: "blueprint", kind: "blueprint", title: "蓝图", contentMarkdown: "# 蓝图", structuredData: { title: "第一章", objective: "处理旧信", startingState: "傍晚", beats: [], endingHook: "来电", characters: [], locations: [], informationRelease: [], mustHappen: [], flexible: [], forbidden: [] } });
+    const prompt = artifact(run, { id: "prompt-f004", stage: "context", kind: "prompt", title: "原始指令", contentMarkdown: "审校旧信章节。" });
+    await novelDb.contextPackets.add(ctx);
+    await novelDb.workflowRuns.add(run);
+    await novelDb.workflowArtifacts.bulkAdd([draft, blueprint, prompt]);
+
+    // 与 "records a retryable learning failure" 测试一致：style-reviewer 带 warning issue 触发 learning
+    const style = {
+      ...reviewerCleanResponse("style-reviewer"),
+      data: {
+        ...reviewerCleanResponse("style-reviewer").data,
+        issues: [{ dimension: "specificity", severity: "warning", title: "局部细节可更具体", description: "旧信的触感尚不明确。", rule: "review.detail", suggestion: "补充一个与人物处境有关的物理细节。" }],
+      },
+    };
+    vi.mocked(callStructuredNovelModel)
+      .mockResolvedValueOnce(style as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("character-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("continuity-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("plot-reviewer") as never)
+      .mockResolvedValueOnce(reviewerCleanResponse("reader-reviewer") as never)
+      .mockRejectedValueOnce(new Error("F-004 第一次失败"));
+
+    await advanceChapterWorkflow(run.id);
+    // F-004 修复后 review-stage 主流程中的 updateQualityReportLearning 调用不应导致 run failed
+    const report = await novelDb.qualityReports.where("workflowRunId").equals(run.id).first();
+    expect(report).toBeDefined();
+    await vi.waitFor(async () => expect(await novelDb.qualityReports.get(report!.id)).toMatchObject({ learningStatus: "failed", learningError: "F-004 第一次失败" }));
+    const failedRevision = (await novelDb.qualityReports.get(report!.id))!.revision;
+
+    // 重试成功
+    vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
+      data: { conclusion: "no-shared-learning", summary: "重试成功。" },
+      usage: { inputTokens: 10, outputTokens: 10 },
+      promptHash: "f004-retry",
+    } as never);
+    await retryFailedWorkflowLearning({ projectId: project.id, db: novelDb });
+
+    // F-004 验证：重试后 revision 必须 > 失败时 revision（事务内 revision+1 生效，无 lost-update）
+    const completedReport = await novelDb.qualityReports.get(report!.id);
+    expect(completedReport?.learningStatus).toBe("completed");
+    expect(completedReport?.revision).toBeGreaterThan(failedRevision);
   });
 });
 

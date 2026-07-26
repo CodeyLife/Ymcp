@@ -10,10 +10,10 @@ vi.mock("../ai", () => ({
 }));
 
 import { callStructuredNovelModel, streamNovelModel } from "../ai";
-import { applyProposalItems, getGenerationTask, runGenerationTask, runPlotDesignTask, tasksForScope, updateProposalItemPayload, validatePlotDesignItems } from "../generation";
-import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, novelDb, recordBase, saveApprovedDocumentRevision, saveStoryArchitecture } from "../db";
+import { applyProposalItems, getGenerationTask, runGenerationTask, runPlotDesignTask, tasksForScope, updateProposalItemPayload, validatePlotDesignItems, validateArchitectureHardConstraints, splitInstruction, MAX_INSTRUCTION_CHARS } from "../generation";
+import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, deletePlotThread, novelDb, recordBase, saveApprovedDocumentRevision, saveStoryArchitecture } from "../db";
 import { createChapterMemory, linkOutlineRealization } from "../memory";
-import type { AIProposal, ProposalItem } from "../types";
+import type { AIProposal, ProposalItem, StoryScene } from "../types";
 
 beforeEach(async () => {
   await novelDb.delete();
@@ -277,13 +277,18 @@ describe("generation task ownership", () => {
     vi.mocked(callStructuredNovelModel).mockResolvedValueOnce({
       data: { summary: "群岛架构", items: [{ label: "群岛账本架构", operation: "update", targetTable: "architectures", payload: {
         centralQuestion: "共同体如何承担稀缺的代价？", centralConflict: "多方围绕淡水、航道与税权合作并竞争。", synopsis: "潮痕与空账页留下多义异常。",
-        powerCenters: ["议港会", "引水社", "巡航营", "岛祠盟", "外洋船团", "潮历院", "盐田诸社"].map((name, index) => ({ id: `center-${index}`, name, interest: `${name}维护自身合法性`, resources: [index === 0 ? "税契" : index === 1 ? "井渠" : "船队"], actionCapacity: "可独立调动成员改变航道秩序", bottomLine: "不接受生存资源被单方垄断", relationshipDynamics: "与其他中心既交换资源又争夺解释权" })),
+        powerCenters: ["议港会", "引水社", "巡航营", "岛祠盟", "外洋船团", "潮历院", "海灵意识"].map((name, index) => ({ id: `center-${index}`, name, kind: index === 6 ? "supernatural" : "human-organization", interest: `${name}维护自身合法性`, resources: [index === 0 ? "税契" : index === 1 ? "井渠" : "船队"], actionCapacity: "可独立调动成员改变航道秩序", bottomLine: "不接受生存资源被单方垄断", relationshipDynamics: "与其他中心既交换资源又争夺解释权" })),
         feedbackLoops: [0, 1, 2, 3].map((index) => ({ id: `loop-${index}`, name: `反馈链${index}`, trigger: "淡水供给下降", transmission: ["井渠限流", "港口改道"], affectedCenters: ["center-0", `center-${index + 1}`, `center-${index + 2}`], storyPressure: "迫使联盟在民生与军务间选择" })),
         longHorizonHooks: [0, 1, 2, 3].map((index) => ({ id: `hook-${index}`, surfaceDetail: index ? `空白潮汐页${index}` : "井壁盐痕", possibleInterpretations: ["自然变化", "人为记录偏差"], affectedCenters: [`center-${index}`], payoffWindow: "中后期分层回收" })),
         phases: Array.from({ length: 5 }, (_, order) => ({ id: `phase-${order}`, title: `阶段${order}`, purpose: "资源与关系共同变化", turningPoint: "旧有承诺再也无法恢复原状", order, locked: true, primaryCurveId: order === 2 ? "ecology" : "main" })),
         growthCurves: [
           { id: "main", kind: "main", subject: "责任认知", resourceLoop: "信用交换", stageGoals: "逐步承担", irreversibleChange: "无法旁观" },
           { id: "ecology", kind: "ecological", subject: "群岛水运", resourceLoop: "淡水与航道流转", stageGoals: "联盟重组", irreversibleChange: "旧航权失效" },
+        ],
+        ideologicalFactions: [
+          { id: "faction-public", name: "航道公有派", position: "淡水与航道应共同管理，任何组织不得独占", affectedCenterIds: ["center-0", "center-1"] },
+          { id: "faction-license", name: "特许经营派", position: "航道运营需专业组织特许经营以保障效率", affectedCenterIds: ["center-2", "center-4"] },
+          { id: "faction-rite", name: "岛祠守礼派", position: "淡水分配须遵循传统岛祠礼仪秩序", affectedCenterIds: ["center-3", "center-5"] },
         ],
       }, rationale: "建立长期结构" }] }, usage: { inputTokens: 10, outputTokens: 10 }, promptHash: "architecture-contract",
     } as never);
@@ -320,7 +325,7 @@ describe("generation task ownership", () => {
   it("rejects dangling power-center references in a million-word architecture", async () => {
     const project = await createNovelProject({ title: "闭合网络", genre: ["科幻"], premise: "轨道城邦共同维护一座升降梯。" });
     await novelDb.projects.update(project.id, { targetWords: 1_200_000 });
-    const centers = ["轨道议会", "地表港务局", "升降梯工会", "赤道农垦带", "外环船团"].map((name, index) => ({ id: `center-${index}`, name, interest: "维持自身生存网络", resources: ["基础设施"], actionCapacity: "可独立改变物流秩序", bottomLine: "不接受生命线被单方控制", relationshipDynamics: "与其他中心互相依赖并争夺调度权" }));
+    const centers = ["轨道议会", "地表港务局", "升降梯工会", "赤道农垦带", "外环船团"].map((name, index) => ({ id: `center-${index}`, name, kind: "human-organization", interest: "维持自身生存网络", resources: ["基础设施"], actionCapacity: "可独立改变物流秩序", bottomLine: "不接受生命线被单方控制", relationshipDynamics: "与其他中心互相依赖并争夺调度权" }));
     const response = { data: { summary: "轨道架构", items: [{ label: "轨道架构", operation: "update", targetTable: "architectures", payload: {
       centralQuestion: "共同维护是否可能？", centralConflict: "五方争夺调度权。", synopsis: "维修编号反复出现。", powerCenters: centers,
       feedbackLoops: [0, 1, 2].map((index) => ({ id: `loop-${index}`, name: `反馈${index}`, trigger: "运力下降", transmission: ["限流", "配给"], affectedCenters: index === 2 ? ["center-0", "未建模的监察院"] : ["center-0", `center-${index + 1}`], storyPressure: "生存与自治冲突" })),
@@ -371,6 +376,7 @@ describe("generation task ownership", () => {
       powerCenters: ["潮汐议会", "种源保管局", "外环维修团"].map((name, index) => ({
         id: `center-${index}`,
         name,
+        kind: "human-organization",
         interest: "维护本群体的生存秩序",
         resources: ["专业人员", "公共设施"],
         actionCapacity: "能够独立调整资源分配",
@@ -527,6 +533,22 @@ describe("proposal application and ownership", () => {
     expect((await novelDb.derivedMemories.get(memory.id))?.status).toBe("stale");
   });
 
+  it("deleting a plot thread detaches it from chapters and scenes", async () => {
+    const project = await createNovelProject({ title: "剧情线删除", genre: ["悬疑"], premise: "失效引用不能留在创作上下文中。" });
+    const thread = { ...recordBase(project.id), kind: "main" as const, title: "旧主线", summary: "追查遗失的账本", status: "active" as const, priority: 80, participantIds: [], progress: 30, nextMove: "调查码头" };
+    const chapter = await createChapter(project.id, "第一章");
+    const scene: StoryScene = { ...recordBase(project.id), chapterId: chapter.id, title: "码头", order: 0, characterIds: [], plotThreadIds: [thread.id], purpose: "推进调查", conflict: "守卫阻拦", outcome: "得到线索", wordTarget: 800 };
+    await novelDb.plotThreads.add(thread);
+    await novelDb.documents.update(chapter.id, { blueprint: { ...chapter.blueprint, plotThreadIds: [thread.id] } });
+    await novelDb.scenes.add(scene);
+
+    await deletePlotThread(thread.id);
+
+    expect(await novelDb.plotThreads.get(thread.id)).toBeUndefined();
+    expect((await novelDb.documents.get(chapter.id))?.blueprint.plotThreadIds).toEqual([]);
+    expect((await novelDb.scenes.get(scene.id))?.plotThreadIds).toEqual([]);
+  });
+
   it("normalizes chapter order from phase and plot segment order", async () => {
     const project = await createNovelProject({ title: "排序", genre: ["都市"], premise: "章节按规划层级排列。" });
     const architecture = await addArchitecture(project.id, 2);
@@ -536,5 +558,91 @@ describe("proposal application and ownership", () => {
     const earlyChapter = await createChapter(project.id, "前章", early.id);
     expect((await novelDb.documents.get(earlyChapter.id))?.order).toBe(0);
     expect((await novelDb.documents.get(lateChapter.id))?.order).toBe(1);
+  });
+});
+
+describe("splitInstruction", () => {
+  it("returns original instruction when below threshold", () => {
+    const instruction = "简短的生成指令";
+    const result = splitInstruction(instruction);
+    expect(result.core).toBe(instruction);
+    expect(result.detail).toBeUndefined();
+  });
+
+  it("splits by section marker when instruction exceeds threshold", () => {
+    const core = "核心指令".repeat(2000);
+    const detail = "# 审核意见\n问题1：turningPoint 不够不可逆\n问题2：ecological 曲线依赖主线";
+    const instruction = `${core}\n\n${detail}`;
+    expect(instruction.length).toBeGreaterThan(MAX_INSTRUCTION_CHARS);
+    const result = splitInstruction(instruction);
+    expect(result.core).toContain("核心指令");
+    expect(result.core).not.toContain("# 审核意见");
+    expect(result.core).toContain("详细审核反馈");
+    expect(result.detail).toBe(detail);
+  });
+
+  it("splits by fallback truncation when no marker found", () => {
+    const instruction = "无标记的长指令".repeat(1000);
+    expect(instruction.length).toBeGreaterThan(MAX_INSTRUCTION_CHARS);
+    const result = splitInstruction(instruction);
+    expect(result.core.length).toBeLessThan(instruction.length);
+    expect(result.core).toContain("详细审核反馈");
+    expect(result.detail).toBeTruthy();
+    expect(result.detail!.length).toBeGreaterThan(0);
+  });
+
+  it("returns original when marker at start (index 0)", () => {
+    const detail = "# 审核意见\n只有审核意见没有核心指令".repeat(400);
+    expect(detail.length).toBeGreaterThan(MAX_INSTRUCTION_CHARS);
+    // marker 在 index 0，core 为空，回退到截断
+    const result = splitInstruction(detail);
+    expect(result.core.length).toBeLessThan(detail.length);
+  });
+});
+
+describe("validateArchitectureHardConstraints", () => {
+  it("flags turningPoint without irreversible markers", () => {
+    const issues = validateArchitectureHardConstraints({
+      phases: [{ id: "p1", turningPoint: "主角发现了新世界" }],
+    });
+    expect(issues.some((i) => i.dimension === "structure.turningPoint")).toBe(true);
+  });
+
+  it("passes turningPoint with irreversible markers", () => {
+    const issues = validateArchitectureHardConstraints({
+      phases: [{ id: "p1", turningPoint: "主角失去了灵脉，组织永久裂变" }],
+    });
+    expect(issues.some((i) => i.dimension === "structure.turningPoint")).toBe(false);
+  });
+
+  it("flags ecological curve depending on main protagonist", () => {
+    const issues = validateArchitectureHardConstraints({
+      growthCurves: [{ kind: "ecological", resourceLoop: "陈墨推动的资源循环", stageGoals: "主角技术传播" }],
+    });
+    expect(issues.some((i) => i.dimension === "structure.growthCurve.ecological")).toBe(true);
+  });
+
+  it("flags feedback loop with fewer than 4 transmission steps", () => {
+    const issues = validateArchitectureHardConstraints({
+      feedbackLoops: [{ id: "fl1", transmission: ["甲→乙", "乙→丙"] }],
+    });
+    expect(issues.some((i) => i.dimension === "structure.feedbackLoop")).toBe(true);
+  });
+
+  it("flags foreshadowing with hint words", () => {
+    const issues = validateArchitectureHardConstraints({
+      longHorizonHooks: [{ id: "h1", surfaceDetail: "账册中有一条异常记录" }],
+    });
+    expect(issues.some((i) => i.dimension === "structure.foreshadowing")).toBe(true);
+  });
+
+  it("warns when power centers lack non-binary relationships", () => {
+    const issues = validateArchitectureHardConstraints({
+      powerCenters: [
+        { id: "pc1", relationshipDynamics: "与pc2纯冲突" },
+        { id: "pc2", relationshipDynamics: "与pc1纯对抗" },
+      ],
+    });
+    expect(issues.some((i) => i.dimension === "structure.powerCenter.relationship" && i.severity === "warning")).toBe(true);
   });
 });

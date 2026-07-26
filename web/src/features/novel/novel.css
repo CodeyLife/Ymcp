@@ -442,8 +442,14 @@
 .novel-continuity-list { display: grid; gap: 10px; }
 .novel-continuity-list article { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 14px; align-items: center; border: 1px solid #303236; padding: 12px; background: #17191b; }
 .novel-continuity-marker span { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #60423c; color: #d47b6f; font: 15px var(--font-mono); }
-.novel-continuity-list article > div:last-child { display: flex; align-items: center; gap: 12px; }
-.novel-continuity-list .ant-input:first-child { font: 500 17px Georgia, serif; }
+.novel-continuity-content { min-width: 0; display: grid; gap: 7px; }
+.novel-continuity-content > strong { font: 500 17px Georgia, serif; }
+.novel-continuity-content > p { margin: 0; color: #a6a9ac; line-height: 1.5; white-space: pre-wrap; }
+.novel-continuity-content > small { color: #7e8286; }
+.novel-continuity-meta { display: flex; align-items: center; gap: 8px; }
+.novel-continuity-edit-fields { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; }
+.novel-continuity-edit-fields .ant-select:last-child { grid-column: span 2; }
+.novel-continuity-list article.is-editing { align-items: start; }
 .novel-clue-table { border: 1px solid #303236; min-width: 780px; }
 .novel-clue-table > div { display: grid; grid-template-columns: 1fr 1.3fr 1.3fr 120px 120px; align-items: center; border-bottom: 1px solid #2c2e30; min-height: 48px; }
 .novel-clue-table > div > * { min-width: 0; padding: 0 8px; }
@@ -598,6 +604,10 @@
   .novel-dashboard-actions { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) 36px; width: 100%; box-sizing: border-box; }
   .novel-dashboard-actions .novel-dashboard-action-tool { width: 36px; min-width: 36px; }
   .novel-view-content { padding: 20px 14px 60px; }
+  .novel-continuity-list article { grid-template-columns: 34px minmax(0, 1fr); gap: 10px; }
+  .novel-continuity-meta { grid-column: 2; flex-wrap: wrap; justify-content: flex-start; }
+  .novel-continuity-edit-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .novel-continuity-edit-fields .ant-select:last-child { grid-column: 1 / -1; }
   .novel-planning-workspace { padding-top: 0; }
   .novel-planning-workspace > .novel-workspace-tabs { width: 100%; margin: 0 0 20px; padding-inline: 14px; box-sizing: border-box; }
   .novel-planning-content.is-board { padding: 0 10px 10px; }
@@ -807,14 +817,42 @@
 
 /* Unified phase -> plot segment -> chapter planning hierarchy. */
 .novel-outline-document { display: grid; gap: 26px; }
-.novel-planning-title { margin-bottom: 0; }
-.novel-planning-title h2 { margin-top: 0; }
+
+/* Hero header — wide, breathing, no cramping. */
+.novel-planning-hero { min-width: 0; padding: 4px 0 6px; border-bottom: 1px solid #303236; }
+.novel-planning-hero-text { min-width: 0; max-width: none; }
+.novel-planning-hero h2 { margin: 0; color: #f3f1ec; font: 520 30px Georgia, "Noto Serif SC", serif; letter-spacing: 0; text-wrap: balance; }
+.novel-planning-hero p { margin: 8px 0 0; color: var(--novel-muted); font-size: 13px; line-height: 1.6; max-width: 70ch; }
+
+/* Sticky command toolbar — always-on summary band + primary actions. */
+.novel-planning-toolbar { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; margin: 0 -14px; border: 1px solid #2f3330; border-radius: 4px; background: rgba(17,20,17,.94); backdrop-filter: blur(14px); box-shadow: 0 10px 30px rgba(0,0,0,.22); }
+.novel-planning-summary-band { min-width: 0; flex: 1; display: grid; grid-auto-flow: dense; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+.novel-planning-summary-cell { min-width: 0; display: grid; align-content: center; gap: 4px; padding: 4px 16px; border-right: 1px solid #2a2d2a; }
+.novel-planning-summary-cell:last-child { border-right: 0; }
+.novel-planning-summary-cell.novel-planning-summary-wide { grid-column: span 1; }
+.novel-planning-summary-cell > span { color: #7f857e; font: 600 9px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
+.novel-planning-summary-cell > strong { min-width: 0; color: #eceee9; font-size: 13px; font-weight: 560; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-planning-summary-cell[data-kind="question"] > strong { font-family: Georgia, "Noto Serif SC", serif; font-weight: 500; color: #d8dad4; }
+.novel-planning-toolbar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.novel-planning-toolbar-actions .ant-btn { height: 34px; border-radius: 3px; }
+
+/* Status pill — shared across summary band + chapter rows. */
+.novel-planning-status-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; font: 600 10px var(--font-mono); letter-spacing: .04em; width: fit-content; }
+.novel-planning-status-pill[data-status="draft"] { color: #c9a96a; background: rgba(173,139,81,.16); border: 1px solid rgba(173,139,81,.4); }
+.novel-planning-status-pill[data-status="approved"] { color: #8fc09a; background: rgba(87,144,113,.16); border: 1px solid rgba(87,144,113,.4); }
+.novel-chapter-status { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 9px; font: 600 9px var(--font-mono); letter-spacing: .04em; flex-shrink: 0; }
+.novel-chapter-status[data-status="outline"] { color: #8a8e92; background: rgba(120,124,128,.14); border: 1px solid rgba(120,124,128,.34); }
+.novel-chapter-status[data-status="draft"] { color: #7fa8c9; background: rgba(74,123,168,.16); border: 1px solid rgba(74,123,168,.38); }
+.novel-chapter-status[data-status="review"] { color: #c9a96a; background: rgba(173,139,81,.16); border: 1px solid rgba(173,139,81,.4); }
+.novel-chapter-status[data-status="final"] { color: #8fc09a; background: rgba(87,144,113,.16); border: 1px solid rgba(87,144,113,.4); }
+
+/* Planning console (collapsible). */
 .novel-planning-console { border: 1px solid #373b37; background: #151815; box-shadow: 0 18px 44px rgba(0,0,0,.18); }
-.novel-planning-console-heading { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 14px 10px 18px; border-bottom: 1px solid #353a35; background: #1b1f1b; }
+.novel-planning-console-heading { min-height: 50px; display: flex; align-items: center; gap: 16px; padding: 10px 14px 10px 18px; border-bottom: 1px solid #353a35; background: #1b1f1b; }
 .novel-planning-console-heading > div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 .novel-planning-console-heading strong { color: #eceee9; font-size: 14px; }
 .novel-planning-console-heading span { color: #858b84; font: 10px var(--font-mono); }
-.novel-planning-save.ant-btn { height: 36px; color: #fff7f3; border-color: #b84f42; border-radius: 3px; background: #c85d4e; box-shadow: 0 8px 22px rgba(154,54,43,.2); font-weight: 650; }
+.novel-planning-save.ant-btn { height: 34px; color: #fff7f3; border-color: #b84f42; border-radius: 3px; background: #c85d4e; box-shadow: 0 8px 22px rgba(154,54,43,.2); font-weight: 650; }
 .novel-planning-save.ant-btn:not(:disabled):hover { color: #fff; border-color: #e07a6c; background: #dc6d5e; transform: translateY(-1px); }
 .novel-planning-ai-command { display: grid; grid-template-columns: minmax(150px, 2fr) minmax(0, 10fr); gap: 0; border-bottom: 1px solid #353a35; }
 .novel-planning-ai-label { display: grid; align-content: center; gap: 5px; padding: 16px 18px; border-right: 1px solid #353a35; background: #181b18; }
@@ -829,47 +867,73 @@
 .novel-planning-ai-command .novel-generation-trigger.ant-btn { color: #fff7f3; border-color: #ad4c40; background: #c85d4e; font-weight: 650; }
 .novel-planning-ai-command .novel-refinement-trigger.ant-btn { color: #d8dcd5; border-color: #444a44; background: #222622; }
 .novel-planning-console > .novel-architecture-data-editor .novel-architecture-form { border: 0; }
+
+/* Unassigned chapters — promoted banner card. */
+.novel-unassigned-chapters { border: 1px solid #5b4930; background: rgba(92,67,40,.12); border-radius: 4px; padding: 14px 16px; }
+.novel-unassigned-chapters > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.novel-unassigned-chapters > header p { margin: 0; color: var(--novel-muted); font-size: 12px; }
+.novel-unassigned-chapters > div { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 1fr) auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid rgba(91,73,48,.5); }
+
+/* Phase quick-nav — sticky jump strip. */
+.novel-phase-quicknav { position: sticky; top: 64px; z-index: 11; display: flex; gap: 6px; padding: 8px 10px; margin: 0 -14px; overflow-x: auto; border: 1px solid #2a2d2a; border-radius: 4px; background: rgba(15,17,15,.92); backdrop-filter: blur(10px); scrollbar-width: thin; }
+.novel-phase-quicknav::-webkit-scrollbar { height: 4px; }
+.novel-phase-quicknav::-webkit-scrollbar-thumb { background: #3a3d3a; border-radius: 2px; }
+.novel-phase-quicknav button { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: #aeb3ac; font: inherit; cursor: pointer; white-space: nowrap; transition: color .18s ease, background .18s ease, border-color .18s ease; }
+.novel-phase-quicknav button:hover { color: #f0efeb; background: #1d201d; border-color: #3a3d3a; }
+.novel-phase-quicknav button strong { color: #df786a; font: 550 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+.novel-phase-quicknav button span { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.novel-phase-quicknav button small { color: #7f857e; font: 9px var(--font-mono); }
+
+/* Phase workspace. */
 .novel-phase-workspace { min-width: 0; }
 .novel-phase-workspace > header { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #3a3d40; }
 .novel-phase-workspace > header > div { display: flex; align-items: baseline; gap: 10px; }
 .novel-phase-workspace > header h3 { margin: 0; color: #f0efeb; font: 520 21px Georgia, "Noto Serif SC", serif; }
 .novel-phase-workspace > header span { color: #7d8280; font: 10px var(--font-mono); }
-.novel-phase-list { display: grid; gap: 18px; padding-top: 14px; }
-.novel-phase-section { min-width: 0; border: 1px solid #373b37; border-left: 3px solid #614a45; background: #151815; transition: border-color .2s ease, transform .2s ease; }
-.novel-phase-section:hover { border-left-color: #d66b5c; }
-.novel-phase-header { display: grid; grid-template-columns: 60px minmax(0, 1fr) 154px; gap: 16px; align-items: start; padding: 16px 14px 16px 0; border-bottom: 1px solid #323632; background: #1a1d1a; }
+.novel-phase-search { width: clamp(220px, 28vw, 320px); flex-shrink: 0; }
+.novel-phase-search .ant-input-affix-wrapper { background: #151815; border-color: #35383a; border-radius: 3px; }
+.novel-phase-search .ant-input-affix-wrapper-focused { border-color: rgba(223,116,101,.6); box-shadow: 0 0 0 2px rgba(200,93,78,.1); }
+.novel-phase-list { display: grid; gap: 22px; padding-top: 18px; }
+.novel-phase-section { min-width: 0; border: 1px solid #373b37; border-left: 3px solid #614a45; background: #151815; scroll-margin-top: 130px; transition: border-color .22s ease, transform .22s ease, box-shadow .22s ease; }
+.novel-phase-section:hover { border-left-color: #d66b5c; box-shadow: 0 12px 32px rgba(0,0,0,.22); }
+.novel-phase-header { display: grid; grid-template-columns: 60px minmax(0, 1fr) 168px; gap: 16px; align-items: start; padding: 16px 14px 16px 0; border-bottom: 1px solid #323632; background: #1a1d1a; }
 .novel-phase-number { min-height: 100%; display: grid; align-content: start; justify-items: center; gap: 5px; padding: 6px 0 0; border: 0; border-right: 1px solid #373b37; background: transparent; color: inherit; font: inherit; cursor: pointer; transition: color .2s ease; }
 .novel-phase-number:hover { color: #d66b5c; }
 .novel-phase-number .anticon { color: #9aa098; font-size: 11px; }
 .novel-phase-number:hover .anticon { color: #d66b5c; }
 .novel-phase-number span { color: #7f857e; font: 9px var(--font-mono); }
 .novel-phase-number strong { color: #df786a; font: 550 20px var(--font-mono); font-variant-numeric: tabular-nums; }
-.novel-segment-collapse { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #9aa098; font: inherit; cursor: pointer; transition: color .2s ease; }
-.novel-segment-collapse .anticon { font-size: 11px; }
-.novel-segment-collapse:hover { color: #d66b5c; }
-.novel-segment-collapse:hover .ant-tag { border-color: #d66b5c; }
+.novel-phase-meta { min-width: 0; display: grid; gap: 10px; align-content: start; }
+.novel-phase-title-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.novel-phase-title-input.ant-input { flex: 1; min-width: 0; height: 38px; padding: 4px 10px; border-color: #3b403b; border-radius: 3px; background: #111411; color: #f0f1ed; font: 560 17px Georgia, "Noto Serif SC", serif; box-shadow: none; }
+.novel-phase-title-input.ant-input:focus { border-color: rgba(223,116,101,.72); box-shadow: 0 0 0 2px rgba(200,93,78,.1); }
+.novel-phase-counts { flex-shrink: 0; color: #7f857e; font: 10px var(--font-mono); }
 .novel-phase-summary-editor { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .novel-phase-summary-editor label { min-width: 0; display: grid; align-content: start; gap: 6px; }
-.novel-phase-summary-editor label:first-child { grid-column: 1 / -1; }
 .novel-phase-summary-editor label > span { color: #aeb3ac; font: 600 10px var(--font-mono); }
 .novel-phase-summary-editor .ant-input { width: 100%; border-color: #3b403b; border-radius: 3px; background: #111411; color: #e0e3dc; box-shadow: none; }
-.novel-phase-summary-editor input.ant-input { height: 36px; color: #f0f1ed; font: 560 15px Georgia, "Noto Serif SC", serif; }
-.novel-phase-summary-editor textarea.ant-input { min-height: 66px; line-height: 1.55; resize: vertical; }
+.novel-phase-summary-editor textarea.ant-input { min-height: 60px; line-height: 1.55; resize: vertical; }
 .novel-phase-summary-editor .ant-input:focus { border-color: rgba(223,116,101,.72); box-shadow: 0 0 0 2px rgba(200,93,78,.1); }
 .novel-phase-actions { min-width: 0; display: grid; gap: 8px; }
 .novel-phase-actions .ant-btn { width: 100%; min-width: 0; border-radius: 3px; }
 .novel-phase-actions .ant-btn-text { width: 32px; justify-self: end; }
 .novel-phase-segments { display: grid; gap: 12px; padding: 14px; background: #111411; }
-.novel-plot-segment { border: 1px solid #34373a; background: #181a1c; }
+.novel-plot-segment { border: 1px solid #34373a; background: #181a1c; transition: border-color .2s ease; }
+.novel-plot-segment:hover { border-color: #4a4e51; }
 .novel-plot-segment-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 14px 16px; border-bottom: 1px solid #2c2f31; }
 .novel-plot-segment-header > div:nth-child(2) { min-width: 0; display: grid; gap: 8px; }
 .novel-plot-segment-header .ant-input { border-color: transparent; background: #202326; color: #e6e5e1; }
 .novel-plot-segment-header input.ant-input { font-weight: 600; }
+.novel-segment-collapse { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #9aa098; font: inherit; cursor: pointer; transition: color .2s ease; }
+.novel-segment-collapse .anticon { font-size: 11px; }
+.novel-segment-collapse:hover { color: #d66b5c; }
+.novel-segment-collapse:hover .ant-tag { border-color: #d66b5c; }
 .novel-planning-row-actions { display: flex; align-items: center; gap: 2px; }
 .novel-planning-chapter-list { background: #121416; }
-.novel-planning-chapter-row { border-bottom: 1px solid #292c2e; }
+.novel-planning-chapter-row { border-bottom: 1px solid #292c2e; transition: background .18s ease; }
 .novel-planning-chapter-row:last-child { border-bottom: 0; }
-.novel-planning-chapter-row > header { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 58px; padding: 8px 12px; }
+.novel-planning-chapter-row:hover { background: #16191b; }
+.novel-planning-chapter-row > header { display: grid; grid-template-columns: 38px 64px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 56px; padding: 8px 12px; }
 .novel-planning-chapter-order { color: #73777b; font: 12px var(--font-mono); }
 .novel-planning-chapter-title { min-width: 0; display: grid; gap: 3px; }
 .novel-planning-chapter-title .ant-input { padding: 2px 6px; border-color: transparent; background: transparent; color: #e7e6e2; font-weight: 550; }
@@ -878,12 +942,17 @@
 .novel-planning-chapter-editor label { display: grid; gap: 6px; color: #94989b; font: 11px var(--font-mono); }
 .novel-planning-chapter-editor .ant-input { border-color: #383b3e; background: #202326; color: #e6e5e1; }
 .novel-planning-chapter-editor > .ant-btn { justify-self: start; align-self: end; }
-.novel-unassigned-chapters { padding-top: 18px; border-top: 1px solid #5b4930; }
-.novel-unassigned-chapters > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
-.novel-unassigned-chapters > header p { margin: 0; color: var(--novel-muted); }
-.novel-unassigned-chapters > div { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 1fr) auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid #292c2e; }
+
+@media (max-width: 1100px) {
+  .novel-planning-summary-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .novel-planning-summary-cell { border-bottom: 1px solid #2a2d2a; padding: 6px 12px; }
+  .novel-planning-summary-cell:nth-child(2) { border-right: 0; }
+  .novel-planning-summary-cell:nth-last-child(-n+2) { border-bottom: 0; }
+}
 
 @media (max-width: 900px) {
+  .novel-planning-toolbar { flex-direction: column; align-items: stretch; }
+  .novel-planning-toolbar-actions { flex-wrap: wrap; }
   .novel-planning-ai-command { grid-template-columns: 1fr; }
   .novel-planning-ai-label { border-right: 0; border-bottom: 1px solid #353a35; }
   .novel-phase-header { grid-template-columns: 50px minmax(0, 1fr); }
@@ -891,11 +960,12 @@
   .novel-phase-actions .ant-btn-text { justify-self: stretch; }
   .novel-plot-segment-header { grid-template-columns: auto minmax(0, 1fr); }
   .novel-plot-segment-header > .novel-planning-row-actions { grid-column: 2; justify-content: flex-end; }
-  .novel-planning-chapter-row > header { grid-template-columns: 30px minmax(0, 1fr); }
-  .novel-planning-chapter-row .novel-planning-row-actions { grid-column: 2; flex-wrap: wrap; }
+  .novel-planning-chapter-row > header { grid-template-columns: 30px 56px minmax(0, 1fr); }
+  .novel-planning-chapter-row .novel-planning-row-actions { grid-column: 2 / -1; flex-wrap: wrap; }
   .novel-planning-chapter-editor { grid-template-columns: 1fr; padding: 14px; }
   .novel-unassigned-chapters > header { align-items: flex-start; flex-direction: column; }
   .novel-unassigned-chapters > div { grid-template-columns: 1fr; }
+  .novel-phase-quicknav { top: 60px; }
 }
 .novel-planning-workspace > .novel-workspace-tabs .ant-segmented { padding: 3px; border: 1px solid #303530; border-radius: 4px; background: #141714; }
 .novel-planning-workspace > .novel-workspace-tabs .ant-segmented-item { min-height: 30px; border-radius: 3px; color: #969b94; transition: color .2s ease, background .2s ease; }
@@ -918,10 +988,9 @@
   .novel-planning-ai-command .novel-generation-command { grid-template-columns: minmax(0, 1fr); }
   .novel-planning-ai-command .novel-generation-actions { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .novel-phase-workspace > header { align-items: stretch; flex-direction: column; padding-bottom: 12px; }
-  .novel-phase-workspace > header .ant-btn { width: 100%; }
+  .novel-phase-search { width: 100%; }
   .novel-phase-header { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; padding-right: 8px; }
   .novel-phase-summary-editor { grid-template-columns: 1fr; }
-  .novel-phase-summary-editor label:first-child { grid-column: 1; }
   .novel-phase-actions { grid-template-columns: 32px minmax(0, 1fr); }
   .novel-phase-actions .ant-btn:last-child { grid-column: 2; }
   .novel-phase-segments { padding: 8px; }

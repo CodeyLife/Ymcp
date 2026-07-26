@@ -256,4 +256,21 @@ describe("creative tool gateway", () => {
     await expect(executeCreativeTool("novel_foundation_export", { projectId: "does-not-exist" }, { db }))
       .rejects.toThrow("项目不存在");
   });
+
+  it("novel_chapter_review rejects for nonexistent project", async () => {
+    await expect(executeCreativeTool("novel_chapter_review", { projectId: "does-not-exist", documentId: "doc-1", idempotencyKey: "review-missing" }, { db }))
+      .rejects.toThrow("章节或项目不存在");
+  });
+
+  it("novel_chapter_review rejects non-final chapters and surfaces startChapterReviewWorkflow precondition errors", async () => {
+    // 使用 beforeEach 中已创建的 project-1，新建一个 outline 状态的章节
+    const documentId = `doc-${crypto.randomUUID()}`;
+    await db.documents.put({
+      id: documentId, projectId: "project-1", schemaVersion: 8, revision: 1, createdAt: 1, updatedAt: 1, createdBy: "test", updatedBy: "test",
+      plotSegmentId: undefined, title: "未定稿章节", summary: "", order: 1, status: "outline", contentHtml: "", plainText: "", blueprint: null as never, wordCount: 0, branch: "main", yjsDocumentId: `yjs-${documentId}`,
+    });
+    // startChapterReviewWorkflow 对非 final 章节抛错
+    await expect(executeCreativeTool("novel_chapter_review", { projectId: "project-1", documentId, idempotencyKey: "review-non-final" }, { db }))
+      .rejects.toThrow(/仅对已定稿章节开放/);
+  });
 });

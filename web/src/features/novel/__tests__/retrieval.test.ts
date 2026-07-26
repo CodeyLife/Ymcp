@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./setup";
 import { novelDb } from "../db";
 import { cosineSimilarity, setEmbeddingProvider, type EmbeddingProvider } from "../embedding";
@@ -204,5 +204,52 @@ describe("vectorSearch", () => {
     setEmbeddingProvider(provider);
     const results = await vectorSearch({ projectId: "empty-project", query: "query" });
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("默认 provider 选择", () => {
+  it("getEmbeddingProvider 默认返回 LocalEmbeddingProvider（解耦中转代理）", async () => {
+    // 重置模块级单例，避免被前序测试的 setEmbeddingProvider 污染
+    const { getEmbeddingProvider, setEmbeddingProvider } = await import("../embedding");
+    const { LocalEmbeddingProvider } = await import("../embedding-local");
+    setEmbeddingProvider(new LocalEmbeddingProvider());
+    const provider = getEmbeddingProvider();
+    expect(provider).toBeInstanceOf(LocalEmbeddingProvider);
+    expect(provider.name).toBe("local-bge-small-zh-v1.5");
+    expect(provider.dimension).toBe(512);
+  });
+});
+
+describe("OpenAIEmbeddingProvider 405 降级（非默认 provider，仅作为可选后端）", () => {
+  it("遇到 405 后自动禁用，后续调用直接抛错不重发请求", async () => {
+    // OpenAIEmbeddingProvider 不再是默认 provider，但保留供配置支持 /v1/embeddings 的代理时使用
+    const { OpenAIEmbeddingProvider, setEmbeddingProvider } = await import("../embedding");
+    const provider = new OpenAIEmbeddingProvider();
+    setEmbeddingProvider(provider);
+
+    // mock getNovelApiConfig 返回有效配置
+    vi.doMock("../api-config", () => ({
+      getNovelApiConfig: () => ({ baseUrl: "https://example.test/v1", apiKey: "test-key", modelContextWindow: 0 }),
+    }));
+
+    let fetchCount = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      fetchCount += 1;
+      return new Response(JSON.stringify({ error: { message: "Method Not Allowed" } }), {
+        status: 405,
+        headers: { allow: "GET, HEAD" },
+      });
+    });
+
+    // 第一次调用：发请求，得到 405，抛错
+    await expect(provider.embedBatch(["test"])).rejects.toThrow(/405/);
+    expect(fetchCount).toBe(1);
+
+    // 第二次调用：provider 已禁用，直接抛错，不再发请求
+    await expect(provider.embedBatch(["test"])).rejects.toThrow(/embedding 不可用/);
+    expect(fetchCount).toBe(1); // 仍是 1，没有重发
+
+    fetchSpy.mockRestore();
+    vi.doUnmock("../api-config");
   });
 });

@@ -4,13 +4,13 @@ import { DEFAULT_API_KEY } from "@/config/defaults";
 
 // ai.ts 的 endpoint() 在 DEV 模式下把默认 baseUrl 改写为 /ai-proxy（Vite dev-server 代理）。
 // Node 测试环境没有 Vite dev-server，需让 getEffectiveApiConfig 返回一个不触发该分支的等价 URL。
-// https://gpt.eromaa.com:443/v1 与默认 https://gpt.eromaa.com/v1 在 fetch 层等价，但字符串不相等，可绕过 DEV 代理逻辑。
+// https://chat.yujin8.top/v1 与默认 https://chat.yujin8.top/v1 在 fetch 层等价，但字符串不相等，可绕过 DEV 代理逻辑。
 vi.mock("@/stores/ui", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
     getEffectiveApiConfig: () => ({
-      baseUrl: "https://gpt.eromaa.com:443/v1",
+      baseUrl: "https://chat.yujin8.top/v1",
       apiKey: DEFAULT_API_KEY,
       usesDefaultBaseUrl: false,
       hasOwnKey: true,

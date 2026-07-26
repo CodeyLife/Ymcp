@@ -20,6 +20,14 @@ interface ReusableChapterBlueprint {
   contentMarkdown: string;
   structuredData: Record<string, unknown>;
   model?: string;
+  /**
+   * true 表示 structuredData 来自 fallback 路径（隔离闭环候选晋升），
+   * 缺失 beats/startingState 等 ChapterBlueprint 不存储的生成期字段，
+   * 已用占位符补齐以满足 blueprintSchema。下游应感知降级状态并在提示中标注。
+   *
+   * false/undefined 表示 structuredData 来自正式库历史 blueprint artifact，字段完整。
+   */
+  degraded?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -101,11 +109,35 @@ export async function findReusableChapterBlueprint(projectId: string, documentId
       || promotedRevision.documentId !== documentId
       || !["approved", "superseded"].includes(promotedRevision.approvalStatus ?? "")) continue;
 
-    const structuredData: Record<string, unknown> = { title: document.title, ...document.blueprint };
+    // F-002 修复 + TODO P1 契约违反标记：fallback 路径产出的 structuredData 来自 ChapterBlueprint 存储模型，
+    // 缺失 beats/startingState 等 blueprintSchema required 字段（这些字段仅存在于
+    // 实验库 blueprint artifact.structuredData，实验库删除后不可恢复）。
+    //
+    // 契约违反说明（AGENTS.md「章节审校工作流复用·产物回填契约」要求"保留 beats/title/startingState 等
+    // ChapterBlueprint 不存储的字段"）：此处用占位字符串注入虚构 beats/startingState 而非真实字段，
+    // 违反"reviewer 拿到真实蓝图"的契约意图。当前作为 isolation 闭环晋升章节的兜底保留，但属已知技术债。
+    // 修复方向：（1）在 isolation 闭环晋升时同步快照 blueprint artifact.structuredData 到 document.blueprint
+    // 持久化字段，避免后续实验库删除后不可读；（2）或扩展 blueprintSchema 让 degraded 路径可省略 beats 字段。
+    // 任一修复落地后删除此 fallback 占位逻辑。
+    const fallbackBlueprint = document.blueprint;
+    const DEGRADED_PLACEHOLDER = "（降级复用：原 blueprint artifact 已不可读，请基于正文反向推断）";
+    const structuredData: Record<string, unknown> = {
+      title: document.title,
+      ...fallbackBlueprint,
+      startingState: DEGRADED_PLACEHOLDER,
+      beats: [
+        { action: DEGRADED_PLACEHOLDER, emotion: "", outcome: "" },
+        { action: DEGRADED_PLACEHOLDER, emotion: "", outcome: "" },
+      ],
+      characters: fallbackBlueprint.characterIds,
+      locations: fallbackBlueprint.locationIds,
+      degraded: true,
+    };
     return {
       contentMarkdown: renderStoredChapterBlueprint(document.title, structuredData),
       structuredData,
       model: typeof provenance.model === "string" ? provenance.model : undefined,
+      degraded: true,
     };
   }
   return undefined;
@@ -238,8 +270,11 @@ export async function cancelWorkflow(runId: string, db: NovelDatabase = novelDb)
  * @param params.documentId 章节 ID
  * @param params.instruction 可选审校指令（注入到 context packet）
  * @param params.blocking false 时异步推进，true 时阻塞至首次审批门禁
+ * @param params.externalDraft 外部 LLM 提交的重写正文——提供时 draft artifact 用此内容替代 document.plainText，
+ *   走标准 review→revision→commit 闭环审核重写质量，不直接覆盖正式稿。用于支持"外部 LLM 主动重写章节正文"
+ *   工作方式，与 novel_change_patch（proposal item 重写）共同覆盖 chapter 层与 change 层的外部协同创作。
  */
-export async function startChapterReviewWorkflow(params: { projectId: string; documentId: string; instruction?: string; blocking?: boolean }, db: NovelDatabase = novelDb) {
+export async function startChapterReviewWorkflow(params: { projectId: string; documentId: string; instruction?: string; blocking?: boolean; externalDraft?: string }, db: NovelDatabase = novelDb) {
   const [project, document] = await Promise.all([db.projects.get(params.projectId), db.documents.get(params.documentId)]);
   if (!project || !document || document.projectId !== params.projectId) throw new Error("章节或项目不存在");
   if (document.status !== "final") throw new Error("章节审校优化仅对已定稿章节开放；未定稿章节请走正式生成流程");
@@ -252,12 +287,17 @@ export async function startChapterReviewWorkflow(params: { projectId: string; do
   if (active) throw new Error("当前章节已有活跃工作流，请先完成或取消后再启动审校优化");
 
   // 优先复用历史 artifact 的完整 structuredData；隔离候选的实验 artifact 未写回正式库时，
-  // findReusableChapterBlueprint 会在核验晋升链路后使用正式 document.blueprint。
+  // findReusableChapterBlueprint 会在核验晋升链路后使用正式 document.blueprint 并标记 degraded。
   const priorBlueprint = await findReusableChapterBlueprint(params.projectId, params.documentId, db);
   if (!priorBlueprint) throw new Error("找不到历史章节蓝图：仅能复用已完成章节流程中的合法蓝图产物");
 
-  // 编译审校上下文：task="chapter-review" 区分正式生成，stage="review" 让 skill 解析走审校分支
-  const instruction = params.instruction?.trim() || `对已定稿章节《${document.title}》进行严苛读者视角审校与文案优化`;
+  // F-002 修复：fallback 蓝图缺失 beats/startingState 等 ChapterBlueprint 不存储的字段。
+  // 在 instruction 中标注降级状态，让 reviewer 知道蓝图节拍不可读、需基于正文反向推断；
+  // 不抛错以保持"已晋升章节仍可审校"的原有行为，但显式提示降级场景。
+  const degradedSuffix = priorBlueprint.degraded
+    ? "\n\n注意：复用的历史蓝图为降级版本（来自隔离闭环候选晋升，原 blueprint artifact 不可读），beats 与 startingState 字段缺失。审校时请基于当前正文反向推断本章节拍与起点，不依赖蓝图节拍。"
+    : "";
+  const instruction = (params.instruction?.trim() || `对已定稿章节《${document.title}》进行严苛读者视角审校与文案优化`) + degradedSuffix;
   const packet = await compileNovelContext({
     projectId: params.projectId,
     task: "chapter-review",
@@ -297,12 +337,14 @@ export async function startChapterReviewWorkflow(params: { projectId: string; do
   }, db);
 
   // 包装历史 blueprint 为本 run 的 blueprint artifact（structuredData 透传，contentMarkdown 复用历史）
+  // F-002：degraded 蓝图在 title 中标注，便于 UI 与审计追溯降级状态
+  const blueprintTitleSuffix = priorBlueprint.degraded ? "（审校复用·降级）" : "（审校复用）";
   const blueprintArtifact = await saveArtifact(run, {
     projectId: run.projectId,
     workflowRunId: run.id,
     stage: "blueprint",
     kind: "blueprint",
-    title: `${document.title}蓝图（审校复用）`,
+    title: `${document.title}蓝图${blueprintTitleSuffix}`,
     contentMarkdown: priorBlueprint.contentMarkdown,
     structuredData: priorBlueprint.structuredData,
     model: priorBlueprint.model,
@@ -310,18 +352,30 @@ export async function startChapterReviewWorkflow(params: { projectId: string; do
     contextPacketId: packet.id,
   }, db);
 
-  // 包装 document.plainText 为本 run 的 draft artifact
+  // 包装正文为本 run 的 draft artifact。外部 LLM 提交 externalDraft 时用重写正文替代 document.plainText，
+  // 走标准 review→revision→commit 闭环审核重写质量，不直接覆盖正式稿。
+  const hasExternalDraft = typeof params.externalDraft === "string" && params.externalDraft.trim().length > 0;
+  const draftContent = hasExternalDraft ? params.externalDraft!.trim() : document.plainText;
+  const draftTitleSuffix = hasExternalDraft ? "（外部重写·审校前）" : "（审校前）";
   const draftArtifact = await saveArtifact(run, {
     projectId: run.projectId,
     workflowRunId: run.id,
     stage: "draft",
     kind: "draft",
-    title: `${document.title}正文（审校前）`,
-    contentMarkdown: document.plainText,
+    title: `${document.title}正文${draftTitleSuffix}`,
+    contentMarkdown: draftContent,
     model: project.settings.textModel,
     skillRefs: [],
     contextPacketId: packet.id,
   }, db);
+  // 外部重写场景在 instruction 中标注，让 reviewer 知道审核的是外部 LLM 重写版本而非原 LLM 生成正文。
+  if (hasExternalDraft) {
+    const externalDraftNote = `\n\n注意：本次审校的 draft artifact 是外部 LLM 提交的重写正文（非原生成流程产出）。审核重点：(1) 重写是否保留了原章节的关键情节、人物状态、伏笔与因果；(2) 重写是否解决了原章节的问题（见 instruction 中审核重点）；(3) 重写是否引入新的事实冲突或风格断裂。若重写质量达标则 commit，若有 issues 则 revision-stage 让原 LLM 基于重写版本修订。`;
+    const promptArtifact = await db.workflowArtifacts.where("workflowRunId").equals(run.id).filter((item) => item.stage === "context" && item.kind === "prompt").first();
+    if (promptArtifact) {
+      await db.workflowArtifacts.put({ ...promptArtifact, contentMarkdown: promptArtifact.contentMarkdown + externalDraftNote, updatedAt: Date.now() });
+    }
+  }
 
   // 把 artifact id 回填到 run，advanceChapterWorkflow 才能让 review-stage 拿到
   const initialized = await transition(run, "review", "running", {

@@ -41,6 +41,8 @@
 .novel-runtime-operation p, .novel-runtime-change p { margin: 4px 0 0; color: #a1a1aa; }
 .novel-runtime-operation time { color: #71717a; font-size: 11px; }
 .novel-runtime-change { display: flex; align-items: center; justify-content: space-between; gap: 20px; width: 100%; padding: 14px 0; color: inherit; text-align: left; background: transparent; border: 0; border-top: 1px solid #27272a; cursor: pointer; }
+.novel-runtime-change.is-managed { cursor: default; }
+.novel-runtime-change.is-managed small { display: block; margin-top: 6px; color: #71717a; }
 .novel-runtime-muted { color: #71717a; }
 .novel-runtime-review-actions { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto auto; gap: 8px; width: 100%; }
 .novel-runtime-preview { max-height: 65vh; overflow: auto; padding: 8px 18px; color: #e4e4e7; line-height: 1.8; }

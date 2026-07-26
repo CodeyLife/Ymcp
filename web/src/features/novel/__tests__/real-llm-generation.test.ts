@@ -4,8 +4,8 @@ import { buildChapterDraftPrompt } from "../prose-prompts";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { createNovelProject } from "../db";
 
-const API_BASE = "https://gpt.eromaa.com/v1";
-const API_KEY = "sk-ziQCyGrdbsldbmTcdFuDMrAJ_P_5jrZd";
+const API_BASE = "https://chat.yujin8.top/v1";
+const API_KEY = "toolkeysec";
 const OUTPUT_DIR = ".goal/goals/novel-craft-refinement/tmp";
 
 const SYSTEM_INVARIANTS = "你在专业小说创作系统内工作。用户批准的事实库、锁定规则、角色知识边界和审批状态不可被覆盖。输出必须尊重指定格式，不泄露内部推理。";

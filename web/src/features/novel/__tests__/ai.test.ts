@@ -193,9 +193,9 @@ describe("novel AI HTTP handling", () => {
 
   it("retries empty stream completions via streaming until success", async () => {
     vi.useFakeTimers();
-    // 非流式降级已移除：空内容 NovelEmptyResponseError 视为限流类错误（RATE_LIMIT_MAX_RETRIES=5），
-    // 即 attempt 0-4 共 5 次请求，第 5 次（attempt=4）失败后直接抛出不再重试。
-    // 本测试模拟 4 次空内容（attempt 0-3）+ 第 5 次（attempt=4）返回有效内容。
+    // F-050 修复后：空内容 NovelEmptyResponseError 视为限流类错误（RATE_LIMIT_MAX_RETRIES=5），
+    // 即 attempt 0-5 共 6 次请求（首次 + 5 次重试），第 6 次（attempt=5）失败后直接抛出不再重试。
+    // 退避阶梯 3s/5s/8s/12s/15s 总 43s。本测试模拟 4 次空内容（attempt 0-3）+ 第 5 次（attempt=4）返回有效内容。
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(sse(""))
       .mockResolvedValueOnce(sse(""))

@@ -71,6 +71,17 @@ export default defineConfig({
         timeout: 600000,
         proxyTimeout: 600000,
       },
+      // hf-mirror.com 不返回 Access-Control-Allow-Origin，浏览器跨域 fetch 会被 CORS 拦截。
+      // 走同源 /hf-mirror/ 路径由 vite 转发，规避 CORS（与 /api、/ai-proxy 同模式）。
+      // 生产部署需在后端反向代理同样路径，或通过 VITE_HF_MIRROR 指向已开启 CORS 的源。
+      "/hf-mirror": {
+        target: "https://hf-mirror.com",
+        changeOrigin: true,
+        secure: false,
+        rewrite: (p) => p.replace(/^\/hf-mirror/, ""),
+        timeout: 600000,
+        proxyTimeout: 600000,
+      },
     },
   },
   build: {

@@ -4,7 +4,7 @@ import json
 import sys
 import urllib.request
 
-BASE_URL = "https://gpt.eromaa.com/v1"
+BASE_URL = "https://chat.yujin8.top/v1"
 API_KEY = "toolkeysec"
 
 models_to_test = ["gpt-5-5", "gpt-5", "claude-3-5-sonnet"]

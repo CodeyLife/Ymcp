@@ -993,6 +993,43 @@ export async function deleteChapter(documentId: string) {
   await deleteCollaborativeDocument(document.projectId, document.yjsDocumentId);
 }
 
+export async function deletePlotThread(threadId: string) {
+  const thread = await novelDb.plotThreads.get(threadId);
+  if (!thread) return;
+  const [documents, scenes] = await Promise.all([
+    novelDb.documents.where("projectId").equals(thread.projectId).filter((document) => document.blueprint.plotThreadIds.includes(threadId)).toArray(),
+    novelDb.scenes.where("projectId").equals(thread.projectId).filter((scene) => scene.plotThreadIds?.includes(threadId) ?? false).toArray(),
+  ]);
+  const now = Date.now();
+  await commitFormalRecordChanges(thread.projectId, [
+    ...documents.map((document) => ({
+      collection: "documents",
+      before: document as unknown as Record<string, unknown>,
+      after: {
+        ...document,
+        blueprint: { ...document.blueprint, plotThreadIds: document.blueprint.plotThreadIds.filter((id) => id !== threadId) },
+        revision: document.revision + 1,
+        updatedAt: now,
+        updatedBy: ACTOR_ID,
+      } as unknown as Record<string, unknown>,
+      fieldChanges: { plotThreadIds: { before: document.blueprint.plotThreadIds, after: document.blueprint.plotThreadIds.filter((id) => id !== threadId) } },
+    })),
+    ...scenes.map((scene) => ({
+      collection: "scenes",
+      before: scene as unknown as Record<string, unknown>,
+      after: {
+        ...scene,
+        plotThreadIds: (scene.plotThreadIds ?? []).filter((id) => id !== threadId),
+        revision: scene.revision + 1,
+        updatedAt: now,
+        updatedBy: ACTOR_ID,
+      } as unknown as Record<string, unknown>,
+      fieldChanges: { plotThreadIds: { before: scene.plotThreadIds ?? [], after: (scene.plotThreadIds ?? []).filter((id) => id !== threadId) } },
+    })),
+    { collection: "plotThreads", before: thread as unknown as Record<string, unknown>, fieldChanges: { title: { before: thread.title, after: null } } },
+  ]);
+}
+
 export async function deleteProject(projectId: string) {
   await novelDb.transaction("rw", novelDb.tables, async () => {
     for (const table of novelDb.tables) {

@@ -5,11 +5,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { deleteChapter, novelDb } from "../features/novel/db";
 import { setNovelApiConfigProvider } from "../features/novel/api-config";
 import { executeCreativeTool, type CreativeToolName } from "../features/novel/creative-tool-gateway";
-import { updateProposalItemPayload } from "../features/novel/generation";
+import { updateProposalItemPayload, validateArchitectureHardConstraints, type ArchitectureConstraintIssue } from "../features/novel/generation";
 import { captureChapterRuleReplay, captureFoundationRuleReplay, createCraftRuleCandidateFromLearning, evaluateCraftRuleOnChapter, evaluateCraftRuleOnFoundation, inspectCraftRuleCandidate } from "../features/novel/craft-rule-evolution";
 import { retryFailedWorkflowLearning } from "../features/novel/learning";
 import {
   assertRuntimeActor,
+  isAdvisoryReview,
   internalEvidencePasses,
   latestExternalReview,
   runtimeNextActions,
@@ -18,6 +19,7 @@ import {
   type RuntimeCandidateEvidence,
   type RuntimeExternalReview,
   type RuntimePatchRecord,
+  type RuntimeReviewIssue,
   type RuntimeChange,
   type RuntimeDriver,
   type RuntimeEvent,
@@ -31,9 +33,31 @@ import {
 import type { NovelStore } from "./sqlite-store";
 
 const OPERATION_LEASE_MS = 20 * 60 * 1000;
+/** operation 层自动重试上限（仅针对 HTTP 5xx/upstream_error 等临时故障，非 assertRuntimeActor 等逻辑错误）。 */
+const MAX_OPERATION_AUTO_RETRIES = 2;
+/** operation 层自动重试退避基数（1s/2s），与 ai.ts 通用错误退避一致。 */
+const OPERATION_RETRY_BASE_DELAY_MS = 1_000;
 
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+/**
+ * 判断 operation 层错误是否可自动重试。
+ *
+ * operation 层错误主要来自 executeCreativeTool 调用链（含 LLM 上游 API），
+ * 错误信息可能包含 "HTTP 5xx"、"upstream_error"、"socket hang up" 等临时故障特征。
+ * 逻辑错误（如 assertRuntimeActor 抛错、schema 校验失败）不在此列。
+ */
+function isRetryableOperationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /HTTP 5\d\d|upstream_error|socket hang up|ECONNRESET|ENOTFOUND|fetch failed|terminated|AI 未返回有效内容/i.test(message);
+}
+
+/** 计算 operation 层自动重试退避延迟（1s/2s + jitter）。 */
+function getOperationRetryDelay(attempt: number): number {
+  const jitter = Math.random() * 500;
+  return OPERATION_RETRY_BASE_DELAY_MS * 2 ** attempt + jitter;
 }
 
 function withInternalGate(evidence: RuntimeCandidateEvidence): RuntimeCandidateEvidence {
@@ -101,7 +125,17 @@ export function buildRuntimeRevisionInstruction(note: string, artifact: unknown)
   const reviewNote = note.trim() || "根据本轮审核意见重做当前候选";
   const envelope = artifact as { kind?: unknown; value?: { items?: unknown[] } } | undefined;
   const items = envelope?.kind === "proposal" && Array.isArray(envelope.value?.items) ? envelope.value.items : [];
-  if (items.length <= 1) return reviewNote;
+  if (items.length <= 1) {
+    // 根因修复（iter14 非确定性退步）：单项候选（如 architecture）此前直接返回 reviewNote，
+    // 不包含前一候选的任何结构信息。LLM 重生成时看不到前一次的 powerCenters/phases/growthCurves，
+    // 自然丢失已通过审核的结构强项（如 iter13 的第8个 powerCenter lingqi_origin_consciousness
+    // 在 iter14 丢失，导致 feedbackLoops 引用悬空 → 连续 3 次结构约束失败）。
+    // 修复：为单项候选生成"上一版结构摘要"，列出关键结构元素的 id/name，
+    // 告诉 LLM 这些是已通过审核的结构强项，除非审核意见明确要求删除/修改，否则必须保留。
+    // 判定信号：单项候选 revise/retry 后丢失前序已建模的结构元素 + review 未要求删除 → 非确定性退步。
+    const structuralSummary = buildSingleItemStructuralSummary(items[0]);
+    return structuralSummary ? `${reviewNote}\n\n${structuralSummary}` : reviewNote;
+  }
   const previousItems = items.map((raw) => {
     const item = raw as Record<string, unknown>;
     return {
@@ -116,6 +150,133 @@ export function buildRuntimeRevisionInstruction(note: string, artifact: unknown)
   return `${reviewNote}\n\n# 多项候选修订协议\n本轮输出会完整替代上一版候选，不是增量补丁。必须返回修订后的全量候选集合：保留审核意见未要求删除的既有项，并在完整集合中执行新增、删除或修改；不得只返回新增项。\n\n# 上一版候选集合\n${JSON.stringify(previousItems, null, 2)}`;
 }
 
+/**
+ * 为单项候选（如 architecture）生成"上一版结构摘要"。
+ *
+ * 提取 payload 中被其他字段引用的关键结构元素（powerCenters/growthCurves/phases）的 id/name，
+ * 告诉 LLM 这些是已通过审核的结构强项，revise/retry 时必须保留除非审核意见明确要求删除。
+ * 只提取 id/name 而非完整 payload，避免指令膨胀；完整 payload 已在 artifact 中可查。
+ */
+function buildSingleItemStructuralSummary(item: unknown): string | null {
+  if (!item || typeof item !== "object") return null;
+  const raw = item as Record<string, unknown>;
+  const payload = raw.payload as Record<string, unknown> | undefined;
+  if (!payload || typeof payload !== "object") return null;
+
+  const lines: string[] = [];
+
+  // powerCenters：被 feedbackLoops.affectedCenters 和 longHorizonHooks.affectedCenters 引用
+  const powerCenters = Array.isArray(payload.powerCenters) ? payload.powerCenters as Array<Record<string, unknown>> : [];
+  if (powerCenters.length) {
+    const centerList = powerCenters
+      .map((center) => {
+        const id = String(center.id ?? "").trim();
+        const name = String(center.name ?? "").trim();
+        return id && name ? `${id}（${name}）` : id || name;
+      })
+      .filter(Boolean);
+    if (centerList.length) {
+      lines.push(`- powerCenters（${centerList.length} 个，被 feedbackLoops/longHorizonHooks 的 affectedCenters 引用）：${centerList.join("、")}`);
+    }
+  }
+
+  // growthCurves：被 phases.primaryCurveId 引用
+  const growthCurves = Array.isArray(payload.growthCurves) ? payload.growthCurves as Array<Record<string, unknown>> : [];
+  if (growthCurves.length) {
+    const curveList = growthCurves
+      .map((curve) => {
+        const id = String(curve.id ?? "").trim();
+        const kind = String(curve.kind ?? "").trim();
+        const subject = String(curve.subject ?? "").trim();
+        return id ? `${id}（kind=${kind || "?"}, subject=${subject || "?"}）` : "";
+      })
+      .filter(Boolean);
+    if (curveList.length) {
+      lines.push(`- growthCurves（${curveList.length} 条，被 phases.primaryCurveId 引用）：${curveList.join("、")}`);
+    }
+  }
+
+  // phases：定义五幕结构 + 每幕已填充的结构化字段
+  const phases = Array.isArray(payload.phases) ? payload.phases as Array<Record<string, unknown>> : [];
+  if (phases.length) {
+    const phaseList = phases
+      .map((phase) => {
+        const id = String(phase.id ?? "").trim();
+        const title = String(phase.title ?? "").trim();
+        const primaryCurveId = String(phase.primaryCurveId ?? "").trim();
+        if (!id) return "";
+        // 根因修复（iter15 发现）：结构摘要只列 phase id/title/primaryCurveId，
+        // 不列每幕已填充的 romanceProgress/techGeneration/originTruthLayer，
+        // 导致 LLM 看不到前序已填充的结构化字段 → 非确定性退步（romanceProgress 5/5→0）。
+        // 修复：列出每幕已填充的结构化字段，标注为已通过审核必须保留。
+        const filledFields: string[] = [];
+        const rp = Array.isArray(phase.romanceProgress) ? phase.romanceProgress as Array<Record<string, unknown>> : [];
+        if (rp.length) {
+          const rpLines = rp.map((r) => {
+            const lineId = String(r.romanceLineId ?? "").trim();
+            const stage = String(r.relationshipStage ?? "").trim();
+            return lineId ? `${lineId}(${stage})` : "";
+          }).filter(Boolean);
+          filledFields.push(`romanceProgress[${rpLines.join(";")}]`);
+        }
+        const tg = phase.techGeneration as Record<string, unknown> | undefined;
+        if (tg && typeof tg === "object") {
+          const tgName = String(tg.name ?? "").trim();
+          const tgGen = String(tg.generation ?? "").trim();
+          filledFields.push(`techGeneration(${tgGen}:${tgName})`);
+        }
+        const otl = phase.originTruthLayer as Record<string, unknown> | undefined;
+        if (otl && typeof otl === "object") {
+          const otlLayer = String(otl.layer ?? "").trim();
+          const otlRev = String(otl.revelation ?? "").trim().slice(0, 30);
+          filledFields.push(`originTruthLayer(L${otlLayer}:${otlRev})`);
+        }
+        const filledSuffix = filledFields.length ? `, 已填充: ${filledFields.join(" | ")}` : "";
+        return `${id}（${title || "?"}, primaryCurveId=${primaryCurveId || "?"}${filledSuffix}）`;
+      })
+      .filter(Boolean);
+    if (phaseList.length) {
+      lines.push(`- phases（${phaseList.length} 幕，每幕的 primaryCurveId 引用 growthCurves.id；标注"已填充"的结构化字段必须保留除非审核要求删除）：${phaseList.join("、")}`);
+    }
+  }
+
+  if (!lines.length) return null;
+  return `# 上一版已通过审核的结构强项（必须保留除非审核意见明确要求删除/修改）\n以下结构元素已在上一版候选中建模并通过审核，被其他字段引用（如 feedbackLoops.affectedCenters 引用 powerCenters.id、phases.primaryCurveId 引用 growthCurves.id）。本轮重生成时必须保留这些结构元素的 id/name 与引用关系，除非审核意见明确要求删除或修改某一项。特别地，每幕 phases 中标注"已填充"的 romanceProgress/techGeneration/originTruthLayer 是前序已通过审核的结构化字段，必须原样保留或在此基础上深化，不得清零。若需新增结构元素，在保留既有元素的基础上追加；不得以"不得保留上一版"为由丢弃已通过审核的结构强项。\n${lines.join("\n")}`;
+}
+
+/**
+ * 将外部审核 issues 格式化为可注入 revisionInstruction 的定向反馈文本。
+ *
+ * 根因修复：reviewChange 存储了 externalReview.issues（含字段级证据与修复建议），
+ * 但 buildRuntimeRevisionInstruction 仅使用 note + 上一版 payload，issues 从未传入 LLM。
+ * 这导致 LLM 在 regenerate 时只看到泛述 note，无法针对性修复 → 内容层无效循环。
+ * 本函数把每个 issue 的 severity/dimension/evidenceField/title/evidence/suggestion
+ * 格式化为 LLM 可直接执行的修复清单，注入 revisionInstruction。
+ */
+export function formatReviewIssuesForInstruction(issues: RuntimeReviewIssue[]): string {
+  const lines = issues.map((issue, index) => {
+    const severityTag = `[${issue.severity}]`;
+    const fieldHint = issue.evidenceField ? ` (${issue.evidenceField})` : "";
+    const quote = issue.evidenceQuote ? ` 当前值: "${truncateForInstruction(issue.evidenceQuote, 120)}"` : "";
+    const evidence = issue.evidence ? `\n  证据: ${truncateForInstruction(issue.evidence, 200)}` : "";
+    const suggestion = issue.suggestion ? `\n  修复: ${truncateForInstruction(issue.suggestion, 300)}` : "";
+    return `${index + 1}. ${severityTag} ${issue.dimension}${fieldHint}: ${issue.title}${quote}${evidence}${suggestion}`;
+  });
+  // 根因修复 2（矛盾指令覆盖，iter13 发现）：work.revise/work.retry 把 baseInstruction（可能含
+  // "不得保留上一版任何结构"等推倒重写指令）prepend 到 revisionInstruction，形成矛盾——
+  // base 说"不得保留"，issues 说"恢复/保留/填充"。LLM 因 primacy effect 倾向遵循 base，
+  // 导致非确定性退步（丢弃已通过审核的结构强项）+ 必填字段不填充。
+  // 本段在 issues 前注入"优先级覆盖指令"，明确 issues 优先于 base 中的推倒重写指令。
+  // 判定信号：base instruction 含"不得保留/全新重生成" + issues 含"恢复/保留/填充" +
+  // LLM 丢弃前序结构 + 必填字段不填充。
+  const precedenceOverride = `# 优先级覆盖指令（高于基础指令中的"不得保留/全新重生成"）\n以下外部审核具体意见的优先级高于基础指令中的任何"不得保留上一版/全新重生成/不得在上一版基础上微调"等推倒重写指令。对于审核意见明确要求"恢复/保留/填充"的字段，必须按要求填充或保留已通过审核的结构强项，不得以"不得保留上一版"为由丢弃。基础指令中的推倒重写要求仅适用于未被审核意见提及的字段——审核意见未提及的内容可以重新生成，但审核意见明确要求保留/恢复的内容必须保留/恢复。\n\n`;
+  return `${precedenceOverride}# 外部审核具体意见（必须逐条修复）\n${lines.join("\n")}`;
+}
+
+function truncateForInstruction(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 export class NovelCreationEngine {
   private readonly emitter = new EventEmitter();
   private readonly projectQueues = new Map<string, Promise<void>>();
@@ -125,8 +286,10 @@ export class NovelCreationEngine {
   constructor(readonly store: NovelStore) {
     setNovelApiConfigProvider(() => {
       const saved = this.store.getSetting<{ baseUrl?: string; apiKey?: string; modelContextWindow?: number }>("apiConfig") ?? {};
+      // TODO P1：默认 baseUrl 与 src/config/defaults.ts DEFAULT_BASE_URL、ai.ts DEV_PROXY_BASE_URL 三处硬编码同步；
+      // 任一处变更会破坏 ai.ts endpoint() 字符串等式判定。应集中到单一 config 并由其他模块导入。
       return {
-        baseUrl: saved.baseUrl?.trim() || process.env.YMCP_API_BASE_URL || "https://gpt.eromaa.com/v1",
+        baseUrl: saved.baseUrl?.trim() || process.env.YMCP_API_BASE_URL || "https://chat.yujin8.top/v1",
         apiKey: saved.apiKey?.trim() || process.env.YMCP_API_KEY || "",
         modelContextWindow: Number(saved.modelContextWindow ?? process.env.YMCP_MODEL_CONTEXT_WINDOW ?? 0),
       };
@@ -276,8 +439,19 @@ export class NovelCreationEngine {
   }
 
   enqueueIntent(input: { projectId: string; kind: NovelIntentKind; instruction: string; target?: string; taskKey?: string; driver: RuntimeDriver }, requestKey: string): RuntimeOperation {
+    // 1. requestKey 幂等去重（保留：相同请求键直接返回已有 operation）
     const duplicate = this.store.listOperations(input.projectId).find((operation) => operation.input.requestKey === requestKey);
     if (duplicate) return duplicate;
+    // 2. instructionHash 去重：相同 instruction+target+taskKey 且仍在排队/审核中的 operation 不重复入队
+    const instructionHash = fingerprint({ instruction: input.instruction, target: input.target ?? "", taskKey: input.taskKey ?? "", projectId: input.projectId });
+    const instructionDuplicate = this.store.listOperations(input.projectId).find((operation) =>
+      operation.instructionHash === instructionHash
+      && (operation.status === "queued" || operation.status === "awaiting_review" || operation.status === "running"));
+    if (instructionDuplicate) return instructionDuplicate;
+    // 3. 收尾同类仍在 queued/awaiting_review 的旧 operation，避免孤儿堆积。
+    //    running 状态保留——它通常很快进入 awaiting_review，下次重新发起时会被 supersede；
+    //    若强行 cancel 可能与正在执行的 LLM 调用产生写回竞态。
+    this.supersedeObsoleteOperations(input, `被新的 ${input.kind} 指令取代`);
     const now = Date.now();
     const operation: RuntimeOperation = {
       id: randomUUID(),
@@ -289,6 +463,7 @@ export class NovelCreationEngine {
       input: { instruction: input.instruction, target: input.target, taskKey: input.taskKey, requestKey },
       baseSnapshotHash: this.store.snapshotHash(input.projectId),
       attempt: 0,
+      instructionHash,
       createdAt: now,
       updatedAt: now,
     };
@@ -296,6 +471,54 @@ export class NovelCreationEngine {
     this.emit("operation.queued", { kind: operation.kind }, operation.projectId, operation.id);
     this.schedule(operation.id);
     return operation;
+  }
+
+  /**
+   * 在重新发起同类 operation 前，把同 projectId+kind+target+taskKey 且仍处于
+   * queued/awaiting_review 的旧 operation 收尾：旧 operation 标 cancelled，
+   * 其当前 pending change 标 superseded（保留审核历史供回溯）。
+   *
+   * 设计权衡：
+   * - 不动 running 状态——它通常几十秒内会进入 awaiting_review，下次重新发起时会被 supersede；
+   *   强行 cancel 会与正在执行的 LLM 调用产生写回竞态（process 函数无乐观锁）。
+   * - 通过 emit 事件让 UI 与 SSE 订阅方即时感知，避免依赖 10s 轮询。
+   * - supersede 而非 reject：reject 会污染 learning 闭环的 reject 模式统计。
+   * - review.decision 用 "superseded"（非 "revise"）：避免污染 learning 闭环的 revise 模式统计，
+   *   "superseded" 语义是"被新候选取代"，与用户审核的 "revise"（重做）路径解耦。
+   */
+  private supersedeObsoleteOperations(input: { projectId: string; kind: NovelIntentKind; target?: string; taskKey?: string }, reason: string): void {
+    // 标准化子任务标识：优先 taskKey（标准化字段），回退 target（历史数据曾用 target 塞入类别）。
+    // 这样旧 op（taskKey=undefined, target="architecture"）与新 op（taskKey="architecture", target=undefined）
+    // 能正确匹配为同类，触发 supersede 避免孤儿堆积。
+    // 对 write/revise 类（taskKey 通常为空，target 是章节 ID），仍按 target 精确匹配。
+    const inputTaskKey = input.taskKey ?? input.target;
+    const obsolete = this.store.listOperations(input.projectId).filter((operation) =>
+      operation.kind === input.kind
+      && (operation.status === "queued" || operation.status === "awaiting_review")
+      && (operation.input.taskKey ?? operation.input.target) === inputTaskKey);
+    if (!obsolete.length) return;
+    const now = Date.now();
+    const actor: RuntimeActor = { type: "user", id: "runtime-supersede" };
+    for (const operation of obsolete) {
+      const pendingChange = operation.currentChangeId
+        ? this.store.getChange(operation.currentChangeId)
+        : undefined;
+      if (pendingChange && pendingChange.status === "pending") {
+        pendingChange.status = "superseded";
+        pendingChange.review = { decision: "superseded", note: reason, actor, reviewedAt: now };
+        pendingChange.updatedAt = now;
+        this.store.putChange(pendingChange);
+        this.emit("change.superseded", { changeId: pendingChange.id, note: reason, workItemId: pendingChange.workItemId, supersededBy: "newer-operation" }, operation.projectId, operation.id);
+      }
+      operation.status = "cancelled";
+      operation.currentChangeId = undefined;
+      operation.currentWorkItemId = undefined;
+      operation.leaseExpiresAt = undefined;
+      operation.result = { superseded: true, reason };
+      operation.updatedAt = now;
+      this.store.putOperation(operation);
+      this.emit("operation.cancelled", { reason, supersededBy: "newer-operation" }, operation.projectId, operation.id);
+    }
   }
 
   getOperation(id: string, afterSequence = 0) {
@@ -473,9 +696,35 @@ export class NovelCreationEngine {
       const operation = storedOperation ? normalizeOperation(storedOperation) : undefined;
       if (!operation) throw new Error("候选变更所属 operation 不存在");
       assertRuntimeActor(operation, actor);
-      let currentArtifactFingerprint: string | undefined;
       let learningCandidateId: string | undefined;
       let learningError: string | undefined;
+      // P1-3: advisory review 路径——external-llm 对 human driver operation 提交非约束性审核意见。
+      // 不改变 operation.status（仍 awaiting_review），只把审核意见附加到 change.externalReviews，
+      // user 仍保留最终决策权（accept/revise/reject 由 user actor 完成）。
+      if (isAdvisoryReview(operation, actor)) {
+        if (!externalReview) throw new Error("advisory review 必须提交结构化外部审核记录");
+        if (!externalReview.reviewRunId.trim() || !externalReview.summary.trim()) throw new Error("外部审核缺少 reviewRunId 或摘要");
+        if (decision !== "revise") throw new Error("advisory review 只能提交 revise 决策（非约束性意见），最终决策由 user 完成");
+        const details = await this.getChangeDetails(changeId);
+        if (externalReview.artifactFingerprint !== details.artifactFingerprint) throw new Error("外部审核未基于当前完整候选，请重新读取候选后审核");
+        const persistedReview: RuntimeExternalReview = { ...externalReview, actor, reviewedAt: Date.now() };
+        change.externalReviews = [...(change.externalReviews ?? []), persistedReview];
+        change.artifactFingerprint = details.artifactFingerprint;
+        change.updatedAt = Date.now();
+        try {
+          learningCandidateId = (await this.persistReviewLearning(change, operation, persistedReview))?.id;
+        } catch (error) {
+          learningError = error instanceof Error ? error.message : "审核经验沉淀失败";
+          persistedReview.learningError = learningError;
+        }
+        persistedReview.learningCandidateId = learningCandidateId;
+        this.store.putChange(change);
+        await this.store.flushProject(novelDb, change.projectId).catch(() => undefined);
+        if (learningError) this.emit("change.learning-failed", { changeId, reviewRunId: externalReview.reviewRunId, error: learningError }, change.projectId, operation.id);
+        this.emit("change.advisory-reviewed", { changeId, verdict: externalReview.verdict, reviewRunId: externalReview.reviewRunId, issueCount: externalReview.issues.length, learningConclusion: externalReview.learning.conclusion, learningCandidateId, learningError }, change.projectId, operation.id);
+        return { change, operation: this.store.getOperation(operation.id) };
+      }
+      let currentArtifactFingerprint: string | undefined;
       if (operation.driver === "external-mcp") {
         if (!externalReview) throw new Error("外部 MCP 审核必须提交结构化外部审核记录");
         if (!externalReview.reviewRunId.trim() || !externalReview.summary.trim()) throw new Error("外部审核缺少 reviewRunId 或摘要");
@@ -561,6 +810,12 @@ export class NovelCreationEngine {
       } else if (decision === "revise") {
         if (!operation.runId) throw new Error("候选变更缺少 runId");
         let revisionInstruction = note || "根据本轮审核意见重做当前候选";
+        // 根因修复：将外部审核的 issues（含字段级证据与修复建议）注入修订指令。
+        // 此前 reviewChange 存储了 externalReview.issues 但 buildRuntimeRevisionInstruction
+        // 仅用 note + 上一版 payload，issues 从未传入 LLM，导致内容层无效循环。
+        if (externalReview?.issues?.length) {
+          revisionInstruction = `${revisionInstruction}\n\n${formatReviewIssuesForInstruction(externalReview.issues)}`;
+        }
         const previousArtifactId = change.artifactRefs[0];
         if (previousArtifactId) {
           try {
@@ -588,7 +843,11 @@ export class NovelCreationEngine {
         change.updatedAt = Date.now();
         this.store.putChange(change);
         operation.currentChangeId = undefined;
-        operation.currentWorkItemId = undefined;
+        // 根因修复：保留 currentWorkItemId 指向被 revise 的工作项。
+        // processPlan 的 taskKey 快速路径（L1082）检查 currentWorkItemId，为空时直接 complete operation
+        // 而不执行 work.revise 重置的工作项。这与 retryOperation（L914）保留 failedWork.id 一致。
+        // 判定信号：review=revise 后 attempt 在数毫秒内 completed 且无 change.pending 事件。
+        operation.currentWorkItemId = change.workItemId;
         operation.status = "queued";
         operation.updatedAt = Date.now();
         this.store.putOperation(operation);
@@ -631,6 +890,13 @@ export class NovelCreationEngine {
         const previousChange = this.store.listChanges(operation.projectId)
           .filter((change) => change.operationId === operation.id && change.workItemId === failedWork.id && change.artifactRefs[0])
           .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+        // 根因修复：retry 路径同样注入最近一次外部审核 issues，避免失败重试时丢失定向反馈。
+        if (previousChange) {
+          const latestReview = latestExternalReview(previousChange);
+          if (latestReview?.issues?.length) {
+            revisionInstruction = `${revisionInstruction}\n\n${formatReviewIssuesForInstruction(latestReview.issues)}`;
+          }
+        }
         if (includePreviousCandidate && previousChange?.artifactRefs[0]) {
           try {
             const previousArtifact = await executeCreativeTool("novel_artifact_get", {
@@ -659,6 +925,7 @@ export class NovelCreationEngine {
       operation.status = "queued";
       operation.error = undefined;
       operation.currentChangeId = undefined;
+      operation.autoRetryCount = 0;
       operation.leaseExpiresAt = undefined;
       operation.updatedAt = Date.now();
       this.store.putOperation(operation);
@@ -767,8 +1034,32 @@ export class NovelCreationEngine {
       else await this.processChapter(operation);
     } catch (error) {
       if (this.shuttingDown) return;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const autoRetryCount = operation.autoRetryCount ?? 0;
+      // HTTP 5xx/upstream_error 等临时故障自动重试，避免用户手动 retryOperation
+      if (isRetryableOperationError(error) && autoRetryCount < MAX_OPERATION_AUTO_RETRIES) {
+        operation.status = "queued";
+        operation.autoRetryCount = autoRetryCount + 1;
+        operation.error = errorMessage;
+        operation.leaseExpiresAt = undefined;
+        // 临时故障常发生在 startWork 的 LLM 调用阶段，此时工作项已被 work.start 置为 "running"
+        // 并取得 OPERATION_LEASE_MS（20 分钟）租约。若不重置，下一次 attempt 的 selectNextPlanWork
+        // 会跳过 "running" 项 → 抛出"没有可执行工作"→ 形成自动重试无效循环（HTTP 500 → no-work → failed）。
+        // 设 runtimeRecovery=true 让 processPlan 的 expired-work 恢复分支（无需等待租约过期）强制
+        // work.recover 把卡住的 "running" 项重置回 "queued"，使其重新可被 selectNextPlanWork 选中。
+        operation.input = { ...operation.input, runtimeRecovery: true };
+        operation.updatedAt = Date.now();
+        this.store.putOperation(operation);
+        await this.store.flushProject(novelDb, operation.projectId).catch(() => undefined);
+        const delay = getOperationRetryDelay(autoRetryCount);
+        const reason = `临时故障自动重试 ${autoRetryCount + 1}/${MAX_OPERATION_AUTO_RETRIES}，${Math.round(delay)}ms 后重新入队：${errorMessage}`;
+        this.emit("operation.auto-retry", { error: errorMessage, retryCount: autoRetryCount + 1, delay }, operation.projectId, operation.id);
+        console.error(`[service.ts] operation ${operation.id} ${reason}`);
+        setTimeout(() => this.schedule(operation.id), delay);
+        return;
+      }
       operation.status = "failed";
-      operation.error = error instanceof Error ? error.message : String(error);
+      operation.error = errorMessage;
       operation.leaseExpiresAt = undefined;
       operation.updatedAt = Date.now();
       this.store.putOperation(operation);
@@ -820,6 +1111,28 @@ export class NovelCreationEngine {
       this.store.putOperation(operation);
       snapshot = await executeCreativeTool("novel_run_get", { projectId: operation.projectId, runId: operation.runId });
       workItems = (snapshot.result as { workItems: typeof workItems }).workItems;
+    }
+    // 自动重试（runtimeRecovery=true）场景：work.start 的 LLM 调用失败时创意网关会把工作项标记为
+    // "failed" 而非 "running"，work.recover 只处理 "running"。若不在此处用 work.retry 重新排队
+    // "failed" 项，selectNextPlanWork 会跳过它 → 抛出"没有可执行工作"→ 自动重试无效循环。
+    // 这与 retryOperation（L761-798）对失败 operation 的处理保持一致：找到 failed 项 → work.retry。
+    // 注意：不传 instruction —— work.retry 在 instruction 为 undefined 时保留工作项既有 instruction
+    //（由 retryOperation 构造的 revisionInstruction，含 formatReviewIssuesForInstruction + 保留指令）。
+    // 若传 operation.input.instruction 会覆盖为 base instruction（可能含"不得保留上一版任何结构"等
+    // 过时指令），丢失定向反馈与必须保留约束，导致非确定性退步。
+    if (operation.input.runtimeRecovery === true) {
+      const failedWork = workItems.find((work) => work.status === "failed");
+      if (failedWork) {
+        await executeCreativeTool("novel_action_execute", {
+          projectId: operation.projectId, runId: operation.runId, action: "work.retry",
+          workItemId: failedWork.id,
+          idempotencyKey: `${operation.id}:auto-retry:${failedWork.id}:${operation.attempt}`,
+        });
+        operation.input = { ...operation.input, runtimeRecovery: false };
+        this.store.putOperation(operation);
+        snapshot = await executeCreativeTool("novel_run_get", { projectId: operation.projectId, runId: operation.runId });
+        workItems = (snapshot.result as { workItems: typeof workItems }).workItems;
+      }
     }
     const next = selectNextPlanWork(workItems);
     if (!next) {
@@ -937,13 +1250,19 @@ export class NovelCreationEngine {
       });
       const artifact = artifactEnvelope.result as { kind?: string; value?: Record<string, unknown> };
       const artifactFingerprint = fingerprint({ artifactRefs, artifact });
-      await executeCreativeTool("novel_action_execute", {
-        projectId: operation.projectId,
-        runId: operation.runId,
-        action: "review.request",
-        workItemId,
-        idempotencyKey: `runtime-internal-review:${workItemId}:${artifactFingerprint}`,
-      });
+      // review.request 可能因 work item 状态不匹配（如 patch 后未重置为 waiting-review）而失败，
+      // 不应阻塞后续质量评估——继续从 run_get 获取已有审核结果或使用 artifact 的 qualityEvidence。
+      try {
+        await executeCreativeTool("novel_action_execute", {
+          projectId: operation.projectId,
+          runId: operation.runId,
+          action: "review.request",
+          workItemId,
+          idempotencyKey: `runtime-internal-review:${workItemId}:${artifactFingerprint}`,
+        });
+      } catch {
+        // review.request 失败不阻塞——已有审核结果仍可通过 run_get 获取
+      }
       const runEnvelope = await executeCreativeTool("novel_run_get", { projectId: operation.projectId, runId: operation.runId });
       const internalReview = (runEnvelope.result as { reviews?: Array<{ workItemId: string; subjectArtifactId: string; reviewer: string; verdict: string; summary: string; issues: Array<{ severity: string; title: string }> }> }).reviews
         ?.filter((review) => review.workItemId === workItemId && review.subjectArtifactId === artifactRefs[0] && review.reviewer === "internal")
@@ -959,24 +1278,42 @@ export class NovelCreationEngine {
         ? internalIssues.filter((issue) => issue.severity === "major").length
         : typeof quality?.majorCount === "number" ? quality.majorCount : undefined;
       if (internalReview && internalReview.verdict !== "passed" && blockerCount === 0 && majorCount === 0) majorCount = 1;
+      // 架构层硬约束语义校验：对 architecture task 的 payload 做结构化内容检查，
+      // 拦截「形式满足 schema 但内容违反硬约束」的候选（如 turningPoint 是事件摘要）
+      const taskKey = typeof operation.input.taskKey === "string" ? operation.input.taskKey : "";
+      let archIssues: ArchitectureConstraintIssue[] = [];
+      if (taskKey === "architecture") {
+        const items = Array.isArray(artifact.value?.items) ? artifact.value.items as Array<Record<string, unknown>> : [];
+        const archPayload = items[0]?.payload;
+        if (archPayload && typeof archPayload === "object") {
+          archIssues = validateArchitectureHardConstraints(archPayload as Record<string, unknown>);
+        }
+      }
+      const archBlockerCount = archIssues.filter((i) => i.severity === "blocker").length;
+      const archMajorCount = archIssues.filter((i) => i.severity === "major").length;
+      const archIssueTitles = archIssues.map((i) => `${i.dimension}: ${i.title}`);
       return {
         complete: Boolean(artifact.value),
         artifactFingerprint,
         artifactKind: artifact.kind,
         qualityScore: typeof quality?.weightedScore === "number" ? quality.weightedScore : undefined,
-        blockerCount,
-        majorCount,
-        openIssues: internalReview
-          ? [
-              ...internalIssues.map((issue) => issue.title),
-              ...(internalReview.verdict === "passed" || internalIssues.length ? [] : [internalReview.summary]),
-            ]
-          : topIssues.map((issue) => typeof issue === "string" ? issue : String((issue as { summary?: unknown }).summary ?? "候选存在未解决问题")),
+        blockerCount: (blockerCount ?? 0) + archBlockerCount,
+        majorCount: (majorCount ?? 0) + archMajorCount,
+        openIssues: [
+          ...(internalReview
+            ? [
+                ...internalIssues.map((issue) => issue.title),
+                ...(internalReview.verdict === "passed" || internalIssues.length ? [] : [internalReview.summary]),
+              ]
+            : topIssues.map((issue) => typeof issue === "string" ? issue : String((issue as { summary?: unknown }).summary ?? "候选存在未解决问题"))),
+          ...archIssueTitles,
+        ],
         iteration: work?.iteration ?? 0,
         maxIterations: operation.reviewPolicy.maxIterations,
       };
-    } catch {
-      return fallback;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ...fallback, openIssues: [`内部审核证据构建失败：${message}`] };
     }
   }
 

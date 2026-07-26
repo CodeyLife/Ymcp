@@ -208,6 +208,124 @@ describe("startChapterReviewWorkflow", () => {
     await vi.waitFor(async () => expect((await novelDb.workflowRuns.get(run.id))?.status).toBe("waiting-approval"));
   });
 
+  // F-002 回归测试：fallback 蓝图必须标记 degraded 并补齐 schema 必需字段，
+  // 让 startChapterReviewWorkflow 在 instruction 与 blueprint artifact title 中标注降级状态。
+  // 不允许 fallback 路径产出静默降级的 blueprint 让 reviewer 误以为蓝图完整。
+  it("marks fallback blueprint as degraded and surfaces degradation in instruction/title (F-002)", async () => {
+    const project = await createNovelProject({ title: "降级复用", genre: ["近未来"], premise: "隔离闭环晋升章节重审须标注降级。" });
+    const document = await createChapter(project.id, "信号浮标");
+    // 给 document.blueprint 写入完整 ChapterBlueprint 字段（模拟 commit-stage 晋升写入）
+    await novelDb.documents.update(document.id, {
+      status: "final",
+      plainText: "浮标在退潮前恢复了信号。",
+      blueprint: {
+        objective: "找到失踪者",
+        locationIds: ["loc-1"],
+        characterIds: ["char-1"],
+        plotThreadIds: [],
+        foreshadowingIds: [],
+        conflict: "信号真伪难辨",
+        informationRelease: ["信号内容"],
+        mustHappen: ["恢复信号"],
+        flexible: [],
+        forbidden: ["角色内心独白"],
+        targetWords: 3000,
+      },
+    });
+    const approvedRevision = {
+      ...recordBase(project.id),
+      documentId: document.id,
+      label: "候选晋升版本",
+      contentHtml: "<p>浮标在退潮前恢复了信号。</p>",
+      plainText: "浮标在退潮前恢复了信号。",
+      source: "ai" as const,
+      branch: "main",
+      approvalStatus: "approved" as const,
+      approvedAt: Date.now(),
+    };
+    const candidateId = crypto.randomUUID();
+    const sourceWorkflowRunId = crypto.randomUUID();
+    const blueprintArtifactId = `artifact:${sourceWorkflowRunId}:blueprint:0:blueprint`;
+    const workItem = {
+      ...recordBase(project.id),
+      creativeRunId: crypto.randomUUID(),
+      kind: "chapter-workflow" as const,
+      status: "completed" as const,
+      targetId: document.id,
+      instruction: "生成并审核章节",
+      dependsOn: [],
+      iteration: 0,
+      artifactRefs: [candidateId, approvedRevision.id],
+      parameters: {
+        closedLoopCandidate: {
+          formatVersion: 2,
+          id: candidateId,
+          sourceProjectId: project.id,
+          targetDocument: { documentId: document.id },
+          manuscript: { sourceWorkflowRunId },
+          provenance: {
+            model: project.settings.textModel,
+            workflowArtifactIds: [blueprintArtifactId],
+            stagePromptEvidence: [{ stage: "blueprint", artifactId: blueprintArtifactId, skillRefs: [], promptFingerprint: "blueprint-fingerprint" }],
+          },
+        },
+      },
+    };
+    const promotionReceipt = {
+      id: crypto.randomUUID(),
+      projectId: project.id,
+      operationId: `promote:${candidateId}`,
+      candidateId,
+      action: "promote-candidate" as const,
+      status: "completed" as const,
+      createdAt: Date.now(),
+      completedAt: Date.now(),
+      receipts: { revisionId: approvedRevision.id, factAssertionIds: [], memoryIds: [], operationIds: [] },
+    };
+    await novelDb.transaction("rw", [novelDb.documents, novelDb.revisions, novelDb.creativeWorkItems, novelDb.operationReceipts], async () => {
+      await novelDb.revisions.add(approvedRevision);
+      await novelDb.documents.update(document.id, { approvedRevisionId: approvedRevision.id });
+      await novelDb.creativeWorkItems.add(workItem);
+      await novelDb.operationReceipts.add(promotionReceipt);
+    });
+
+    // 验证 fallback 路径返回 degraded: true，且 structuredData 补齐了 schema 必需字段
+    const reused = await findReusableChapterBlueprint(project.id, document.id, novelDb);
+    expect(reused).toBeDefined();
+    expect(reused!.degraded).toBe(true);
+    expect(reused!.structuredData.degraded).toBe(true);
+    expect(reused!.structuredData.startingState).toContain("降级复用");
+    expect(Array.isArray(reused!.structuredData.beats)).toBe(true);
+    expect((reused!.structuredData.beats as unknown[]).length).toBeGreaterThanOrEqual(2);
+    expect(reused!.structuredData.characters).toEqual(["char-1"]);
+    expect(reused!.structuredData.locations).toEqual(["loc-1"]);
+    // 保留 ChapterBlueprint 存储字段
+    expect(reused!.structuredData.objective).toBe("找到失踪者");
+    expect(reused!.structuredData.conflict).toBe("信号真伪难辨");
+    // structuredData 应能通过 asBlueprint 还原为合法 ChapterBlueprint
+    const blueprintData = asBlueprint(reused!.structuredData);
+    expect(blueprintData.objective).toBe("找到失踪者");
+    expect(blueprintData.conflict).toContain("降级复用"); // beats 缺失时 conflict 从 beats.action 派生
+
+    const run = await startChapterReviewWorkflow({ projectId: project.id, documentId: document.id, blocking: false }, novelDb);
+    expect(run.currentStage).toBe("review");
+
+    // 验证 instruction 中标注了降级提示
+    const promptArtifact = await novelDb.workflowArtifacts.where("workflowRunId").equals(run.id)
+      .and((item) => item.kind === "prompt" && item.stage === "context").first();
+    expect(promptArtifact).toBeDefined();
+    expect(promptArtifact!.contentMarkdown).toContain("降级版本");
+    expect(promptArtifact!.contentMarkdown).toContain("beats 与 startingState 字段缺失");
+
+    // 验证 blueprint artifact title 标注了降级
+    const reviewBlueprintArtifact = await novelDb.workflowArtifacts.get(run.blueprintArtifactId!);
+    expect(reviewBlueprintArtifact).toBeDefined();
+    expect(reviewBlueprintArtifact!.title).toContain("审校复用·降级");
+    expect(reviewBlueprintArtifact!.structuredData).toEqual(reused!.structuredData);
+
+    await vi.waitFor(async () => expect((await novelDb.workflowRuns.get(run.id))?.status).toBe("waiting-approval"));
+  });
+
   it("rejects when an active workflow already exists for the chapter", async () => {
     const project = await createNovelProject({ title: "并发检查", genre: ["悬疑"], premise: "不得并发改写同一章节。" });
     const document = await createChapter(project.id, "第一章");

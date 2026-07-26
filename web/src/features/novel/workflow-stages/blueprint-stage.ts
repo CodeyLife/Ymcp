@@ -4,6 +4,7 @@ import { DEFAULT_CHAPTER_TARGET_WORDS, novelDb } from "../db";
 import { compileNovelStagePrompt, resolveNovelSkills } from "../skills";
 import { auditIssueSchema, blueprintMarkdown, blueprintSchema, formatAuditFindingsForRerun, hasMajorOrBlocker } from "../workflow-shared";
 import { formatCreativeBriefContract } from "../workflow-brief";
+import { readNovelBuildEnv } from "../build-env";
 import type { GenerationAuditIssue, GenerationAuditReport, GenerationAuditRound, StoryEntity } from "../types";
 import type { StageContext, StageHandler, StageResult } from "../workflow-stages";
 
@@ -20,7 +21,7 @@ const ENDING_HOOK_UNIQUENESS_CONTRACT = `章尾驱动力是最后一个节拍结
  * 上限 3 次，避免长循环消耗 LLM 配额。
  */
 export function getBlueprintAuditMaxIterations(): number {
-  const raw = process.env.NOVEL_BLUEPRINT_AUDIT_MAX_ITER;
+  const raw = readNovelBuildEnv("NOVEL_BLUEPRINT_AUDIT_MAX_ITER");
   if (raw === undefined || raw === "") return 1;
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed < 0) return 1;
@@ -63,7 +64,10 @@ export async function runBlueprintAudit(params: {
   const mustHappen = Array.isArray(params.blueprintData.mustHappen) ? (params.blueprintData.mustHappen as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
   const forbidden = Array.isArray(params.blueprintData.forbidden) ? (params.blueprintData.forbidden as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
   const informationRelease = Array.isArray(params.blueprintData.informationRelease) ? (params.blueprintData.informationRelease as string[]).map((item, index) => `${index + 1}. ${item}`).join("\n") || "（无）" : "（无）";
-  const prompt = `# 审核任务\n审核以下章节蓝图（ChapterBlueprint）的设计质量。\n\n## 章节标题\n${params.documentTitle}\n\n## 章节目标\n${params.blueprintData.objective ?? "无"}\n\n## 当前章节要求\n${params.documentObjective || "尚未规划"}\n\n## 起点\n${params.blueprintData.startingState ?? "无"}\n\n## 节拍\n${beatsBrief}\n\n## 章尾驱动力\n${params.blueprintData.endingHook ?? "无"}\n\n## 必须发生\n${mustHappen}\n\n## 禁止事项\n${forbidden}\n\n## 信息释放\n${informationRelease}\n\n## POV\n${params.povName ?? "未指定（多视角切片或未设置）"}\n\n## 其他在场角色\n${params.otherCharacterNames.join("、") || "无"}\n\n## 创作简报契约\n${params.briefContract}\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- 基于 blueprint-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境\n- severity 由你基于问题影响和具体语境判断\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体字段（objective / beats[N] / mustHappen[N] / endingHook / forbidden[N] 等）作为证据\n- 必须给出具体修订建议\n\n按 schema 输出 summary 和 issues 数组。`;
+  const judgmentStyle = project.settings.contentProfile === "general-serial" || project.settings.contentProfile === "progression"
+    ? "基于版本化审校规则、网文类型叙事经验（当代长篇网文通用的悬念/节奏/人物/支线布局机制）与当前项目目标进行弹性判断"
+    : "基于版本化审校规则、当前项目目标与蓝图证据进行跨题材判断，不套用特定作者或作品风格";
+  const prompt = `# 审核任务\n审核以下章节蓝图（ChapterBlueprint）的设计质量。\n\n## 章节标题\n${params.documentTitle}\n\n## 章节目标\n${params.blueprintData.objective ?? "无"}\n\n## 当前章节要求\n${params.documentObjective || "尚未规划"}\n\n## 起点\n${params.blueprintData.startingState ?? "无"}\n\n## 节拍\n${beatsBrief}\n\n## 章尾驱动力\n${params.blueprintData.endingHook ?? "无"}\n\n## 必须发生\n${mustHappen}\n\n## 禁止事项\n${forbidden}\n\n## 信息释放\n${informationRelease}\n\n## POV\n${params.povName ?? "未指定（多视角切片或未设置）"}\n\n## 其他在场角色\n${params.otherCharacterNames.join("、") || "无"}\n\n## 创作简报契约\n${params.briefContract}\n\n# 冻结上下文摘要\n${contextMarkdown}\n\n# 审核输出要求\n- ${judgmentStyle}\n- severity 由你基于问题影响和具体语境判断\n- 没问题的方面不必报告，避免凑数\n- 每个 issue 必须引用具体字段（objective / beats[N] / mustHappen[N] / endingHook / forbidden[N] 等）作为证据\n- 必须给出具体修订建议\n\n按 schema 输出 summary 和 issues 数组。`;
   const auditSkillPrompt = `${compileNovelStagePrompt(auditSkills.skills, "review")}\n\n## 章节蓝图审核职责\n根据本章实际功能、项目风格、前后因果、人物主体性和长篇材料余量审核。单 POV 蓝图若直接声明非 POV 角色内心，应要求架构师在保持原事件、人物主动性、信息释放时机和后果不变的前提下，重新设计 POV 可观察的证据；禁止建议做同义词或动词替换。节拍数量、信息密度、冲突强度和章尾形态没有固定合格公式；关系、生活流、余波或阶段闭合章可以用未尽交流、状态变化或有功能的情感与意象余韵收束，不得只因缺少强钩子判错。只有当具体字段造成因果断裂、人物失真、体验不足、提前透支或后续驱动力缺失时才报告问题。不同题材、视角、章节功能和叙事风格必须分别判断。`;
   const result = await callStructuredNovelModel<{ summary: string; issues: GenerationAuditIssue[] }>({
     model: project.settings.textModel,
@@ -71,7 +75,7 @@ export async function runBlueprintAudit(params: {
     role: "quality-editor",
     skillPrompt: auditSkillPrompt,
     schema: auditIssueSchema,
-    prompt: prompt.replace("基于 blueprint-audit skill 的弹性判断风格：网文经验（烽火/猫腻/超级大坦克科比）+ 项目语境", "基于版本化审校规则、当前项目目标与蓝图证据进行跨题材判断，不套用特定作者或作品风格"),
+    prompt,
     signal: params.signal,
     maxTokens: 4096,
   });

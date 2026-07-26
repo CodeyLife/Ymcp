@@ -1,5 +1,7 @@
 // 默认 API 配置
-export const DEFAULT_BASE_URL = "https://gpt.eromaa.com/v1";
+// TODO P1：此 URL 与 ai.ts DEV_PROXY_BASE_URL、service.ts 默认 baseUrl 三处硬编码同步，
+// 任一处变更会破坏 ai.ts endpoint() 字符串等式判定。应集中到单一 config 并由其他模块导入。
+export const DEFAULT_BASE_URL = "https://chat.yujin8.top/v1";
 // 可选的部署级共享 Key。VITE_* 会进入浏览器产物，不应把它当作服务端秘密。
 const buildEnv = import.meta.env ?? {};
 export const DEFAULT_API_KEY = String(buildEnv.VITE_DEFAULT_API_KEY ?? "").trim();

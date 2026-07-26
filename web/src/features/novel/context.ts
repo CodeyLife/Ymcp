@@ -5,16 +5,26 @@ import type { ContextSource, DerivedMemory, FactAssertion, ManuscriptDocument, N
 
 const LAYERS: ContextSource["layer"][] = ["mandatory", "working", "continuity", "retrieval", "background"];
 
-const ROLE_SOURCE_KINDS: Partial<Record<NovelAgentRole, Set<ContextSource["kind"]>>> = {
-  architect: new Set(["instruction", "style", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "fact", "memory", "creative-brief", "skill", "conversation-memory"]),
+// F-003 修复：补全 5 个缺失角色白名单，并改为 Record<NovelAgentRole, ...> 强制编译期全覆盖。
+// 历史上是 Partial<Record>，新增 NovelAgentRole 时类型层不会提示补白名单，
+// 且 push() 把"角色已指定但缺省"与"角色未指定"等同处理，导致这 5 个角色无差别注入所有 source kind。
+// reader-reviewer/quality-editor 是审校核心角色（startChapterReviewWorkflow 用 quality-editor），
+// 无差别注入会让 reviewer 看到无关来源，污染审校上下文。
+const ROLE_SOURCE_KINDS: Record<NovelAgentRole, Set<ContextSource["kind"]>> = {
+  architect: new Set(["instruction", "style", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "fact", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
   writer: new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
-  "style-reviewer": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill", "conversation-memory"]),
-  "character-reviewer": new Set(["instruction", "style", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
-  "continuity-reviewer": new Set(["instruction", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "snapshot", "fact", "knowledge", "memory", "creative-brief", "skill"]),
-  "plot-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "foreshadowing", "memory", "creative-brief", "skill"]),
-  "revision-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
+  "style-reviewer": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
+  "character-reviewer": new Set(["instruction", "style", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
+  "continuity-reviewer": new Set(["instruction", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "snapshot", "fact", "knowledge", "memory", "creative-brief", "skill", "review-feedback"]),
+  "plot-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "foreshadowing", "memory", "creative-brief", "skill", "review-feedback"]),
+  "reader-reviewer": new Set(["instruction", "style", "taste", "document", "thread", "foreshadowing", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
+  "revision-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
   "fact-extractor": new Set(["instruction", "document", "fact", "creative-brief", "skill"]),
+  "quality-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
   "character-enricher": new Set(["instruction", "document", "entity", "fact", "knowledge", "creative-brief", "skill"]),
+  "conversation-assistant": new Set(["instruction", "style", "document", "creative-brief", "skill", "conversation-memory"]),
+  "memory-curator": new Set(["instruction", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill"]),
+  "skill-iterator": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill"]),
 };
 
 function estimateTokens(text: string) {
@@ -153,6 +163,8 @@ export async function compileNovelContext(params: {
   retrievalHits?: NovelRetrievalHit[];
   factCutoffOrder?: number;
   consumer?: { workflowRunId?: string; stage?: WorkflowStage; role?: NovelAgentRole | string; messageId?: string };
+  /** 详细审核意见（instruction 过长时分段移出的部分），注入为 review-feedback source。 */
+  reviewFeedback?: string;
   db?: NovelDatabase;
 }): Promise<NovelContextPacket> {
   const { projectId, task, instruction, targetDocumentId, pinnedSourceIds = [], excludedSourceIds = [] } = params;
@@ -199,6 +211,9 @@ export async function compileNovelContext(params: {
   };
 
   push(source({ kind: "instruction", id: "instruction", title: "本次任务", content: instruction, weight: 100, layer: "mandatory", pinned: true, reason: "作者本次明确指令", priorityClass: "invariant", authority: "author" }));
+  if (params.reviewFeedback?.trim()) {
+    push(source({ kind: "review-feedback", id: "review-feedback", title: "详细审核反馈", content: params.reviewFeedback.trim(), weight: 96, layer: "mandatory", pinned: true, reason: "instruction 过长时从核心指令中分段移出的详细审核意见，必须阅读并执行", priorityClass: "invariant", authority: "author" }));
+  }
   push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle, project.sellingPoints.length ? `卖点（须在合适章节被读者在正文亲历其运作，而非只停留在设定层）：${project.sellingPoints.join("；")}` : ""].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant", authority: "approved", evidenceRefs: [project.id] }));
   if (params.creativeBriefId) {
     const brief = await db.creativeBriefs.get(params.creativeBriefId);

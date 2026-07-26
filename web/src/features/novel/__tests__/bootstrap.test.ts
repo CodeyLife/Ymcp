@@ -57,13 +57,13 @@ function architectureResponse() {
         centralConflict: "女孩必须保存被遗忘者的痕迹，同时躲避维护遗忘秩序的机构",
         synopsis: "女孩从一次违规保留档案开始，逐步发现城市依靠遗忘维持表面稳定，并决定让消失者重新被看见。",
         phases: [
-          { id: "phase-1", title: "残留的名字", purpose: "女孩发现第一份无法销毁的档案。", turningPoint: "她第一次见到被遗忘者。", order: 0, locked: false, primaryCurveId: "main" },
-          { id: "phase-2", title: "遗忘的秩序", purpose: "她追查制度背后的代价。", turningPoint: "她自己的名字进入销毁名单。", order: 1, locked: false, primaryCurveId: "eco" },
-          { id: "phase-3", title: "重新被看见", purpose: "她让城市面对被抹去的人。", turningPoint: "所有档案在公共空间重现。", order: 2, locked: false, primaryCurveId: "main" },
+          { id: "phase-1", title: "残留的名字", purpose: "女孩发现第一份无法销毁的档案。", turningPoint: "她在销毁流程尽头第一次见到被遗忘者本人，机构的监控网络首次出现盲区。", order: 0, locked: false, primaryCurveId: "main", stages: [{ title: "发现档案", summary: "女孩在销毁流程中故意漏掉一份无法销毁的档案。" }, { title: "初次照面", summary: "她在档案室深处第一次见到被遗忘者本人，对方请求她保存痕迹。" }] },
+          { id: "phase-2", title: "遗忘的秩序", purpose: "她追查制度背后的代价。", turningPoint: "她自己的名字出现在销毁名单上，机构正式将她列为必须清除的目标。", order: 1, locked: false, primaryCurveId: "eco", stages: [{ title: "追查代价", summary: "她摸清销毁档案维持的城市秩序与机构运作逻辑。" }, { title: "名单降临", summary: "她发现自己的名字已进入销毁名单，成为清除目标。" }] },
+          { id: "phase-3", title: "重新被看见", purpose: "她让城市面对被抹去的人。", turningPoint: "所有被销毁的档案在城市公共空间同时重现，机构的遗忘秩序彻底崩塌。", order: 2, locked: false, primaryCurveId: "main", stages: [{ title: "公开对抗", summary: "她决定让所有消失者重新被城市居民看见，策划公开行动。" }, { title: "档案重现", summary: "所有被销毁的档案在城市公共空间同时重现，秩序崩塌。" }] },
         ],
         growthCurves: [
-          { id: "main", kind: "main", subject: "女孩与被遗忘者的连接", resourceLoop: "每销毁一份档案城市稳定一分但女孩的记忆多一层", stageGoals: "从发现异常到公开对抗", irreversibleChange: "城市的遗忘机制被永久打破" },
-          { id: "eco", kind: "ecological", subject: "遗忘机构的权力生态", resourceLoop: "机构通过销毁档案获取维持秩序的资源与合法性", stageGoals: "从暗中运作到公开镇压", irreversibleChange: "机构的合法性与运作基础被公开质疑" },
+          { id: "main", kind: "main", subject: "女孩与被遗忘者的连接", resourceLoop: "每销毁一份档案城市稳定一分但女孩的记忆多一层", stageGoals: "从发现销毁异常到组织公开对抗的完整路径与代价", irreversibleChange: "城市的遗忘机制被永久打破" },
+          { id: "eco", kind: "ecological", subject: "遗忘机构的权力生态", resourceLoop: "机构通过销毁档案获取维持秩序的资源与合法性", stageGoals: "从暗中运作维持秩序到公开镇压反对者的转变", irreversibleChange: "机构的合法性与运作基础被公开质疑" },
         ],
       },
       rationale: "为后续规划提供阶段骨架",
