@@ -6,6 +6,7 @@ import type { ModelGateway } from "../model-gateway";
 import { ContentObjectStore } from "../object-store";
 import { CommitService } from "../commit-service";
 import type { MemoryIndex } from "../qdrant-memory";
+import { assessRuntimeLearningWithModel } from "../learning-assessment";
 
 export function createNovelWorkflowActivities(deps: { repository: NovelPostgresRepository; memoryProvider: MemoryProvider; skillProvider: SkillProvider; modelGateway?: ModelGateway; objectStore?: ContentObjectStore; commitService?: CommitService; memoryIndex?: MemoryIndex }) {
   const model = deps.modelGateway;
@@ -54,28 +55,11 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       return artifact;
     },
     assessLearning: async (input: { projectId: string; workflowId: string; artifact: Artifact; reviews: Review[] }): Promise<RuntimeLearningAssessmentV2> => {
-      const blocking = input.reviews.flatMap((review) => review.issues.filter((issue) => issue.severity === "blocker" || issue.severity === "major"));
-      const assessment: RuntimeLearningAssessmentV2 = blocking.length ? {
-        id: `learning:${input.artifact.id}`,
-        projectId: input.projectId,
-        source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: input.reviews.map((review) => review.id), fingerprint: input.artifact.fingerprint },
-        conclusion: "propose-improvement",
-        symptom: blocking.map((issue) => issue.title).join("；").slice(0, 500),
-        failingLayer: "review",
-        underlyingMechanism: "审核发现的 blocker/major 表明当前技能或提示词未能在通用质量门前预防同类问题，需要把机制沉淀到可复用规则而不是只修复单次正文。",
-        affectedInputClass: "需要双门审核的长篇正文、修订或规划任务",
-        boundaries: "只覆盖审核证据指向的质量机制；不以具体章节名、角色名、样本文案作为规则边界。",
-        regressionRisks: ["过度收紧规则可能压缩抒情、铺陈和低冲突章节的呼吸空间"],
-        candidate: { targetKind: "skill", targetId: "independent-quality-gate", rationale: "从失败审核中沉淀可复用质量门", afterText: `补充规则：遇到${blocking[0]?.title ?? "高风险质量问题"}时，先识别机制、影响输入类和边界，再决定是否要求修订。` },
-        createdAt: Date.now(),
-      } : {
-        id: `learning:${input.artifact.id}`,
-        projectId: input.projectId,
-        source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: input.reviews.map((review) => review.id), fingerprint: input.artifact.fingerprint },
-        conclusion: "no-shared-learning",
-        createdAt: Date.now(),
-      };
-      return deps.repository.recordLearningAssessment(assessment);
+      const { assessment, validationError } = await assessRuntimeLearningWithModel({ ...input, model });
+      const recorded = validationError
+        ? { ...assessment, validationError }
+        : assessment;
+      return deps.repository.recordLearningAssessment(recorded);
     },
     commit: (input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commit(input),
   };

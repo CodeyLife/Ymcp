@@ -272,6 +272,7 @@ export interface RuntimeLearningAssessmentV2 {
   affectedInputClass?: string;
   boundaries?: string;
   regressionRisks?: string[];
+  validationError?: string;
   candidate?: {
     targetKind: "skill" | "system-prompt" | "workflow";
     targetId: string;
