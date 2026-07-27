@@ -10,7 +10,7 @@ vi.mock("../ai", () => ({
 }));
 
 import { callStructuredNovelModel, streamNovelModel } from "../ai";
-import { applyProposalItems, getGenerationTask, runGenerationTask, runPlotDesignTask, tasksForScope, updateProposalItemPayload, validatePlotDesignItems, validateArchitectureHardConstraints, splitInstruction, MAX_INSTRUCTION_CHARS } from "../generation";
+import { applyProposalItems, getGenerationTask, runGenerationTask, runPlotDesignTask, tasksForScope, updateProposalItemPayload, validatePlotDesignItems, validateArchitectureHardConstraints } from "../generation";
 import { addOutlineNode, createChapter, createNovelProject, deleteChapter, deleteOutlineBranch, deletePlotThread, novelDb, recordBase, saveApprovedDocumentRevision, saveStoryArchitecture } from "../db";
 import { createChapterMemory, linkOutlineRealization } from "../memory";
 import type { AIProposal, ProposalItem, StoryScene } from "../types";
@@ -558,45 +558,6 @@ describe("proposal application and ownership", () => {
     const earlyChapter = await createChapter(project.id, "前章", early.id);
     expect((await novelDb.documents.get(earlyChapter.id))?.order).toBe(0);
     expect((await novelDb.documents.get(lateChapter.id))?.order).toBe(1);
-  });
-});
-
-describe("splitInstruction", () => {
-  it("returns original instruction when below threshold", () => {
-    const instruction = "简短的生成指令";
-    const result = splitInstruction(instruction);
-    expect(result.core).toBe(instruction);
-    expect(result.detail).toBeUndefined();
-  });
-
-  it("splits by section marker when instruction exceeds threshold", () => {
-    const core = "核心指令".repeat(2000);
-    const detail = "# 审核意见\n问题1：turningPoint 不够不可逆\n问题2：ecological 曲线依赖主线";
-    const instruction = `${core}\n\n${detail}`;
-    expect(instruction.length).toBeGreaterThan(MAX_INSTRUCTION_CHARS);
-    const result = splitInstruction(instruction);
-    expect(result.core).toContain("核心指令");
-    expect(result.core).not.toContain("# 审核意见");
-    expect(result.core).toContain("详细审核反馈");
-    expect(result.detail).toBe(detail);
-  });
-
-  it("splits by fallback truncation when no marker found", () => {
-    const instruction = "无标记的长指令".repeat(1000);
-    expect(instruction.length).toBeGreaterThan(MAX_INSTRUCTION_CHARS);
-    const result = splitInstruction(instruction);
-    expect(result.core.length).toBeLessThan(instruction.length);
-    expect(result.core).toContain("详细审核反馈");
-    expect(result.detail).toBeTruthy();
-    expect(result.detail!.length).toBeGreaterThan(0);
-  });
-
-  it("returns original when marker at start (index 0)", () => {
-    const detail = "# 审核意见\n只有审核意见没有核心指令".repeat(400);
-    expect(detail.length).toBeGreaterThan(MAX_INSTRUCTION_CHARS);
-    // marker 在 index 0，core 为空，回退到截断
-    const result = splitInstruction(detail);
-    expect(result.core.length).toBeLessThan(detail.length);
   });
 });
 

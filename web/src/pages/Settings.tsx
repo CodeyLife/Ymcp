@@ -4,7 +4,6 @@ import { useUIStore, getEffectiveApiConfig, type ImageGenAdapter } from "@/store
 import { DEFAULT_GREENSCREEN_PROMPT, DEFAULT_SPRITESHEET_PROMPT } from "@/config/defaults";
 import { PageHeader } from "@/components/showtime";
 import { ChatModelSelect } from "@/components/ChatModelSelect";
-import { novelRuntimeClient } from "@/features/novel/runtime-client";
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -45,13 +44,7 @@ export default function Settings() {
     setThumbSize(values.thumb_size || 256);
     setGreenscreenPrompt(values.greenscreen_prompt || "");
     setSpritesheetPrompt(values.spritesheet_prompt || "");
-    const effective = getEffectiveApiConfig();
-    try {
-      await novelRuntimeClient.updateApiConfig({ baseUrl: effective.baseUrl, apiKey: effective.apiKey, modelContextWindow: effective.modelContextWindow });
-      message.success("设置已保存并同步到小说运行时");
-    } catch (error) {
-      message.warning(error instanceof Error ? `浏览器设置已保存，但小说运行时同步失败：${error.message}` : "浏览器设置已保存，但小说运行时同步失败");
-    }
+    message.success("设置已保存");
   }
 
   return (

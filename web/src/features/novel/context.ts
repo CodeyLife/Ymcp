@@ -11,21 +11,57 @@ const LAYERS: ContextSource["layer"][] = ["mandatory", "working", "continuity", 
 // reader-reviewer/quality-editor 是审校核心角色（startChapterReviewWorkflow 用 quality-editor），
 // 无差别注入会让 reviewer 看到无关来源，污染审校上下文。
 const ROLE_SOURCE_KINDS: Record<NovelAgentRole, Set<ContextSource["kind"]>> = {
-  architect: new Set(["instruction", "style", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "fact", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
+  architect: new Set(["instruction", "style", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "fact", "memory", "creative-brief", "skill", "conversation-memory"]),
   writer: new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
-  "style-reviewer": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
-  "character-reviewer": new Set(["instruction", "style", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
-  "continuity-reviewer": new Set(["instruction", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "snapshot", "fact", "knowledge", "memory", "creative-brief", "skill", "review-feedback"]),
-  "plot-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "foreshadowing", "memory", "creative-brief", "skill", "review-feedback"]),
-  "reader-reviewer": new Set(["instruction", "style", "taste", "document", "thread", "foreshadowing", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
-  "revision-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
+  "style-reviewer": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill", "conversation-memory"]),
+  "character-reviewer": new Set(["instruction", "style", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
+  "continuity-reviewer": new Set(["instruction", "architecture", "document", "entity", "relation", "outline", "scene", "thread", "foreshadowing", "snapshot", "fact", "knowledge", "memory", "creative-brief", "skill"]),
+  "plot-reviewer": new Set(["instruction", "architecture", "document", "outline", "scene", "thread", "foreshadowing", "memory", "creative-brief", "skill"]),
+  "reader-reviewer": new Set(["instruction", "style", "taste", "document", "thread", "foreshadowing", "creative-brief", "skill", "conversation-memory"]),
+  "revision-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
   "fact-extractor": new Set(["instruction", "document", "fact", "creative-brief", "skill"]),
-  "quality-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory", "review-feedback"]),
+  "quality-editor": new Set(["instruction", "style", "taste", "architecture", "document", "entity", "relation", "scene", "thread", "foreshadowing", "fact", "knowledge", "memory", "creative-brief", "skill", "conversation-memory"]),
   "character-enricher": new Set(["instruction", "document", "entity", "fact", "knowledge", "creative-brief", "skill"]),
   "conversation-assistant": new Set(["instruction", "style", "document", "creative-brief", "skill", "conversation-memory"]),
   "memory-curator": new Set(["instruction", "document", "entity", "relation", "fact", "knowledge", "memory", "creative-brief", "skill"]),
   "skill-iterator": new Set(["instruction", "style", "taste", "document", "creative-brief", "skill"]),
 };
+
+// 章节阶段任务（review/draft/continuity 等）需要全部上下文保证跨章节一致性；
+// 架构阶段的结构化生成任务（project-positioning/architecture/story-bible 等）不需要章节产物，
+// 注入空表只是浪费请求体 token，长 prompt 还会触发反代 500。
+// 裁剪规则：白名单内的 source kind 才注入；不在白名单的 task 走原有逻辑（全量注入）。
+// 注意：entities/relations 在白名单中，但若项目尚无记录则 push 自然不触发，无副作用。
+const FOUNDATION_TASK_SOURCE_WHITELIST: Record<string, Set<ContextSource["kind"]>> = {
+  // project-positioning：仅需 project 自身定位信息
+  "project-positioning": new Set(["instruction", "style", "architecture"]),
+  // architecture：基于已有实体/关系设计权力中心与幕结构
+  architecture: new Set(["instruction", "style", "architecture", "entity", "relation"]),
+  // story-bible：基于架构从零生成实体+关系。
+  // novel-arch-review 修复：白名单曾包含 entity/relation，导致 contextPacket 注入已有实体
+  // 的完整内容（summary/description/attributes），LLM 看到后误判"实体已存在，只需 update"，
+  // 仅输出 1 个 update item 而非 22+ create items。移除 entity/relation 后 LLM 只看到架构，
+  // 不会误判已有实体，从而正确 create 新实体。inventory（id+name 列表）仍由 generation.ts 注入，
+  // LLM 可引用已有 ID 但不知道内容，不会跳过生成。
+  "story-bible": new Set(["instruction", "style", "architecture"]),
+  // characters：基于架构生成角色，需要已有实体做参考
+  characters: new Set(["instruction", "style", "architecture", "entity", "relation"]),
+  // relations：与 characters 类似
+  relations: new Set(["instruction", "style", "architecture", "entity", "relation"]),
+  // worldview：基于架构生成世界规则，已有实体是参考
+  worldview: new Set(["instruction", "style", "architecture", "entity", "relation"]),
+};
+
+// vectorSearch topK 按 taskKey 调整：
+// - story-bible/worldview/characters/relations：已有全量 entities/relations 作为 contextPacket，
+//   vectorSearch 与之高度重叠，topK 降为 10（仅保留语义补充）
+// - project-positioning/architecture：无需检索已有实体，topK 降为 0（禁用）
+// - 其他任务（章节生成、review）：保持 topK=30 不变
+function vectorSearchTopKForTask(task: string): number {
+  if (task === "project-positioning" || task === "architecture") return 0;
+  if (task === "story-bible" || task === "worldview" || task === "characters" || task === "relations") return 10;
+  return 30;
+}
 
 function estimateTokens(text: string) {
   const cjk = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
@@ -163,8 +199,6 @@ export async function compileNovelContext(params: {
   retrievalHits?: NovelRetrievalHit[];
   factCutoffOrder?: number;
   consumer?: { workflowRunId?: string; stage?: WorkflowStage; role?: NovelAgentRole | string; messageId?: string };
-  /** 详细审核意见（instruction 过长时分段移出的部分），注入为 review-feedback source。 */
-  reviewFeedback?: string;
   db?: NovelDatabase;
 }): Promise<NovelContextPacket> {
   const { projectId, task, instruction, targetDocumentId, pinnedSourceIds = [], excludedSourceIds = [] } = params;
@@ -195,25 +229,30 @@ export async function compileNovelContext(params: {
   const cutoffOrder = params.factCutoffOrder ?? (target ? target.order - 1 : undefined);
   const resolvedSkills = params.resolvedSkills ?? (await resolveNovelSkills({ projectId, stage, explicitSkillIds: params.explicitSkillIds })).skills;
   const terms = searchTerms(instruction, `${target?.title ?? ""} ${target?.plainText.slice(-3000) ?? ""}`);
-  const vectorResults = await vectorSearch({ projectId, query: instruction, targetTables: ["entities", "outlineNodes", "documents", "plotThreads", "foreshadowing"], topK: 30, db }).catch(() => [] as Array<{ targetId: string; targetTable: string; score: number }>);
+  const vectorTopK = vectorSearchTopKForTask(task);
+  const vectorResults = vectorTopK > 0
+    ? await vectorSearch({ projectId, query: instruction, targetTables: ["entities", "outlineNodes", "documents", "plotThreads", "foreshadowing"], topK: vectorTopK, db }).catch(() => [] as Array<{ targetId: string; targetTable: string; score: number }>)
+    : [];
   const vectorScoreMap = new Map(vectorResults.map((result) => [result.targetId, result.score]));
   const pinned = new Set(pinnedSourceIds);
   const excluded = new Set(excludedSourceIds);
   const retrieved = params.retrievalSourceIds ? new Set(params.retrievalSourceIds) : undefined;
+  // 架构阶段结构化任务白名单：仅注入必要 source kind，跳过章节产物（snapshot/memory/timeline/foreshadowing 等）
+  // 不在白名单的 task（章节生成/review/continuity）走全量注入，保持原有行为
+  const sourceKindWhitelist = FOUNDATION_TASK_SOURCE_WHITELIST[task];
   const candidates: ContextSource[] = [];
   const push = (candidate: ContextSource) => {
     const role = params.consumer?.role as NovelAgentRole | undefined;
     const allowedKinds = role ? ROLE_SOURCE_KINDS[role] : undefined;
     if (allowedKinds && !allowedKinds.has(candidate.kind)) return;
+    // 架构阶段白名单裁剪：不在白名单的 kind 直接跳过（mandatory 层除外，保留指令/项目定位/创作简报）
+    if (sourceKindWhitelist && !sourceKindWhitelist.has(candidate.kind) && candidate.layer !== "mandatory") return;
     if (pinned.has(candidate.id)) { candidate.pinned = true; candidate.layer = "mandatory"; candidate.priorityClass = "invariant"; candidate.visibilityReason = "作者为本次任务临时固定"; }
     if (retrieved && candidate.layer !== "mandatory" && !retrieved.has(candidate.id) && !candidate.pinned) return;
     if (!excluded.has(candidate.id) || candidate.layer === "mandatory") candidates.push(candidate);
   };
 
   push(source({ kind: "instruction", id: "instruction", title: "本次任务", content: instruction, weight: 100, layer: "mandatory", pinned: true, reason: "作者本次明确指令", priorityClass: "invariant", authority: "author" }));
-  if (params.reviewFeedback?.trim()) {
-    push(source({ kind: "review-feedback", id: "review-feedback", title: "详细审核反馈", content: params.reviewFeedback.trim(), weight: 96, layer: "mandatory", pinned: true, reason: "instruction 过长时从核心指令中分段移出的详细审核意见，必须阅读并执行", priorityClass: "invariant", authority: "author" }));
-  }
   push(source({ kind: "style", id: `style:${project.id}`, title: "项目定位与文风", content: [project.premise, `题材：${project.genre.join("、")}`, `主题：${project.themes.join("、")}`, `视角：${project.pov}`, `基调：${project.tone}`, project.languageStyle, project.sellingPoints.length ? `卖点（须在合适章节被读者在正文亲历其运作，而非只停留在设定层）：${project.sellingPoints.join("；")}` : ""].filter(Boolean).join("\n"), weight: 95, layer: "mandatory", pinned: true, reason: "已确认的创作契约", priorityClass: "invariant", authority: "approved", evidenceRefs: [project.id] }));
   if (params.creativeBriefId) {
     const brief = await db.creativeBriefs.get(params.creativeBriefId);

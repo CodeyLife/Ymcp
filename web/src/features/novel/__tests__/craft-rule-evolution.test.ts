@@ -8,6 +8,8 @@ import {
   evaluateCraftRuleOnFoundation,
   evaluateCraftRuleOnChapter,
   evaluateCraftRuleGate,
+  evaluateCraftRuleObservationGate,
+  inspectCraftRuleCandidate,
   promoteCraftRuleCandidate,
   recordCraftRuleEvidence,
   rollbackCraftRuleCandidate,
@@ -68,7 +70,8 @@ describe("craft rule evolution", () => {
       candidate = await recordCraftRuleEvidence({ candidateId: candidate.id, scenarioClass: item.scenario, baselineWorkItemId: baseline.id, candidateWorkItemId: changed.id }, db);
     }
     for (const role of ["plot-editor", "character-editor", "prose-editor", "long-form-editor"] satisfies CraftRuleReviewRole[]) {
-      candidate = await submitCraftRuleReview({ candidateId: candidate.id, role, reviewer: "external-llm", reviewerId: role === "plot-editor" || role === "prose-editor" ? "reviewer-a" : "reviewer-b", reviewRunId: `review-run-${role}-${candidate.id}`, model: "test-review-model", verdict: "passed", summary: `${role} 确认修改覆盖通用机制且没有压平文体`, concerns: [] }, db);
+      const firstReviewer = role === "plot-editor" || role === "prose-editor";
+      candidate = await submitCraftRuleReview({ candidateId: candidate.id, role, reviewer: "external-llm", reviewerId: firstReviewer ? "reviewer-a" : "reviewer-b", reviewRunId: `review-run-${role}-${candidate.id}`, model: firstReviewer ? "test-review-model-a" : "test-review-model-b", provider: "test-provider", verdict: "passed", summary: `${role} 确认修改覆盖通用机制且没有压平文体`, concerns: [] }, db);
     }
     return candidate;
   }
@@ -88,6 +91,7 @@ describe("craft rule evolution", () => {
     const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
     const candidate = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：人物在高压选择中应呈现代价，但日常与余波章节不强制制造抉择，具体强度服从章节功能和人物处境。`, rationale: "把单章人物问题提升为有边界的选择机制", scope }, db);
     expect(evaluateCraftRuleGate(candidate).ready).toBe(false);
+    expect((await inspectCraftRuleCandidate(candidate.id, db)).nextActions).toEqual(expect.arrayContaining([expect.objectContaining({ type: "improvement.evaluate", requiredCases: 3 })]));
     const ready = await completeGate(candidate);
     expect(ready.status).toBe("ready");
     expect(evaluateCraftRuleGate(ready)).toMatchObject({ ready: true });
@@ -220,8 +224,20 @@ describe("craft rule evolution", () => {
     const ready = await completeGate(candidate);
     const renamedOnly = { ...ready, evidenceCases: ready.evidenceCases.map((item, index) => ({ ...item, scenarioClass: `自由标签-${index}`, scenarioSignature: "same-actual-structure" })) };
     expect(evaluateCraftRuleGate(renamedOnly).reasons).toContain("实际输入结构至少需要覆盖 3 类不同创作场景");
+    const labelOnlyDiversity = {
+      ...ready,
+      evidenceCases: ready.evidenceCases.map((item, index) => ({
+        ...item,
+        scenarioClass: `另一个标签-${index}`,
+        scenarioSignature: `label-only-${index}`,
+        scenarioProfile: { characterCountBand: "same", conflictMode: "same" },
+      })),
+    };
+    expect(evaluateCraftRuleGate(labelOnlyDiversity).reasons).toContain("跨场景证据至少需要覆盖 2 个真实输入维度，不能只更换场景标签");
     const selfReviewed = { ...ready, reviews: ready.reviews.map((review) => ({ ...review, reviewerId: "same-agent", reviewRunId: "same-run" })) };
     expect(evaluateCraftRuleGate(selfReviewed).reasons).toEqual(expect.arrayContaining(["四项角色审核必须来自彼此独立的审核运行", "四项角色审核至少需要两个独立审核主体"]));
+    const oneModelWithAliases = { ...ready, reviews: ready.reviews.map((review, index) => ({ ...review, reviewerId: `alias-${index}`, model: "same-model", provider: "same-provider", modelIdentity: "same-provider:same-model" })) };
+    expect(evaluateCraftRuleGate(oneModelWithAliases).reasons).toContain("四项角色审核至少需要两个独立模型或用户审核主体");
   });
 
   it("validates the complete root-cause scope in the shared service", async () => {
@@ -234,6 +250,41 @@ describe("craft rule evolution", () => {
       rationale: "验证服务层范围契约",
       scope: { ...scope, regressionRisks: [] },
     }, db)).rejects.toThrow("regressionRisks");
+  });
+
+  it("rejects placeholder rule revisions and requires diverse post-promotion observations", async () => {
+    const skill = (await getEffectiveSkill(projectId, "embodied-prose", db))!;
+    await expect(createCraftRuleCandidate({
+      projectId,
+      targetKind: "skill",
+      targetId: skill.skillId,
+      afterText: "在原规则基础上增加人物选择代价，并保持其余不变。".repeat(10),
+      rationale: "验证完整全文契约",
+      scope,
+    }, db)).rejects.toThrow("完整全文");
+
+    const candidate = await createCraftRuleCandidate({ projectId, targetKind: "skill", targetId: skill.skillId, afterText: `${skill.prompt}\n\n补充：人物选择的代价必须改变后续空间，同时服从章节功能。`, rationale: "验证观察多样性", scope }, db);
+    const repeatedProfile = { characterCountBand: "few", conflictMode: "explicit" };
+    const observed = {
+      ...candidate,
+      promotionObservations: [0, 1, 2].map((index) => ({
+        observationId: `observation-${index}`,
+        scenarioClass: `标签-${index}`,
+        subjectKind: "chapter" as const,
+        subjectId: `chapter-${index}`,
+        scenarioSignature: `signature-${index}`,
+        scenarioProfile: repeatedProfile,
+        baselineArtifactId: `baseline-${index}`,
+        candidateArtifactId: `candidate-${index}`,
+        baselineScore: 3.5,
+        candidateScore: 3.7,
+        blockerDelta: 0,
+        majorDelta: 0,
+        observedAt: Date.now(),
+        outcome: "passed" as const,
+      })),
+    };
+    expect(evaluateCraftRuleObservationGate(observed).reasons).toContain("晋升后观察至少需要覆盖 2 个真实输入维度");
   });
 
   it("creates a foundation-only candidate and evaluates it with an isolated foundation task", async () => {
@@ -298,7 +349,8 @@ describe("craft rule evolution", () => {
     expect(candidate.status).toBe("evaluating");
 
     candidate = await completeGate(candidate);
-    await promoteWithPassingRegression(candidate);
+    const promoted = await promoteWithPassingRegression(candidate);
+    expect((await inspectCraftRuleCandidate(promoted.id, db)).nextActions).toEqual(expect.arrayContaining([expect.objectContaining({ type: "improvement.observe", requiredObservations: 3 })]));
     await expect(submitCraftRuleReview({ candidateId: candidate.id, role: "plot-editor", reviewer: "external-llm", reviewerId: "reviewer-a", reviewRunId: "late-run", model: "test-review-model", verdict: "passed", summary: "晋升后不得追加" }, db))
       .rejects.toThrow("已结束的规则候选");
   });

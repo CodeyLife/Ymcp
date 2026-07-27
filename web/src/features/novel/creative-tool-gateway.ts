@@ -323,7 +323,7 @@ async function executeCreativeToolCore(
     const blocking = args.blocking === false ? false : true;
     const externalDraft = typeof args.externalDraft === "string" && args.externalDraft.trim() ? args.externalDraft.trim() : undefined;
     const run = await startChapterReviewWorkflow({ projectId, documentId, instruction, blocking, externalDraft }, db);
-    return { ok: true, tool, result: { workflowRunId: run.id, projectId: run.projectId, targetDocumentId: run.targetDocumentId, status: run.status, currentStage: run.currentStage, externalDraftApplied: Boolean(externalDraft) } };
+    return { ok: true, tool, result: { workflowRunId: run.id, projectId: run.projectId, targetDocumentId: run.targetDocumentId, status: run.status, currentStage: run.currentStage, externalDraftApplied: Boolean(externalDraft), repairMode: externalDraft ? "external-edit" : "regenerate" } };
   }
 
   if (tool === "novel_run_create") {
@@ -408,7 +408,7 @@ async function executeCreativeToolCore(
   if (tool === "novel_rule_review_submit") {
     const candidateId = requiredString(args, "candidateId");
     await assertCandidateScope(candidateId, requiredString(args, "projectId"), db);
-    const candidate = await submitCraftRuleReview({ candidateId, role: requiredString(args, "role") as CraftRuleReviewRole, reviewer: "external-llm", reviewerId: requiredString(args, "reviewerId"), reviewRunId: requiredString(args, "reviewRunId"), model: requiredString(args, "model"), verdict: requiredString(args, "verdict") as "passed" | "revise" | "rejected", summary: requiredString(args, "summary"), concerns: Array.isArray(args.concerns) ? args.concerns.filter((item): item is string => typeof item === "string") : [] }, db);
+    const candidate = await submitCraftRuleReview({ candidateId, role: requiredString(args, "role") as CraftRuleReviewRole, reviewer: "external-llm", reviewerId: requiredString(args, "reviewerId"), reviewRunId: requiredString(args, "reviewRunId"), model: requiredString(args, "model"), provider: typeof args.provider === "string" ? args.provider : undefined, promptFingerprint: typeof args.promptFingerprint === "string" ? args.promptFingerprint : undefined, verdict: requiredString(args, "verdict") as "passed" | "revise" | "rejected", summary: requiredString(args, "summary"), concerns: Array.isArray(args.concerns) ? args.concerns.filter((item): item is string => typeof item === "string") : [] }, db);
     return { ok: true, tool, result: { candidate, gate: (await inspectCraftRuleCandidate(candidate.id, db)).gate } };
   }
   if (tool === "novel_rule_promote") {

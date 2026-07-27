@@ -140,6 +140,28 @@ export interface ArchitecturePhaseStage {
   title: string;
   summary: string;
 }
+
+export interface ArchitectureRomanceProgress {
+  romanceLineId: string;
+  relationshipStage: string;
+  irreversibleEvent: string;
+  crossOverWith?: string[];
+}
+
+export interface ArchitectureTechGeneration {
+  generation: string;
+  name: string;
+  unlockCondition?: string;
+  narrativeFunction?: string;
+}
+
+export interface ArchitectureOriginTruthLayer {
+  layer: string;
+  revelation: string;
+  revealerCenterId?: string;
+  consequence?: string;
+}
+
 export interface ArchitecturePhase {
   id: string;
   title: string;
@@ -152,11 +174,19 @@ export interface ArchitecturePhase {
   /** 子阶段：百万字长篇每幕需拆分为 2-4 个子阶段，其中含一个中段崩塌点（all-is-lost）。
    *  旧记录可缺省；新生成由 payloadContract 与 validateArchitectureHardConstraints 强制。 */
   stages?: ArchitecturePhaseStage[];
+  /** 旧记录及不涉及感情线的短篇可缺省；百万字架构生成契约要求显式提供。 */
+  romanceProgress?: ArchitectureRomanceProgress[];
+  /** 旧记录及不涉及能力代际的短篇可缺省；百万字架构生成契约要求显式提供。 */
+  techGeneration?: ArchitectureTechGeneration;
+  /** 旧记录及不涉及分层真相的短篇可缺省；百万字架构生成契约要求显式提供。 */
+  originTruthLayer?: ArchitectureOriginTruthLayer;
 }
 
 export interface ArchitecturePowerCenter {
   id: string;
   name: string;
+  /** 旧记录可缺省；新生成契约要求显式区分行动中心的存在层级。 */
+  kind?: "human-organization" | "supernatural" | "ancient-legacy";
   interest: string;
   resources: string[];
   actionCapacity: string;
@@ -184,6 +214,13 @@ export interface ArchitectureLongHorizonHook {
   payoffWindow: string;
 }
 
+export interface ArchitectureIdeologicalFaction {
+  id: string;
+  name: string;
+  position: string;
+  affectedCenterIds: string[];
+}
+
 export interface StoryArchitecture extends VersionedRecord {
   framework: StoryFramework;
   status: "draft" | "approved";
@@ -197,6 +234,8 @@ export interface StoryArchitecture extends VersionedRecord {
   phases: ArchitecturePhase[];
   /** 增长曲线——至少 2 条（1 主线 + 至少 1 生态曲线），结构化第二增长曲线约束 */
   growthCurves: GrowthCurve[];
+  /** 旧项目可缺省；新架构生成契约要求显式提供跨权力中心的思想流派。 */
+  ideologicalFactions?: ArchitectureIdeologicalFaction[];
 }
 
 export interface OutlineNode extends VersionedRecord {
@@ -347,7 +386,6 @@ export const CONTEXT_SOURCE_KINDS = [
   "memory",
   "conversation-memory",
   "creative-brief",
-  "review-feedback",
 ] as const;
 
 export type ContextSourceKind = (typeof CONTEXT_SOURCE_KINDS)[number];
@@ -821,7 +859,11 @@ export interface CraftRuleLearningSource {
   qualityReportId?: string;
   issueIds: string[];
   autoPromote: boolean;
+  promotionMode?: "manual" | "observe-only" | "canary" | "auto-promote";
   replay?: CraftRuleReplaySnapshot;
+  /** 同一机制的所有来源报告；replay 保留为首个兼容入口。 */
+  sourceReportIds?: string[];
+  replays?: CraftRuleReplaySnapshot[];
 }
 
 export interface CraftRulePromotionValidation {
@@ -836,6 +878,26 @@ export interface CraftRulePromotionValidation {
   checkedAt: number;
 }
 
+/**
+ * 评测场景的真实输入画像。字段来自章节 blueprint 或基础任务上下文，
+ * 不能由审核方仅通过更换 scenarioClass 人工伪造。
+ */
+export interface CraftRuleScenarioProfile {
+  [dimension: string]: string | undefined;
+  taskKey?: string;
+  chapterFunction?: string;
+  pov?: string;
+  textType?: string;
+  conflictType?: string;
+  narrativePhase?: string;
+  characterCountBand?: string;
+  mustHappenBand?: string;
+  informationReleaseBand?: string;
+  conflictMode?: string;
+  manuscriptState?: string;
+  targetLengthBand?: string;
+}
+
 export interface CraftRuleEvidenceCase {
   caseId: string;
   scenarioClass: string;
@@ -843,7 +905,7 @@ export interface CraftRuleEvidenceCase {
   subjectId: string;
   documentId?: string;
   scenarioSignature: string;
-  scenarioProfile: Record<string, string>;
+  scenarioProfile: CraftRuleScenarioProfile;
   baselineWorkItemId: string;
   candidateWorkItemId: string;
   baselineArtifactId: string;
@@ -855,12 +917,35 @@ export interface CraftRuleEvidenceCase {
   recordedAt: number;
 }
 
+export interface CraftRulePromotionObservation {
+  observationId: string;
+  scenarioClass: string;
+  subjectKind: "chapter" | "foundation-task";
+  subjectId: string;
+  scenarioSignature: string;
+  scenarioProfile: CraftRuleScenarioProfile;
+  baselineArtifactId: string;
+  candidateArtifactId: string;
+  baselineScore: number;
+  candidateScore: number;
+  blockerDelta: number;
+  majorDelta: number;
+  observedAt: number;
+  outcome: "passed" | "regressed";
+}
+
 export interface CraftRuleReviewDecision {
   role: CraftRuleReviewRole;
   reviewer: "external-llm" | "user";
   reviewerId: string;
   reviewRunId: string;
   model?: string;
+  provider?: string;
+  modelIdentity?: string;
+  promptFingerprint?: string;
+  reviewInputFingerprint?: string;
+  reviewCriteriaVersion?: string;
+  focusAreas?: string[];
   verdict: "passed" | "revise" | "rejected";
   summary: string;
   concerns: string[];
@@ -884,6 +969,7 @@ export interface CraftRuleCandidate extends VersionedRecord {
   learningSource?: CraftRuleLearningSource;
   promotionReplay?: CraftRuleReplaySnapshot;
   promotionValidation?: CraftRulePromotionValidation;
+  promotionObservations?: CraftRulePromotionObservation[];
   promotedRecordId?: string;
   promotedAt?: number;
   rollbackOfCandidateId?: string;

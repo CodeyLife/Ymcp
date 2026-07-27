@@ -10,18 +10,7 @@ import { ConfigProvider, theme as antdTheme, App as AntdApp } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import App from "./App";
 import { queryClient } from "@/lib/queryClient";
-import { setNovelApiConfigProvider } from "@/features/novel/api-config";
-import { setFormalChapterDeleteCommitter, setFormalMutationCommitter } from "@/features/novel/db";
-import { commitRuntimeRecords, deleteRuntimeChapter } from "@/features/novel/runtime-records";
-import { getEffectiveApiConfig } from "@/stores/ui";
 import "@/index.css";
-
-setNovelApiConfigProvider(() => {
-  const config = getEffectiveApiConfig();
-  return { baseUrl: config.baseUrl, apiKey: config.apiKey, modelContextWindow: config.modelContextWindow };
-});
-setFormalMutationCommitter(commitRuntimeRecords);
-setFormalChapterDeleteCommitter(deleteRuntimeChapter);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

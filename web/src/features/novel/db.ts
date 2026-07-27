@@ -53,11 +53,11 @@ import type {
 } from "./types";
 import type { CanvasEdge, CanvasNodeLayout, ViewportTransform } from "@/shared/canvas";
 import type { OperationReceipt } from "./evaluation/types";
-import type { RuntimeRecordMutation } from "@/novel-runtime/contracts";
 import { cleanupApprovalMetaPollution, cleanupPollutedMemorySummaries, cleanupReferenceIntegrity, migrateLegacyProposal, migrateNovelMemoryReliability, migrateOutlineBeatFields, migrateOutlineNodeModel, RECORD_SCHEMA_VERSION, removeReaderPromise, removeReaderPromiseFromProposal, resetNovelPlanningHierarchy, V4_STORES, V5_STORES, V6_STORES, V7_STORES, V8_STORES, V9_STORES, V10_STORES, V11_STORES, V12_STORES, V13_STORES, V14_STORES, V15_STORES, V16_STORES, V17_STORES, V18_STORES, V19_STORES, V20_STORES, V21_STORES, V22_STORES, V23_STORES, V24_STORES, V25_STORES, V26_STORES } from "./db-schema";
 import { upsertEmbedding } from "./retrieval";
 
 const ACTOR_ID = "local-user";
+export type RuntimeRecordMutation = { type: "put" | "delete"; collection: string; id: string; expectedRevision: number | null; value?: Record<string, unknown> };
 type FormalMutationCommitter = (projectId: string, mutations: RuntimeRecordMutation[]) => Promise<unknown>;
 let formalMutationCommitter: FormalMutationCommitter | undefined;
 type FormalChapterDeleteCommitter = (projectId: string, documentId: string) => Promise<unknown>;
@@ -452,19 +452,80 @@ export function normalizeArchitecturePhases(phases: ArchitecturePhase[]) {
 
 export function normalizeArchitecturePayload(payload: Record<string, unknown>) {
   const normalized: Record<string, unknown> = { ...payload };
-  if (Array.isArray(payload.phases)) {
-    normalized.phases = payload.phases.map((phase, order) => phase && typeof phase === "object" && !Array.isArray(phase)
-      ? { ...phase as Record<string, unknown>, order }
-      : phase);
+
+  // Loop 26: 修复 LLM 输出的类型违规，使 payload 通过 JSON schema 校验。
+  // 根因：LLM 倾向于把数组字段输出为字符串、遗漏 required 字段、使用非 enum 值。
+  // validateArchitectureHardConstraints 只检查结构约束（引用完整性、计数），
+  // 不检查 JSON schema 类型约束；accept 路径的 CREATE_PAYLOAD_VALIDATORS/PAYLOAD_VALIDATORS
+  // 才检查类型。本函数在 validation 之前调用，把 LLM 输出规范化为 schema 合法形态。
+  // 判定信号：accept 时报 "字段无效：/framework must be equal to one of the allowed values" 等
+  // 类型错误，但 internalGate.passed=true（因 validateArchitectureHardConstraints 未检查类型）。
+
+  // 1. framework enum：非合法值回退为 "free"（自定义结构的通用兜底）
+  const FRAMEWORK_ENUM = ["free", "three-act", "four-part", "save-the-cat", "snowflake"];
+  if (typeof normalized.framework === "string" && !FRAMEWORK_ENUM.includes(normalized.framework)) {
+    normalized.framework = "free";
   }
-  // Loop 4: 规范化 growthCurves——确保每条曲线有 id，便于 phases.primaryCurveId 引用
-  if (Array.isArray(payload.growthCurves)) {
-    normalized.growthCurves = payload.growthCurves.map((curve, index) => {
+
+  // 2. status enum：非合法值回退为 "draft"
+  const STATUS_ENUM = ["draft", "approved"];
+  if (typeof normalized.status === "string" && !STATUS_ENUM.includes(normalized.status)) {
+    normalized.status = "draft";
+  }
+
+  // 3. powerCenters[].resources：字符串→数组（LLM 常用顿号/逗号分隔）
+  if (Array.isArray(normalized.powerCenters)) {
+    normalized.powerCenters = normalized.powerCenters.map((center) => {
+      if (!center || typeof center !== "object" || Array.isArray(center)) return center;
+      const c = { ...(center as Record<string, unknown>) };
+      if (typeof c.resources === "string") {
+        c.resources = c.resources.split(/[、,，]/).map((s) => s.trim()).filter(Boolean);
+      }
+      return c;
+    });
+  }
+
+  // 4. feedbackLoops[].transmission：字符串→数组（LLM 常用 → 分隔步骤）
+  if (Array.isArray(normalized.feedbackLoops)) {
+    normalized.feedbackLoops = normalized.feedbackLoops.map((loop) => {
+      if (!loop || typeof loop !== "object" || Array.isArray(loop)) return loop;
+      const l = { ...(loop as Record<string, unknown>) };
+      if (typeof l.transmission === "string") {
+        l.transmission = l.transmission.split(/→|->|=>/).map((s) => s.trim()).filter(Boolean);
+      }
+      return l;
+    });
+  }
+
+  // 5. longHorizonHooks[].payoffWindow：缺失时补默认值
+  if (Array.isArray(normalized.longHorizonHooks)) {
+    normalized.longHorizonHooks = normalized.longHorizonHooks.map((hook) => {
+      if (!hook || typeof hook !== "object" || Array.isArray(hook)) return hook;
+      const h = { ...(hook as Record<string, unknown>) };
+      if (!h.payoffWindow || typeof h.payoffWindow !== "string") {
+        h.payoffWindow = "百章后";
+      }
+      return h;
+    });
+  }
+
+  // 6. growthCurves[].stageGoals：数组→字符串（schema 要求 string，LLM 常输出数组）
+  if (Array.isArray(normalized.growthCurves)) {
+    normalized.growthCurves = normalized.growthCurves.map((curve, index) => {
       if (!curve || typeof curve !== "object" || Array.isArray(curve)) return curve;
       const c = { ...(curve as Record<string, unknown>) };
       if (!c.id || typeof c.id !== "string") c.id = `curve-${index + 1}`;
+      if (Array.isArray(c.stageGoals)) {
+        c.stageGoals = c.stageGoals.join("；");
+      }
       return c;
     });
+  }
+
+  if (Array.isArray(normalized.phases)) {
+    normalized.phases = normalized.phases.map((phase, order) => phase && typeof phase === "object" && !Array.isArray(phase)
+      ? { ...phase as Record<string, unknown>, order }
+      : phase);
   }
   return normalized;
 }

@@ -19,6 +19,7 @@ import type {
   CraftRuleScopeAnalysis,
   CraftRuleLearningSource,
   CraftRuleReplaySnapshot,
+  CraftRulePromotionObservation,
   FoundationEvaluationTaskKey,
   LearningAssessment,
   ManuscriptDocument,
@@ -46,11 +47,37 @@ export interface CraftRuleGate {
   ready: boolean;
   reasons: string[];
   averageScoreDelta: number;
+  variedDimensions: string[];
   latestReviews: Partial<Record<CraftRuleReviewRole, CraftRuleReviewDecision>>;
 }
 
+export interface CraftRuleObservationGate {
+  ready: boolean;
+  reasons: string[];
+  variedDimensions: string[];
+}
+
+export type CraftRuleNextAction =
+  | { type: "improvement.evaluate"; candidateId: string; reason: string; requiredCases: number; variedDimensions: string[] }
+  | { type: "improvement.review"; candidateId: string; reason: string; roles: CraftRuleReviewRole[] }
+  | { type: "improvement.promote"; candidateId: string }
+  | { type: "improvement.observe"; candidateId: string; reason: string; requiredObservations: number; suggestedSubjects: CraftRuleObservationSubject[] }
+  | { type: "improvement.revise"; candidateId: string; reason: string }
+  | { type: "improvement.rollback"; candidateId: string };
+
+export type CraftRuleObservationSubject =
+  | { subjectKind: "chapter"; subjectId: string; documentId: string; scenarioClass: string; scenarioProfile: Record<string, string> }
+  | { subjectKind: "foundation-task"; subjectId: string; taskKey: FoundationEvaluationTaskKey; scenarioClass: string; scenarioProfile: Record<string, string> };
+
 const CHAPTER_WORKFLOW_RULE_STAGES = new Set(["planning", "drafting", "review", "revision", "fact-extraction", "character-enrichment"]);
 export const FOUNDATION_EVALUATION_TASKS = ["project-positioning", "architecture", "story-bible", "characters", "relations", "worldview"] as const satisfies NovelGenerationTaskKey[];
+const REVIEW_CRITERIA_VERSION = "craft-rule-review-v1";
+const REVIEW_ROLE_FOCUS: Record<CraftRuleReviewRole, string[]> = {
+  "plot-editor": ["causality", "objective-conflict", "pacing"],
+  "character-editor": ["motivation", "agency", "relationship-continuity"],
+  "prose-editor": ["language", "imagery", "sentence-control"],
+  "long-form-editor": ["cross-chapter-continuity", "repetition-risk", "long-term-side-effects"],
+};
 
 export function supportsChapterRuleEvaluation(stages: NovelSkillStage[]): boolean {
   return stages.some((stage) => CHAPTER_WORKFLOW_RULE_STAGES.has(stage));
@@ -90,6 +117,44 @@ function deriveChapterScenarioFromDocument(document: ManuscriptDocument) {
     targetLengthBand: lengthBand(document.blueprint.targetWords),
   };
   return { profile, signature: JSON.stringify(profile) };
+}
+
+const REQUIRED_SCENARIO_DIMENSIONS = [
+  "taskKey",
+  "architectureState",
+  "entityState",
+  "relationState",
+  "planningState",
+  "chapterFunction",
+  "pov",
+  "textType",
+  "conflictType",
+  "narrativePhase",
+  "characterCountBand",
+  "mustHappenBand",
+  "informationReleaseBand",
+  "conflictMode",
+  "manuscriptState",
+  "targetLengthBand",
+] as const;
+
+function scenarioDimensionCoverage(cases: Array<{ scenarioProfile: Record<string, string | undefined> }>): string[] {
+  return REQUIRED_SCENARIO_DIMENSIONS.filter((dimension) => {
+    const values = new Set(cases.map((item) => item.scenarioProfile?.[dimension]).filter(Boolean));
+    return values.size >= 2;
+  });
+}
+
+export function evaluateCraftRuleObservationGate(candidate: CraftRuleCandidate): CraftRuleObservationGate {
+  const observations = candidate.promotionObservations ?? [];
+  const reasons: string[] = [];
+  const variedDimensions = scenarioDimensionCoverage(observations);
+  if (observations.length < 3) reasons.push("晋升后至少需要 3 组真实运行观察");
+  if (new Set(observations.map((item) => item.subjectId)).size < 3) reasons.push("晋升后观察至少需要覆盖 3 个不同章节或基础任务");
+  if (new Set(observations.map((item) => item.scenarioSignature)).size < 3) reasons.push("晋升后观察至少需要覆盖 3 类不同输入结构");
+  if (variedDimensions.length < 2) reasons.push("晋升后观察至少需要覆盖 2 个真实输入维度");
+  if (observations.some((item) => item.outcome === "regressed")) reasons.push("晋升后观察存在质量回退");
+  return { ready: reasons.length === 0, reasons, variedDimensions };
 }
 
 function requireScope(scope: CraftRuleScopeAnalysis): void {
@@ -138,6 +203,8 @@ export function evaluateCraftRuleGate(candidate: CraftRuleCandidate): CraftRuleG
   if (cases.length < 3) reasons.push("至少需要 3 组真实基线/候选对照");
   if (distinctSubjects.size < 3) reasons.push("至少需要覆盖 3 个不同章节或基础创作任务");
   if (distinctScenarios.size < 3) reasons.push("实际输入结构至少需要覆盖 3 类不同创作场景");
+  const variedDimensions = scenarioDimensionCoverage(cases);
+  if (variedDimensions.length < 2) reasons.push("跨场景证据至少需要覆盖 2 个真实输入维度，不能只更换场景标签");
   if (cases.some((item) => item.blockerDelta > 0 || item.majorDelta > 0)) reasons.push("候选规则不得增加 blocker 或 major");
   if (cases.some((item) => item.candidateScore < item.baselineScore - 0.2)) reasons.push("单个场景质量分回退不得超过 0.2");
   if (cases.length >= 3 && averageScoreDelta < 0.1) reasons.push("跨场景平均质量提升必须达到 0.1");
@@ -150,6 +217,9 @@ export function evaluateCraftRuleGate(candidate: CraftRuleCandidate): CraftRuleG
     else if (latestReviews[role]?.verdict !== "passed") reasons.push(`${role} 审核未通过`);
     else if (latestReviews[role]?.reviewedVersion !== candidate.proposedVersion || latestReviews[role]?.evidenceFingerprint !== evidenceFingerprint(candidate)) {
       reasons.push(`${role} 审核早于当前证据集，需要重新审核`);
+    } else if (latestReviews[role]?.reviewCriteriaVersion !== REVIEW_CRITERIA_VERSION
+      || JSON.stringify(latestReviews[role]?.focusAreas) !== JSON.stringify(REVIEW_ROLE_FOCUS[role])) {
+      reasons.push(`${role} 审核缺少当前角色专属检查证据，需要重新审核`);
     }
   }
   const currentReviews = Object.values(latestReviews).filter((review): review is CraftRuleReviewDecision => Boolean(review));
@@ -160,11 +230,25 @@ export function evaluateCraftRuleGate(candidate: CraftRuleCandidate): CraftRuleG
     if (new Set(currentReviews.map((review) => `${review.reviewer}:${review.reviewerId}`)).size < 2) {
       reasons.push("四项角色审核至少需要两个独立审核主体");
     }
+    const independentSources = new Set(currentReviews.map((review) => review.reviewer === "user"
+      ? `user:${review.reviewerId}`
+      : `model:${review.modelIdentity ?? `${review.provider ?? "unknown"}:${review.model ?? "unknown"}`}`));
+    if (independentSources.size < 2) reasons.push("四项角色审核至少需要两个独立模型或用户审核主体");
     if (currentReviews.some((review) => review.reviewer === "external-llm" && !review.model?.trim())) {
       reasons.push("外部 LLM 审核必须记录模型身份");
     }
   }
-  return { ready: reasons.length === 0, reasons, averageScoreDelta, latestReviews };
+  return { ready: reasons.length === 0, reasons, averageScoreDelta, variedDimensions, latestReviews };
+}
+
+function validateCompleteRuleRevision(beforeText: string, afterText: string): void {
+  const normalized = afterText.trim();
+  if (/(?:TODO|TBD|待补充|内容略|其余同上|保持其余不变|在原(?:规则|prompt|提示词)基础上)/i.test(normalized)) {
+    throw new Error("规则候选必须提交可独立使用的完整全文，不能包含占位符或 diff 式指令");
+  }
+  if (beforeText.trim().length >= 250 && normalized.length < beforeText.trim().length * 0.4) {
+    throw new Error("规则候选相对当前完整基线截断过多，无法证明保留了无关规则");
+  }
 }
 
 async function refreshStatus(candidate: CraftRuleCandidate, db: NovelDatabase): Promise<CraftRuleCandidate> {
@@ -210,6 +294,7 @@ export async function createCraftRuleCandidate(input: {
     targetStages = template.stages;
   }
   if (!targetStages.length) throw new Error("目标规则没有可评测阶段");
+  validateCompleteRuleRevision(beforeText, input.afterText);
   if (input.expectedTargetVersion && beforeVersion !== input.expectedTargetVersion) throw new Error("审核期目标规则版本已变化，需要重新评估 learning 提案");
   if (input.expectedTargetContentFingerprint && await Dexie.waitFor(textFingerprint(beforeText)) !== input.expectedTargetContentFingerprint) throw new Error("审核期目标规则内容已变化，需要重新评估 learning 提案");
   if (beforeText.trim() === input.afterText.trim()) throw new Error("规则候选与当前生效内容相同");
@@ -426,7 +511,38 @@ export async function recordCraftRuleEvidence(input: {
     majorDelta: (changed.qualityEvidence.majorCount ?? 0) - (baseline.qualityEvidence.majorCount ?? 0),
     recordedAt: Date.now(),
   };
-  if (candidate.status === "promoted" || candidate.promotionValidation?.status === "pending") {
+  if (candidate.status === "promoted") {
+    if ([...candidate.evidenceCases, ...(candidate.promotionObservations ?? [])].some((item) => item.subjectId === evidence.subjectId && item.scenarioSignature === evidence.scenarioSignature)) {
+      throw new Error("晋升后 observation 必须使用未参与候选评测的新场景");
+    }
+    const candidateBlockers = changed.qualityEvidence.blockerCount ?? 0;
+    const candidateMajors = changed.qualityEvidence.majorCount ?? 0;
+    const passed = candidateBlockers === 0 && candidateMajors === 0
+      && evidence.candidateScore >= evidence.baselineScore
+      && evidence.blockerDelta <= 0 && evidence.majorDelta <= 0;
+    const observation: CraftRulePromotionObservation = {
+      observationId: crypto.randomUUID(),
+      scenarioClass: evidence.scenarioClass,
+      subjectKind: evidence.subjectKind,
+      subjectId: evidence.subjectId,
+      scenarioSignature: evidence.scenarioSignature,
+      scenarioProfile: evidence.scenarioProfile,
+      baselineArtifactId: evidence.baselineArtifactId,
+      candidateArtifactId: evidence.candidateArtifactId,
+      baselineScore: evidence.baselineScore,
+      candidateScore: evidence.candidateScore,
+      blockerDelta: evidence.blockerDelta,
+      majorDelta: evidence.majorDelta,
+      observedAt: Date.now(),
+      outcome: passed ? "passed" : "regressed",
+    };
+    candidate.promotionObservations = [...(candidate.promotionObservations ?? []), observation];
+    candidate.updatedAt = Date.now();
+    candidate.revision += 1;
+    await db.craftRuleCandidates.put(candidate);
+    return passed ? candidate : rollbackCraftRuleCandidate(candidate.id, db);
+  }
+  if (candidate.promotionValidation?.status === "pending") {
     const candidateBlockers = changed.qualityEvidence.blockerCount ?? 0;
     const candidateMajors = changed.qualityEvidence.majorCount ?? 0;
     const passed = candidateBlockers === 0 && candidateMajors === 0
@@ -448,7 +564,7 @@ export async function recordCraftRuleEvidence(input: {
     candidate.updatedAt = Date.now();
     candidate.revision += 1;
     await db.craftRuleCandidates.put(candidate);
-    return candidate.status === "promoted" && !passed ? rollbackCraftRuleCandidate(candidate.id, db) : candidate;
+    return candidate;
   }
   candidate.promotionReplay ??= structuredClone(baselineReplay);
   candidate.evidenceCases = [...candidate.evidenceCases.filter((item) => item.subjectId !== evidence.subjectId), evidence];
@@ -666,6 +782,8 @@ export async function submitCraftRuleReview(input: {
   reviewerId: string;
   reviewRunId: string;
   model?: string;
+  provider?: string;
+  promptFingerprint?: string;
   verdict: CraftRuleReviewDecision["verdict"];
   summary: string;
   concerns?: string[];
@@ -686,6 +804,12 @@ export async function submitCraftRuleReview(input: {
     reviewerId: input.reviewerId.trim(),
     reviewRunId: input.reviewRunId.trim(),
     model: input.model?.trim() || undefined,
+    provider: input.provider?.trim() || undefined,
+    modelIdentity: input.reviewer === "external-llm" ? `${input.provider?.trim() || "unknown"}:${input.model!.trim()}` : undefined,
+    promptFingerprint: input.promptFingerprint?.trim() || undefined,
+    reviewInputFingerprint: `${candidate.proposedVersion}:${evidenceFingerprint(candidate)}:${input.role}`,
+    reviewCriteriaVersion: REVIEW_CRITERIA_VERSION,
+    focusAreas: [...REVIEW_ROLE_FOCUS[input.role]],
     verdict: input.verdict,
     summary: input.summary.trim(),
     concerns: [...new Set(input.concerns ?? [])],
@@ -857,8 +981,77 @@ export async function rollbackCraftRuleCandidate(candidateId: string, db: NovelD
   });
 }
 
+async function suggestObservationSubjects(candidate: CraftRuleCandidate, db: NovelDatabase): Promise<CraftRuleObservationSubject[]> {
+  const targetStages = candidate.targetKind === "skill"
+    ? (await getEffectiveSkill(candidate.projectId, candidate.targetId, db))?.stages
+    : (await listPromptTemplates(candidate.projectId, db)).find((item) => item.templateId === candidate.targetId)?.stages;
+  if (!targetStages) return [];
+  const observedKeys = new Set([
+    ...candidate.evidenceCases.map((item) => `${item.subjectId}:${item.scenarioSignature}`),
+    ...(candidate.promotionObservations ?? []).map((item) => `${item.subjectId}:${item.scenarioSignature}`),
+  ]);
+  const knownProfiles = [...candidate.evidenceCases.map((item) => item.scenarioProfile), ...(candidate.promotionObservations ?? []).map((item) => item.scenarioProfile)];
+  const noveltyScore = (profile: Record<string, string | undefined>) => Object.entries(profile)
+    .filter(([, value]) => Boolean(value))
+    .reduce((score, [dimension, value]) => score + (knownProfiles.some((known) => known[dimension] === value) ? 0 : 1), 0);
+  const suggestions: Array<CraftRuleObservationSubject & { novelty: number; priority: number }> = [];
+  if (supportsChapterRuleEvaluation(targetStages)) {
+    const documents = await db.documents.where("projectId").equals(candidate.projectId).filter((item) => !item.deletedAt).toArray();
+    for (const document of documents) {
+      const scenario = deriveChapterScenarioFromDocument(document);
+      if (observedKeys.has(`${document.id}:${scenario.signature}`)) continue;
+      suggestions.push({
+        subjectKind: "chapter",
+        subjectId: document.id,
+        documentId: document.id,
+        scenarioClass: `晋升观察:${document.title}`,
+        scenarioProfile: scenario.profile,
+        novelty: noveltyScore(scenario.profile),
+        priority: document.status === "final" ? 2 : document.status === "draft" ? 1 : 0,
+      });
+    }
+  }
+  if (supportsFoundationRuleEvaluation(targetStages)) {
+    for (const taskKey of FOUNDATION_EVALUATION_TASKS) {
+      const context = await buildFoundationEvaluationContext({ projectId: candidate.projectId, taskKey }, db);
+      const subjectId = `foundation:${taskKey}`;
+      if (observedKeys.has(`${subjectId}:${context.scenarioSignature}`)) continue;
+      suggestions.push({ subjectKind: "foundation-task", subjectId, taskKey, scenarioClass: `晋升观察:${taskKey}`, scenarioProfile: context.scenarioProfile, novelty: noveltyScore(context.scenarioProfile), priority: 1 });
+    }
+  }
+  return suggestions
+    .sort((left, right) => right.novelty - left.novelty || right.priority - left.priority || left.subjectId.localeCompare(right.subjectId))
+    .slice(0, 3)
+    .map((item): CraftRuleObservationSubject => item.subjectKind === "chapter"
+      ? { subjectKind: item.subjectKind, subjectId: item.subjectId, documentId: item.documentId, scenarioClass: item.scenarioClass, scenarioProfile: item.scenarioProfile }
+      : { subjectKind: item.subjectKind, subjectId: item.subjectId, taskKey: item.taskKey, scenarioClass: item.scenarioClass, scenarioProfile: item.scenarioProfile });
+}
+
 export async function inspectCraftRuleCandidate(candidateId: string, db: NovelDatabase = novelDb) {
   const candidate = await db.craftRuleCandidates.get(candidateId);
   if (!candidate) throw new Error("规则候选不存在");
-  return { candidate, gate: evaluateCraftRuleGate(candidate) };
+  const gate = evaluateCraftRuleGate(candidate);
+  const observationGate = evaluateCraftRuleObservationGate(candidate);
+  const nextActions: CraftRuleNextAction[] = [];
+  if (candidate.status === "rejected") {
+    nextActions.push({ type: "improvement.revise", candidateId, reason: "候选被独立审核拒绝，需要基于 concerns 创建新的不可变候选" });
+  } else if (candidate.status === "promoted") {
+    const observationCount = candidate.promotionObservations?.length ?? 0;
+    if (!observationGate.ready) {
+      nextActions.push({ type: "improvement.observe", candidateId, reason: observationGate.reasons.join("；"), requiredObservations: Math.max(0, 3 - observationCount), suggestedSubjects: await suggestObservationSubjects(candidate, db) });
+    }
+  } else if (candidate.status !== "rolled-back") {
+    const evidenceReasons = gate.reasons.filter((reason) => reason.includes("场景") || reason.includes("基线/候选") || reason.includes("不同章节") || reason.includes("质量") || reason.includes("blocker") || reason.includes("major"));
+    if (evidenceReasons.length) {
+      nextActions.push({ type: "improvement.evaluate", candidateId, reason: evidenceReasons.join("；"), requiredCases: Math.max(0, 3 - candidate.evidenceCases.length), variedDimensions: gate.variedDimensions });
+    }
+    const reviewRoles = REQUIRED_REVIEW_ROLES.filter((role) => {
+      const review = gate.latestReviews[role];
+      return !review || review.verdict !== "passed" || review.reviewedVersion !== candidate.proposedVersion
+        || review.evidenceFingerprint !== evidenceFingerprint(candidate) || review.reviewCriteriaVersion !== REVIEW_CRITERIA_VERSION;
+    });
+    if (reviewRoles.length) nextActions.push({ type: "improvement.review", candidateId, reason: "提交绑定当前候选版本、证据集和角色检查契约的独立审核", roles: reviewRoles });
+    if (gate.ready && candidate.status === "ready") nextActions.push({ type: "improvement.promote", candidateId });
+  }
+  return { candidate, gate, observationGate, nextActions };
 }

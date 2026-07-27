@@ -1,4 +1,4 @@
-import { parseRuntimeLearningAssessment } from "../../novel-runtime/contracts";
+import { parseRuntimeLearningAssessment } from "./runtime-learning";
 import { callStructuredNovelModel } from "./ai";
 import { captureChapterRuleReplay, createCraftRuleCandidateFromLearning } from "./craft-rule-evolution";
 import { novelDb, type NovelDatabase } from "./db";
@@ -222,17 +222,22 @@ export async function createWorkflowLearningCandidates(input: {
   }
   reports = await db.qualityReports.where("workflowRunId").equals(input.workflowRunId).sortBy("iteration");
   const proposals = reports.filter((report): report is QualityReport & { learning: Extract<LearningAssessment, { conclusion: "propose-improvement" }> } => report.learning?.conclusion === "propose-improvement");
-  const latestByMechanism = new Map<string, typeof proposals[number]>();
+  const reportsByMechanism = new Map<string, Array<typeof proposals[number]>>();
   for (const report of proposals) {
     const learning = report.learning;
-    latestByMechanism.set(`${learning.proposal.targetKind}:${learning.proposal.targetId}:${learning.underlyingMechanism}:${learning.affectedInputClass}`, report);
+    const key = `${learning.proposal.targetKind}:${learning.proposal.targetId}:${learning.underlyingMechanism}:${learning.affectedInputClass}`;
+    reportsByMechanism.set(key, [...(reportsByMechanism.get(key) ?? []), report]);
   }
   const candidates: CraftRuleCandidate[] = [];
-  for (const report of latestByMechanism.values()) {
+  for (const groupedReports of reportsByMechanism.values()) {
+    const report = groupedReports[groupedReports.length - 1];
     const learning = report.learning;
     try {
-      if (!report.learningReplay) throw new Error("审校经验缺少冻结失败场景，不能创建规则候选");
-      const sourceFingerprint = await fingerprint({ workflowRunId: input.workflowRunId, targetKind: learning.proposal.targetKind, targetId: learning.proposal.targetId, targetVersion: learning.proposal.targetVersion, targetContentFingerprint: learning.proposal.targetContentFingerprint, underlyingMechanism: learning.underlyingMechanism, affectedInputClass: learning.affectedInputClass });
+      const replayReports = groupedReports.filter((item) => item.learningReplay);
+      if (!replayReports.length) throw new Error("审校经验缺少冻结失败场景，不能创建规则候选");
+      const sourceReportIds = groupedReports.map((item) => item.id);
+      const replays = replayReports.map((item) => item.learningReplay!);
+      const sourceFingerprint = await fingerprint({ workflowRunId: input.workflowRunId, sourceReportIds, replayFingerprints: replays.map((item) => item.inputFingerprint).sort(), targetKind: learning.proposal.targetKind, targetId: learning.proposal.targetId, targetVersion: learning.proposal.targetVersion, targetContentFingerprint: learning.proposal.targetContentFingerprint, underlyingMechanism: learning.underlyingMechanism, affectedInputClass: learning.affectedInputClass });
       const candidate = await createCraftRuleCandidateFromLearning({
         projectId: input.projectId,
         learning,
@@ -241,9 +246,11 @@ export async function createWorkflowLearningCandidates(input: {
           fingerprint: sourceFingerprint,
           workflowRunId: input.workflowRunId,
           qualityReportId: report.id,
-          issueIds: report.issues.map((issue) => issue.id),
+          issueIds: [...new Set(groupedReports.flatMap((item) => item.issues.map((issue) => issue.id)))],
           autoPromote: false,
-          replay: report.learningReplay,
+          replay: replays[0],
+          sourceReportIds,
+          replays,
         },
       }, db);
       if (candidate) candidates.push(candidate);

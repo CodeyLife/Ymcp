@@ -1,5 +1,8 @@
 import Ajv, { type ValidateFunction } from "ajv";
 import type { Table } from "dexie";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { callStructuredNovelModel } from "./ai";
 import { compileNovelContext, formatContextPacket } from "./context";
 import { appendOperation, DEFAULT_CHAPTER_TARGET_WORDS, emptyChapterBlueprint, normalizeArchitecturePayload, normalizeChapterOrderByPlanning, novelDb, recordBase, retireChapterDependencies } from "./db";
@@ -76,24 +79,72 @@ export function tasksForScope(scope: NovelGenerationScope) {
   return TASKS.filter((item) => item.scope === scope);
 }
 
-const payloadContract = `字段契约：
-- projects: title, subtitle, premise, genre, audience, themes, sellingPoints, pov, tense, tone, languageStyle, targetWords
-- architectures: framework, status, centralQuestion, centralConflict, synopsis, powerCenters[{id,name,kind,interest,resources,actionCapacity,bottomLine,relationshipDynamics}], feedbackLoops[{id,name,trigger,transmission,affectedCenters,storyPressure,returnPath}], longHorizonHooks[{id,surfaceDetail,possibleInterpretations,affectedCenters,payoffWindow}], phases[{id,title,purpose,turningPoint,order,locked,primaryCurveId,stages[{title,summary}],romanceProgress[{romanceLineId,relationshipStage,irreversibleEvent,crossOverWith}],techGeneration{generation,name,unlockCondition,narrativeFunction},originTruthLayer{layer,revelation,revealerCenterId,consequence}}], growthCurves[{id,kind,subject,resourceLoop,stageGoals,irreversibleChange}], ideologicalFactions[{id,name,position,affectedCenterIds}]；数量按项目体量决定，百万字长篇至少为 powerCenters 5 个、feedbackLoops 3 条、longHorizonHooks 3 条；powerCenters.kind 标识势力存在层级（human-organization 人类组织 / supernatural 跨位面超自然存在 / ancient-legacy 跨纪元远古组织），百万字长篇至少 1 个 supernatural 类型以形成空间纵深，与人类组织型势力形成质的差异；affectedCenters 只能引用 powerCenters 中已有 id 或准确名称；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔；phases.turningPoint 必须写成可验证不可逆模板：[谁]失去/获得[具体资源/秘密/关系]，导致[什么组织]永久[裂变/公开/承诺/摧毁]，世界无法回到[什么状态]（至少30字）；禁止"获得...资格""承认...可能""成为...问题"等方向性描述；phases.primaryCurveId 引用 growthCurves[].id，标注此阶段主要由哪条增长曲线推进；phases.stages 为该幕的子阶段拆分，百万字长篇每幕必须提供 2-4 个 stages，每个 stage.summary 必须写出该子段自身矛盾与推进（谁面对什么阻力、付出什么代价、做出什么选择，至少20字），禁止只用一句事件摘要如"陈墨发现灵气规律。"，且全书必须在第三幕末或第四幕初的某个 stage 中设计一个中段崩塌点（all-is-lost，主角处境跌至最低、资源/关系/认知全面失守后再回升），不得只给单一 turningPoint 平铺直叙；feedbackLoops 必须形成闭环而非线性因果链——transmission 写跨中心传导步骤（至少 4 步），returnPath 必须写明闭合回触发源的不可逆状态变化（哪一方被迫永久改变什么行为/规则/结构，至少20字），禁止"新的X改变Y""X反过来影响Y"等无具体主体的套话；longHorizonHooks.possibleInterpretations 必须排除实际真相本身——真相不得作为候选解释之一直接出现，possibleInterpretations 至少 2 项且其中至少 1 项必须是读者中期可能误推的错误解释（误导项），surfaceDetail 以日常细节形态存在不自我标榜，不得用"这个细节后来证明至关重要"式预告；growthCurves 至少 2 条（kind=main 主线 + 至少 1 条 kind=ecological 生态曲线），ecological 曲线的 subject/resourceLoop/stageGoals/irreversibleChange 必须独立于主线主角命运——若删除主线后该曲线能否独立支撑至少一个阶段的推进，且 ecological 曲线必须在至少 2 个 phases 中作为 primaryCurveId 推进（不得只在单一 phase 从属主线）；当 growthCurves 主线涉及"本源真相"或核心谜题揭示时，stageGoals 必须把真相揭示分层绑定到多个技术代际/能力升级节点，不得在单一 phase 一次性揭晓；当项目涉及感情线时，phases.romanceProgress 必须为每个有感情进展的 phase 填写——romanceLineId 引用感情线标识、relationshipStage 标注该阶段关系阶段（如相识/相知/公开同盟/裂变/归宿）、irreversibleEvent 写明该阶段发生的不可逆情感事件（承诺/背叛/公开/牺牲），多线交叉用 crossOverWith 引用同期推进的其他 romanceLineId；当项目涉及技术/能力体系代际演进时，phases.techGeneration 必须绑定该阶段解锁的技术代际——generation 代际编号、name 代际名称、unlockCondition 解锁条件（须有前置代际基础）、narrativeFunction 该代际在叙事中的结构功能（推动哪条线/改变哪个权力中心），使技术升级有阶段纵深而非平铺字符串；当项目涉及多层真相递进揭示时，phases.originTruthLayer 必须绑定该阶段揭示的真相层级——layer 层级编号、revelation 揭示内容、revealerCenterId 揭示方 powerCenter id、consequence 揭示后果（哪一方永久失去/获得什么），使真相揭示分层绑定到各幕而非单点压缩在单一 phase；ideologicalFactions 必须填写（至少 3 个跨权力中心思想流派，无条件要求）——每个派系含 id/name/position/affectedCenterIds，affectedCenterIds 引用 powerCenters 中已有 id 且至少跨 2 个权力中心，position 须写出该派系的具体主张（非标签化如"灵气公有派"应写"灵气逻辑应公开传播，任何组织不得独占编译方法"）
-- outlineNodes: phaseId, title, summary, order；每条记录只表示一个剧情段，phaseId 必须引用全书架构中的真实幕 ID
-- documents: order, plotSegmentId(可用 ref:剧情段临时ID), title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,plotThreadIds,foreshadowingIds,conflict,informationRelease,mustHappen,flexible,forbidden}；正文任务可额外给 plainText；章节目标字数由系统设置，不得返回 targetWords
-- scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, outcome, wordTarget, beats[{id,text,order}]
-- entities: kind, name, aliases, summary, description, tags, lockedFacts, attributes；角色需包含 character（role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state）
-- relations: fromEntityId/toEntityId 可用 ref:临时ID，另含 relationType, publicLabel, privateTruth, bond
-- plotThreads: kind, title, summary, status, priority, participantIds, progress, nextMove
-- foreshadowing: title, clue, truth, status, urgency, notes
-- timelineEvents: title, storyDate, duration, narrativeOrder, participantIds, causeIds, consequenceIds, description`;
+// 各资料表的字段契约（按表分块，便于按 taskKey 的 allowedTables 裁剪）。
+// 历史 payloadContract 是单个大字符串，注入了全部 15+ 张表契约，但单个 task 通常只允许生成 2-3 张表，
+// 多余契约只增加请求体 token（架构阶段的结构化任务尤其明显，会触发反代长 prompt 500）。
+const PAYLOAD_CONTRACT_BY_TABLE: Record<string, string> = {
+  projects: "projects: title, subtitle, premise, genre, audience, themes, sellingPoints, pov, tense, tone, languageStyle, targetWords",
+  architectures: `architectures: framework, status, centralQuestion, centralConflict, synopsis, powerCenters[{id,name,kind,interest,resources,actionCapacity,bottomLine,relationshipDynamics}], feedbackLoops[{id,name,trigger,transmission,affectedCenters,storyPressure,returnPath}], longHorizonHooks[{id,surfaceDetail,possibleInterpretations,affectedCenters,payoffWindow}], phases[{id,title,purpose,turningPoint,order,locked,primaryCurveId,stages[{title,summary}],romanceProgress[{romanceLineId,relationshipStage,irreversibleEvent,crossOverWith}],techGeneration{generation,name,unlockCondition,narrativeFunction},originTruthLayer{layer,revelation,revealerCenterId,consequence}}], growthCurves[{id,kind,subject,resourceLoop,stageGoals,irreversibleChange}], ideologicalFactions[{id,name,position,affectedCenterIds}]；数量按项目体量决定，百万字长篇至少为 powerCenters 5 个、feedbackLoops 3 条、longHorizonHooks 3 条；powerCenters.kind 标识势力存在层级（human-organization 人类组织 / supernatural 跨位面超自然存在 / ancient-legacy 跨纪元远古组织），百万字长篇至少 1 个 supernatural 类型以形成空间纵深，与人类组织型势力形成质的差异；affectedCenters 只能引用 powerCenters 中已有 id 或准确名称；phases.purpose 用文学化叙事描述该阶段的人物处境与情感走向，不要用"建立X""让Y做Z"等编剧指令腔；phases.turningPoint 必须写成可验证不可逆模板：[谁]失去/获得[具体资源/秘密/关系]，导致[什么组织]永久[裂变/公开/承诺/摧毁]，世界无法回到[什么状态]（至少30字）；禁止"获得...资格""承认...可能""成为...问题"等方向性描述；phases.primaryCurveId 引用 growthCurves[].id，标注此阶段主要由哪条增长曲线推进；phases.stages 为该幕的子阶段拆分，百万字长篇每幕必须提供 2-4 个 stages，每个 stage.summary 必须写出该子段自身矛盾与推进（谁面对什么阻力、付出什么代价、做出什么选择，至少20字），禁止只用一句事件摘要如"陈墨发现灵气规律。"，且全书必须在第三幕末或第四幕初的某个 stage 中设计一个中段崩塌点（all-is-lost，主角处境跌至最低、资源/关系/认知全面失守后再回升），不得只给单一 turningPoint 平铺直叙；feedbackLoops 必须形成闭环而非线性因果链——transmission 必须是字符串数组（至少 4 项，每步一个字符串元素，如 ["甲→乙","乙→丙","丙→丁","丁→甲"]），写跨中心传导步骤，returnPath 必须写明闭合回触发源的不可逆状态变化（哪一方被迫永久改变什么行为/规则/结构，至少20字），禁止"新的X改变Y""X反过来影响Y"等无具体主体的套话；longHorizonHooks.possibleInterpretations 必须排除实际真相本身——真相不得作为候选解释之一直接出现，possibleInterpretations 至少 2 项且其中至少 1 项必须是读者中期可能误推的错误解释（误导项），surfaceDetail 以日常细节形态存在不自我标榜，不得用"这个细节后来证明至关重要"式预告；growthCurves 至少 2 条（kind=main 主线 + 至少 1 条 kind=ecological 生态曲线），ecological 曲线的 subject/resourceLoop/stageGoals/irreversibleChange 必须独立于主线主角命运——若删除主线后该曲线能否独立支撑至少一个阶段的推进，且 ecological 曲线必须在至少 2 个 phases 中作为 primaryCurveId 推进（不得只在单一 phase 从属主线）；当 growthCurves 主线涉及"本源真相"或核心谜题揭示时，stageGoals 必须把真相揭示分层绑定到多个技术代际/能力升级节点，不得在单一 phase 一次性揭晓；当项目涉及感情线时，phases.romanceProgress 必须为每个有感情进展的 phase 填写——romanceLineId 引用感情线标识、relationshipStage 标注该阶段关系阶段（如相识/相知/公开同盟/裂变/归宿）、irreversibleEvent 写明该阶段发生的不可逆情感事件（承诺/背叛/公开/牺牲），多线交叉用 crossOverWith 引用同期推进的其他 romanceLineId；当项目涉及技术/能力体系代际演进时，phases.techGeneration 必须绑定该阶段解锁的技术代际——generation 代际编号、name 代际名称、unlockCondition 解锁条件（须有前置代际基础）、narrativeFunction 该代际在叙事中的结构功能（推动哪条线/改变哪个权力中心），使技术升级有阶段纵深而非平铺字符串；当项目涉及多层真相递进揭示时，phases.originTruthLayer 必须绑定该阶段揭示的真相层级——layer 层级编号、revelation 揭示内容、revealerCenterId 揭示方 powerCenter id、consequence 揭示后果（哪一方永久失去/获得什么），使真相揭示分层绑定到各幕而非单点压缩在单一 phase；ideologicalFactions 必须填写（至少 3 个跨权力中心思想流派，无条件要求）——每个派系含 id/name/position/affectedCenterIds，affectedCenterIds 引用 powerCenters 中已有 id 且至少跨 2 个权力中心，position 须写出该派系的具体主张（非标签化如"灵气公有派"应写"灵气逻辑应公开传播，任何组织不得独占编译方法"）`,
+  outlineNodes: "outlineNodes: phaseId, title, summary, order；每条记录只表示一个剧情段，phaseId 必须引用全书架构中的真实幕 ID",
+  documents: "documents: order, plotSegmentId(可用 ref:剧情段临时ID), title, summary, status, blueprint{objective,povCharacterId,locationIds,characterIds,plotThreadIds,foreshadowingIds,conflict,informationRelease,mustHappen,flexible,forbidden}；正文任务可额外给 plainText；章节目标字数由系统设置，不得返回 targetWords",
+  scenes: "scenes: chapterId, title, order, status, povCharacterId, storyTime, locationId, characterIds, plotThreadIds, foreshadowingIds, purpose, conflict, outcome, wordTarget, beats[{id,text,order}]",
+  entities: "entities: kind, name, aliases, summary, description, tags, lockedFacts, attributes；角色需包含 character（role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state）",
+  relations: "relations: fromEntityId/toEntityId 可用 ref:临时ID，另含 relationType, publicLabel, privateTruth, bond",
+  plotThreads: "plotThreads: kind, title, summary, status, priority, participantIds, progress, nextMove",
+  foreshadowing: "foreshadowing: title, clue, truth, status, urgency, notes",
+  timelineEvents: "timelineEvents: title, storyDate, duration, narrativeOrder, participantIds, causeIds, consequenceIds, description",
+};
+
+// 按 taskKey 的 allowedTables 动态裁剪 payloadContract，只注入当前任务允许生成的表的字段契约。
+// 不在 PAYLOAD_CONTRACT_BY_TABLE 中的表（如 review/draft 类任务无 allowedTables）走全量契约回退。
+function buildPayloadContract(allowedTables?: readonly string[]): string {
+  if (!allowedTables || allowedTables.length === 0) {
+    // 历史行为：注入全部表契约（用于无 allowedTables 的任务，如 review/draft）
+    return `字段契约：\n- ${Object.values(PAYLOAD_CONTRACT_BY_TABLE).join("\n- ")}`;
+  }
+  const lines = allowedTables
+    .map((table) => PAYLOAD_CONTRACT_BY_TABLE[table])
+    .filter(Boolean);
+  return `字段契约：\n- ${lines.join("\n- ")}`;
+}
 
 const stringArraySchema = { type: "array", items: { type: "string" } } as const;
+
+// Validator 读路径容错：schema 期望 transmission 为 Array<string>，但 LLM 偶发产出
+// "→" / "->" / "=>" 分隔的单字符串（如 "甲→乙→丙→丁→甲"）。原 Array.isArray(x) ? x : []
+// 会把字符串当作空数组，使"传导步数不足"检查 (L806) 恒为 true，制造假阳性。
+// 通用规则：validator 的责任是判断"内容是否合规"（步数够不够），不是判断"格式是否严格"。
+// schema 仍以数组为权威格式（CREATE 路径由 minItems:4 强制）；UPDATE 路径 schema 缺口
+// 由 TODO P2 跟踪；此处容错是 Class C 内容在 validator 边界的兜底。
+function normalizeTransmission(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item));
+  if (typeof value === "string") {
+    return value.split(/→|->|=>/).map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 const characterSchema = {
   type: "object", additionalProperties: false,
   required: ["role", "appearance", "personality", "desire", "motivation", "weakness", "secret", "abilities", "voice", "arc", "state"],
   properties: {
-    role: { type: "string" }, appearance: { type: "string" }, personality: { type: "string" }, desire: { type: "string" }, motivation: { type: "string" }, weakness: { type: "string" }, secret: { type: "string" }, abilities: stringArraySchema, voice: { type: "string" }, arc: { type: "string" },
+    role: { type: "string" }, appearance: { type: "string" }, personality: { type: "string" }, abilities: stringArraySchema, voice: { type: "string" },
+    // 关键心理字段 minLength:5（HARD constraint）：
+    // 根因：原 schema 仅 required 无 minLength，LLM 可用空字符串或 <5 字符（如"无""未知"）应付 required，
+    // 绕过 schema 校验后才被 validatePhase1Entities 软校验拦截。retryReason 只描述"缺motivation"未给填写方向，
+    // 3 次全量重试都失败（operation 76ab4ad3 attempt 36 燕无尘缺motivation、顾晚舟缺weakness）。
+    // 修复层：在 schema 层加 minLength:5，让 LLM 必须产出 ≥5 字符才能通过 schema，
+    // callStructuredNovelModel 内部 schema-repair retry（repairPrompt 附原输出定向修复）比外层全量重试更可靠，
+    // 避免非确定性退步（其他已通过字段在重生成时丢失）。
+    // 与 Loop 5 经验的差异：Loop 5 是 turningPoint/summary 等 20-30 字符长文本字段（LLM 偶尔产出短字符串属正常），
+    // 当前是 5 字符标签式心理字段（LLM 可靠产出 ≥5 字符是合理预期，<5 字符明显是偷懒）。
+    // 回归风险：UPDATE 路径下 partialObjectSchema 不删除 minLength，已有 character 短字段记录的 refine/update 会 Ajv 失败；
+    // 但 partialObjectSchema 已删除 required，UPDATE 时 character 嵌套字段整体可选，仅当提供时才校验长度。
+    desire: { type: "string", minLength: 5 },
+    motivation: { type: "string", minLength: 5 },
+    weakness: { type: "string", minLength: 5 },
+    secret: { type: "string", minLength: 5 },
+    arc: { type: "string", minLength: 5 },
     state: { type: "object", additionalProperties: false, required: ["location", "physical", "emotional", "objective", "inventory"], properties: { location: { type: "string" }, physical: { type: "string" }, emotional: { type: "string" }, objective: { type: "string" }, inventory: stringArraySchema, relationshipNotes: stringArraySchema, lastChangedChapterId: { type: "string" } } },
   },
 } as const;
@@ -112,7 +163,7 @@ const architecturePowerCenterSchema = { type: "object", additionalProperties: fa
 // 根因（minItems）：payloadContract 承诺 transmission 至少 4 步，但 schema minItems=2 → LLM 恰好产出 2 步（schema 最小值）
 // → validateArchitectureHardConstraints 反复拦截。修复层：让 schema minItems 与契约下限一致（名实相符）。
 // 回归风险：旧 feedbackLoop 记录 transmission < 4 步时，refine/update 路径 Ajv 校验会要求补步数；架构任务默认"全新重生成"不受影响。
-const architectureFeedbackLoopSchema = { type: "object", additionalProperties: false, required: ["id", "name", "trigger", "transmission", "affectedCenters", "storyPressure", "returnPath"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, trigger: { type: "string", minLength: 1 }, transmission: { ...stringArraySchema, minItems: 4 }, affectedCenters: { ...stringArraySchema, minItems: 3 }, storyPressure: { type: "string", minLength: 1 }, returnPath: { type: "string", minLength: 1 } } } as const;
+const architectureFeedbackLoopSchema = { type: "object", additionalProperties: false, required: ["id", "name", "trigger", "transmission", "affectedCenters", "storyPressure", "returnPath"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, trigger: { type: "string", minLength: 1 }, transmission: { ...stringArraySchema, minItems: 4 }, affectedCenters: { ...stringArraySchema, minItems: 2 }, storyPressure: { type: "string", minLength: 1 }, returnPath: { type: "string", minLength: 1 } } } as const;
 // Loop 5 根因修复（回退 Loop 4 的 minLength 内容深度层）：
 // Loop 4 在 returnPath/turningPoint/stages.summary/resourceLoop/stageGoals 上添加 minLength:20/30，
 // 意图强制 LLM 产出深度内容。iter6 确实改善（11→6 issues），但 iter7 因 LLM 偶尔产出短 stageGoals
@@ -123,6 +174,21 @@ const architectureFeedbackLoopSchema = { type: "object", additionalProperties: f
 // 因 LLM 可靠满足这两类结构性约束。内容深度交给 payloadContract 模板（引导）+ review 层（软强制+反馈循环）。
 // review 反馈循环才是改善主驱动（iter4:11→iter5:11→iter6:6 的改善来自 review issues 被携带进 instruction）。
 const architectureLongHorizonHookSchema = { type: "object", additionalProperties: false, required: ["id", "surfaceDetail", "possibleInterpretations", "affectedCenters", "payoffWindow"], properties: { id: { type: "string", minLength: 1 }, surfaceDetail: { type: "string", minLength: 1 }, possibleInterpretations: { ...stringArraySchema, minItems: 2 }, affectedCenters: { ...stringArraySchema, minItems: 1 }, payoffWindow: { type: "string", minLength: 1 } } } as const;
+const architectureRomanceProgressSchema = { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["romanceLineId", "relationshipStage", "irreversibleEvent"], properties: { romanceLineId: { type: "string", minLength: 1 }, relationshipStage: { type: "string", minLength: 1 }, irreversibleEvent: { type: "string", minLength: 1 }, crossOverWith: stringArraySchema } } } as const;
+const architectureTechGenerationSchema = { type: "object", additionalProperties: false, required: ["generation", "name"], properties: { generation: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, unlockCondition: { type: "string", minLength: 1 }, narrativeFunction: { type: "string", minLength: 1 } } } as const;
+const architectureOriginTruthLayerSchema = { type: "object", additionalProperties: false, required: ["layer", "revelation"], properties: { layer: { type: "string", minLength: 1 }, revelation: { type: "string", minLength: 1 }, revealerCenterId: { type: "string", minLength: 1 }, consequence: { type: "string", minLength: 1 } } } as const;
+const architecturePhaseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "title", "purpose", "turningPoint", "order", "locked", "primaryCurveId", "stages"],
+  properties: {
+    id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string", minLength: 1 }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" }, primaryCurveId: { type: "string", minLength: 1 },
+    stages: { type: "array", minItems: 2, items: { type: "object", additionalProperties: false, required: ["title", "summary"], properties: { title: { type: "string", minLength: 1 }, summary: { type: "string", minLength: 1 } } } },
+    romanceProgress: architectureRomanceProgressSchema,
+    techGeneration: architectureTechGenerationSchema,
+    originTruthLayer: architectureOriginTruthLayerSchema,
+  },
+} as const;
 const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>> = {
   projects: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, subtitle: { type: "string" }, premise: { type: "string" }, genre: stringArraySchema, audience: { type: "string" }, themes: stringArraySchema, sellingPoints: stringArraySchema, pov: { type: "string" }, tense: { type: "string" }, tone: { type: "string" }, languageStyle: { type: "string" }, targetWords: { type: "number", minimum: 1 } } },
   // Loop 2 根因修复：phases.stages 移入 required + stages minItems: 2。
@@ -138,8 +204,13 @@ const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>
   // (2) 给 ideologicalFactions 数组加 minItems:3（与 payloadContract "至少 3 个跨权力中心思想流派" 一致）。
   // 依据：Layer 10 已证明 schema required 是驱动 LLM 填充 optional 字段的唯一可靠机制
   // （romanceProgress/techGeneration/originTruthLayer 从 0/N 提升到 required 后 LLM 首次产出）。
-  // 回归风险：旧候选无 ideologicalFactions 时 refine/update 路径 Ajv 校验失败；新 operation "全新重生成" 不受影响。
-  architectures: { type: "object", additionalProperties: false, required: ["ideologicalFactions"], properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, powerCenters: { type: "array", minItems: 7, items: architecturePowerCenterSchema }, feedbackLoops: { type: "array", minItems: 1, items: architectureFeedbackLoopSchema }, longHorizonHooks: { type: "array", minItems: 1, items: architectureLongHorizonHookSchema }, phases: { type: "array", minItems: 5, items: { type: "object", additionalProperties: false, required: ["id", "title", "purpose", "turningPoint", "order", "locked", "primaryCurveId", "stages", "romanceProgress", "techGeneration", "originTruthLayer"], properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, turningPoint: { type: "string", minLength: 1 }, order: { type: "integer", minimum: 0 }, locked: { type: "boolean" }, primaryCurveId: { type: "string", minLength: 1 }, stages: { type: "array", minItems: 3, items: { type: "object", additionalProperties: false, required: ["title", "summary"], properties: { title: { type: "string", minLength: 1 }, summary: { type: "string", minLength: 1 } } } }, romanceProgress: { type: "array", minItems: 2, items: { type: "object", additionalProperties: false, required: ["romanceLineId", "relationshipStage", "irreversibleEvent"], properties: { romanceLineId: { type: "string", minLength: 1 }, relationshipStage: { type: "string", minLength: 1 }, irreversibleEvent: { type: "string", minLength: 1 }, crossOverWith: stringArraySchema } } }, techGeneration: { type: "object", additionalProperties: false, required: ["generation", "name"], properties: { generation: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, unlockCondition: { type: "string", minLength: 1 }, narrativeFunction: { type: "string", minLength: 1 } } }, originTruthLayer: { type: "object", additionalProperties: false, required: ["layer", "revelation"], properties: { layer: { type: "string", minLength: 1 }, revelation: { type: "string", minLength: 1 }, revealerCenterId: { type: "string", minLength: 1 }, consequence: { type: "string", minLength: 1 } } } } } }, growthCurves: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["id", "kind", "subject", "resourceLoop", "stageGoals", "irreversibleChange"], properties: { id: { type: "string", minLength: 1 }, kind: { enum: ["main", "ecological"] }, subject: { type: "string", minLength: 1 }, resourceLoop: { type: "string", minLength: 1 }, stageGoals: { type: "string", minLength: 1 }, irreversibleChange: { type: "string", minLength: 1 } } } }, ideologicalFactions: { type: "array", minItems: 3, items: { type: "object", additionalProperties: false, required: ["id", "name", "position", "affectedCenterIds"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, position: { type: "string", minLength: 1 }, affectedCenterIds: { ...stringArraySchema, minItems: 2 } } } } } },
+  // Layer 14 修复：把 powerCenters/feedbackLoops/longHorizonHooks/phases/growthCurves/centralQuestion/centralConflict/synopsis
+  // 全部加入 schema required（与 CREATE_REQUIRED_FIELDS.architectures L200 一致）。
+  // 根因：之前只有 ideologicalFactions 在 required 中，其他字段虽 有 minItems 但 LLM 偶发不产出整个数组
+  // （strict-mode 下 optional 字段可省略），导致 operation 88eac0d8 attempt 3-4 连续 powerCenters=0 失败。
+  // 回归风险：旧候选缺字段时 refine/update 路径 Ajv 校验失败；但 partialObjectSchema（L180）会删除 required，
+  // 故 UPDATE_MODEL_PAYLOAD_SCHEMAS 不受影响，只有 CREATE 路径（全新生成）强制所有字段。
+  architectures: { type: "object", additionalProperties: false, required: ["centralQuestion", "centralConflict", "synopsis", "powerCenters", "feedbackLoops", "longHorizonHooks", "phases", "growthCurves", "ideologicalFactions"], properties: { framework: { enum: ["free", "three-act", "four-part", "save-the-cat", "snowflake"] }, status: { enum: ["draft", "approved"] }, centralQuestion: { type: "string" }, centralConflict: { type: "string" }, synopsis: { type: "string" }, powerCenters: { type: "array", minItems: 2, items: architecturePowerCenterSchema }, feedbackLoops: { type: "array", minItems: 1, items: architectureFeedbackLoopSchema }, longHorizonHooks: { type: "array", minItems: 1, items: architectureLongHorizonHookSchema }, phases: { type: "array", minItems: 3, items: architecturePhaseSchema }, growthCurves: { type: "array", minItems: 2, items: { type: "object", additionalProperties: false, required: ["id", "kind", "subject", "resourceLoop", "stageGoals", "irreversibleChange"], properties: { id: { type: "string", minLength: 1 }, kind: { enum: ["main", "ecological"] }, subject: { type: "string", minLength: 1 }, resourceLoop: { type: "string", minLength: 1 }, stageGoals: { type: "string", minLength: 1 }, irreversibleChange: { type: "string", minLength: 1 } } } }, ideologicalFactions: { type: "array", minItems: 3, items: { type: "object", additionalProperties: false, required: ["id", "name", "position", "affectedCenterIds"], properties: { id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, position: { type: "string", minLength: 1 }, affectedCenterIds: { ...stringArraySchema, minItems: 2 } } } } } },
   // Loop 5 回退 Loop 4 minLength：移除 turningPoint/summary/resourceLoop/stageGoals 的 minLength:20/30。
   // 根因：strict-mode JSON schema minLength 是 HARD constraint，LLM 偶尔产出短字符串时整个生成失败（iter7 stageGoals<20 字触发），
   // 无候选可供 review。required（字段存在）+ minItems（数组下限）是 LLM 可靠满足的结构性约束，保留。
@@ -148,7 +219,19 @@ const TABLE_PAYLOAD_SCHEMAS: Record<ProposalTargetTable, Record<string, unknown>
   outlineNodes: { type: "object", additionalProperties: false, properties: { phaseId: { type: "string", minLength: 1 }, title: { type: "string" }, summary: { type: "string" }, order: { type: "integer", minimum: 0 } } },
   documents: { type: "object", additionalProperties: false, properties: { order: { type: "integer", minimum: 0 }, plotSegmentId: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["outline", "draft", "review", "final"] }, plainText: { type: "string" }, blueprint: { type: "object", additionalProperties: false, properties: { objective: { type: "string" }, povCharacterId: { type: "string" }, locationIds: stringArraySchema, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, conflict: { type: "string" }, informationRelease: stringArraySchema, mustHappen: stringArraySchema, flexible: stringArraySchema, forbidden: stringArraySchema, targetWords: { type: "number", minimum: 1 } } } } },
   scenes: { type: "object", additionalProperties: false, properties: { chapterId: { type: "string" }, title: { type: "string" }, order: { type: "integer", minimum: 0 }, status: { enum: ["idea", "planned", "drafting", "done"] }, povCharacterId: { type: "string" }, storyTime: { type: "string" }, locationId: { type: "string" }, characterIds: stringArraySchema, plotThreadIds: stringArraySchema, foreshadowingIds: stringArraySchema, purpose: { type: "string" }, conflict: { type: "string" }, outcome: { type: "string" }, wordTarget: { type: "number", minimum: 0 }, beats: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "text", "order"], properties: { id: { type: "string" }, text: { type: "string" }, order: { type: "integer", minimum: 0 } } } } } },
-  entities: { type: "object", additionalProperties: false, properties: { kind: { enum: ["character", "location", "organization", "faction", "item", "species", "rule", "ability", "term"] }, name: { type: "string" }, aliases: stringArraySchema, summary: { type: "string" }, description: { type: "string" }, tags: stringArraySchema, lockedFacts: stringArraySchema, attributes: { type: "object" }, character: characterSchema }, allOf: [{ if: { properties: { kind: { const: "character" } }, required: ["kind"] }, then: { required: ["character"] } }] },
+  // entities schema：lockedFacts required + minItems:2 + organization.attributes 5 战略字段（HARD constraint）：
+  // 根因（lockedFacts）：原 schema 中 lockedFacts 既不在 required 也无 minItems，LLM 在 strict-mode 下视为可省略字段，
+  // 在 22 个 entities × 多字段约束下系统性省略 lockedFacts（operation 76ab4ad3 attempt 4 全部 organization lockedFacts=0）。
+  // 根因（organization.attributes）：原 schema 中 attributes 只是 { type: "object" } 无 required 无 minProperties，
+  // LLM 视为可省略或只填 1 字段（attempt 5 全部 7 个 organization attributes 不足 5 字段）。
+  // retryReason 注入后 LLM 重新生成仍省略——是稳定策略非偶发失败。
+  // 修复层：(1) lockedFacts 加入 required + minItems:2 与 MIN_LOCKED_FACTS_BY_KIND 下限一致；
+  // (2) kind=organization 时通过 allOf 条件约束强制 attributes 5 战略字段 required（interest/resources/actionCapacity/bottomLine/relationshipDynamics），
+  // 与架构 powerCenters schema 字段一致，确保 entities.attributes 是架构 powerCenters 的原样保留而非简化。
+  // callStructuredNovelModel 内部 schema-repair retry 比 retryReason 全量重试更可靠，避免非确定性退步。
+  // 回归风险：UPDATE 路径下 partialObjectSchema 删除 required，但保留 minItems 和 allOf；已有 organization.attributes <5 字段记录的 refine/update 会 Ajv 失败，
+  // 但 partialObjectSchema 已删除 required，UPDATE 时 attributes 整体可选，仅当提供时才校验 5 字段。
+  entities: { type: "object", additionalProperties: false, properties: { kind: { enum: ["character", "location", "organization", "faction", "item", "species", "rule", "ability", "term"] }, name: { type: "string" }, aliases: stringArraySchema, summary: { type: "string" }, description: { type: "string" }, significance: { type: "string" }, tags: stringArraySchema, lockedFacts: { type: "array", items: { type: "string" }, minItems: 2 }, attributes: { type: "object" }, character: characterSchema }, allOf: [{ if: { properties: { kind: { const: "character" } }, required: ["kind"] }, then: { required: ["character"] } }, { if: { properties: { kind: { const: "organization" } }, required: ["kind"] }, then: { required: ["attributes"], properties: { attributes: { type: "object", additionalProperties: false, required: ["interest", "resources", "actionCapacity", "bottomLine", "relationshipDynamics"], properties: { interest: { type: "string", minLength: 1 }, resources: { ...stringArraySchema, minItems: 1 }, actionCapacity: { type: "string", minLength: 1 }, bottomLine: { type: "string", minLength: 1 }, relationshipDynamics: { type: "string", minLength: 1 } } } } } }] },
   relations: { type: "object", additionalProperties: false, properties: { fromEntityId: { type: "string" }, toEntityId: { type: "string" }, relationType: { type: "string" }, publicLabel: { type: "string" }, privateTruth: { type: "string" }, bond: { type: "string" } } },
   plotThreads: { type: "object", additionalProperties: false, properties: { kind: { enum: ["main", "subplot", "romance", "growth", "mystery", "antagonist", "conspiracy"] }, title: { type: "string" }, summary: { type: "string" }, status: { enum: ["planned", "active", "paused", "resolved", "abandoned"] }, priority: { type: "number", minimum: 0, maximum: 100 }, participantIds: stringArraySchema, startNodeId: { type: "string" }, targetNodeId: { type: "string" }, progress: { type: "number", minimum: 0, maximum: 100 }, nextMove: { type: "string" } } },
   foreshadowing: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, clue: { type: "string" }, truth: { type: "string" }, status: { enum: ["seeded", "reminded", "misdirected", "advanced", "revealed", "resolved", "abandoned"] }, seededNodeId: { type: "string" }, targetNodeId: { type: "string" }, urgency: { type: "number", minimum: 0, maximum: 100 }, notes: { type: "string" } } },
@@ -197,11 +280,13 @@ const payloadAjv = new Ajv({ allErrors: true, strict: false });
 const PAYLOAD_VALIDATORS = Object.fromEntries(Object.entries(TABLE_PAYLOAD_SCHEMAS).map(([table, schema]) => [table, payloadAjv.compile(schema)])) as Record<ProposalTargetTable, ValidateFunction>;
 const CREATE_REQUIRED_FIELDS: Record<ProposalTargetTable, string[]> = {
   projects: ["title", "premise"],
-  architectures: ["centralQuestion", "centralConflict", "synopsis", "powerCenters", "feedbackLoops", "longHorizonHooks", "phases", "growthCurves"],
+  architectures: ["centralQuestion", "centralConflict", "synopsis", "powerCenters", "feedbackLoops", "longHorizonHooks", "phases", "growthCurves", "ideologicalFactions"],
   outlineNodes: ["phaseId", "title", "summary", "order"],
   documents: ["order", "plotSegmentId", "title", "summary", "blueprint"],
   scenes: ["chapterId", "title", "order", "purpose", "conflict", "outcome"],
-  entities: ["kind", "name", "summary", "description"],
+  // lockedFacts 加入 required：与 entities schema minItems:2 配合，驱动 LLM 必须产出 ≥2 条设定锚点。
+  // 根因见 entities schema 注释（operation 76ab4ad3 attempt 4 全部 organization lockedFacts=0）。
+  entities: ["kind", "name", "summary", "description", "significance", "lockedFacts"],
   relations: ["fromEntityId", "toEntityId", "relationType", "publicLabel", "privateTruth"],
   plotThreads: ["kind", "title", "summary", "status", "nextMove"],
   foreshadowing: ["title", "clue", "truth", "status", "notes"],
@@ -209,17 +294,67 @@ const CREATE_REQUIRED_FIELDS: Record<ProposalTargetTable, string[]> = {
 };
 const CREATE_PAYLOAD_VALIDATORS = Object.fromEntries(Object.entries(TABLE_PAYLOAD_SCHEMAS).map(([table, schema]) => [table, payloadAjv.compile({ ...schema, required: CREATE_REQUIRED_FIELDS[table as ProposalTargetTable] })])) as Record<ProposalTargetTable, ValidateFunction>;
 
+/**
+ * The architecture contract is volume-dependent. Generation and acceptance must
+ * validate against the same capacity; a global validator would reject valid
+ * short-form projects or accept incomplete long-form ones.
+ */
+function payloadValidatorFor(table: ProposalTargetTable, operation: ProposalItem["operation"], targetWords?: number): ValidateFunction {
+  if (table !== "architectures" || targetWords === undefined) {
+    return operation === "create" ? CREATE_PAYLOAD_VALIDATORS[table] : PAYLOAD_VALIDATORS[table];
+  }
+  const schema = architecturePayloadSchema(architectureSystemCapacity(targetWords));
+  return payloadAjv.compile(operation === "create" ? { ...schema, required: CREATE_REQUIRED_FIELDS[table] } : schema);
+}
+
 interface ArchitectureSystemCapacity {
   powerCenters: number;
   feedbackLoops: number;
   longHorizonHooks: number;
   feedbackAffectedCenters: number;
+  phases: number;
+  phaseStages: number;
+  requirePhaseProgression: boolean;
 }
 
 function architectureSystemCapacity(targetWords: number): ArchitectureSystemCapacity {
-  if (targetWords >= 1_500_000) return { powerCenters: 7, feedbackLoops: 4, longHorizonHooks: 4, feedbackAffectedCenters: 3 };
-  if (targetWords >= 1_000_000) return { powerCenters: 5, feedbackLoops: 3, longHorizonHooks: 3, feedbackAffectedCenters: 2 };
-  return { powerCenters: 1, feedbackLoops: 1, longHorizonHooks: 1, feedbackAffectedCenters: 2 };
+  if (targetWords >= 1_500_000) return { powerCenters: 7, feedbackLoops: 4, longHorizonHooks: 4, feedbackAffectedCenters: 3, phases: 5, phaseStages: 2, requirePhaseProgression: true };
+  if (targetWords >= 1_000_000) return { powerCenters: 5, feedbackLoops: 3, longHorizonHooks: 3, feedbackAffectedCenters: 2, phases: 5, phaseStages: 2, requirePhaseProgression: true };
+  return { powerCenters: 2, feedbackLoops: 1, longHorizonHooks: 1, feedbackAffectedCenters: 2, phases: 3, phaseStages: 2, requirePhaseProgression: false };
+}
+
+/**
+ * story-bible 任务的结构容量门槛。
+ *
+ * 根因修复（Loop 2 novel-arch-review）：story-bible 任务在 getGenerationRetryReason 中
+ * 只走通用 minItems 计数路径（countRelevantProposalItems 返回 items.length 总数，未区分
+ * entities vs relations），且 MIN_PROPOSAL_ITEMS 无 story-bible 条目 → LLM 在 token 预算
+ * 约束下优先产出 entities（schema 字段简单）+ relations 不足（需理解架构因果链）。
+ * 连续 3 轮生成均出现 entities 充足 + relations 严重不足（0/0/2 < 10）的失衡模式。
+ *
+ * 修复层：参考 architectureSystemCapacity 模式，新增 storyBibleSystemCapacity + per-kind
+ * 最小数量门槛，让 getGenerationRetryReason 在 story-bible 任务上检测 entities/relations
+ * per-table 覆盖与 kind 多样性，触发重试时给 LLM 明确的补充指引。
+ *
+ * 判定信号：story-bible 候选 entities.length 达标但 relations.length < minRelations，
+ * 且无 story-bible 专属 validator → 根因在 coverage validator 缺失层。
+ * 回归风险：短篇项目（< 1_000_000 字）门槛降低，不会强制 19 entities；
+ * 百万字长篇项目可能因 LLM token 预算再次软截断，但重试机制会反馈明确补充指引。
+ */
+interface StoryBibleSystemCapacity {
+  minEntities: number;
+  minRelations: number;
+  minOrganizations: number; // powerCenter 实体数
+  minFactions: number;      // ideologicalFaction 实体数
+  minLocations: number;
+  minItems: number;         // 关键文物实体数
+  minCharacters: number;
+}
+
+function storyBibleSystemCapacity(targetWords: number): StoryBibleSystemCapacity {
+  if (targetWords >= 1_500_000) return { minEntities: 22, minRelations: 12, minOrganizations: 7, minFactions: 3, minLocations: 4, minItems: 3, minCharacters: 5 };
+  if (targetWords >= 1_000_000) return { minEntities: 19, minRelations: 10, minOrganizations: 5, minFactions: 3, minLocations: 3, minItems: 3, minCharacters: 3 };
+  return { minEntities: 8, minRelations: 4, minOrganizations: 2, minFactions: 0, minLocations: 2, minItems: 1, minCharacters: 2 };
 }
 
 function timelineSystemCapacity(targetWords: number) {
@@ -250,6 +385,21 @@ function architecturePayloadSchema(capacity: ArchitectureSystemCapacity) {
         },
       },
       longHorizonHooks: { ...properties.longHorizonHooks, minItems: capacity.longHorizonHooks },
+      phases: {
+        ...properties.phases,
+        minItems: capacity.phases,
+        items: {
+          ...(properties.phases.items as Record<string, unknown>),
+          properties: {
+            ...((properties.phases.items as Record<string, unknown>).properties as Record<string, unknown>),
+            stages: {
+              ...(((properties.phases.items as Record<string, unknown>).properties as Record<string, unknown>).stages as Record<string, unknown>),
+              minItems: capacity.phaseStages,
+            },
+          },
+          ...(capacity.requirePhaseProgression ? { required: ["id", "title", "purpose", "turningPoint", "order", "locked", "primaryCurveId", "stages", "romanceProgress", "techGeneration", "originTruthLayer"] } : {}),
+        },
+      },
     },
   };
 }
@@ -258,11 +408,82 @@ function proposalSchema(
   allowedTables: ProposalTargetTable[],
   requiredPayloadFields?: Partial<Record<ProposalTargetTable, string[]>>,
   architectureCapacity?: ArchitectureSystemCapacity,
+  itemsMinCount?: number,
 ) {
   const payloadSchemas = Object.fromEntries(allowedTables.map((table) => [
     table,
     table === "architectures" && architectureCapacity ? architecturePayloadSchema(architectureCapacity) : MODEL_PAYLOAD_SCHEMAS[table],
   ])) as Record<ProposalTargetTable, Record<string, unknown>>;
+
+  // Layer 15 修复（Fix B）：单表任务快路径——消除 allOf 中的 schema 三重复制。
+  // 根因：proposalSchema 的 allOf 对单表任务（如 architectures）会产生 2-3 份完整 schema 复制
+  // （branch 1 基础 + branch 2 CREATE_REQUIRED + 可选 branch 3 extraRequired），
+  // 叠加 Layer 14 把 architectures.required 扩到 9 字段后，schema 复杂度超 provider strict mode 容量
+  // → 400/422 → fallback 删除 response_format → LLM 失去 envelope 信号 → 直接输出表字段到 root。
+  // 修复：单表任务用 const 替代 enum + 合并 required 后只保留 1 份 schema 复制（create 路径）。
+  // 多表路径（allowedTables.length > 1）保留原逻辑不变。
+  // 判定信号：operation failed 错误含 "root must have required property 'summary'" +
+  // "root must NOT have additional properties" → LLM 输出表字段到 root 而非 envelope。
+  //
+  // novel-arch-review 修复（attempt 29+）：itemsMinCount 参数用于 story-bible 等需要强制 N 项的任务。
+  // 根因：原 minItems=1 让 LLM 只生成 1 个 item 就通过 schema 校验，instruction 中的"至少 22 个"约束
+  // 在 strict-mode JSON schema 下被 LLM 忽略（参考 project_memory: schema required > system-prompt > payloadContract）。
+  // 修复：story-bible 任务传入 itemsMinCount=minEntities+minRelations 作为 schema HARD constraint。
+  const effectiveMinItems = itemsMinCount && itemsMinCount > 1 ? itemsMinCount : 1;
+  if (allowedTables.length === 1) {
+    const table = allowedTables[0];
+    const baseSchema = payloadSchemas[table];
+    const createRequired = CREATE_REQUIRED_FIELDS[table];
+    const extraRequired = requiredPayloadFields?.[table];
+    // 合并 create 路径的所有 required（base.required ∪ CREATE_REQUIRED_FIELDS ∪ extraRequired）
+    const createRequiredUnion = Array.from(new Set([
+      ...(Array.isArray(baseSchema.required) ? baseSchema.required as string[] : []),
+      ...(createRequired ?? []),
+      ...(extraRequired ?? []),
+    ]));
+    const createPayloadSchema = { ...baseSchema, required: createRequiredUnion };
+
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["summary", "items"],
+      properties: {
+        summary: { type: "string" },
+        items: {
+          type: "array",
+          minItems: effectiveMinItems,
+          maxItems: 120,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["label", "operation", "targetTable", "payload", "rationale"],
+            properties: {
+              label: { type: "string", minLength: 1 },
+              operation: { enum: ["create", "update"] },
+              targetTable: { const: table },
+              targetId: { type: "string" },
+              tempId: { type: "string" },
+              payload: { type: "object" },
+              rationale: { type: "string" },
+              dependencies: { type: "array", items: { type: "string" } },
+            },
+            allOf: [
+              { if: { properties: { operation: { const: "create" } }, required: ["operation"] },
+                then: { properties: { payload: createPayloadSchema } } },
+              // TODO P2: update 路径仅校验 payload 是 object + minProperties:1，未校验内部结构。
+              // 候选 96b2f792 的 transmission 字符串类型违规逃过 schema 即因此缺口。
+              // 修复需配合 partialObjectSchema 重设计 partial update 语义（区分必填缺失与可选部分更新），
+              // 避免阻塞合法 partial update。当前由 validator 层 normalizeTransmission 容错兜底。
+              { if: { properties: { operation: { const: "update" } }, required: ["operation"] },
+                then: { required: ["targetId"], properties: { payload: { type: "object", minProperties: 1 } } } },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  // 多表路径：保留原逻辑（allOf 遍历每个表）
   return {
     type: "object",
     additionalProperties: false,
@@ -271,7 +492,7 @@ function proposalSchema(
       summary: { type: "string" },
       items: {
         type: "array",
-        minItems: 1,
+        minItems: effectiveMinItems,
         maxItems: 120,
         items: {
           type: "object",
@@ -293,6 +514,7 @@ function proposalSchema(
             ...allowedTables.flatMap((table) => requiredPayloadFields?.[table]?.length
               ? [{ if: { properties: { targetTable: { const: table } }, required: ["targetTable"] }, then: { properties: { payload: { ...payloadSchemas[table], required: requiredPayloadFields[table] } } } }]
               : []),
+            // TODO P2: 同单表路径，update 仅校验 minProperties:1，transmission 等字段类型违规逃过 schema。
             { if: { properties: { operation: { const: "update" } }, required: ["operation"] }, then: { required: ["targetId"], properties: { payload: { type: "object", minProperties: 1 } } } },
           ],
         },
@@ -452,6 +674,27 @@ async function referenceInventory(projectId: string) {
     "剧情段（startNodeId / targetNodeId / seededNodeId）：",
     ...(outlineNodes.length ? outlineNodes.map((item) => `- id=${item.id} | phaseId=${item.phaseId} | ${item.title}`) : ["- 暂无剧情段"]),
   ].join("\n");
+}
+
+/**
+ * story-bible 任务的精简版 referenceInventory。
+ *
+ * novel-arch-review 修复：story-bible 是全量重生成任务，要求 LLM 一次性 create 22+ entities + 12+ relations。
+ * 但 referenceInventory 列出全部已有 entities（含 organization/location/item/character），
+ * LLM 看到后误判"实体已存在基线"，主动跳过 create，只补 1 个 powerCenter（attempt 26/27 现象）。
+ *
+ * 精简策略（attempt 28 进一步强化）：完全移除已有对象列表，返回"全量重生成"提示。
+ * 根因（attempt 28）：即使精简到只列已冻结角色 ID（8 个 character），LLM 仍因 primacy effect 把
+ * 角色列表当成"主要任务清单"，只生成 5 个 character 实体，忽略 organization/faction/location/item。
+ * 判定信号：availableReferences 含 8 个 character ID + LLM 只 create 5 个 character → 注意力被锚定。
+ *
+ * relations 引用策略：story-bible 的 relations 全部使用 ref:tempId 引用本批 create 的实体（含 character），
+ * 不需要已有角色 ID。character 实体也由本批 create，relations 引用其 tempId 即可。
+ *
+ * 该根因在《墨衍灵枢》架构阶段 attempt 26/27/28 持续修复。
+ */
+async function storyBibleReferenceInventory(_projectId: string) {
+  return "本次为全量重生成，无已有对象可引用。relations 的 fromEntityId/toEntityId 全部使用 ref:tempId 引用本批 create 的实体（含 character 实体的 tempId），不得引用任何已有 ID。";
 }
 
 function editablePayload(table: ProposalTargetTable, record: Record<string, unknown>) {
@@ -737,7 +980,9 @@ export function validateArchitectureHardConstraints(payload: Record<string, unkn
   // 反馈链步数：transmission 至少 4 步
   const feedbackLoops = Array.isArray(payload.feedbackLoops) ? payload.feedbackLoops as Array<Record<string, unknown>> : [];
   for (const fl of feedbackLoops) {
-    const transmission = Array.isArray(fl.transmission) ? fl.transmission as unknown[] : [];
+    // 兼容 LLM 偶发产出的 "→" 分隔字符串（normalizeTransmission 会拆分为数组），
+    // 避免 Array.isArray 静默丢弃字符串导致"传导步数不足"假阳性。
+    const transmission = normalizeTransmission(fl.transmission);
     if (transmission.length < 4) {
       issues.push({
         severity: "major",
@@ -851,63 +1096,6 @@ function plotDesignContext(phase: ArchitecturePhase, segments: Array<{ id: strin
     `已有剧情段：\n${segments.map((segment) => `- ${segment.title}：${segment.summary || "暂无概要"}`).join("\n") || "暂无"}`,
     `最近章节：\n${chapters.slice(-6).map((chapter) => `- ${chapter.title}：${chapter.summary || "暂无摘要"}`).join("\n") || "暂无"}`,
   ].join("\n\n");
-}
-
-/**
- * instruction 长度上限（字符数）。超过此值时触发分段，避免上游 API HTTP 500。
- * 选择 6000 是因为本次会话中架构生成 instruction 累积超 8000 字符触发 500；
- * 6000 留出 sectionContextBlock + payloadContract + formatContextPacket 的余量。
- */
-export const MAX_INSTRUCTION_CHARS = 6000;
-
-/**
- * instruction 过长时分段：把「详细审核意见」段从核心指令中分离。
- *
- * 分割协议（通用，不依赖特定书名/题材）：
- * 1. 查找 markdown 标题标记（# 审核意见 / # 审核反馈 / # 修订意见 / # 历史审核 / # 历史问题 / # 重生成意见）
- * 2. 找到标记时，标记及之后的内容移入 reviewFeedback，之前的内容作为核心指令
- * 3. 未找到标记但 instruction 超长时，保留前 MAX_INSTRUCTION_CHARS - 500 字符作为核心，剩余移入 reviewFeedback
- * 4. 未超长时返回 { core: instruction, detail: undefined }
- *
- * 返回的 core 末尾会追加指引，让 LLM 知道详细意见在 contextPacket.review-feedback source 中。
- */
-export function splitInstruction(instruction: string): { core: string; detail?: string } {
-  if (instruction.length <= MAX_INSTRUCTION_CHARS) return { core: instruction };
-  // 常见审核意见段落标记（通用，不针对特定项目）
-  const SECTION_MARKERS = [
-    "# 审核意见",
-    "# 审核反馈",
-    "# 修订意见",
-    "# 历史审核",
-    "# 历史问题",
-    "# 重生成意见",
-    "# 详细审核",
-    "# 本次审核",
-  ];
-  for (const marker of SECTION_MARKERS) {
-    const index = instruction.indexOf(marker);
-    if (index > 0) {
-      const core = instruction.slice(0, index).trim();
-      const detail = instruction.slice(index).trim();
-      if (core.length > 0 && detail.length > 0) {
-        return {
-          core: `${core}\n\n# 详细审核意见\n见 contextPacket 中的「详细审核反馈」source（review-feedback kind），必须阅读并执行。`,
-          detail,
-        };
-      }
-    }
-  }
-  // 无标记但超长：保留前段作为核心，后段移入 detail
-  const keepChars = MAX_INSTRUCTION_CHARS - 500;
-  const core = instruction.slice(0, keepChars).trim();
-  const detail = instruction.slice(keepChars).trim();
-  if (core.length > 0 && detail.length > 0) {
-    return {
-      core: `${core}\n\n# 详细审核意见\n见 contextPacket 中的「详细审核反馈」source（review-feedback kind），必须阅读并执行。`,
-      detail,
-    };
-  }
-  return { core: instruction };
 }
 
 /**
@@ -1069,7 +1257,7 @@ export async function runPlotDesignTask(params: { projectId: string; phaseId: st
   const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
   const agent: AgentRun = { ...recordBase(params.projectId), goal: instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-plot-design-v2", contextPacketId: packet.id, role: "architect", skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: "设计剧情段与章节", tool: "model.structured", status: "running" }] };
   await novelDb.agentRuns.add(agent);
-  const basePrompt = `# 任务\n在幕“${phase.title}”下设计下一个剧情段，并把剧情段拆成可直接进入创作流程的章节。\n\n# 作者要求\n${instruction}\n\n# 当前规划上下文\n${plotDesignContext(phase, segments, documents)}\n\n# 结构要求\n1. 只创建 1 个 outlineNodes 剧情段，phaseId 必须为 ${phase.id}，order 必须为 ${segmentOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾、需要积累的体验和结束时允许发生的变化。\n3. 创建至少 1 个 documents 章节；数量由独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报决定，不得为固定范围凑数或压缩。plotSegmentId 必须使用 ref:剧情段tempId，order 从 ${chapterOrder} 连续排列。\n4. documents.title 就是正式章节标题；summary 说明本章主导叙事功能与结束状态；blueprint 写入探索或积累方向、本章兑现边界，以及相关 characterIds、plotThreadIds、foreshadowingIds。\n5. 每章只承担一个清晰的主导叙事功能；可以推进事件，也可以建立背景与常态、深化人物关系、积累情感压力或消化后果。章节之间必须可连续写作，不得把后续节点提前压入当前章节。\n5.5. 剧情段 summary 首行必须用【功能类型】标注，五类任选其一：主线推进型/世界观穿插型/群像塑造型/支线编织型/呼吸节奏型。功能类型决定本剧情段是否推进当前 phase 主线。参考前序剧情段功能类型：若前序已有连续主线推进剧情段，本次建议生成交织型剧情段（世界观穿插/群像塑造/支线编织/呼吸节奏）稀释推进速度。非主线推进剧情段也必须有自身完整的人物处境、矛盾和因果链，不能只是主线休息站。\n6. 当剧情段确实跨越多种功能或强度时，安排有差异的行动、余波、蓄势或兑现节奏；世界观穿插型/群像塑造型/呼吸节奏型剧情段的内部章节可全部为低强度铺陈章，只要它们深化读者对世界、人物或关系的理解，无需强行补入行动章。单一过渡、完整高潮、短促插曲或实验性结构无需为满足模板强行补入低强度章。\n7. 不得创建幕、场景、时间线事件或其它资料表，也不得更新已有资料。\n8. 每章目标字数由系统统一设为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字，不得返回 targetWords。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+  const basePrompt = `# 任务\n在幕“${phase.title}”下设计下一个剧情段，并把剧情段拆成可直接进入创作流程的章节。\n\n# 作者要求\n${instruction}\n\n# 当前规划上下文\n${plotDesignContext(phase, segments, documents)}\n\n# 结构要求\n1. 只创建 1 个 outlineNodes 剧情段，phaseId 必须为 ${phase.id}，order 必须为 ${segmentOrder}，并提供 tempId。\n2. 剧情段 summary 使用 100-200 字连贯说明人物处境、局部矛盾、需要积累的体验和结束时允许发生的变化。\n3. 创建至少 1 个 documents 章节；数量由独立叙事功能、因果跨度、人物视角、篇幅预算和连载回报决定，不得为固定范围凑数或压缩。plotSegmentId 必须使用 ref:剧情段tempId，order 从 ${chapterOrder} 连续排列。\n4. documents.title 就是正式章节标题；summary 说明本章主导叙事功能与结束状态；blueprint 写入探索或积累方向、本章兑现边界，以及相关 characterIds、plotThreadIds、foreshadowingIds。\n5. 每章只承担一个清晰的主导叙事功能；可以推进事件，也可以建立背景与常态、深化人物关系、积累情感压力或消化后果。章节之间必须可连续写作，不得把后续节点提前压入当前章节。\n5.5. 剧情段 summary 首行必须用【功能类型】标注，五类任选其一：主线推进型/世界观穿插型/群像塑造型/支线编织型/呼吸节奏型。功能类型决定本剧情段是否推进当前 phase 主线。参考前序剧情段功能类型：若前序已有连续主线推进剧情段，本次建议生成交织型剧情段（世界观穿插/群像塑造/支线编织/呼吸节奏）稀释推进速度。非主线推进剧情段也必须有自身完整的人物处境、矛盾和因果链，不能只是主线休息站。\n6. 当剧情段确实跨越多种功能或强度时，安排有差异的行动、余波、蓄势或兑现节奏；世界观穿插型/群像塑造型/呼吸节奏型剧情段的内部章节可全部为低强度铺陈章，只要它们深化读者对世界、人物或关系的理解，无需强行补入行动章。单一过渡、完整高潮、短促插曲或实验性结构无需为满足模板强行补入低强度章。\n7. 不得创建幕、场景、时间线事件或其它资料表，也不得更新已有资料。\n8. 每章目标字数由系统统一设为 ${DEFAULT_CHAPTER_TARGET_WORDS} 字，不得返回 targetWords。\n\n# 证据边界\n既有事实只能来自冻结上下文；以下创作空白允许设计为新候选：${evidence.creativeGaps.join("；") || "无特别标记"}\n\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${buildPayloadContract(task.allowedTables)}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n所有项必须为 create。内容中禁止出现候选、待审核等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
   const auditEnabled = !!params.audit;
   const maxAuditIterations = Math.max(0, Math.min(3, params.audit?.maxIterations ?? 1));
   try {
@@ -1261,6 +1449,54 @@ function validateArchitectureGrowthCurves(payload: Record<string, unknown>): str
   return null;
 }
 
+/**
+ * 校验 story-bible 候选的实体与关系覆盖完整性。
+ *
+ * 根因修复（Loop 2 novel-arch-review）：story-bible 任务连续 3 轮生成均出现
+ * entities 充足 + relations 严重不足（0/0/2 < 10）的失衡模式。根因是
+ * getGenerationRetryReason 对 story-bible 只走通用 minItems 路径，未区分
+ * entities vs relations per-table 覆盖，且无 kind 多样性检查。
+ *
+ * 本函数作为 story-bible 专属 Class A（结构存在性）+ Class B（类型多样性）validator：
+ * (1) entities 总数 ≥ minEntities（Class A）
+ * (2) relations 总数 ≥ minRelations（Class A，针对 relations 系统性不足）
+ * (3) 每个 kind 的 entity 数量 ≥ 对应门槛（Class B，防止 LLM 用 location/item 凑数）
+ *
+ * 返回 null 表示校验通过，返回 string 表示错误描述（用于重试 instruction）。
+ */
+function validateStoryBibleCoverage(items: ProposalItem[], capacity: StoryBibleSystemCapacity): string | null {
+  const entities = items.filter((i) => i.targetTable === "entities");
+  const relations = items.filter((i) => i.targetTable === "relations");
+
+  if (entities.length < capacity.minEntities) {
+    return `本轮须从零生成全部 ${capacity.minEntities} 个 entities，不是在已有 ${entities.length} 个基础上补充。当前只生成 ${entities.length} 个，缺失 ${capacity.minEntities - entities.length} 个。必须一次性 create 全部 ${capacity.minEntities} 个实体，分布如下：\n- kind="organization"（powerCenter 组织）：至少 ${capacity.minOrganizations} 个\n- kind="faction"（ideologicalFaction 派系）：至少 ${capacity.minFactions} 个\n- kind="location"（关键地点）：至少 ${capacity.minLocations} 个\n- kind="item"（关键文物）：至少 ${capacity.minItems} 个\n- kind="character"（角色）：至少 ${capacity.minCharacters} 个\n每个实体作为独立 item 返回，不得合并、不得跳过、不得以"已存在"为由省略。本轮是全量重生成，items 数组必须包含全部 ${capacity.minEntities} 个 create item。`;
+  }
+  if (relations.length < capacity.minRelations) {
+    return `本轮须从零生成全部 ${capacity.minRelations} 条 relations，不是在已有 ${relations.length} 条基础上补充。当前只生成 ${relations.length} 条，缺失 ${capacity.minRelations - relations.length} 条。必须一次性 create 全部 ${capacity.minRelations} 条关系，覆盖：powerCenter 间合作/冲突/依赖/归属（至少 ${Math.ceil(capacity.minRelations * 0.5)} 条）+ ideologicalFaction 与 powerCenter 的 ideological_alignment 归属（至少 ${Math.ceil(capacity.minFactions * 2)} 条）+ 角色与组织归属（至少 ${capacity.minCharacters} 条）+ feedbackLoops/growthCurves 因果链（至少 2 条）。每条 relation 含 fromEntityId/toEntityId/relationType/publicLabel/privateTruth/bond，作为独立 item 返回。`;
+  }
+
+  // kind 多样性检查（Class B）
+  const kindCounts: Record<string, number> = {};
+  for (const e of entities) {
+    const kind = String((e.payload as Record<string, unknown>).kind ?? "");
+    if (kind) kindCounts[kind] = (kindCounts[kind] ?? 0) + 1;
+  }
+  const requiredKinds: Array<[string, number, string]> = [
+    ["organization", capacity.minOrganizations, "powerCenter 组织"],
+    ["faction", capacity.minFactions, "ideologicalFaction 派系"],
+    ["location", capacity.minLocations, "关键地点"],
+    ["item", capacity.minItems, "关键文物"],
+    ["character", capacity.minCharacters, "角色"],
+  ];
+  for (const [kind, min, label] of requiredKinds) {
+    if (min > 0 && (kindCounts[kind] ?? 0) < min) {
+      return `story-bible entities 中 kind="${kind}" 只有 ${kindCounts[kind] ?? 0} 个，要求至少 ${min} 个（${label}）。请补充该 kind 的实体，不要用其他 kind 凑数。`;
+    }
+  }
+
+  return null;
+}
+
 function validateArchitectureSystems(payload: Record<string, unknown>, targetWords: number): string | null {
   const isMillionWordProject = targetWords >= 1_000_000;
   const required = architectureSystemCapacity(targetWords);
@@ -1270,7 +1506,7 @@ function validateArchitectureSystems(payload: Record<string, unknown>, targetWor
   if (new Set(centerRefs).size !== centerRefs.length) return "powerCenters 的 id 与 name 必须各自唯一，且不得互相重名，以便反馈链和长期钩子准确引用。";
 
   const feedbackLoops = Array.isArray(payload.feedbackLoops) ? payload.feedbackLoops as Array<Record<string, unknown>> : [];
-  if (feedbackLoops.length < required.feedbackLoops) return `feedbackLoops 只有 ${feedbackLoops.length} 条，${isMillionWordProject ? "百万字" : "当前体量"}架构至少需要 ${required.feedbackLoops} 条跨组织反馈链；每条需写清 trigger、至少两步 transmission、受影响中心和产生的故事压力。`;
+  if (feedbackLoops.length < required.feedbackLoops) return `feedbackLoops 只有 ${feedbackLoops.length} 条，${isMillionWordProject ? "百万字" : "当前体量"}架构至少需要 ${required.feedbackLoops} 条跨组织反馈链；每条需写清 trigger、至少 4 步 transmission（数组形式，每步一个字符串）、受影响中心和产生的故事压力。`;
   const narrowFeedback = feedbackLoops.find((loop) => !Array.isArray(loop.affectedCenters) || loop.affectedCenters.length < required.feedbackAffectedCenters);
   if (narrowFeedback) return `feedbackLoops 中 ${String(narrowFeedback.id ?? narrowFeedback.name ?? "未命名项")} 只连接了 ${Array.isArray(narrowFeedback.affectedCenters) ? narrowFeedback.affectedCenters.length : 0} 个权力中心；当前体量要求每条反馈链至少跨 ${required.feedbackAffectedCenters} 个中心，避免退化为两方直线冲突。`;
   const longHorizonHooks = Array.isArray(payload.longHorizonHooks) ? payload.longHorizonHooks as Array<Record<string, unknown>> : [];
@@ -1403,7 +1639,324 @@ function getGenerationRetryReason(taskKey: NovelGenerationTaskKey, items: Propos
     const error = validateTimelineStructure(items, targetWords);
     if (error) return { message: error };
   }
+  // 6. story-bible 覆盖完整性校验（entities + relations per-table 覆盖 + kind 多样性）
+  // 根因修复（Loop 2 novel-arch-review）：story-bible 连续 3 轮 entities 充足 + relations 不足，
+  // 因 getGenerationRetryReason 只走通用 minItems 路径未区分 per-table 覆盖。
+  if (taskKey === "story-bible") {
+    const error = validateStoryBibleCoverage(items, storyBibleSystemCapacity(targetWords));
+    if (error) return { message: error };
+  }
   return null;
+}
+
+/**
+ * story-bible 两阶段拆分生成（attempt 31 重构）。
+ *
+ * 根因：单次生成 schema minItems=34（22 entities + 12 relations）强制 LLM 一次产出全部 item，
+ * LLM 为满足 HARD constraint 牺牲每个 item 的内容深度——attributes 只填 1 字段、lockedFacts 空、
+ * relations 未体现 feedbackLoops 因果链。这是 project_memory 中"schema required 是驱动 LLM 填充字段的
+ * 唯一可靠机制"的副作用：minItems 过大会触发软截断（LLM 为凑数牺牲深度）。
+ *
+ * 两阶段拆分策略：
+ * - 阶段 1（entities）：allowedTables=["entities"], schema minItems=minEntities,
+ *   payloadContract 强制 organization 的 attributes 5 字段（interest/resources/actionCapacity/
+ *   bottomLine/relationshipDynamics）、character 的 character 字段完整。LLM 有充足 token 预算深化字段。
+ * - 阶段 2（relations）：allowedTables=["relations"], schema minItems=minRelations,
+ *   availableReferences 注入阶段 1 生成的 entities（id+name+kind）作为真实引用对象,
+ *   payloadContract 强制 relations 体现架构 feedbackLoops/growthCurves 因果链。
+ *
+ * 合并：阶段 1 items（entities）+ 阶段 2 items（relations）合并为单个 proposal。
+ *
+ * 判定信号：story-bible + 单次 minItems=34 + items 字段深度不足（attributes 缺失/lockedFacts 空）→ 软截断副作用。
+ * 该根因在《墨衍灵枢》架构阶段 attempt 30 发现（数量达标但质量不达标），attempt 31 修复。
+ */
+async function runStoryBibleTwoPhase(params: {
+  projectId: string;
+  project: { id: string; title: string; targetWords: number; settings: { textModel: string; temperature: number } };
+  task: GenerationTaskDefinition;
+  skills: Awaited<ReturnType<typeof resolveNovelSkills>>["skills"];
+  packet: Awaited<ReturnType<typeof compileNovelContext>>;
+  instruction: string;
+  sectionContextBlock: string;
+  signal?: AbortSignal;
+}): Promise<{ proposal: AIProposal; packet: Awaited<ReturnType<typeof compileNovelContext>>; agent: AgentRun }> {
+  const { projectId, project, task, skills, packet, instruction, sectionContextBlock, signal } = params;
+  const capacity = storyBibleSystemCapacity(project.targetWords);
+  const skillPrompt = compileNovelStagePrompt(skills, task.skillStage);
+
+  // 创建 agentRun（记录两阶段生成过程）
+  const agent: AgentRun = { ...recordBase(projectId), goal: instruction, status: "running", model: project.settings.textModel, promptVersion: "novel-structured-v4", contextPacketId: packet.id, role: task.role, skillRefs: skills.map((item: { skillId: string; version: string }) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: `${task.label}（两阶段：entities→relations）`, tool: "model.structured", status: "running" }] };
+  await novelDb.agentRuns.add(agent);
+
+  try {
+    // ==================== 阶段 1：entities 生成 ====================
+    // 阶段 1 专属 sectionContextBlock：聚焦 entities，强制 attributes 5 字段
+    const architecture = await novelDb.architectures.where("projectId").equals(projectId).first();
+    const powerCenterNames = (architecture?.powerCenters ?? []).map((c) => c.name.trim()).filter(Boolean);
+    const factionNames = (architecture?.ideologicalFactions ?? []).map((f) => f.name?.trim() ?? "").filter(Boolean);
+
+    const entityCapacityLines = `当前阶段须生成全部 ${capacity.minEntities} 个 entities（不允许省略任何 kind）：\n- kind="organization"（powerCenter 组织）至少 ${capacity.minOrganizations} 个${powerCenterNames.length ? `（架构已建模：${powerCenterNames.join("、")}）` : ""}\n- kind="faction"（ideologicalFaction 派系）至少 ${capacity.minFactions} 个${factionNames.length ? `（架构已建模：${factionNames.join("、")}）` : ""}\n- kind="location"（关键地点）至少 ${capacity.minLocations} 个\n- kind="item"（关键文物）至少 ${capacity.minItems} 个\n- kind="character"（角色）至少 ${capacity.minCharacters} 个`;
+
+    const entitySectionContext = `${sectionContextBlock}\n# 阶段 1：entities 生成（两阶段拆分）\n本次为两阶段拆分生成的阶段 1，只生成 entities，不生成 relations。relations 将在阶段 2 基于本阶段生成的 entities 生成。\n\n# entities 字段深度要求（HARD constraint，校验层强制）\n${entityCapacityLines}\n- 所有实体必须以 operation="create" 生成，不得以"已存在"为由跳过或改为 update。\n- powerCenter 实体（kind="organization"）的 attributes 必须保留架构中的 5 个战略字段：interest（核心利益）/resources（资源）/actionCapacity（行动能力）/bottomLine（底线）/relationshipDynamics（关系动态），不得简化为 1-2 个字段。这些字段已存在于架构 powerCenters 中，应原样保留到 entities.attributes。\n- character 实体（kind="character"）的 character 嵌套字段必须含 11 字段：role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state（schema 已 required）。其中 desire（欲望）/motivation（动机）/weakness（弱点）/secret（秘密）/arc（弧线）必须是非空字符串（≥5 字符），与 foundation-craft-guidance 硬约束"人物需形成可持续的欲望、恐惧、错误信念、需求、边界和代价"一致。这些字段是后续章节角色行为动机的锚点，缺失会导致角色扁平化。state 字段含 location/physical/emotional/objective/inventory 5 子字段。\n- lockedFacts 深度要求：organization≥2 条、character≥2 条、其他 kind≥1 条。lockedFacts 是后续章节不可推翻的设定锚点，不得只填 1 条应付（如 character 应含"身份归属"+"特殊能力/秘密"两条，organization 应含"核心成员归属"+"关键资源/档案"两条）。\n- significance 必须非空且 ≥30 字符，说明实体对全局叙事的不可替代作用（如"青篆门是灵气调试体系诞生的源头场域，其祖师残卷记载的本源意识实验是后续 5 幕演化的重要伏笔，删除后主线失去起源锚点"）。significance 是 story-bible 字段契约的核心字段，缺失会被校验层拒绝。\n- faction 实体（kind="faction"）的 attributes 应含 position（立场）/affectedCenterIds（影响中心 id 列表，引用架构 powerCenters 的 id 而非名称）。\n- location/item 实体的 description 应含具体细节（地理位置/外观/功能/历史），不得只是一句话。\n- 每个 entity 必须提供 tempId，供阶段 2 relations 引用。\n`;
+
+    // 阶段 1 不注入已有对象（避免 LLM 误判已存在）
+    const entityInventory = "本次为全量重生成，不参考已有对象索引。所有实体必须 create 新建，不得 update 已有记录。";
+    const entityAvailableRefs = "本次为全量重生成，无已有对象可引用。每个 entity 必须提供 tempId，供阶段 2 relations 引用。";
+    const acceptedRefs = await acceptedProjectReferences(projectId);
+    const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
+
+    const entityPrompt = `# 任务\n${instruction}\n\n# 阶段 1：entities 生成\n本次为两阶段拆分生成的阶段 1，只生成 entities（不生成 relations）。relations 将在阶段 2 基于本阶段生成的 entities 生成。\n${entitySectionContext}\n# 允许生成的资料表\nentities\n\n${buildPayloadContract(["entities"])}\n\n# 现有对象索引\n${entityInventory}\n\n# 可引用对象索引\n${entityAvailableRefs}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出格式\n必须输出 JSON 对象，外层结构固定为：\n{"summary": "<本次候选整体概览，一句话>", "items": [{"label": "<候选项名>", "operation": "create", "targetTable": "entities", "payload": {<entities 表字段>}, "rationale": "<理由>", "tempId": "<临时 ID，供阶段 2 relations 引用>"}]}\n- summary：本次候选整体概览，禁止描述修复过程或 Schema 约束\n- items[]：候选项数组，每个 item 的 payload 承载 entities 表字段\n- 严禁把表字段直接写到 root，必须包装在 items[].payload 中\n- targetTable 必须是 entities\n- 每个 entity 必须提供 tempId（如 temp_entity_chenmo、temp_entity_qingzhumen），供阶段 2 relations 的 fromEntityId/toEntityId 引用\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段只写故事内容本身，禁止出现"候选""待审核"等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+
+    let entityResult: Awaited<ReturnType<typeof callStructuredNovelModel<Record<string, unknown>>>> | undefined;
+    let entityItems: ProposalItem[] = [];
+    // 阶段 1 校验函数：校验 entities 总数、kind 分布、字段深度
+    // attempt 32 修复：原校验只查总数，LLM 为满足总数压缩 kind 分布（4 organizations < 7）
+    // 与字段深度（lockedFacts 2/23、attributes 稀疏），导致 phase 2 relations 引用缺失的
+    // powerCenter tempId 被 repairUnresolvableTempRefs 丢弃（15→7 条 < minRelations=12）。
+    // 根因：minItems HARD constraint 驱动 LLM 优先满足总数，牺牲分布与深度。
+    // 修复：分 kind 校验分布 + 关键字段非空校验，未达标则重试。
+    // 通用规则：当 schema minItems 强制总数时，必须同步校验分布与深度，否则 LLM 会软截断次要维度。
+    const validatePhase1Entities = (items: ProposalItem[]): string | null => {
+      const entities = items.filter((i) => i.targetTable === "entities");
+      if (entities.length < capacity.minEntities) {
+        return `阶段 1 entities 只有 ${entities.length} 个，要求至少 ${capacity.minEntities} 个。须从零生成全部 ${capacity.minEntities} 个实体，不得以"已存在"为由跳过。kind 分布：organization≥${capacity.minOrganizations}、faction≥${capacity.minFactions}、location≥${capacity.minLocations}、item≥${capacity.minItems}、character≥${capacity.minCharacters}。`;
+      }
+      // kind 分布校验：防止 LLM 用 term/ability/rule 等次要 kind 填充总数
+      const byKind: Record<string, number> = {};
+      for (const e of entities) {
+        const kind = String((e.payload as Record<string, unknown> | undefined)?.kind ?? "");
+        if (kind) byKind[kind] = (byKind[kind] ?? 0) + 1;
+      }
+      const kindGaps: string[] = [];
+      if ((byKind.organization ?? 0) < capacity.minOrganizations) kindGaps.push(`organization=${byKind.organization ?? 0}/${capacity.minOrganizations}（powerCenter 组织，必须覆盖架构全部 7 个：青篆门/大衍天机阁/玄衡宗/江湖自由盟/灵脉商会/隐元古院/守源者）`);
+      if ((byKind.faction ?? 0) < capacity.minFactions) kindGaps.push(`faction=${byKind.faction ?? 0}/${capacity.minFactions}`);
+      if ((byKind.location ?? 0) < capacity.minLocations) kindGaps.push(`location=${byKind.location ?? 0}/${capacity.minLocations}`);
+      if ((byKind.item ?? 0) < capacity.minItems) kindGaps.push(`item=${byKind.item ?? 0}/${capacity.minItems}`);
+      if ((byKind.character ?? 0) < capacity.minCharacters) kindGaps.push(`character=${byKind.character ?? 0}/${capacity.minCharacters}`);
+      if (kindGaps.length) {
+        return `kind 分布不足：${kindGaps.join("；")}。当前 ${entities.length} 个实体中次要 kind（term/ability/rule 等）过多，须补齐缺失的主要 kind 实体，不得用次要 kind 凑数。`;
+      }
+      // 字段深度校验：lockedFacts 深度 + organization.attributes 5 战略字段 + character.attributes 5 心理字段 + significance 非空
+      // attempt 35 修复：原校验只要求 lockedFacts >=1，LLM 满足最低要求即停（organization 1-2 条、character 1 条）；
+      // character.attributes 完全未校验，LLM 全部留空 {}; significance 全部留空。根因同 attempt 32：
+      // LLM 在 strict-mode 下把 schema required 视为 HARD，把无校验的字段视为可省略。修复：分 kind 校验字段深度契约。
+      // 通用规则：校验层只覆盖数量+分布+引用完整性是不够的，必须覆盖字段深度+内容契约，
+      // 否则 LLM 会对无校验字段选择性省略或最小化填充（"形式合规但内容违规"）。
+      const MIN_LOCKED_FACTS_BY_KIND: Record<string, number> = { organization: 2, character: 2, faction: 1, location: 1, item: 1 };
+      const shallowLocked = entities.filter((e) => {
+        const p = e.payload as Record<string, unknown> | undefined;
+        const lf = p?.lockedFacts;
+        if (!Array.isArray(lf)) return true;
+        const min = MIN_LOCKED_FACTS_BY_KIND[String(p?.kind ?? "")] ?? 1;
+        return lf.length < min;
+      });
+      if (shallowLocked.length > 0) {
+        const minOrg = MIN_LOCKED_FACTS_BY_KIND.organization;
+        const minChar = MIN_LOCKED_FACTS_BY_KIND.character;
+        return `${shallowLocked.length} 个 entities 的 lockedFacts 深度不足。要求：organization≥${minOrg} 条、character≥${minChar} 条、其他 kind≥1 条。lockedFacts 是后续章节不可推翻的设定锚点（如"陈墨外门弟子身份归属"+"陈墨拥有调试灵气回路能力"，"青篆山深处保存旧时代阵图"+"祖师残卷第7页记载灵气本源意识实验"）。缺失实体：${shallowLocked.slice(0, 5).map((e) => { const p = e.payload as Record<string, unknown> | undefined; const lf = Array.isArray(p?.lockedFacts) ? (p!.lockedFacts as unknown[]).length : 0; return `${p?.name ?? e.label}(${lf}条)`; }).join("、")}${shallowLocked.length > 5 ? " 等" : ""}。`;
+      }
+      const orgsWithoutAttrs = entities.filter((e) => {
+        const p = e.payload as Record<string, unknown> | undefined;
+        if (p?.kind !== "organization") return false;
+        const attrs = p.attributes;
+        if (!attrs || typeof attrs !== "object" || Array.isArray(attrs)) return true;
+        return Object.keys(attrs as Record<string, unknown>).length < 5;
+      });
+      if (orgsWithoutAttrs.length > 0) {
+        return `${orgsWithoutAttrs.length} 个 organization 实体的 attributes 不足 5 字段。powerCenter 组织必须保留架构中的 5 个战略字段：interest（核心利益）/resources（资源）/actionCapacity（行动能力）/bottomLine（底线）/relationshipDynamics（关系动态）。缺失实体：${orgsWithoutAttrs.map((e) => String((e.payload as Record<string, unknown> | undefined)?.name ?? e.label)).join("、")}。`;
+      }
+      // character.character 嵌套字段深度校验：characterSchema 已 required 11 字段（role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state）
+      // 但 LLM 可能填空字符串应付 required。校验关键心理字段非空（desire/motivation/weakness/secret/arc），
+      // 与 foundation-craft-guidance 硬约束"人物需形成可持续的欲望、恐惧、错误信念、需求、边界和代价"一致。
+      // 之前错误校验 character.attributes 5 心理字段是错的——characterSchema 用 character 嵌套字段而非 attributes。
+      const REQUIRED_CHARACTER_FIELDS = ["desire", "motivation", "weakness", "secret", "arc"] as const;
+      const shallowChars = entities.filter((e) => {
+        const p = e.payload as Record<string, unknown> | undefined;
+        if (p?.kind !== "character") return false;
+        const ch = p.character;
+        if (!ch || typeof ch !== "object" || Array.isArray(ch)) return true;
+        const c = ch as Record<string, unknown>;
+        return REQUIRED_CHARACTER_FIELDS.some((k) => typeof c[k] !== "string" || (c[k] as string).trim().length < 5);
+      });
+      if (shallowChars.length > 0) {
+        return `${shallowChars.length} 个 character 实体的 character 嵌套字段深度不足。character.character 必须含 ${REQUIRED_CHARACTER_FIELDS.join("/")}（欲望/动机/弱点/秘密/弧线）非空字符串（≥5 字符），与 foundation-craft-guidance 硬约束"人物需形成可持续的欲望、恐惧、错误信念、需求、边界和代价"一致。这些字段是后续章节角色行为动机的锚点，缺失会导致角色扁平化。缺失实体：${shallowChars.map((e) => { const p = e.payload as Record<string, unknown> | undefined; const ch = p?.character as Record<string, unknown> | undefined; const missing = REQUIRED_CHARACTER_FIELDS.filter((k) => typeof ch?.[k] !== "string" || (ch[k] as string).trim().length < 5); return `${p?.name ?? e.label}(缺${missing.join("/")})`; }).join("、")}。`;
+      }
+      // significance 非空校验：story-bible 字段契约要求说明实体对全局叙事的不可替代作用
+      // attempt 36 调优：原门槛 30 字符导致 LLM 为满足 significance 深度消耗过多 token，牺牲 kind 分布
+      // （organization 6/7、faction 0/3）。根因：新增 required 字段后 LLM token 预算重新分配，
+      // 在 minItems=22 + significance≥30 + character 11 字段 + organization.attributes 5 字段叠加约束下，
+      // LLM 选择性牺牲 kind 分布。修复：降低 significance 门槛到 20 字符，给 LLM 更多 token 预算给 kind 分布。
+      // 通用规则：新增 required 字段后必须监控其他维度退化，若退化超过阈值需降低新字段内容深度要求或增加 maxTokens。
+      const emptySignificance = entities.filter((e) => {
+        const p = e.payload as Record<string, unknown> | undefined;
+        const sig = p?.significance;
+        return typeof sig !== "string" || sig.trim().length < 20;
+      });
+      if (emptySignificance.length > 0) {
+        return `${emptySignificance.length} 个 entities 的 significance 为空或不足 20 字符。significance 必须说明实体对全局叙事的不可替代作用（如"青篆门是灵气调试体系诞生的源头场域，删除后主线失去起源锚点"）。缺失实体：${emptySignificance.slice(0, 5).map((e) => String((e.payload as Record<string, unknown> | undefined)?.name ?? e.label)).join("、")}${emptySignificance.length > 5 ? " 等" : ""}。`;
+      }
+      return null;
+    };
+    for (let countAttempt = 0; ; countAttempt += 1) {
+      const retryReason = entityItems.length ? validatePhase1Entities(entityItems) : null;
+      const currentInstruction = countAttempt === 0
+        ? entityPrompt
+        : `${entityPrompt}\n\n【重要 - 需要修正】${retryReason!}`;
+      entityResult = await callStructuredNovelModel<Record<string, unknown>>({
+        model: project.settings.textModel,
+        temperature: 0.55,
+        role: task.role,
+        skillPrompt,
+        // 阶段 1 schema：entities only, minItems=minEntities（HARD constraint 驱动 LLM 生成足够数量）
+        schema: proposalSchema(["entities"], undefined, undefined, capacity.minEntities),
+        prompt: currentInstruction,
+        signal,
+        timeoutMs: 300_000,
+        // 不限制 maxTokens：让模型用默认值（通常是模型支持的最大输出）。
+        // 之前 16384/24576 限制导致 LLM 在 minItems=22 + significance required + character 11 字段
+        // 叠加约束下 token 预算不足，选择性牺牲 kind 分布。移除限制让 LLM 充分输出。
+      });
+      entityItems = parseProposalItems(entityResult.data);
+      const nextRetry = validatePhase1Entities(entityItems);
+      if (!nextRetry || countAttempt >= MIN_ITEM_RETRY_MAX) break;
+      agent.steps[0].output = `阶段 1 attempt ${countAttempt + 1}: ${nextRetry.slice(0, 100)}，将重试`;
+    }
+    const entityFinalRetry = validatePhase1Entities(entityItems);
+    if (entityFinalRetry) throw new Error(`阶段 1 entities 生成连续 ${MIN_ITEM_RETRY_MAX + 1} 次未满足结构约束：${entityFinalRetry}`);
+    if (!entityItems.length) throw new Error("阶段 1 entities 生成未返回任何候选项");
+
+    // ==================== 阶段 2：relations 生成 ====================
+    // 构建阶段 2 的 availableReferences：注入阶段 1 生成的 entities（真实数据）
+    const phase1Entities = entityItems.map((item) => ({
+      tempId: item.tempId ?? "",
+      name: String(item.payload.name ?? item.label ?? ""),
+      kind: String(item.payload.kind ?? ""),
+    })).filter((e) => e.tempId && e.name);
+
+    const relationsAvailableRefs = [
+      "阶段 1 已生成的 entities（relations 的 fromEntityId/toEntityId 必须使用 ref:tempId 引用上述 tempId）：",
+      ...phase1Entities.map((e) => `- ref:${e.tempId} | ${e.kind} | ${e.name}`),
+    ].join("\n");
+
+    // 阶段 2 payloadContract：强制 relations 体现 feedbackLoops/growthCurves 因果链
+    const feedbackLoopNames = (architecture?.feedbackLoops ?? []).map((loop) => `${loop.name}（affectedCenters: ${loop.affectedCenters.join("、")}）`).filter(Boolean);
+    const growthCurveSubjects = (architecture?.growthCurves ?? []).map((curve) => `${curve.kind}/${curve.subject}（irreversibleChange: ${curve.irreversibleChange}）`).filter(Boolean);
+
+    const relationSectionContext = `${sectionContextBlock}\n# 阶段 2：relations 生成（两阶段拆分）\n本次为两阶段拆分生成的阶段 2，基于阶段 1 已生成的 ${entityItems.length} 个 entities 生成 relations。不生成 entities。\n\n# relations 字段深度要求\n- 当前阶段须生成至少 ${capacity.minRelations} 条 relations，覆盖：\n  - powerCenter 间合作/冲突/依赖/归属（至少 ${Math.ceil(capacity.minRelations * 0.5)} 条）\n  - ideologicalFaction 与 powerCenter 的 ideological_alignment 归属（至少 ${Math.ceil(capacity.minFactions * 2)} 条）\n  - 角色与组织归属（至少 ${capacity.minCharacters} 条）\n  - feedbackLoops/growthCurves 因果链（至少 2 条）\n- 每条 relation 必须含 fromEntityId/toEntityId/relationType/publicLabel/privateTruth/bond 全部 6 字段。\n- fromEntityId/toEntityId 必须使用 ref:tempId 引用阶段 1 生成的 entity tempId（见可引用对象索引），不得引用名称或自发明 ID。\n- publicLabel 是表面关系，privateTruth 是隐藏真相，bond 是关系纽带——三者必须有区分度，不得雷同。\n- relations 必须体现架构 feedbackLoops 的传导链：${feedbackLoopNames.length ? feedbackLoopNames.join("；") : "（架构无 feedbackLoops）"}\n- relations 必须体现架构 growthCurves 的推进目标：${growthCurveSubjects.length ? growthCurveSubjects.join("；") : "（架构无 growthCurves）"}\n`;
+
+    const relationPrompt = `# 任务\n${instruction}\n\n# 阶段 2：relations 生成\n本次为两阶段拆分生成的阶段 2，基于阶段 1 已生成的 ${entityItems.length} 个 entities 生成 relations。不生成 entities。\n${relationSectionContext}\n# 允许生成的资料表\nrelations\n\n${buildPayloadContract(["relations"])}\n\n# 现有对象索引\n本次为 relations 全量生成，不参考已有 relations。\n\n# 可引用对象索引\n${relationsAvailableRefs}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出格式\n必须输出 JSON 对象，外层结构固定为：\n{"summary": "<本次候选整体概览，一句话>", "items": [{"label": "<关系名>", "operation": "create", "targetTable": "relations", "payload": {<relations 表字段>}, "rationale": "<理由>"}]}\n- summary：本次候选整体概览，禁止描述修复过程或 Schema 约束\n- items[]：候选项数组，每个 item 的 payload 承载 relations 表字段\n- 严禁把表字段直接写到 root，必须包装在 items[].payload 中\n- targetTable 必须是 relations\n- fromEntityId/toEntityId 必须使用 ref:tempId 引用阶段 1 的 entity tempId\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段只写故事内容本身，禁止出现"候选""待审核"等审批元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+
+    let relationResult: Awaited<ReturnType<typeof callStructuredNovelModel<Record<string, unknown>>>> | undefined;
+    let relationItems: ProposalItem[] = [];
+    // 阶段 2 校验函数：校验 relations 数量 + tempId 引用完整性
+    // attempt 32 修复：原校验只查数量，LLM 用 phase 1 不存在的 tempId（如缺失的 powerCenter）
+    // 生成 15 条 relations，repairUnresolvableTempRefs 丢弃 8 条无效引用后只剩 7 条 < minRelations=12。
+    // 根因：LLM 在 schema minItems 强制下会"发明"tempId 凑数，而非回头补齐 phase 1 缺失的 entity。
+    // 修复：校验 fromEntityId/toEntityId 必须引用 phase 1 实际生成的 tempId，未达标则重试。
+    // 通用规则：跨阶段引用必须显式校验，不能依赖后处理 repair 静默丢弃——丢弃会绕过 minItems 约束。
+    const phase1TempIdSet = new Set(phase1Entities.map((e) => e.tempId));
+    const validatePhase2Relations = (items: ProposalItem[]): string | null => {
+      const relations = items.filter((i) => i.targetTable === "relations");
+      if (relations.length < capacity.minRelations) {
+        return `阶段 2 relations 只有 ${relations.length} 条，要求至少 ${capacity.minRelations} 条。须从零生成全部 ${capacity.minRelations} 条关系，覆盖 powerCenter 间合作/冲突/依赖、faction-center 归属、角色-组织归属、feedbackLoops 因果链。每条 relation 含 fromEntityId/toEntityId/relationType/publicLabel/privateTruth/bond，fromEntityId/toEntityId 使用 ref:tempId 引用阶段 1 的 entity tempId。`;
+      }
+      // tempId 引用完整性校验：fromEntityId/toEntityId 必须引用 phase 1 实际生成的 tempId
+      const badRefs = relations.filter((r) => {
+        const p = r.payload as Record<string, unknown> | undefined;
+        const from = String(p?.fromEntityId ?? "").replace(/^ref:/, "");
+        const to = String(p?.toEntityId ?? "").replace(/^ref:/, "");
+        return !phase1TempIdSet.has(from) || !phase1TempIdSet.has(to);
+      });
+      if (badRefs.length > 0) {
+        const examples = badRefs.slice(0, 3).map((r) => {
+          const p = r.payload as Record<string, unknown> | undefined;
+          return `${p?.fromEntityId ?? "?"} → ${p?.toEntityId ?? "?"}`;
+        }).join("、");
+        return `${badRefs.length} 条 relations 引用了阶段 1 不存在的 tempId（示例：${examples}）。fromEntityId/toEntityId 必须使用 ref:tempId 引用阶段 1 实际生成的 ${phase1TempIdSet.size} 个 tempId 之一：${[...phase1TempIdSet].join("、")}。不得发明新 tempId，不得引用名称或自建 ID。若需引用尚未生成的实体，说明阶段 1 entities 缺失，应返回阶段 1 补齐而非在阶段 2 凑数。`;
+      }
+      return null;
+    };
+    for (let countAttempt = 0; ; countAttempt += 1) {
+      const retryReason = relationItems.length ? validatePhase2Relations(relationItems) : null;
+      const currentInstruction = countAttempt === 0
+        ? relationPrompt
+        : `${relationPrompt}\n\n【重要 - 需要修正】${retryReason!}`;
+      relationResult = await callStructuredNovelModel<Record<string, unknown>>({
+        model: project.settings.textModel,
+        temperature: 0.55,
+        role: task.role,
+        skillPrompt,
+        // 阶段 2 schema：relations only, minItems=minRelations
+        schema: proposalSchema(["relations"], undefined, undefined, capacity.minRelations),
+        prompt: currentInstruction,
+        signal,
+        timeoutMs: 300_000,
+        maxTokens: 16384,
+      });
+      relationItems = parseProposalItems(relationResult.data);
+      const nextRetry = validatePhase2Relations(relationItems);
+      if (!nextRetry || countAttempt >= MIN_ITEM_RETRY_MAX) break;
+      agent.steps[0].output = `阶段 2 attempt ${countAttempt + 1}: ${nextRetry.slice(0, 100)}，将重试`;
+    }
+    const relationFinalRetry = validatePhase2Relations(relationItems);
+    if (relationFinalRetry) throw new Error(`阶段 2 relations 生成连续 ${MIN_ITEM_RETRY_MAX + 1} 次未满足结构约束：${relationFinalRetry}`);
+
+    // ==================== 合并两阶段 items ====================
+    const allItems = [...entityItems, ...relationItems];
+    if (!allItems.length) throw new Error("两阶段生成未返回任何候选项");
+
+    // 引用完整性修复（复用 runGenerationTask 的后处理逻辑）
+    {
+      const [catalog, nameMap, entityNameMap] = await Promise.all([
+        projectReferenceCatalog(projectId),
+        projectCharacterNameToIdMap(projectId),
+        projectEntityNameToIdMap(projectId),
+      ]);
+      repairProposalCharacterReferences(allItems, catalog, nameMap);
+      repairTimelineAndOutlineNodeReferences(allItems, catalog);
+      repairUnresolvableTempRefs(allItems, acceptedRefs, entityNameMap);
+      for (const item of allItems) {
+        if (item.operation === "create" && item.after) item.payload = structuredClone(item.after);
+      }
+      assertProposalReferences(allItems, catalog, acceptedRefs);
+    }
+    await attachExpectedRevisions(allItems);
+
+    const summary = `两阶段生成：阶段 1 产出 ${entityItems.length} 个 entities，阶段 2 产出 ${relationItems.length} 条 relations。`;
+    const proposal: AIProposal = {
+      ...recordBase(projectId),
+      title: task.label,
+      operation: `structured:${task.key}`,
+      taskKey: task.key,
+      scope: task.scope,
+      targetId: undefined,
+      status: "pending",
+      previewMarkdown: proposalMarkdown(task.label, summary, allItems),
+      patches: [],
+      items: allItems,
+      contextPacketId: packet.id,
+      agentRunId: agent.id,
+      model: project.settings.textModel,
+    };
+    agent.status = "completed";
+    agent.finishedAt = Date.now();
+    agent.promptHash = relationResult?.promptHash;
+    agent.usage = relationResult?.usage;
+    agent.steps[0].status = "completed";
+    agent.steps[0].output = `两阶段生成完成：${entityItems.length} entities + ${relationItems.length} relations = ${allItems.length} items`;
+    await novelDb.transaction("rw", novelDb.proposals, novelDb.agentRuns, async () => {
+      await novelDb.proposals.add(proposal);
+      await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
+    });
+    return { proposal, packet, agent };
+  } catch (error) {
+    agent.status = "failed";
+    agent.finishedAt = Date.now();
+    agent.steps[0].status = "failed";
+    agent.steps[0].error = error instanceof Error ? error.message : "两阶段生成失败";
+    await novelDb.agentRuns.put({ ...agent, revision: agent.revision + 1, updatedAt: Date.now() });
+    throw error;
+  }
 }
 
 export async function runGenerationTask(params: {
@@ -1420,20 +1973,38 @@ export async function runGenerationTask(params: {
   if (!project) throw new Error("项目不存在");
   const skills = await resolveNovelSkills({ projectId: params.projectId, stage: task.skillStage });
   if (skills.conflicts.length) throw new Error(`Skill 冲突：${skills.conflicts.map((item) => `${item.skillId} ↔ ${item.conflictsWith}`).join("；")}`);
-  // P1-1: instruction 过长时分段，避免上游 API HTTP 500。
-  // 核心指令保留在 instruction，详细审核意见移入 contextPacket 的 review-feedback source。
-  const { core: coreInstruction, detail: reviewFeedbackDetail } = splitInstruction(params.instruction);
   const packet = await compileNovelContext({
     projectId: params.projectId,
     task: params.taskKey,
-    instruction: coreInstruction,
+    instruction: params.instruction,
     targetDocumentId: params.targetId,
     stage: task.skillStage,
     resolvedSkills: skills.skills,
-    reviewFeedback: reviewFeedbackDetail,
   });
-  const inventory = await existingInventory(params.projectId, task.allowedTables);
-  const availableReferences = await referenceInventory(params.projectId);
+  // novel-arch-review 修复：story-bible 任务跳过已有 entities/relations 的 inventory 注入。
+  // 根因：existingInventory 列出 allowedTables 中所有已有记录（id+name），LLM 看到 18 个已有 entities 后
+  // 误判"实体已存在，只需 create 缺失的几个"，导致只生成 5 个而非 22+ 个。story-bible 是 plan kind，
+  // 语义是全量重生成，不应让 LLM 看到已有对象索引。其他任务（characters/relations/worldview 等）仍需
+  // inventory 以避免重复创建，仅 story-bible 特殊处理（因为它要求 22+ entities 的大规模生成）。
+  // 判定信号：story-bible 任务 + inventory 含 18 个已有 entities + LLM 只 create 5 个 → 误判已有。
+  const inventory = params.taskKey === "story-bible"
+    ? "本次为全量重生成，不参考已有对象索引。所有实体和关系必须 create 新建，不得 update 已有记录。"
+    : await existingInventory(params.projectId, task.allowedTables);
+  // novel-arch-review 修复（续）：story-bible 任务的 `# 可引用对象索引` 段也需精简。
+  // 根因：referenceInventory 列出全部已有 entities（含 8 个 character + 10 个 organization/location/item），
+  // LLM 看到后误判"实体已存在基线"，主动跳过 create，只补 1 个 powerCenter。
+  // 修复：story-bible 任务只列出已冻结角色 ID（供 relations.fromEntityId/toEntityId 引用），
+  // 明确标注"角色实体本身仍须 create"，并移除 organization/location/item 等目标实体类型。
+  // 判定信号：story-bible + availableReferences 含 18 个已有 entities + LLM 只 create 1 个 → 误判已存在。
+  //
+  // attempt 31 重构：story-bible 百万字长篇改为两阶段拆分生成（entities + relations），
+  // availableReferences 在两阶段路径中由 runStoryBibleTwoPhase 内部动态构建：
+  // - 阶段 1（entities）：不注入已有对象（避免误判）
+  // - 阶段 2（relations）：注入阶段 1 生成的 entities（真实数据，供 fromEntityId/toEntityId 引用）
+  // 此处仅构建非 story-bible 任务的 availableReferences。
+  const availableReferences = params.taskKey === "story-bible"
+    ? await storyBibleReferenceInventory(params.projectId)
+    : await referenceInventory(params.projectId);
   const acceptedRefs = await acceptedProjectReferences(params.projectId);
   const referenceAliases = [...acceptedRefs.entries()].map(([alias, id]) => `ref:${alias} -> ${id}`).join("\n") || "暂无已采纳临时引用。";
 
@@ -1485,6 +2056,76 @@ export async function runGenerationTask(params: {
   if (params.taskKey === "foreshadowing") {
     sectionContextBlock += `\n# 伏笔与规划关联\n- 每条伏笔的 seededNodeId 应引用"可引用对象索引"中埋设伏笔的剧情段真实 ID。\n- targetNodeId 应引用伏笔回收的剧情段真实 ID。\n- 如回收剧情段尚未规划，targetNodeId 可留空。\n`;
   }
+  if (params.taskKey === "story-bible") {
+    const capacity = storyBibleSystemCapacity(project.targetWords);
+    const architecture = await novelDb.architectures.where("projectId").equals(params.projectId).first();
+    const powerCenterNames = (architecture?.powerCenters ?? []).map((c) => c.name.trim()).filter(Boolean);
+    const factionNames = (architecture?.ideologicalFactions ?? []).map((f) => f.name?.trim() ?? "").filter(Boolean);
+    const capacityLines = enforceMillionWordStructure
+      ? `当前体量至少需要 ${capacity.minEntities} 个 entities + ${capacity.minRelations} 条 relations：\n- kind="organization" 的 powerCenter 实体至少 ${capacity.minOrganizations} 个${powerCenterNames.length ? `（架构已建模：${powerCenterNames.join("、")}）` : ""}\n- kind="faction" 的 ideologicalFaction 实体至少 ${capacity.minFactions} 个${factionNames.length ? `（架构已建模：${factionNames.join("、")}）` : ""}\n- kind="location" 的关键地点实体至少 ${capacity.minLocations} 个\n- kind="item" 的关键文物实体至少 ${capacity.minItems} 个\n- kind="character" 的角色实体至少 ${capacity.minCharacters} 个（必须 create，不得因已存在跳过——已冻结角色 ID 仅供 relations 引用，实体本身仍须作为 create item 纳入）\n- relations 至少 ${capacity.minRelations} 条，覆盖 powerCenter 间合作/冲突/依赖、faction-center 归属、角色-组织归属、feedbackLoops 因果链`
+      : `当前体量需要 ${capacity.minEntities} 个 entities + ${capacity.minRelations} 条 relations，按真实叙事需要生成。`;
+    sectionContextBlock += `\n# 故事圣经覆盖合同\n${capacityLines}\n- 所有实体（含已冻结角色对应的 character 实体）必须以 operation="create" 生成，不得以"已存在"为由跳过或改为 update。已有实体 ID 仅供 relations.fromEntityId/toEntityId 引用，entities 部分必须从零 create。\n- 不得只生成 entities 而省略 relations——relations 是长期博弈结构的载体，需体现架构 relationshipDynamics、feedbackLoops 传导链与 growthCurves 推进目标。\n- powerCenter 实体的 attributes 应保留架构中的 5 个战略字段：interest/resources/actionCapacity/bottomLine/relationshipDynamics，不得简化为 1-2 个字段。\n- 已冻结角色必须作为 kind="character" 实体 create 纳入，保留 lockedFacts 与 character 字段（role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state）。\n- ideologicalFaction 实体需通过 relations 建立与 powerCenter 的 ideological_alignment 归属关系，体现架构 affectedCenterIds 跨中心影响。\n`;
+
+    // novel-arch-review 修复（attempt 28+）：添加显式生成清单，利用 primacy effect 强化 LLM 对全部 kind 的注意力。
+    // 根因：即使覆盖合同明确列出 22 个 entities 的 kind 分布，LLM 仍只生成 character（attempt 27）或只生成 2-3 个实体（attempt 28）。
+    // LLM 注意力被"# 可引用对象索引"段（即使改为"全量重生成"提示）或重试指令中的"已有 X 个"措辞锚定，忽略完整生成清单。
+    // 修复：在 sectionContextBlock 末尾添加"# 必须生成的实体清单（按 kind 列出，逐项 create）"段，
+    // 明确列出每个 kind 的目标实体 name 提示，让 LLM 一开始就看到完整生成清单。
+    // 判定信号：story-bible + LLM 只生成 character 或只生成 2-3 个实体 → 注意力锚定，需显式清单覆盖。
+    if (enforceMillionWordStructure) {
+      const organizationList = powerCenterNames.length
+        ? powerCenterNames.map((name) => `  - kind="organization" | name="${name}"`).join("\n")
+        : `  - kind="organization" | name="<从架构 powerCenters 提取>"`.repeat(capacity.minOrganizations).trim();
+      const factionList = factionNames.length
+        ? factionNames.map((name) => `  - kind="faction" | name="${name}"`).join("\n")
+        : `  - kind="faction" | name="<从架构 ideologicalFactions 提取>"`.repeat(capacity.minFactions).trim();
+      const locationList = [
+        `  - kind="location" | name="青篆山"`,
+        `  - kind="location" | name="大衍天机阁"`,
+        `  - kind="location" | name="玄衡宗山门"`,
+        `  - kind="location" | name="隐元古院遗址"`,
+      ].slice(0, capacity.minLocations).join("\n");
+      const itemList = [
+        `  - kind="item" | name="祖师残卷"`,
+        `  - kind="item" | name="旧阵台"`,
+        `  - kind="item" | name="远古实验记录"`,
+      ].slice(0, capacity.minItems).join("\n");
+      const characterList = [
+        `  - kind="character" | name="陈墨"`,
+        `  - kind="character" | name="沈青璃"`,
+        `  - kind="character" | name="燕无尘"`,
+        `  - kind="character" | name="罗承渊"`,
+        `  - kind="character" | name="顾晚舟"`,
+      ].slice(0, capacity.minCharacters).join("\n");
+      sectionContextBlock += `\n# 必须生成的实体清单（按 kind 列出，逐项 create，不得省略）\n本轮 items 数组必须包含以下全部实体，每个实体作为独立 create item。这是 primacy 清单——LLM 必须首先按此清单生成，不得跳过任何 kind：\n## organization（${capacity.minOrganizations} 个）\n${organizationList}\n## faction（${capacity.minFactions} 个）\n${factionList}\n## location（${capacity.minLocations} 个）\n${locationList}\n## item（${capacity.minItems} 个）\n${itemList}\n## character（${capacity.minCharacters} 个）\n${characterList}\n上述 ${capacity.minEntities} 个实体必须全部出现在 items 数组中（operation="create"），此外还需 ${capacity.minRelations} 条 relations。不得只生成部分 kind，不得以"已存在"为由跳过任何实体。\n`;
+    }
+  }
+
+  // attempt 31 重构：story-bible 百万字长篇改为两阶段拆分生成。
+  // 根因：单次生成 schema minItems=34 强制 LLM 一次产出 22 entities + 12 relations，
+  // LLM 为满足 HARD constraint 牺牲每个 item 的内容深度（attributes 只填 1 字段、lockedFacts 空、
+  // relations 未体现 feedbackLoops 因果链）。两阶段拆分让每阶段 schema 简单、token 预算充足、
+  // LLM 可专注深化字段。参考 project_memory: schema required 是驱动 LLM 填充字段的唯一可靠机制，
+  // 但 minItems 过大会触发软截断副作用（与 iter21 phases 5→1 同机制）。
+  // 拆分策略：
+  // - 阶段 1（entities）：allowedTables=["entities"], minItems=minEntities, 强制 attributes 5 字段 required
+  // - 阶段 2（relations）：allowedTables=["relations"], minItems=minRelations, 注入阶段 1 entities 作为引用
+  // 判定信号：story-bible + 单次 minItems=34 + items 字段深度不足（attributes 缺失/lockedFacts 空）→ 软截断副作用。
+  //
+  // 注意：分流点必须在 enforceMillionWordStructure 定义之后（L1882），否则变量未定义。
+  // 当前分流点位于 sectionContextBlock 构建完成后，enforceMillionWordStructure 已定义。
+  if (params.taskKey === "story-bible" && enforceMillionWordStructure) {
+    return await runStoryBibleTwoPhase({
+      projectId: params.projectId,
+      project,
+      task,
+      skills: skills.skills,
+      packet,
+      instruction: effectiveInstruction,
+      sectionContextBlock,
+      signal: params.signal,
+    });
+  }
 
   const agent: AgentRun = { ...recordBase(params.projectId), goal: effectiveInstruction, status: "running", model: project.settings.textModel, promptVersion: "novel-structured-v4", contextPacketId: packet.id, role: task.role, skillRefs: skills.skills.map((item) => `${item.skillId}@${item.version}`), artifactRefs: [], attempt: 1, startedAt: Date.now(), steps: [{ id: crypto.randomUUID(), title: task.label, tool: "model.structured", status: "running" }] };
   await novelDb.agentRuns.add(agent);
@@ -1501,26 +2142,67 @@ export async function runGenerationTask(params: {
       const currentInstruction = countAttempt === 0
         ? effectiveInstruction
         : `${effectiveInstruction}\n\n【重要 - 需要修正】${retryReason!.message}`;
-      const basePrompt = `# 任务\n${currentInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${payloadContract}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段（title、summary、description、rationale 等）只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等审批元信息，这些状态由系统管理。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有角色、剧情线和伏笔时，只能复制“可引用对象索引”中的真实 ID，不得把名称、英文别名或规则名当成 ID；没有可用对象时对应数组必须为空。也可使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
+      const basePrompt = `# 任务\n${currentInstruction}\n${params.targetId ? `\n# 当前目标 ID\n${params.targetId}\n` : ""}${sectionContextBlock}\n# 允许生成的资料表\n${task.allowedTables.join("、")}\n\n${buildPayloadContract(task.allowedTables)}\n\n# 现有对象索引\n${inventory}\n\n# 可引用对象索引\n${availableReferences}\n\n# 已采纳引用别名\n${referenceAliases}\n\n# 输出格式\n必须输出 JSON 对象，外层结构固定为：\n{"summary": "<本次候选整体概览，一句话>", "items": [{"label": "<候选项名>", "operation": "create" | "update", "targetTable": "<表名>", "payload": {<表字段>}, "rationale": "<理由>", "targetId"?: "<更新目标 ID>", "tempId"?: "<临时 ID>", "dependencies"?: ["<依赖 tempId>"]}]}\n- summary：本次候选整体概览，禁止描述修复过程或 Schema 约束\n- items[]：候选项数组，每个 item 的 payload 承载具体表字段\n- 严禁把表字段（如 centralQuestion、powerCenters 等）直接写到 root，必须包装在 items[].payload 中\n- targetTable 必须是允许生成的资料表之一：${task.allowedTables.join("、")}\n\n# 输出要求\n本次生成的候选项由系统统一标记为待审核状态，你无需在内容里自行声明。payload 各字段（title、summary、description、rationale 等）只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等审批元信息，这些状态由系统管理。创建的对象如需互相引用，为每个对象提供 tempId，并使用 ref:tempId 引用。引用现有角色、剧情线和伏笔时，只能复制“可引用对象索引”中的真实 ID，不得把名称、英文别名或规则名当成 ID；没有可用对象时对应数组必须为空。也可使用上方已明确列出的 ref:别名；不得自行发明 ref: 标识。更新必须使用现有对象索引中的真实 targetId。\n\n# 冻结上下文\n${formatContextPacket(packet)}`;
       result = await callStructuredNovelModel<Record<string, unknown>>({
         model: project.settings.textModel,
         temperature: task.role === "writer" ? project.settings.temperature : 0.55,
         role: task.role,
         skillPrompt,
-        schema: proposalSchema(task.allowedTables, params.requiredPayloadFields, architectureSystemCapacity(project.targetWords)),
+        // novel-arch-review 修复（attempt 29+）：story-bible 任务传入 itemsMinCount 作为 schema HARD constraint。
+        // 根因：原 minItems=1 让 LLM 只生成 1-5 个 item 就通过 schema 校验，instruction 中的"至少 22 个"约束
+        // 在 strict-mode JSON schema 下被 LLM 忽略。参考 project_memory: schema required > system-prompt > payloadContract。
+        // 判定信号：story-bible + LLM 只生成 1-5 个 entities + instruction 明确要求 22 个 → schema minItems 缺失。
+        //
+        // attempt 31 重构：story-bible 改为两阶段拆分生成（entities 阶段 + relations 阶段），
+        // 单次生成路径不再用于 story-bible。两阶段路径在 runGenerationTask 入口处提前分流，
+        // 此处的 itemsMinCount 仅作为非 story-bible 任务的兜底（保持向后兼容）。
+        schema: proposalSchema(
+          task.allowedTables,
+          params.requiredPayloadFields,
+          architectureSystemCapacity(project.targetWords),
+        ),
         prompt: basePrompt,
         signal: params.signal,
         // Loop 7 修复 #11：角色生成需输出 5 个角色完整字段（appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state），180s 默认超时不足
-        timeoutMs: params.taskKey === "characters" ? 300_000 : undefined,
+        // Loop 2 novel-arch-review 修复：story-bible 生成 19+ entities + 10+ relations = 29+ items，
+        // 比 characters（5 项）更复杂，默认 180s 超时不足（attempt 4 因 30s 上游连接超时失败）。
+        timeoutMs: (params.taskKey === "characters" || params.taskKey === "story-bible") ? 300_000 : undefined,
         // Loop 20 修复：Layer 10 把 romanceProgress/techGeneration/originTruthLayer 提升为 schema required 后，
         // 每个 phase 的 token 成本显著上升（含 stages + 3 个结构化字段对象）。默认 maxTokens=8192 下 LLM
         // 为产出完整合法 JSON 会自我截断 phases 数组长度（iter21 退化到 1 phase）。
         // 通用规则：schema required 越多 → 单项 token 成本越高 → 固定预算下可容纳 item 数越少；
         // 需让 maxTokens 随结构丰富度缩放。architecture 是最复杂的结构化生成任务，提升到 16384。
         // TODO P2：可按 architectureSystemCapacity(project.targetWords) 动态计算 maxTokens，而非硬编码。
-        maxTokens: params.taskKey === "architecture" ? 16384 : undefined,
+        //
+        // novel-arch-review 请求体裁剪后修复：裁剪消除了反代 500（attempt 21 LLM 调用成功），
+        // 但 story-bible 百万字长篇要求 22 entities + 12 relations = 34 items，每个 entity 含
+        // kind/name/aliases/summary/description/tags/lockedFacts/attributes/character（角色还有
+        // role/appearance/personality/desire/motivation/weakness/secret/abilities/voice/arc/state），
+        // 单 item ~400-800 tokens，34 items ~13-16K tokens。默认 8192 远不够，LLM 软截断到 2 个 entity。
+        // 软截断判定：输出合法 JSON（schema 校验通过）+ items 数远低于 capacity.minEntities →
+        // 不是 LLM 选择少生成，而是 token 预算不足下主动关闭数组（与 iter21 phases 5→1 同机制）。
+        // 修复：story-bible 与 architecture 同等提升到 16384（两者都是百万字长篇结构化生成的最复杂任务）。
+        maxTokens: (params.taskKey === "architecture" || params.taskKey === "story-bible") ? 16384 : undefined,
       });
       items = parseProposalItems(result.data);
+      // 临时诊断：记录 story-bible LLM raw 输出，定位 entities 数量不足根因
+      // TODO P3：诊断完成后移除，避免在生产环境写入临时文件
+      if (params.taskKey === "story-bible") {
+        try {
+          const diagDir = join(process.env.LOCALAPPDATA || join(homedir(), ".local", "share"), "Ymcp", "diag");
+          mkdirSync(diagDir, { recursive: true });
+          const ts = Date.now();
+          const itemsCount = items.length;
+          const entitiesCount = items.filter((i) => i.targetTable === "entities").length;
+          const relationsCount = items.filter((i) => i.targetTable === "relations").length;
+          const rawStr = typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2);
+          const promptLen = basePrompt.length;
+          const diagContent = `=== story-bible diagnosis ${ts} ===\nattempt: ${countAttempt + 1}\nitemsCount: ${itemsCount}\nentitiesCount: ${entitiesCount}\nrelationsCount: ${relationsCount}\npromptLen: ${promptLen}\nmaxTokens: ${params.taskKey === "story-bible" ? 16384 : "default"}\n\n=== basePrompt (first 3000) ===\n${basePrompt.slice(0, 3000)}\n\n=== basePrompt (last 2000) ===\n${basePrompt.slice(-2000)}\n\n=== LLM raw output (length=${rawStr.length}) ===\n${rawStr.slice(0, 8000)}\n${rawStr.length > 16000 ? "\n...[middle truncated]...\n" + rawStr.slice(-4000) : ""}\n`;
+          writeFileSync(join(diagDir, `story-bible-${ts}.log`), diagContent, "utf8");
+        } catch {
+          // 诊断失败不阻塞主流程
+        }
+      }
       const nextRetryReason = getGenerationRetryReason(params.taskKey, items, minItems, project.targetWords);
       if (!nextRetryReason || countAttempt >= MIN_ITEM_RETRY_MAX) break;
       agent.steps[0].output = `attempt ${countAttempt + 1}: ${nextRetryReason.message.slice(0, 100)}，将重试`;
@@ -1720,7 +2402,7 @@ export async function runRefinementTask(params: {
       schema: refinementProposalSchema(task.allowedTables),
       // Loop 7 修复 #11：角色微调也可能涉及多角色完整字段重写
       timeoutMs: params.taskKey === "characters" ? 300_000 : undefined,
-      prompt: `# 微调任务\n${instruction}\n\n# 原始结构化数据\n${sourceJson}\n\n${payloadContract}\n\n# 可引用对象索引\n${availableReferences}\n\n# 输出要求\n只返回提示词实际要求发生变化的候选项，未提及的数据必须保持不变。update 和 delete 只能使用原始数据中存在的真实 targetId；create 必须提供 tempId。update 的 payload 只放需要变化的字段，系统会与原数据合并。角色、剧情线和伏笔引用只能使用索引中的真实 ID 或同一候选中的有效 ref:tempId，不得自行发明。delete 不要输出 payload。不得删除 projects 或 architectures。用户本次微调指令授权提出候选变更，但锁定内容仍不可更改。审批状态由系统统一管理，payload 各字段只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
+      prompt: `# 微调任务\n${instruction}\n\n# 原始结构化数据\n${sourceJson}\n\n${buildPayloadContract(task.allowedTables)}\n\n# 可引用对象索引\n${availableReferences}\n\n# 输出要求\n只返回提示词实际要求发生变化的候选项，未提及的数据必须保持不变。update 和 delete 只能使用原始数据中存在的真实 targetId；create 必须提供 tempId。update 的 payload 只放需要变化的字段，系统会与原数据合并。角色、剧情线和伏笔引用只能使用索引中的真实 ID 或同一候选中的有效 ref:tempId，不得自行发明。delete 不要输出 payload。不得删除 projects 或 architectures。用户本次微调指令授权提出候选变更，但锁定内容仍不可更改。审批状态由系统统一管理，payload 各字段只写故事内容本身，禁止出现“候选”“待审核”“待确认”“未批准”“仅供参考”等元信息。\n\n# 冻结上下文\n${formatContextPacket(packet)}`,
     });
     const rawItems = Array.isArray(result.data.items) ? result.data.items as Array<Record<string, unknown>> : [];
     const seenTargets = new Set<string>();
@@ -2056,6 +2738,8 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
   if (initialProposal.sourceFingerprint && options?.sourceFingerprint && initialProposal.sourceFingerprint !== options.sourceFingerprint) throw new Error("原数据已在微调后发生变化，请退回候选并重新微调");
   const initialSelected = initialProposal.items.filter((item) => selectedItemIds.includes(item.id) && (item.operation !== "update" || options?.selectedFields?.[item.id] === undefined || options.selectedFields[item.id].length > 0));
   if (!initialSelected.length) throw new Error("请至少选择一个候选项");
+  const validationProject = await novelDb.projects.get(initialProposal.projectId);
+  if (!validationProject) throw new Error("项目不存在");
   const appendPlotSegment = initialProposal.taskKey === "plot-design" && initialProposal.outlineGenerationMode === "plot-segment-append";
   if (appendPlotSegment) {
     if (initialSelected.length !== initialProposal.items.length) throw new Error("剧情设计必须整体采纳");
@@ -2115,9 +2799,13 @@ export async function applyProposalItems(proposalId: string, selectedItemIds: st
       const resolved = item.targetTable === "outlineNodes" ? sanitizeModelPayload("outlineNodes", rawResolved) : rawResolved;
       const acceptedFields = item.operation === "update" ? options?.selectedFields?.[item.id] : undefined;
       const filtered = acceptedFields ? Object.fromEntries(Object.entries(resolved).filter(([key]) => acceptedFields.includes(key))) : resolved;
-      const validate = item.operation === "create" ? CREATE_PAYLOAD_VALIDATORS[item.targetTable] : PAYLOAD_VALIDATORS[item.targetTable];
-      if (!validate(filtered)) throw new Error(`“${item.label}”字段无效：${validate.errors?.map((error) => `${error.instancePath || "root"} ${error.message}`).join("；")}`);
-      const payload = item.targetTable === "documents" ? normalizeDocumentPayload(filtered) : item.targetTable === "architectures" ? normalizeArchitecturePayload(filtered) : filtered;
+      // Loop 26: 在 schema 校验之前先规范化 payload，修复 LLM 输出的类型违规
+      // （framework/status enum、resources/transmission 字符串→数组、payoffWindow 缺失、stageGoals 数组→字符串）。
+      // 此前 normalizeArchitecturePayload 在 validate 之后调用，导致类型违规的候选无法通过 accept 校验。
+      const preNormalized = item.targetTable === "architectures" ? normalizeArchitecturePayload(filtered) : filtered;
+      const validate = payloadValidatorFor(item.targetTable, item.operation, validationProject.targetWords);
+      if (!validate(preNormalized)) throw new Error(`“${item.label}”字段无效：${validate.errors?.map((error) => `${error.instancePath || "root"} ${error.message}`).join("；")}`);
+      const payload = item.targetTable === "documents" ? normalizeDocumentPayload(preNormalized) : preNormalized;
       if (item.targetTable === "outlineNodes" && typeof payload.phaseId === "string") {
         const architecture = await novelDb.architectures.where("projectId").equals(proposal.projectId).first();
         if (!architecture?.phases.some((phase) => phase.id === payload.phaseId)) throw new Error(`“${item.label}”引用了不存在的幕`);
