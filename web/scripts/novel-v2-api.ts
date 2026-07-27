@@ -61,9 +61,9 @@ const server = createServer(async (request, response) => {
       const document = await repository.ensureDocument({ projectId, documentId: asString(input.documentId), title, narrativeOrder: asNumber(input.narrativeOrder), povCharacterId: asString(input.povCharacterId), status: asString(input.status) });
       return send(response, 201, { document });
     }
-    const recordMatch = request.url?.match(/^\/v2\/(preflight-plans|memory-bundles|skills|blueprints|artifacts)\/([^/]+)$/);
+    const recordMatch = request.url?.match(/^\/v2\/(preflight-plans|memory-bundles|skills|blueprints|artifacts|context-manifests|learning-assessments)\/([^/]+)$/);
     if (request.method === "GET" && recordMatch) {
-      const table = ({ "preflight-plans": "preflight_plans", "memory-bundles": "memory_bundles", skills: "skill_bundles", blueprints: "execution_blueprints", artifacts: "artifacts" } as const)[recordMatch[1] as "preflight-plans" | "memory-bundles" | "skills" | "blueprints" | "artifacts"];
+      const table = ({ "preflight-plans": "preflight_plans", "memory-bundles": "memory_bundles", skills: "skill_bundles", blueprints: "execution_blueprints", artifacts: "artifacts", "context-manifests": "context_manifests", "learning-assessments": "learning_assessments" } as const)[recordMatch[1] as "preflight-plans" | "memory-bundles" | "skills" | "blueprints" | "artifacts" | "context-manifests" | "learning-assessments"];
       return send(response, 200, { record: await repository.getRecord(table, decodeURIComponent(recordMatch[2])) });
     }
     const eventsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/events(?:\?after=(\d+))?$/);
@@ -87,8 +87,31 @@ const server = createServer(async (request, response) => {
       const result = await commitService.commit({ projectId: input.projectId, documentId: input.documentId, artifact: input.artifact as any, reviews: Array.isArray(input.reviews) ? input.reviews as any[] : [], baseRevision: input.baseRevision, idempotencyKey: input.idempotencyKey, text: typeof input.text === "string" ? input.text : "" });
       return send(response, 201, { result });
     }
+    const workflowTaskSignalMatch = request.url?.match(/^\/v2\/workflows\/([^/]+)\/tasks\/([^/]+)\/signal$/);
+    if (request.method === "POST" && workflowTaskSignalMatch) {
+      const input = await readJson(request);
+      const workflowId = decodeURIComponent(workflowTaskSignalMatch[1]);
+      const taskId = decodeURIComponent(workflowTaskSignalMatch[2]);
+      const signal = String(input.signal ?? "humanSignal");
+      const payload = { ...(typeof input.payload === "object" && input.payload ? input.payload as Record<string, unknown> : {}), taskId };
+      await repository.recordTaskSignal({ workflowId, taskId, signal, payload });
+      const handle = temporal.workflow.getHandle(workflowId);
+      await handle.signal(signal, payload);
+      return send(response, 202, { accepted: true, workflowId, taskId });
+    }
     const signalMatch = request.url?.match(/^\/v2\/tasks\/([^/]+)\/signal$/);
-    if (request.method === "POST" && signalMatch) { const input = await readJson(request); const handle = temporal.workflow.getHandle(decodeURIComponent(signalMatch[1])); await handle.signal(String(input.signal ?? "humanSignal"), input.payload); return send(response, 202, { accepted: true }); }
+    if (request.method === "POST" && signalMatch) {
+      const input = await readJson(request);
+      const taskId = decodeURIComponent(signalMatch[1]);
+      const workflowId = asString(input.workflowId);
+      if (!workflowId) return send(response, 400, { error: "workflowId 必填；任务信号必须绑定 Temporal workflow，不能把 taskId 当作 workflowId" });
+      const signal = String(input.signal ?? "humanSignal");
+      const payload = { ...(typeof input.payload === "object" && input.payload ? input.payload as Record<string, unknown> : {}), taskId };
+      await repository.recordTaskSignal({ workflowId, taskId, signal, payload });
+      const handle = temporal.workflow.getHandle(workflowId);
+      await handle.signal(signal, payload);
+      return send(response, 202, { accepted: true, workflowId, taskId });
+    }
     if (request.method === "GET" && request.url === "/v2/usage") return send(response, 200, { usage: [] });
     const runMatch = request.url?.match(/^\/v2\/runs\/([^/]+)$/);
     if (request.method === "GET" && runMatch) {

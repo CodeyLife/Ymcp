@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMemoryBundle, compileExecutionBlueprint, createPreflightPlan, resolveSkillBundle } from "../../../novel-v2/cognition";
+import { buildContextManifest, buildMemoryBundle, compileExecutionBlueprint, createPreflightPlan, resolveSkillBundle } from "../../../novel-v2/cognition";
 import type { MemoryProvider, NovelIntent, SkillProvider } from "../../../novel-v2/protocol";
 
 const intent: NovelIntent = { id: "intent-1", projectId: "p1", source: "web", objective: "续写第 12 章，保持主角对秘密尚未知情", target: { kind: "chapter", id: "doc-12", order: 12 }, requestedStage: "drafting", createdAt: 1, idempotencyKey: "k1" };
@@ -21,6 +21,23 @@ describe("V2 cognition compiler", () => {
     const bundle = await buildMemoryBundle(plan, { projectId: "p1", provider });
     expect(bundle.claims.map((claim) => claim.id)).toEqual(["past"]);
     expect(bundle.sourceRevisionIds).toEqual(["r4"]);
+  });
+
+  it("orders authoritative memories and freezes a ContextManifest before blueprint compilation", async () => {
+    const provider: MemoryProvider = { search: async () => [
+      { id: "candidate", projectId: "p1", kind: "episodic", title: "候选", content: "候选记忆", subjectRefs: ["hero"], narrativeRange: { start: 4 }, knowledgeScope: "author", authority: "candidate", confidence: 0.9, sourceRevisionIds: ["r-c"], contentHash: "c", supersedes: [], score: 0.99, matchedFacet: "fact", reason: "semantic" },
+      { id: "approved", projectId: "p1", kind: "canonical", title: "核准", content: "正式事实", subjectRefs: ["hero"], narrativeRange: { start: 4 }, knowledgeScope: "author", authority: "approved", confidence: 0.7, sourceRevisionIds: ["r-a"], contentHash: "a", supersedes: [], score: 0.5, matchedFacet: "entity", reason: "lexical" },
+      { id: "thread", projectId: "p1", kind: "hierarchical", title: "线索", content: "主线仍在推进", subjectRefs: ["thread"], narrativeRange: { start: 5 }, knowledgeScope: "author", authority: "approved", confidence: 0.7, sourceRevisionIds: ["r-t"], contentHash: "t", supersedes: [], score: 0.4, matchedFacet: "thread", reason: "lexical" },
+      { id: "foreshadowing", projectId: "p1", kind: "hierarchical", title: "伏笔", content: "秘密尚未揭开", subjectRefs: ["thread"], narrativeRange: { start: 5 }, knowledgeScope: "author", authority: "approved", confidence: 0.7, sourceRevisionIds: ["r-f"], contentHash: "f", supersedes: [], score: 0.4, matchedFacet: "foreshadowing", reason: "lexical" },
+    ] };
+    const plan = createPreflightPlan(intent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 });
+    const memory = await buildMemoryBundle(plan, { projectId: "p1", provider });
+    const manifest = buildContextManifest(plan, memory, { retrievalRunId: "retrieval-1", allClaimIds: ["approved", "candidate", "excluded"] });
+    const skills = await resolveSkillBundle(plan, memory, { projectId: "p1", provider: { list: async () => [] } satisfies SkillProvider });
+    const blueprint = compileExecutionBlueprint(intent, plan, memory, skills, { projectId: "p1", currentRevision: 7 }, manifest);
+    expect(memory.claims.map((claim) => claim.id)).toEqual(["approved", "thread", "foreshadowing", "candidate"]);
+    expect(manifest).toMatchObject({ memoryBundleId: memory.id, includedClaimIds: ["approved", "thread", "foreshadowing", "candidate"], excludedClaimIds: ["excluded"], truncationReason: "budget" });
+    expect(blueprint.contextManifestId).toBe(manifest.id);
   });
 
   it("rejects high-risk execution when required memory is missing", async () => {

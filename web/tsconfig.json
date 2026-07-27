@@ -20,7 +20,7 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/novel-v2-api.ts", "scripts/novel-v2-worker.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/novel-v2-api.ts", "scripts/novel-v2-worker.ts", "scripts/novel-v2-smoke.ts"],
   "exclude": [
     "src/features/novel/**"
   ],

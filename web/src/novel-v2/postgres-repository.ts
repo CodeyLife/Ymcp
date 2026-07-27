@@ -6,6 +6,7 @@ import type {
   Artifact,
   CommitRequest,
   CommitResult,
+  ContextManifest,
   ExecutionBlueprint,
   ManuscriptDocumentSummary,
   MemoryBundle,
@@ -15,8 +16,10 @@ import type {
   NovelProjectDetail,
   PreflightPlan,
   RetrievalFacet,
+  RuntimeLearningAssessmentV2,
   SkillBundle,
   SkillDescriptor,
+  TaskAttemptRecord,
   WorkflowRunRecord,
 } from "./protocol";
 
@@ -31,6 +34,7 @@ export interface NovelProjectSnapshot {
 type ProjectRow = { id: string; title: string; current_revision: string | number; metadata: Record<string, unknown>; created_at: Date | string; updated_at: Date | string };
 type DocumentRow = { id: string; project_id: string; title: string; narrative_order: string | number; pov_character_id: string | null; current_revision_id: string | null; status: string; created_at: Date | string; updated_at: Date | string };
 type WorkflowRunRow = { id: string; workflow_type: string; project_id: string; temporal_workflow_id: string; status: string; payload: Record<string, unknown>; created_at: Date | string; updated_at: Date | string };
+type TaskAttemptRow = { id: string; workflow_run_id: string | null; task_id: string; lease_owner: string | null; lease_expires_at: Date | string | null; heartbeat_at: Date | string | null; status: TaskAttemptRecord["status"]; payload: Record<string, unknown> };
 
 function iso(value: Date | string) { return value instanceof Date ? value.toISOString() : value; }
 function sha256(value: string) { return createHash("sha256").update(value, "utf8").digest("hex"); }
@@ -39,6 +43,9 @@ function documentFromRow(row: DocumentRow): ManuscriptDocumentSummary {
 }
 function workflowFromRow(row: WorkflowRunRow): WorkflowRunRecord {
   return { id: row.id, workflowType: row.workflow_type, projectId: row.project_id, temporalWorkflowId: row.temporal_workflow_id, status: row.status, payload: row.payload ?? {}, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) };
+}
+function taskAttemptFromRow(row: TaskAttemptRow): TaskAttemptRecord {
+  return { id: row.id, workflowRunId: row.workflow_run_id ?? undefined, taskId: row.task_id, leaseOwner: row.lease_owner ?? undefined, leaseExpiresAt: row.lease_expires_at ? iso(row.lease_expires_at) : undefined, heartbeatAt: row.heartbeat_at ? iso(row.heartbeat_at) : undefined, status: row.status, payload: row.payload ?? {} };
 }
 
 export class NovelPostgresRepository {
@@ -116,7 +123,7 @@ export class NovelPostgresRepository {
     return Number(result.rows[0]?.next_order ?? 1);
   }
 
-  async getRecord(table: "preflight_plans" | "memory_bundles" | "skill_bundles" | "execution_blueprints" | "artifacts", id: string) {
+  async getRecord(table: "preflight_plans" | "memory_bundles" | "skill_bundles" | "execution_blueprints" | "artifacts" | "context_manifests" | "learning_assessments", id: string) {
     const result = await this.pool.query(`SELECT payload FROM ${table} WHERE id=$1`, [id]);
     return result.rows[0]?.payload ?? null;
   }
@@ -174,13 +181,15 @@ export class NovelPostgresRepository {
     return result.rows[0] ? workflowFromRow(result.rows[0]) : undefined;
   }
 
-  async putCognition(plan: PreflightPlan, memory: MemoryBundle, skills: SkillBundle, blueprint: ExecutionBlueprint) {
+  async putCognition(plan: PreflightPlan, memory: MemoryBundle, skills: SkillBundle, blueprint: ExecutionBlueprint, context?: ContextManifest) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      if (context?.retrievalRunId) await client.query("INSERT INTO retrieval_runs(id,project_id,query,result) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING", [context.retrievalRunId, context.projectId, { preflightId: context.preflightId }, { includedClaimIds: context.includedClaimIds, excludedClaimIds: context.excludedClaimIds }]);
       await client.query("INSERT INTO preflight_plans(id,intent_id,project_id,payload,fingerprint) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING", [plan.id, plan.intentId, plan.projectId, plan, plan.sourceFingerprint]);
       await client.query("INSERT INTO memory_bundles(id,project_id,preflight_id,payload,fingerprint) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING", [memory.id, memory.projectId, memory.preflightId, memory, memory.fingerprint]);
       await client.query("INSERT INTO skill_bundles(id,project_id,preflight_id,payload,fingerprint) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING", [skills.id, skills.projectId, skills.preflightId, skills, skills.fingerprint]);
+      if (context) await client.query("INSERT INTO context_manifests(id,project_id,retrieval_run_id,source_revision_ids,token_budget,truncation_reason,fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO NOTHING", [context.id, context.projectId, context.retrievalRunId ?? null, context.sourceRevisionIds, context.tokenBudget, context.truncationReason ?? null, context.fingerprint, context]);
       await client.query("INSERT INTO execution_blueprints(id,project_id,intent_id,preflight_id,memory_bundle_id,skill_bundle_id,payload,fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO NOTHING", [blueprint.id, blueprint.projectId, blueprint.intentId, blueprint.preflightId, blueprint.memoryBundleId, blueprint.skillBundleId, blueprint, blueprint.fingerprint]);
       await this.appendOutboxTx(client, "execution-blueprint", blueprint.id, "execution-blueprint.ready", { ...blueprint, projectId: blueprint.projectId });
       await client.query("COMMIT");
@@ -188,6 +197,23 @@ export class NovelPostgresRepository {
       await client.query("ROLLBACK");
       throw error;
     } finally { client.release(); }
+  }
+
+  async upsertTaskAttempt(input: { id: string; workflowRunId?: string; taskId: string; status: TaskAttemptRecord["status"]; leaseOwner?: string; leaseMs?: number; payload?: Record<string, unknown> }) {
+    const leaseExpires = input.leaseOwner && input.leaseMs ? new Date(Date.now() + input.leaseMs) : null;
+    const result = await this.pool.query<TaskAttemptRow>(`INSERT INTO task_attempts(id,workflow_run_id,task_id,lease_owner,lease_expires_at,heartbeat_at,status,payload)
+      VALUES($1,$2,$3,$4,$5,now(),$6,$7)
+      ON CONFLICT(id) DO UPDATE SET workflow_run_id=COALESCE(EXCLUDED.workflow_run_id,task_attempts.workflow_run_id),lease_owner=COALESCE(EXCLUDED.lease_owner,task_attempts.lease_owner),lease_expires_at=COALESCE(EXCLUDED.lease_expires_at,task_attempts.lease_expires_at),heartbeat_at=now(),status=EXCLUDED.status,payload=task_attempts.payload || EXCLUDED.payload
+      RETURNING id,workflow_run_id,task_id,lease_owner,lease_expires_at,heartbeat_at,status,payload`, [input.id, input.workflowRunId ?? null, input.taskId, input.leaseOwner ?? null, leaseExpires, input.status, input.payload ?? {}]);
+    const row = taskAttemptFromRow(result.rows[0]);
+    await this.appendOutbox("task-attempt", row.id, `task.${row.status}`, { workflowRunId: row.workflowRunId, taskId: row.taskId, attemptId: row.id, ...row.payload });
+    return row;
+  }
+
+  async recordTaskSignal(input: { workflowId: string; taskId: string; signal: string; payload?: Record<string, unknown> }) {
+    const attemptId = typeof input.payload?.attemptId === "string" ? input.payload.attemptId : `${input.taskId}:signal`;
+    const status: TaskAttemptRecord["status"] = input.signal === "claim" ? "claimed" : input.signal === "heartbeat" ? "running" : input.signal === "artifact" ? "submitted" : input.signal === "review" ? "reviewed" : input.signal === "fail" ? "failed" : "running";
+    return this.upsertTaskAttempt({ id: attemptId, workflowRunId: input.workflowId, taskId: input.taskId, status, leaseOwner: typeof input.payload?.leaseOwner === "string" ? input.payload.leaseOwner : undefined, leaseMs: 10 * 60_000, payload: { signal: input.signal, ...(input.payload ?? {}) } });
   }
 
   async recordArtifact(artifact: Artifact) {
@@ -199,10 +225,26 @@ export class NovelPostgresRepository {
     await this.recordArtifact(input.artifact);
     const content = input.text.trim();
     if (!content) return [];
-    const claim: MemoryClaim = { id: `claim:${input.artifact.id}`, projectId: input.projectId, kind: "episodic", title: "章节事实提取", content: content.slice(0, 4000), subjectRefs: [], narrativeRange: undefined, knowledgeScope: "author", authority: "derived", confidence: 0.55, sourceRevisionIds: [], contentHash: sha256(content), supersedes: [] };
-    await this.pool.query("INSERT INTO memory_claims(id,project_id,kind,title,content,subject_refs,narrative_start,narrative_end,knowledge_scope,authority,confidence,source_revision_ids,content_hash,supersedes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET content=EXCLUDED.content,content_hash=EXCLUDED.content_hash,confidence=EXCLUDED.confidence", [claim.id, claim.projectId, claim.kind, claim.title, claim.content, claim.subjectRefs, null, null, claim.knowledgeScope, claim.authority, claim.confidence, claim.sourceRevisionIds, claim.contentHash, claim.supersedes]);
-    await this.appendOutbox("memory-claim", claim.id, "memory-claim.upserted", { projectId: claim.projectId, claimId: claim.id, sourceArtifactId: input.artifact.id });
-    return [claim];
+    const fragments = content.split(/[。！？!?；;\n]+/u).map((item) => item.trim()).filter((item) => item.length >= 8).slice(0, 12);
+    const claims: MemoryClaim[] = [];
+    for (const [index, fragment] of fragments.entries()) {
+      const contentHash = sha256(fragment);
+      const existing = await this.pool.query<{ id: string }>("SELECT id FROM memory_claims WHERE project_id=$1 AND content_hash=$2 LIMIT 1", [input.projectId, contentHash]);
+      if (existing.rowCount) continue;
+      const subjectRefs = [...new Set(Array.from(fragment.matchAll(/[《“]?([\p{Script=Han}A-Za-z0-9_]{2,12})[”》]?/gu)).map((match) => match[1]).slice(0, 8))];
+      const claim: MemoryClaim = { id: `claim:${input.artifact.id}:${index}`, projectId: input.projectId, kind: /承诺|约定|誓言|伏笔|线索/u.test(fragment) ? "hierarchical" : "episodic", title: fragment.slice(0, 32), content: fragment, subjectRefs, narrativeRange: undefined, knowledgeScope: "author", authority: "derived", confidence: 0.62, sourceRevisionIds: [], contentHash, supersedes: [] };
+      await this.pool.query("INSERT INTO memory_claims(id,project_id,kind,title,content,subject_refs,narrative_start,narrative_end,knowledge_scope,authority,confidence,source_revision_ids,content_hash,supersedes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET content=EXCLUDED.content,content_hash=EXCLUDED.content_hash,confidence=EXCLUDED.confidence", [claim.id, claim.projectId, claim.kind, claim.title, claim.content, claim.subjectRefs, null, null, claim.knowledgeScope, claim.authority, claim.confidence, claim.sourceRevisionIds, claim.contentHash, claim.supersedes]);
+      await this.appendOutbox("memory-claim", claim.id, "memory-claim.upserted", { projectId: claim.projectId, claimId: claim.id, sourceArtifactId: input.artifact.id, novelty: "new" });
+      claims.push(claim);
+    }
+    return claims;
+  }
+
+  async recordLearningAssessment(assessment: RuntimeLearningAssessmentV2) {
+    if (assessment.conclusion === "propose-improvement" && (!assessment.underlyingMechanism || !assessment.affectedInputClass || !assessment.candidate)) throw new Error("propose-improvement 必须包含机制、影响输入类和候选变更");
+    await this.pool.query("INSERT INTO learning_assessments(id,project_id,source,conclusion,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload,conclusion=EXCLUDED.conclusion", [assessment.id, assessment.projectId, assessment.source, assessment.conclusion, assessment]);
+    await this.appendOutbox("learning-assessment", assessment.id, `learning.${assessment.conclusion}`, { projectId: assessment.projectId, assessmentId: assessment.id, source: assessment.source, proposeImprovement: assessment.conclusion === "propose-improvement" });
+    return assessment;
   }
 
   async commitRevision(input: CommitRequest & { text: string; contentHash: string; objectKey: string; revisionId: string }): Promise<CommitResult> {

@@ -13,7 +13,8 @@
     "novel:v2:api": "node --import tsx scripts/novel-v2-api.ts",
     "novel:v2:worker": "node --import tsx scripts/novel-v2-worker.ts",
     "novel:mcp:v2": "node scripts/novel-mcp-server.mjs",
-    "novel:v2:compose": "docker compose -f docker-compose.v2.yml up -d"
+    "novel:v2:compose": "docker compose -f docker-compose.v2.yml up -d",
+    "novel:v2:smoke": "node --import tsx scripts/novel-v2-smoke.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",

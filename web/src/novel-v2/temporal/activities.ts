@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Artifact, ExecutionBlueprint, MemoryBundle, MemoryProvider, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, SkillBundle, SkillProvider } from "../protocol";
-import { buildMemoryBundle, compileExecutionBlueprint, createPreflightPlan, resolveSkillBundle } from "../cognition";
+import type { Artifact, ContextManifest, ExecutionBlueprint, MemoryBundle, MemoryProvider, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, RuntimeLearningAssessmentV2, SkillBundle, SkillProvider, TaskAttemptRecord } from "../protocol";
+import { buildContextManifest, buildMemoryBundle, compileExecutionBlueprint, createPreflightPlan, resolveSkillBundle } from "../cognition";
 import { NovelPostgresRepository } from "../postgres-repository";
 import type { ModelGateway } from "../model-gateway";
 import { ContentObjectStore } from "../object-store";
@@ -19,17 +19,22 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
   };
   return {
     updateWorkflowStatus: (input: { workflowId: string; status: string; payload?: Record<string, unknown> }) => deps.repository.updateWorkflowRunStatus(input.workflowId, input.status, input.payload),
+    recordWorkflowSignal: (input: { workflowId: string; taskId: string; signal: string; payload?: Record<string, unknown> }) => deps.repository.recordTaskSignal(input),
+    updateTaskAttempt: (input: { id: string; workflowRunId?: string; taskId: string; status: TaskAttemptRecord["status"]; payload?: Record<string, unknown> }) => deps.repository.upsertTaskAttempt(input),
     loadProjectSnapshot: (input: { projectId: string; targetDocumentId?: string }) => deps.repository.getProjectSnapshot(input.projectId, input.targetDocumentId),
     createPreflight: async (input: { intent: NovelIntent; snapshot: PreflightProjectSnapshot }) => createPreflightPlan(input.intent, input.snapshot),
     retrieveMemory: (input: { projectId: string; plan: PreflightPlan }) => buildMemoryBundle(input.plan, { projectId: input.projectId, provider: deps.memoryProvider }),
     resolveSkills: (input: { projectId: string; plan: PreflightPlan; memory: MemoryBundle; requestedCapabilities?: string[] }) => resolveSkillBundle(input.plan, input.memory, { projectId: input.projectId, provider: deps.skillProvider, requestedCapabilities: input.requestedCapabilities }),
-    compileBlueprint: async (input: { intent: NovelIntent; plan: PreflightPlan; memory: MemoryBundle; skills: SkillBundle; snapshot: PreflightProjectSnapshot }): Promise<ExecutionBlueprint> => {
-      const blueprint = compileExecutionBlueprint(input.intent, input.plan, input.memory, input.skills, input.snapshot);
-      await deps.repository.putCognition(input.plan, input.memory, input.skills, blueprint);
-      return blueprint;
+    compileBlueprint: async (input: { intent: NovelIntent; plan: PreflightPlan; memory: MemoryBundle; skills: SkillBundle; snapshot: PreflightProjectSnapshot }): Promise<{ blueprint: ExecutionBlueprint; context: ContextManifest }> => {
+      const context = buildContextManifest(input.plan, input.memory, { retrievalRunId: `retrieval:${input.plan.id}`, allClaimIds: input.memory.claims.map((claim) => claim.id) });
+      const blueprint = compileExecutionBlueprint(input.intent, input.plan, input.memory, input.skills, input.snapshot, context);
+      await deps.repository.putCognition(input.plan, input.memory, input.skills, blueprint, context);
+      return { blueprint, context };
     },
     draft: async (input: { intent: NovelIntent; blueprint: ExecutionBlueprint; memory: MemoryBundle; skills: SkillBundle }) => {
-      const generated = model ? await model.generateText({ model: "novel-writer", system: "你是长篇小说写作 Worker，只写当前任务，不引入记忆快照之外的事实。", prompt: `${input.intent.objective}\nMemory Bundle:\n${JSON.stringify(input.memory.claims)}\nSkill Bundle:\n${JSON.stringify(input.skills)}`, maxTokens: input.blueprint.budget.maxOutputTokens }) : { text: "", usage: { model: "none", inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0 } };
+      const skillSections = input.skills.skills.map((skill) => `${skill.skillId}@${skill.version}: gates=${skill.qualityGates.join(",")}`).join("\n");
+      const memoryLines = input.memory.claims.map((claim) => `[${claim.authority}/${claim.kind}/${claim.reason}] ${claim.title}: ${claim.content}`).join("\n");
+      const generated = model ? await model.generateText({ model: "novel-writer", system: "你是长篇小说写作 Worker。只写当前任务；只使用冻结 MemoryBundle 和 SkillBundle 中的事实；严格尊重叙事截止、视角知识边界、章节功能、文风目标和质量门。", prompt: `目标：${input.intent.objective}\n\n冻结上下文：\n${memoryLines}\n\n技能与质量门：\n${skillSections}\n\n输出要求：生成可进入审核的完整候选正文，不解释流程。`, maxTokens: input.blueprint.budget.maxOutputTokens }) : { text: "", usage: { model: "none", inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0 } };
       return { artifact: await makeArtifact({ projectId: input.intent.projectId, taskId: `${input.blueprint.id}:draft`, kind: "draft", baseRevision: input.blueprint.baseRevision, text: generated.text }), text: generated.text };
     },
     review: async (input: { artifact: Artifact; text: string; identity: "internal" | "independent" }): Promise<Review> => {
@@ -47,6 +52,30 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const claims = await deps.repository.recordFactExtraction({ projectId: input.projectId, artifact, text: input.text });
       if (claims.length && deps.memoryIndex) await deps.memoryIndex.upsertClaims(input.projectId, claims);
       return artifact;
+    },
+    assessLearning: async (input: { projectId: string; workflowId: string; artifact: Artifact; reviews: Review[] }): Promise<RuntimeLearningAssessmentV2> => {
+      const blocking = input.reviews.flatMap((review) => review.issues.filter((issue) => issue.severity === "blocker" || issue.severity === "major"));
+      const assessment: RuntimeLearningAssessmentV2 = blocking.length ? {
+        id: `learning:${input.artifact.id}`,
+        projectId: input.projectId,
+        source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: input.reviews.map((review) => review.id), fingerprint: input.artifact.fingerprint },
+        conclusion: "propose-improvement",
+        symptom: blocking.map((issue) => issue.title).join("；").slice(0, 500),
+        failingLayer: "review",
+        underlyingMechanism: "审核发现的 blocker/major 表明当前技能或提示词未能在通用质量门前预防同类问题，需要把机制沉淀到可复用规则而不是只修复单次正文。",
+        affectedInputClass: "需要双门审核的长篇正文、修订或规划任务",
+        boundaries: "只覆盖审核证据指向的质量机制；不以具体章节名、角色名、样本文案作为规则边界。",
+        regressionRisks: ["过度收紧规则可能压缩抒情、铺陈和低冲突章节的呼吸空间"],
+        candidate: { targetKind: "skill", targetId: "independent-quality-gate", rationale: "从失败审核中沉淀可复用质量门", afterText: `补充规则：遇到${blocking[0]?.title ?? "高风险质量问题"}时，先识别机制、影响输入类和边界，再决定是否要求修订。` },
+        createdAt: Date.now(),
+      } : {
+        id: `learning:${input.artifact.id}`,
+        projectId: input.projectId,
+        source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: input.reviews.map((review) => review.id), fingerprint: input.artifact.fingerprint },
+        conclusion: "no-shared-learning",
+        createdAt: Date.now(),
+      };
+      return deps.repository.recordLearningAssessment(assessment);
     },
     commit: (input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commit(input),
   };

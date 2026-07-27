@@ -1,5 +1,6 @@
 import type {
   ExecutionBlueprint,
+  ContextManifest,
   MemoryBundle,
   MemoryProvider,
   NovelIntent,
@@ -16,6 +17,14 @@ function hash(value: unknown): string {
   let result = 2166136261;
   for (let index = 0; index < text.length; index += 1) result = Math.imul(result ^ text.charCodeAt(index), 16777619);
   return (result >>> 0).toString(16).padStart(8, "0");
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 2);
+}
+
+function authorityRank(authority: MemoryBundle["claims"][number]["authority"]): number {
+  return ({ approved: 4, author: 3, derived: 2, candidate: 1 } as const)[authority] ?? 0;
 }
 
 function terms(value: string): string[] {
@@ -70,20 +79,29 @@ export function createPreflightPlan(intent: NovelIntent, snapshot: PreflightProj
 
 export async function buildMemoryBundle(plan: PreflightPlan, input: { projectId: string; provider: MemoryProvider; tokenBudget?: number }, now = Date.now()): Promise<MemoryBundle> {
   const claims = await input.provider.search({ projectId: input.projectId, facets: plan.facets, narrativeCutoff: plan.narrativeCutoff, povCharacterId: plan.povCharacterId });
+  const tokenBudget = input.tokenBudget ?? 24_000;
   const visible = claims.filter((claim) => claim.narrativeRange?.start === undefined || plan.narrativeCutoff === undefined || claim.narrativeRange.start <= plan.narrativeCutoff);
+  const ordered = [...visible].sort((left, right) => authorityRank(right.authority) - authorityRank(left.authority) || right.score - left.score || right.confidence - left.confidence);
+  let spent = 0;
+  const budgeted = ordered.filter((claim) => {
+    const cost = estimateTokens(`${claim.title}\n${claim.content}`);
+    if (spent + cost > tokenBudget) return false;
+    spent += cost;
+    return true;
+  });
   const required = new Set(plan.facets.filter((facet) => facet.required).map((facet) => facet.kind));
-  const found = new Set(visible.map((claim) => claim.matchedFacet));
+  const found = new Set(budgeted.map((claim) => claim.matchedFacet));
   const missingFacets = [...required].filter((facet) => !found.has(facet));
-  const sourceRevisionIds = [...new Set(visible.flatMap((claim) => claim.sourceRevisionIds))];
-  const conflicts = visible.flatMap((claim) => claim.supersedes.map((superseded) => ({ claimIds: [claim.id, superseded], subjectRefs: claim.subjectRefs, reason: "当前 claim 声明覆盖了旧 claim，需在提交前确认", blocking: false }))).filter((conflict, index, all) => index === all.findIndex((candidate) => candidate.claimIds.join(":") === conflict.claimIds.join(":")));
+  const sourceRevisionIds = [...new Set(budgeted.flatMap((claim) => claim.sourceRevisionIds))];
+  const conflicts = budgeted.flatMap((claim) => claim.supersedes.map((superseded) => ({ claimIds: [claim.id, superseded], subjectRefs: claim.subjectRefs, reason: "当前 claim 声明覆盖了旧 claim，需在提交前确认", blocking: false }))).filter((conflict, index, all) => index === all.findIndex((candidate) => candidate.claimIds.join(":") === conflict.claimIds.join(":")));
   const bundle = {
     id: `memory:${plan.id}`,
     projectId: input.projectId,
     preflightId: plan.id,
-    claims: visible.sort((left, right) => right.score - left.score),
+    claims: budgeted,
     conflicts,
     missingFacets,
-    tokenBudget: input.tokenBudget ?? 24_000,
+    tokenBudget,
     sourceRevisionIds,
     narrativeCutoff: plan.narrativeCutoff,
     fingerprint: "",
@@ -91,6 +109,31 @@ export async function buildMemoryBundle(plan: PreflightPlan, input: { projectId:
   } satisfies Omit<MemoryBundle, "fingerprint"> & { fingerprint: string };
   bundle.fingerprint = hash({ ...bundle, fingerprint: undefined });
   return bundle;
+}
+
+export function buildContextManifest(plan: PreflightPlan, memory: MemoryBundle, input: { retrievalRunId?: string; allClaimIds?: string[] } = {}, now = Date.now()): ContextManifest {
+  if (memory.preflightId !== plan.id) throw new Error("记忆包不属于当前 Preflight");
+  const includedClaimIds = memory.claims.map((claim) => claim.id);
+  const excludedClaimIds = (input.allClaimIds ?? []).filter((id) => !includedClaimIds.includes(id));
+  const estimatedTokens = memory.claims.reduce((sum, claim) => sum + estimateTokens(`${claim.title}\n${claim.content}`), 0);
+  const manifest: ContextManifest = {
+    id: `context:${plan.id}`,
+    projectId: plan.projectId,
+    preflightId: plan.id,
+    memoryBundleId: memory.id,
+    retrievalRunId: input.retrievalRunId,
+    sourceRevisionIds: memory.sourceRevisionIds,
+    includedClaimIds,
+    excludedClaimIds,
+    narrativeCutoff: plan.narrativeCutoff,
+    tokenBudget: memory.tokenBudget,
+    estimatedTokens,
+    truncationReason: excludedClaimIds.length ? "budget" : memory.missingFacets.length ? "future-cutoff" : "none",
+    fingerprint: "",
+    createdAt: now,
+  };
+  manifest.fingerprint = hash({ ...manifest, fingerprint: undefined });
+  return manifest;
 }
 
 export async function resolveSkillBundle(plan: PreflightPlan, memory: MemoryBundle, input: { projectId: string; provider: SkillProvider; requestedCapabilities?: string[] }, now = Date.now()): Promise<SkillBundle> {
@@ -105,15 +148,16 @@ export async function resolveSkillBundle(plan: PreflightPlan, memory: MemoryBund
   return bundle;
 }
 
-export function compileExecutionBlueprint(intent: NovelIntent, plan: PreflightPlan, memory: MemoryBundle, skills: SkillBundle, snapshot: PreflightProjectSnapshot, now = Date.now()): ExecutionBlueprint {
+export function compileExecutionBlueprint(intent: NovelIntent, plan: PreflightPlan, memory: MemoryBundle, skills: SkillBundle, snapshot: PreflightProjectSnapshot, context?: ContextManifest, now = Date.now()): ExecutionBlueprint {
   if (memory.preflightId !== plan.id || skills.preflightId !== plan.id) throw new Error("认知快照不属于当前 Preflight");
+  if (context && (context.preflightId !== plan.id || context.memoryBundleId !== memory.id)) throw new Error("上下文清单不属于当前 Preflight");
   if (memory.missingFacets.length && plan.risk === "high") throw new Error(`高风险任务缺少记忆维度：${memory.missingFacets.join("、")}`);
   if (skills.conflicts.length) throw new Error("Skill 冲突，不能生成执行蓝图");
   const retrieve: BlueprintTask = { id: `${plan.id}:retrieve`, kind: "retrieve", role: "memory-curator", dependsOn: [], readSet: memory.sourceRevisionIds, writeSet: [], queue: "memory", independentReviewRequired: false };
   const draft: BlueprintTask = { id: `${plan.id}:draft`, kind: plan.taskClass === "review" ? "review" : plan.taskClass === "revision" ? "revise" : "draft", role: plan.taskClass === "review" ? "reader-reviewer" : "writer", dependsOn: [retrieve.id], readSet: memory.sourceRevisionIds, writeSet: intent.target?.id ? [intent.target.id] : [], queue: "writer", independentReviewRequired: plan.requiresIndependentReview };
   const review: BlueprintTask = { id: `${plan.id}:review`, kind: "review", role: "quality-editor", dependsOn: [draft.id], readSet: [draft.id, ...memory.sourceRevisionIds], writeSet: [], queue: "reviewer", independentReviewRequired: true };
   const commit: BlueprintTask = { id: `${plan.id}:commit`, kind: "memory-update", role: "fact-extractor", dependsOn: [review.id], readSet: [draft.id, review.id], writeSet: intent.target?.id ? [intent.target.id] : [], queue: "memory", independentReviewRequired: false };
-  const blueprint: ExecutionBlueprint = { id: `blueprint:${intent.id}`, projectId: intent.projectId, intentId: intent.id, preflightId: plan.id, memoryBundleId: memory.id, skillBundleId: skills.id, baseRevision: snapshot.currentRevision, tasks: [retrieve, draft, review, commit], commitPolicy: plan.requiresIndependentReview ? "dual-gate" : "human-only", budget: { maxInputTokens: memory.tokenBudget, maxOutputTokens: plan.taskClass === "drafting" || plan.taskClass === "revision" ? 16_000 : 8_000 }, fingerprint: "", createdAt: now };
+  const blueprint: ExecutionBlueprint = { id: `blueprint:${intent.id}`, projectId: intent.projectId, intentId: intent.id, preflightId: plan.id, memoryBundleId: memory.id, skillBundleId: skills.id, contextManifestId: context?.id, baseRevision: snapshot.currentRevision, tasks: [retrieve, draft, review, commit], commitPolicy: plan.requiresIndependentReview ? "dual-gate" : "human-only", budget: { maxInputTokens: memory.tokenBudget, maxOutputTokens: plan.taskClass === "drafting" || plan.taskClass === "revision" ? 16_000 : 8_000 }, fingerprint: "", createdAt: now };
   blueprint.fingerprint = hash({ ...blueprint, fingerprint: undefined });
   return blueprint;
 }

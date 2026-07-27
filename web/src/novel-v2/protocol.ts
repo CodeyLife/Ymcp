@@ -92,6 +92,23 @@ export interface MemoryBundle {
   createdAt: number;
 }
 
+export interface ContextManifest {
+  id: string;
+  projectId: string;
+  preflightId: string;
+  memoryBundleId: string;
+  retrievalRunId?: string;
+  sourceRevisionIds: string[];
+  includedClaimIds: string[];
+  excludedClaimIds: string[];
+  narrativeCutoff?: number;
+  tokenBudget: number;
+  estimatedTokens: number;
+  truncationReason?: "budget" | "future-cutoff" | "authority-conflict" | "none";
+  fingerprint: string;
+  createdAt: number;
+}
+
 export interface SkillDescriptor {
   skillId: string;
   version: string;
@@ -133,6 +150,7 @@ export interface ExecutionBlueprint {
   preflightId: string;
   memoryBundleId: string;
   skillBundleId: string;
+  contextManifestId?: string;
   baseRevision: number;
   tasks: BlueprintTask[];
   commitPolicy: "dual-gate" | "human-only";
@@ -230,4 +248,35 @@ export interface WorkflowRunRecord {
   payload: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaskAttemptRecord {
+  id: string;
+  workflowRunId?: string;
+  taskId: string;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
+  heartbeatAt?: string;
+  status: "pending" | "claimed" | "running" | "submitted" | "reviewed" | "failed" | "completed";
+  payload: Record<string, unknown>;
+}
+
+export interface RuntimeLearningAssessmentV2 {
+  id: string;
+  projectId: string;
+  source: { workflowId: string; artifactId?: string; reviewIds: string[]; fingerprint: string };
+  conclusion: "no-shared-learning" | "propose-improvement";
+  symptom?: string;
+  failingLayer?: string;
+  underlyingMechanism?: string;
+  affectedInputClass?: string;
+  boundaries?: string;
+  regressionRisks?: string[];
+  candidate?: {
+    targetKind: "skill" | "system-prompt" | "workflow";
+    targetId: string;
+    rationale: string;
+    afterText: string;
+  };
+  createdAt: number;
 }
