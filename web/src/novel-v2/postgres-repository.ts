@@ -32,20 +32,37 @@ export interface NovelProjectSnapshot {
 }
 
 type ProjectRow = { id: string; title: string; current_revision: string | number; metadata: Record<string, unknown>; created_at: Date | string; updated_at: Date | string };
-type DocumentRow = { id: string; project_id: string; title: string; narrative_order: string | number; pov_character_id: string | null; current_revision_id: string | null; status: string; created_at: Date | string; updated_at: Date | string };
+type DocumentRow = { id: string; project_id: string; title: string; narrative_order: string | number; pov_character_id: string | null; current_revision_id: string | null; status: string; created_at: Date | string; updated_at: Date | string; word_count?: string | number | null; latest_revision?: string | number | null; blocking_issue_count?: string | number | null };
 type WorkflowRunRow = { id: string; workflow_type: string; project_id: string; temporal_workflow_id: string; status: string; payload: Record<string, unknown>; created_at: Date | string; updated_at: Date | string };
+type ArtifactRow = { id: string; project_id: string; task_id: string; attempt_id: string; kind: Artifact["kind"]; content_hash: string; object_key: string | null; base_revision: string | number; fingerprint: string; payload: Record<string, unknown>; created_at: Date | string };
 type TaskAttemptRow = { id: string; workflow_run_id: string | null; task_id: string; lease_owner: string | null; lease_expires_at: Date | string | null; heartbeat_at: Date | string | null; status: TaskAttemptRecord["status"]; payload: Record<string, unknown> };
 
 function iso(value: Date | string) { return value instanceof Date ? value.toISOString() : value; }
 function sha256(value: string) { return createHash("sha256").update(value, "utf8").digest("hex"); }
 function documentFromRow(row: DocumentRow): ManuscriptDocumentSummary {
-  return { id: row.id, projectId: row.project_id, title: row.title, narrativeOrder: Number(row.narrative_order), povCharacterId: row.pov_character_id ?? undefined, currentRevisionId: row.current_revision_id ?? undefined, status: row.status, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) };
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    narrativeOrder: Number(row.narrative_order),
+    povCharacterId: row.pov_character_id ?? undefined,
+    currentRevisionId: row.current_revision_id ?? undefined,
+    status: row.status,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    wordCount: row.word_count === undefined || row.word_count === null ? undefined : Number(row.word_count),
+    latestRevision: row.latest_revision === undefined || row.latest_revision === null ? undefined : Number(row.latest_revision),
+    blockingIssueCount: row.blocking_issue_count === undefined || row.blocking_issue_count === null ? undefined : Number(row.blocking_issue_count),
+  };
 }
 function workflowFromRow(row: WorkflowRunRow): WorkflowRunRecord {
   return { id: row.id, workflowType: row.workflow_type, projectId: row.project_id, temporalWorkflowId: row.temporal_workflow_id, status: row.status, payload: row.payload ?? {}, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) };
 }
 function taskAttemptFromRow(row: TaskAttemptRow): TaskAttemptRecord {
   return { id: row.id, workflowRunId: row.workflow_run_id ?? undefined, taskId: row.task_id, leaseOwner: row.lease_owner ?? undefined, leaseExpiresAt: row.lease_expires_at ? iso(row.lease_expires_at) : undefined, heartbeatAt: row.heartbeat_at ? iso(row.heartbeat_at) : undefined, status: row.status, payload: row.payload ?? {} };
+}
+function artifactFromRow(row: ArtifactRow): Artifact {
+  return { id: row.id, projectId: row.project_id, taskId: row.task_id, attemptId: row.attempt_id, kind: row.kind, contentHash: row.content_hash, objectKey: row.object_key ?? undefined, baseRevision: Number(row.base_revision), fingerprint: row.fingerprint, structuredData: row.payload ?? {}, createdAt: new Date(row.created_at).getTime() };
 }
 
 export class NovelPostgresRepository {
@@ -95,16 +112,37 @@ export class NovelPostgresRepository {
   }
 
   async listProjects() {
-    const result = await this.pool.query("SELECT id,title,current_revision,metadata,created_at,updated_at FROM novel_projects ORDER BY updated_at DESC");
-    return result.rows;
+    const result = await this.pool.query(`
+      SELECT p.id,p.title,p.current_revision,p.metadata,p.created_at,p.updated_at,
+        latest.status AS latest_run_status
+      FROM novel_projects p
+      LEFT JOIN LATERAL (
+        SELECT status FROM workflow_runs r WHERE r.project_id=p.id ORDER BY r.updated_at DESC LIMIT 1
+      ) latest ON TRUE
+      ORDER BY p.updated_at DESC
+    `);
+    return result.rows.map((row: ProjectRow & { latest_run_status?: string | null }) => ({ id: row.id, title: row.title, currentRevision: Number(row.current_revision), current_revision: Number(row.current_revision), metadata: row.metadata ?? {}, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), updated_at: iso(row.updated_at), latestRunStatus: row.latest_run_status ?? undefined }));
   }
 
   async getProjectDetail(projectId: string): Promise<NovelProjectDetail> {
     const project = await this.pool.query<ProjectRow>("SELECT id,title,current_revision,metadata,created_at,updated_at FROM novel_projects WHERE id=$1", [projectId]);
     if (!project.rowCount) throw new Error("项目不存在");
-    const documents = await this.pool.query<DocumentRow>("SELECT id,project_id,title,narrative_order,pov_character_id,current_revision_id,status,created_at,updated_at FROM manuscript_documents WHERE project_id=$1 ORDER BY narrative_order,id", [projectId]);
+    const documents = await this.pool.query<DocumentRow>(`
+      SELECT d.id,d.project_id,d.title,d.narrative_order,d.pov_character_id,d.current_revision_id,d.status,d.created_at,d.updated_at,
+        COALESCE(cb.byte_length, 0) AS word_count,
+        mr.revision AS latest_revision,
+        COUNT(rv.id)::int AS blocking_issue_count
+      FROM manuscript_documents d
+      LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+      LEFT JOIN content_blobs cb ON cb.content_hash=mr.content_hash
+      LEFT JOIN reviews rv ON rv.artifact_id=mr.artifact_id AND rv.issues @> '[{"severity":"blocker"}]'::jsonb
+      WHERE d.project_id=$1
+      GROUP BY d.id,d.project_id,d.title,d.narrative_order,d.pov_character_id,d.current_revision_id,d.status,d.created_at,d.updated_at,cb.byte_length,mr.revision
+      ORDER BY d.narrative_order,d.id
+    `, [projectId]);
+    const runs = await this.listProjectRuns(projectId, 5);
     const row = project.rows[0];
-    return { id: row.id, title: row.title, currentRevision: Number(row.current_revision), metadata: row.metadata ?? {}, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), documents: documents.rows.map(documentFromRow) };
+    return { id: row.id, title: row.title, currentRevision: Number(row.current_revision), metadata: row.metadata ?? {}, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), documents: documents.rows.map(documentFromRow), latestRuns: runs };
   }
 
   async ensureDocument(input: { projectId: string; documentId?: string; title: string; narrativeOrder?: number; povCharacterId?: string; status?: string }): Promise<ManuscriptDocumentSummary> {
@@ -116,6 +154,66 @@ export class NovelPostgresRepository {
       ON CONFLICT(project_id,narrative_order) DO UPDATE SET title=EXCLUDED.title,pov_character_id=EXCLUDED.pov_character_id,status=EXCLUDED.status,updated_at=now()
       RETURNING id,project_id,title,narrative_order,pov_character_id,current_revision_id,status,created_at,updated_at`, [id, input.projectId, input.title, order, input.povCharacterId ?? null, input.status ?? "planned"]);
     return documentFromRow(result.rows[0]);
+  }
+
+  async updateProject(input: { projectId: string; title?: string; metadata?: Record<string, unknown> }) {
+    const result = await this.pool.query<ProjectRow>(`
+      UPDATE novel_projects
+      SET title=COALESCE($2, title), metadata=metadata || COALESCE($3, '{}'::jsonb), updated_at=now()
+      WHERE id=$1
+      RETURNING id,title,current_revision,metadata,created_at,updated_at
+    `, [input.projectId, input.title ?? null, input.metadata ?? null]);
+    if (!result.rowCount) throw new Error("项目不存在");
+    await this.appendOutbox("novel-project", input.projectId, "project.updated", { projectId: input.projectId, title: input.title });
+    return this.getProjectDetail(input.projectId);
+  }
+
+  async deleteProject(projectId: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM task_attempts WHERE workflow_run_id IN (SELECT temporal_workflow_id FROM workflow_runs WHERE project_id=$1) OR workflow_run_id IN (SELECT id FROM workflow_runs WHERE project_id=$1)", [projectId]);
+      await client.query("DELETE FROM workflow_runs WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM learning_assessments WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM context_manifests WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM retrieval_runs WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM execution_blueprints WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM skill_bundles WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM memory_bundles WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM preflight_plans WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM novel_intents WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM memory_claims WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM reviews WHERE project_id=$1", [projectId]);
+      await client.query("DELETE FROM artifacts WHERE project_id=$1", [projectId]);
+      const result = await client.query("DELETE FROM novel_projects WHERE id=$1 RETURNING id", [projectId]);
+      await client.query("COMMIT");
+      return { deleted: Boolean(result.rowCount), projectId };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async updateDocument(input: { projectId: string; documentId: string; title?: string; narrativeOrder?: number; povCharacterId?: string | null; status?: string }): Promise<ManuscriptDocumentSummary> {
+    const result = await this.pool.query<DocumentRow>(`
+      UPDATE manuscript_documents
+      SET title=COALESCE($3, title),
+        narrative_order=COALESCE($4, narrative_order),
+        pov_character_id=CASE WHEN $5::boolean THEN $6 ELSE pov_character_id END,
+        status=COALESCE($7, status),
+        updated_at=now()
+      WHERE project_id=$1 AND id=$2
+      RETURNING id,project_id,title,narrative_order,pov_character_id,current_revision_id,status,created_at,updated_at
+    `, [input.projectId, input.documentId, input.title ?? null, input.narrativeOrder ?? null, input.povCharacterId !== undefined, input.povCharacterId ?? null, input.status ?? null]);
+    if (!result.rowCount) throw new Error("章节不存在");
+    await this.appendOutbox("manuscript-document", input.documentId, "document.updated", { projectId: input.projectId, documentId: input.documentId });
+    return documentFromRow(result.rows[0]);
+  }
+
+  async deleteDocument(projectId: string, documentId: string) {
+    const result = await this.pool.query("DELETE FROM manuscript_documents WHERE project_id=$1 AND id=$2 RETURNING id", [projectId, documentId]);
+    await this.appendOutbox("manuscript-document", documentId, "document.deleted", { projectId, documentId, deleted: Boolean(result.rowCount) });
+    return { deleted: Boolean(result.rowCount), projectId, documentId };
   }
 
   private async nextDocumentOrder(projectId: string): Promise<number> {
@@ -179,6 +277,24 @@ export class NovelPostgresRepository {
   async getWorkflowRunByTemporalId(temporalWorkflowId: string) {
     const result = await this.pool.query<WorkflowRunRow>("SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at FROM workflow_runs WHERE temporal_workflow_id=$1", [temporalWorkflowId]);
     return result.rows[0] ? workflowFromRow(result.rows[0]) : undefined;
+  }
+
+  async listProjectRuns(projectId: string, limit = 20): Promise<WorkflowRunRecord[]> {
+    const result = await this.pool.query<WorkflowRunRow>("SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at FROM workflow_runs WHERE project_id=$1 ORDER BY updated_at DESC LIMIT $2", [projectId, limit]);
+    return result.rows.map(workflowFromRow);
+  }
+
+  async listRunArtifacts(temporalWorkflowId: string): Promise<Artifact[]> {
+    const run = await this.getWorkflowRunByTemporalId(temporalWorkflowId);
+    if (!run) return [];
+    const result = await this.pool.query<ArtifactRow>(`
+      SELECT id,project_id,task_id,attempt_id,kind,content_hash,object_key,base_revision,fingerprint,payload,created_at
+      FROM artifacts
+      WHERE project_id=$1 AND (payload->>'workflowId'=$2 OR payload->>'workflowId' IS NULL)
+      ORDER BY created_at DESC
+      LIMIT 100
+    `, [run.projectId, temporalWorkflowId]);
+    return result.rows.map(artifactFromRow);
   }
 
   async putCognition(plan: PreflightPlan, memory: MemoryBundle, skills: SkillBundle, blueprint: ExecutionBlueprint, context?: ContextManifest) {
@@ -245,6 +361,16 @@ export class NovelPostgresRepository {
     await this.pool.query("INSERT INTO learning_assessments(id,project_id,source,conclusion,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload,conclusion=EXCLUDED.conclusion", [assessment.id, assessment.projectId, assessment.source, assessment.conclusion, assessment]);
     await this.appendOutbox("learning-assessment", assessment.id, `learning.${assessment.conclusion}`, { projectId: assessment.projectId, assessmentId: assessment.id, source: assessment.source, proposeImprovement: assessment.conclusion === "propose-improvement" });
     return assessment;
+  }
+
+  async requestLearningPromotion(assessmentId: string) {
+    const result = await this.pool.query<{ project_id: string; payload: RuntimeLearningAssessmentV2 }>("SELECT project_id,payload FROM learning_assessments WHERE id=$1", [assessmentId]);
+    const assessment = result.rows[0]?.payload;
+    if (!assessment) throw new Error("learning assessment 不存在");
+    if (assessment.conclusion !== "propose-improvement" || !assessment.candidate) throw new Error("只有 propose-improvement 可进入 promote 回归验证");
+    await this.pool.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,$3,$4,$5,$6)", [result.rows[0].project_id, "runtime-learning", "promotion-regression-required", "learning-assessment", assessmentId, { assessmentId, candidate: assessment.candidate, regressionRisks: assessment.regressionRisks ?? [] }]);
+    await this.appendOutbox("learning-assessment", assessmentId, "learning.promotion-regression-required", { projectId: result.rows[0].project_id, assessmentId, targetKind: assessment.candidate.targetKind, targetId: assessment.candidate.targetId });
+    return { assessmentId, promoted: false, status: "regression-validation-required" as const, candidate: assessment.candidate };
   }
 
   async commitRevision(input: CommitRequest & { text: string; contentHash: string; objectKey: string; revisionId: string }): Promise<CommitResult> {

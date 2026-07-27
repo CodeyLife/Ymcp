@@ -24,6 +24,7 @@ function send(response: import("node:http").ServerResponse, status: number, valu
 
 function asString(value: unknown) { return typeof value === "string" && value.trim() ? value.trim() : undefined; }
 function asNumber(value: unknown) { return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
+function asRecord(value: unknown) { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 
 const server = createServer(async (request, response) => {
   try {
@@ -51,7 +52,19 @@ const server = createServer(async (request, response) => {
       return send(response, 201, { project: await repository.getProjectDetail(input.projectId) });
     }
     const projectMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)$/);
-    if (request.method === "GET" && projectMatch) return send(response, 200, { project: await repository.getProjectDetail(decodeURIComponent(projectMatch[1])) });
+    if (projectMatch) {
+      const projectId = decodeURIComponent(projectMatch[1]);
+      if (request.method === "GET") return send(response, 200, { project: await repository.getProjectDetail(projectId) });
+      if (request.method === "PATCH") {
+        const input = await readJson(request);
+        const title = input.title === undefined ? undefined : asString(input.title);
+        if (input.title !== undefined && !title) return send(response, 400, { error: "title 不能为空" });
+        return send(response, 200, { project: await repository.updateProject({ projectId, title, metadata: asRecord(input.metadata) }) });
+      }
+      if (request.method === "DELETE") return send(response, 200, await repository.deleteProject(projectId));
+    }
+    const projectRunsMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/runs$/);
+    if (request.method === "GET" && projectRunsMatch) return send(response, 200, { runs: await repository.listProjectRuns(decodeURIComponent(projectRunsMatch[1])) });
     const documentMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/documents$/);
     if (request.method === "POST" && documentMatch) {
       const input = await readJson(request);
@@ -61,11 +74,28 @@ const server = createServer(async (request, response) => {
       const document = await repository.ensureDocument({ projectId, documentId: asString(input.documentId), title, narrativeOrder: asNumber(input.narrativeOrder), povCharacterId: asString(input.povCharacterId), status: asString(input.status) });
       return send(response, 201, { document });
     }
+    const documentItemMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/documents\/([^/?]+)$/);
+    if (documentItemMatch) {
+      const projectId = decodeURIComponent(documentItemMatch[1]);
+      const documentId = decodeURIComponent(documentItemMatch[2]);
+      if (request.method === "PATCH") {
+        const input = await readJson(request);
+        const title = input.title === undefined ? undefined : asString(input.title);
+        if (input.title !== undefined && !title) return send(response, 400, { error: "title 不能为空" });
+        const clearPov = input.povCharacterId === null;
+        const povCharacterId = clearPov ? null : asString(input.povCharacterId);
+        const document = await repository.updateDocument({ projectId, documentId, title, narrativeOrder: asNumber(input.narrativeOrder), povCharacterId: input.povCharacterId === undefined ? undefined : povCharacterId, status: asString(input.status) });
+        return send(response, 200, { document });
+      }
+      if (request.method === "DELETE") return send(response, 200, await repository.deleteDocument(projectId, documentId));
+    }
     const recordMatch = request.url?.match(/^\/v2\/(preflight-plans|memory-bundles|skills|blueprints|artifacts|context-manifests|learning-assessments)\/([^/]+)$/);
     if (request.method === "GET" && recordMatch) {
       const table = ({ "preflight-plans": "preflight_plans", "memory-bundles": "memory_bundles", skills: "skill_bundles", blueprints: "execution_blueprints", artifacts: "artifacts", "context-manifests": "context_manifests", "learning-assessments": "learning_assessments" } as const)[recordMatch[1] as "preflight-plans" | "memory-bundles" | "skills" | "blueprints" | "artifacts" | "context-manifests" | "learning-assessments"];
       return send(response, 200, { record: await repository.getRecord(table, decodeURIComponent(recordMatch[2])) });
     }
+    const runArtifactsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/artifacts$/);
+    if (request.method === "GET" && runArtifactsMatch) return send(response, 200, { artifacts: await repository.listRunArtifacts(decodeURIComponent(runArtifactsMatch[1])) });
     const eventsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/events(?:\?after=(\d+))?$/);
     if (request.method === "GET" && eventsMatch) {
       const workflowId = decodeURIComponent(eventsMatch[1]);
@@ -112,6 +142,8 @@ const server = createServer(async (request, response) => {
       await handle.signal(signal, payload);
       return send(response, 202, { accepted: true, workflowId, taskId });
     }
+    const learningPromoteMatch = request.url?.match(/^\/v2\/learning\/([^/?]+)\/promote$/);
+    if (request.method === "POST" && learningPromoteMatch) return send(response, 202, { promotion: await repository.requestLearningPromotion(decodeURIComponent(learningPromoteMatch[1])) });
     if (request.method === "GET" && request.url === "/v2/usage") return send(response, 200, { usage: [] });
     const runMatch = request.url?.match(/^\/v2\/runs\/([^/]+)$/);
     if (request.method === "GET" && runMatch) {

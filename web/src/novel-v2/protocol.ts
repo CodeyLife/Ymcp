@@ -227,6 +227,9 @@ export interface ManuscriptDocumentSummary {
   status: string;
   createdAt: string;
   updatedAt: string;
+  wordCount?: number;
+  latestRevision?: number;
+  blockingIssueCount?: number;
 }
 
 export interface NovelProjectDetail {
@@ -237,6 +240,7 @@ export interface NovelProjectDetail {
   createdAt: string;
   updatedAt: string;
   documents: ManuscriptDocumentSummary[];
+  latestRuns?: WorkflowRunRecord[];
 }
 
 export interface WorkflowRunRecord {
