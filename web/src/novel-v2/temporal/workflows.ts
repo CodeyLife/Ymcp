@@ -1,10 +1,10 @@
 import { defineSignal, proxyActivities, setHandler, condition } from "@temporalio/workflow";
-import type { Artifact, CommitResult, ContextManifest, CreativeRun, CreativeReviewGate, CreativeWorkItem, ExecutionBlueprint, MemoryBundle, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, RuntimeLearningAssessmentV2, SkillBundle, TaskAttemptRecord } from "../protocol";
+import type { Artifact, CommitResult, ContextManifest, CreativeRun, CreativeReviewGate, CreativeWorkItem, ExecutionBlueprint, FactApprovalSummary, MemoryBundle, MemoryClaim, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, RuntimeLearningAssessmentV2, SkillBundle, TaskAttemptRecord } from "../protocol";
 import type { ChapterPlanningContext, StoryArcBundle } from "../application/story-arc";
 import type { StoryArcReviewOutput } from "../prompts/story-arc";
 import type { ReviewerRole } from "../prompts/chapter-review";
 import type { ModelRoutingSnapshot, ModelTaskRecord } from "../model-routing";
-import { runChapterLifecycle } from "../application/chapter-lifecycle";
+import { finalizeChapterLifecycle, runChapterLifecycle } from "../application/chapter-lifecycle";
 
 function failureMessage(error: unknown): string {
   let current: unknown = error;
@@ -75,7 +75,9 @@ export interface NovelWorkflowActivities {
   materializeExternalReview(input: { modelTaskId: string; artifact: Artifact; identity: "internal" | "independent"; role: ReviewerRole; value: unknown }): Promise<Review>;
   extractFacts(input: { workflowId: string; projectId: string; artifact: Artifact; text: string; blueprint: ExecutionBlueprint; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; documentId?: string; narrativeOrder?: number }): Promise<{ kind: "completed"; artifact: Artifact } | { kind: "external"; task: ModelTaskRecord; artifact: Artifact }>;
   materializeExternalFacts(input: { modelTaskId: string; projectId: string; artifact: Artifact; text: string; documentId?: string; narrativeOrder?: number }): Promise<Artifact>;
-  approveFacts(input: { workflowId: string; projectId: string; artifact: Artifact }): Promise<{ autoApproved: number; pending: number }>;
+  approveFacts(input: { workflowId: string; projectId: string; artifact: Artifact }): Promise<FactApprovalSummary>;
+  /** P0 #1: 人工事实审批门通过后，批量批准 pending 事实候选（candidate → approved）。 */
+  approveFactClaims(input: { projectId: string; ids: string[] }): Promise<MemoryClaim[]>;
   assessLearning(input: { projectId: string; workflowId: string; assessmentKey: string; artifact: Artifact; reviews: Review[]; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; assessment: RuntimeLearningAssessmentV2 } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalLearning(input: { modelTaskId: string; projectId: string; workflowId: string; artifact: Artifact; reviews: Review[] }): Promise<RuntimeLearningAssessmentV2>;
   commit(input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }): Promise<CommitResult>;
@@ -380,13 +382,18 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
     await activities.updateTaskAttempt({ id: draft.artifact.attemptId, workflowRunId: workflowId, taskId: draft.artifact.taskId, status: "submitted", payload: { artifactId: draft.artifact.id, fingerprint: draft.artifact.fingerprint } });
 
     // 章节反思（Phase 2.4）：draft 后、runAllReviewers 前的自我批评
-    // 若 reflection 发现 blocker/major，自动调一次 runRevision（不计入 maxAutoRevisions）
+    // 若 reflection 发现 blocker/major，自动调一次 runRevision。
+    // 注意：reflection 修订独立于 review-revision 循环（runChapterLifecycle 内的 ≤DEFAULT_MAX_AUTO_REVISIONS 轮），
+    // 单独计数以便语义明确——reflection 最多 REFLECTION_AUTO_REVISIONS 次，不占用 review 循环的修订额度。
     // 设计依据：AGENTS.md「root-cause analysis」+ Phase 2.4 计划「autoRevise 最多 1 次」
+    const REFLECTION_AUTO_REVISIONS = 1;
+    let reflectionRevisions = 0;
     try {
       const reflection = await runReflection(draft);
       if (reflection) {
         const hasBlocking = reflection.critique.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major");
-        if (hasBlocking) {
+        if (hasBlocking && reflectionRevisions < REFLECTION_AUTO_REVISIONS) {
+          reflectionRevisions += 1;
           await activities.updateWorkflowStatus({ workflowId, status: "running", payload: { stage: "reflection-auto-revise", issueCount: reflection.critique.issues.length } });
           const reflectionReview = critiqueToReview(reflection.critique, draft.artifact);
           draft = await runRevision(draft, [reflectionReview]);
@@ -404,14 +411,39 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
       revise: (current, reviewList) => runRevision(current, reviewList),
       assessLearning: runLearning,
       extractFacts: runFactExtraction,
-      approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: intent.projectId, artifact: factArtifact }).then(() => undefined),
+      approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: intent.projectId, artifact: factArtifact }),
       commit: (current, reviewList) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, text: current.text, reviews: reviewList, baseRevision: blueprint.baseRevision, idempotencyKey: intent.idempotencyKey }),
       enrich: (current, commitResult) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder),
       progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
       beforeRevision: (revisionIteration) => activities.updateTaskAttempt({ id: `${blueprint.id}:revise:attempt-${revisionIteration}`, workflowRunId: workflowId, taskId: `${blueprint.id}:revise`, status: "running", payload: { taskKind: "revise", iteration: revisionIteration } }).then(() => undefined),
       afterRevision: (current, revisionIteration) => activities.updateTaskAttempt({ id: current.artifact.attemptId, workflowRunId: workflowId, taskId: current.artifact.taskId, status: "submitted", payload: { artifactId: current.artifact.id, iteration: revisionIteration } }).then(() => undefined),
       commitBlocked: blueprint.memoryGate?.status === "manual-review" ? { reasonCode: "memory-coverage-incomplete", missingFacets: blueprint.memoryGate.missingFacets, manualReviewFacets: blueprint.memoryGate.manualReviewFacets } : undefined,
+      requireManualFactApproval: blueprint.factApprovalMode === "manual",
     });
+
+    // P0 #1: opt-in 人工事实审批门。factApprovalBlocked 仅在 commitGate 已通过、但存在 pending 事实时出现。
+    if (lifecycle.factApprovalBlocked) {
+      await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { blueprintId: blueprint.id, reasonCode: "fact-approval-pending", pendingIds: lifecycle.factApprovalBlocked.pendingIds, artifactId: lifecycle.draft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds } });
+      await condition(() => humanDecision !== undefined);
+      if (humanDecision!.decision === "reject") {
+        await activities.updateWorkflowStatus({ workflowId, status: "rejected", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, authorId: humanDecision!.authorId, feedback: humanDecision!.feedback } });
+        return blueprint;
+      }
+      // 作者确认：将 pending 事实候选翻转为 approved（candidate → approved），随后正常提交。
+      // approveFactClaims activity 内部同时写回 Qdrant 索引（与 recordFactExtraction 模式一致）。
+      await activities.approveFactClaims({ projectId: intent.projectId, ids: lifecycle.factApprovalBlocked.pendingIds });
+      const finalized = await finalizeChapterLifecycle({
+        projectId: intent.projectId,
+        draft: lifecycle.draft,
+        reviews: lifecycle.reviews,
+        commit: (current, reviewList) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, text: current.text, reviews: reviewList, baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:fact-approved` }),
+        enrich: (current, commitResult) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder),
+        assessLearning: runLearning,
+        progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
+      });
+      await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, finalScore: lifecycle.finalScore, factApproved: true, authorId: humanDecision!.authorId, enrichmentError: finalized.enrichmentError } });
+      return blueprint;
+    }
 
     if (!lifecycle.commitResult) {
       await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { blueprintId: blueprint.id, signalCount: signals.length, iterations: lifecycle.iteration, finalScore: lifecycle.finalScore, artifactId: lifecycle.draft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds, reasonCode: lifecycle.commitBlocked?.reasonCode ?? "quality-gate-not-passed", ...lifecycle.commitBlocked } });
@@ -484,6 +516,8 @@ export interface CreativeWorkflowActivities {
   updateRunStatus(input: { runId: string }): Promise<CreativeRun>;
   /** 写入 creative_run_events 事件 */
   recordEvent(input: { runId: string; eventType: string; payload: Record<string, unknown> }): Promise<unknown>;
+  /** 标记 work item 失败（达到重试上限时闭环，避免永久 running） */
+  failWork(input: { runId: string; workItemId: string; reason?: string }): Promise<CreativeWorkItem>;
   /**
    * 生成架构产出（foundation artifact）。
    * 按 work item.taskKey 调用 modelGateway.generateStructured(planning.foundation)。
@@ -730,7 +764,7 @@ export async function creativeRunWorkflow(runId: string): Promise<void> {
     const finalRun = await activities.updateRunStatus({ runId });
     await activities.recordEvent({
       runId,
-      eventType: "workflow.completed",
+      eventType: finalRun.status === "failed" ? "workflow.failed" : "workflow.completed",
       payload: { finalStatus: finalRun.status },
     });
     await activities.updateWorkflowStatus({ workflowId: runId, status: finalRun.status, payload: { runId } });
@@ -866,8 +900,8 @@ async function processWorkItem(params: {
     return;
   }
 
-  // 达到重试上限：记录事件，work item 留待人工介入
-  // TODO P2: 触发 failWork 或标记为需人工介入
+  // 达到重试上限：标记 work item 失败；run-manager 会把所属 run 派生为 failed 终态。
+  await activities.failWork({ runId, workItemId: work.id, reason: `maxRetriesExceeded:${gate.reason}` });
   await activities.recordEvent({
     runId,
     eventType: "work.maxRetriesExceeded",
@@ -1024,7 +1058,7 @@ export async function chapterReviewWorkflow(params: {
       },
       assessLearning: runLearning,
       extractFacts: runFactExtraction,
-      approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: params.projectId, artifact: factArtifact }).then(() => undefined),
+      approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: params.projectId, artifact: factArtifact }),
       commit: (current, reviewList) => activities.commit({ projectId: params.projectId, documentId: params.documentId, artifact: current.artifact, text: current.text, reviews: reviewList, baseRevision: documentState.baseRevision, idempotencyKey: workflowId }),
       enrich: (current, commitResult) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder),
       progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),

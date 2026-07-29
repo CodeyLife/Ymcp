@@ -46,6 +46,8 @@ export interface NovelIntent {
   requestedStage?: NovelStage;
   constraints?: string[];
   requestedCapabilities?: string[];
+  /** Whether candidate facts must be approved before the chapter commit. */
+  factApprovalMode?: "auto" | "manual";
   createdAt: number;
   idempotencyKey: string;
 }
@@ -218,6 +220,13 @@ export interface BlueprintTask {
   independentReviewRequired: boolean;
 }
 
+/** fact-approval 阶段产出。autoApproved=自动归类为 derived 的可检索事实数；pending=仍需作者确认（authority=candidate）的事实数；pendingIds=对应 claim id 列表。 */
+export interface FactApprovalSummary {
+  autoApproved: number;
+  pending: number;
+  pendingIds: string[];
+}
+
 export interface ExecutionBlueprint {
   id: string;
   projectId: string;
@@ -229,6 +238,16 @@ export interface ExecutionBlueprint {
   baseRevision: number;
   tasks: BlueprintTask[];
   commitPolicy: "dual-gate" | "human-only";
+  /**
+   * 事实审批模式（P0 #1）：
+   * - "auto"（默认）：recordFactApprovalPolicy 自动记录 derived 事实的审批决定，candidate 事实保持 pending（不进入检索），流程不阻塞。
+   * - "manual"：当存在 pending 事实时，chapter lifecycle 在 commit 前返回 factApprovalBlocked，
+   *   由工作流设置 manual-review-required 并等待作者确认（approveFactClaims）后才提交。
+   *
+   * 注意：authority 维度只有 derived/candidate/approved 三档；confidence 维度的 high/medium/low
+   *       不参与审批门判定，避免与 authority 语义混淆。
+   */
+  factApprovalMode?: "auto" | "manual";
   budget: { maxInputTokens: number; maxOutputTokens: number; maxCostUsd?: number };
   memoryGate?: {
     status: "passed" | "manual-review";
@@ -612,7 +631,7 @@ export interface AuthorDecision {
 // ===== 创意执行（Phase B-2）=====
 
 export type CreativeRunMode = "chapter" | "segment-auto";
-export type CreativeRunStatus = "pending" | "running" | "paused" | "completed" | "cancelled";
+export type CreativeRunStatus = "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
 export type CreativeWorkKind = "generation" | "revision" | "review";
 export type CreativeWorkStatus = "pending" | "running" | "accepted" | "revised" | "retried" | "recovered" | "failed";
 

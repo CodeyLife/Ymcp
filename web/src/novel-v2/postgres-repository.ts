@@ -21,6 +21,7 @@ import type {
   CommitResult,
   ContextManifest,
   ExecutionBlueprint,
+  FactApprovalSummary,
   ManuscriptDocumentSummary,
   MemoryBundle,
   MemoryClaim,
@@ -597,7 +598,19 @@ export class NovelPostgresRepository {
     if (kind === "foundation") return (await this.listFoundationArtifacts(projectId)).map((artifact) => ({ ...artifact, payload: artifact.structuredData ?? {} }));
     if (kind === "skills") {
       const result = await this.pool.query("SELECT skill_id AS id, version, capabilities, applicable_tasks, required_memory_kinds, conflicts, quality_gates, prompt_sections, applicable_genres, enabled, updated_at FROM skill_definitions ORDER BY skill_id");
-      return result.rows;
+      return result.rows.map((row) => ({
+        id: row.id,
+        version: row.version,
+        capabilities: row.capabilities ?? [],
+        applicableTasks: row.applicable_tasks ?? [],
+        requiredMemoryKinds: row.required_memory_kinds ?? [],
+        conflicts: row.conflicts ?? [],
+        qualityGates: row.quality_gates ?? [],
+        promptSections: row.prompt_sections ?? {},
+        applicableGenres: row.applicable_genres ?? [],
+        enabled: row.enabled,
+        updatedAt: row.updated_at,
+      }));
     }
     if (kind === "planning" || kind === "worldview" || kind === "characters") {
       const entityKind = kind === "characters" ? "character" : kind;
@@ -606,14 +619,14 @@ export class NovelPostgresRepository {
     }
     if (kind === "relations") {
       const result = await this.pool.query("SELECT id, subject_id, predicate, object_id, valid_from, valid_to, source_revision_id FROM relations WHERE project_id=$1 ORDER BY id", [projectId]);
-      return result.rows;
+      return result.rows.map((row) => ({ id: row.id, subjectId: row.subject_id, predicate: row.predicate, objectId: row.object_id, validFrom: row.valid_from, validTo: row.valid_to, sourceRevisionId: row.source_revision_id }));
     }
     if (kind === "timeline") {
       const result = await this.pool.query("SELECT id, narrative_time, event_type, content, source_revision_id FROM timeline_events WHERE project_id=$1 ORDER BY narrative_time,id", [projectId]);
-      return result.rows;
+      return result.rows.map((row) => ({ id: row.id, narrativeTime: Number(row.narrative_time), eventType: row.event_type, content: row.content ?? {}, sourceRevisionId: row.source_revision_id }));
     }
     const result = await this.pool.query("SELECT id, subject_id, predicate, object_value, truth_status, confidence, narrative_start, narrative_end FROM facts WHERE project_id=$1 ORDER BY narrative_start NULLS LAST,id", [projectId]);
-    return result.rows;
+    return result.rows.map((row) => ({ id: row.id, subjectId: row.subject_id, predicate: row.predicate, objectValue: row.object_value ?? {}, truthStatus: row.truth_status, confidence: Number(row.confidence), narrativeStart: row.narrative_start === null ? undefined : Number(row.narrative_start), narrativeEnd: row.narrative_end === null ? undefined : Number(row.narrative_end) }));
   }
 
   async upsertKnowledgeRecord(projectId: string, kind: Exclude<KnowledgeRecordKind, "foundation">, input: Record<string, unknown>) {
@@ -1663,8 +1676,10 @@ export class NovelPostgresRepository {
     projectId: string;
     artifact: Artifact;
     narrativeElements: NonNullable<FactExtractionOutput["narrativeElements"]>;
+    /** 当前章节的叙事顺序（1-based）。用于让未兑现伏笔按叙事顺序过滤，避免剧透未来章节。 */
+    narrativeOrder?: number;
   }): Promise<{ foreshadowings: number; promises: number; payoffs: number }> {
-    const { projectId, artifact, narrativeElements } = input;
+    const { projectId, artifact, narrativeElements, narrativeOrder } = input;
     const revisionId = artifact.id; // 用 artifact id 作为 revision 占位（fact-extraction 阶段尚未 commit）
     let foreshadowingCount = 0;
     let promiseCount = 0;
@@ -1674,8 +1689,8 @@ export class NovelPostgresRepository {
     for (const f of narrativeElements.foreshadowings ?? []) {
       const id = `foreshadowing:${projectId}:${createHash("sha256").update(`${artifact.id}:${f.description}`).digest("hex").slice(0, 12)}`;
       await this.pool.query(
-        "INSERT INTO foreshadowing(id, project_id, planted_revision_id, status, payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload",
-        [id, projectId, revisionId, "open", { description: f.description, triggerKeywords: f.triggerKeywords, expectedPayoffWindow: f.expectedPayoffWindow, evidence: f.evidence, artifactId: artifact.id }],
+        "INSERT INTO foreshadowing(id, project_id, planted_revision_id, status, payload, narrative_order) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload, narrative_order=EXCLUDED.narrative_order",
+        [id, projectId, revisionId, "open", { description: f.description, triggerKeywords: f.triggerKeywords, expectedPayoffWindow: f.expectedPayoffWindow, evidence: f.evidence, artifactId: artifact.id }, narrativeOrder ?? null],
       );
       foreshadowingCount += 1;
     }
@@ -1750,12 +1765,18 @@ export class NovelPostgresRepository {
     foreshadowings: Array<{ id: string; description: string; triggerKeywords: string[]; expectedPayoffWindow: string; plantedRevisionId: string }>;
     promises: Array<{ id: string; promiser: string; promisee: string; statement: string; sourceRevisionId: string }>;
   }> {
-    // narrativeCutoff 暂未用于过滤（foreshadowing 表无 narrative_order 列），保留参数供未来扩展
-    void narrativeCutoff;
+    // P0 #2: 按叙事顺序过滤未兑现伏笔，避免长篇后期审校注入"未来章节"埋设的伏笔造成剧透。
+    // narrativeCutoff = 当前章节顺序 - 1（由 retrieveMemory 传入），只有 planted 在 cutoff 之前
+    // （narrative_order <= cutoff）的伏笔才对当前章节可见、可被其兑现。迁移会尽力回填旧数据；
+    // 仍无法确定顺序的记录在有 cutoff 时隐藏，避免未知来源被错误当作过去事实而泄露未来剧情。
+    const foreshadowingSql = narrativeCutoff === undefined
+      ? "SELECT id, planted_revision_id, payload FROM foreshadowing WHERE project_id=$1 AND status='open' ORDER BY planted_revision_id ASC"
+      : "SELECT id, planted_revision_id, payload FROM foreshadowing WHERE project_id=$1 AND status='open' AND narrative_order <= $2 ORDER BY narrative_order ASC, planted_revision_id ASC";
+    const foreshadowingParams = narrativeCutoff === undefined ? [projectId] : [projectId, narrativeCutoff];
     // 查询未兑现的 foreshadowing
     const foreshadowingRows = await this.pool.query<{ id: string; planted_revision_id: string; payload: { description?: string; triggerKeywords?: string[]; expectedPayoffWindow?: string } }>(
-      "SELECT id, planted_revision_id, payload FROM foreshadowing WHERE project_id=$1 AND status='open' ORDER BY planted_revision_id ASC",
-      [projectId],
+      foreshadowingSql,
+      foreshadowingParams,
     );
     const foreshadowings = foreshadowingRows.rows.map((row) => ({
       id: row.id,
@@ -2135,19 +2156,66 @@ export class NovelPostgresRepository {
     return { contentHashes, claimsIndex };
   }
 
-  async recordFactApprovalPolicy(input: { projectId: string; artifactId: string; workflowId: string }): Promise<{ autoApproved: number; pending: number }> {
+  async recordFactApprovalPolicy(input: { projectId: string; artifactId: string; workflowId: string }): Promise<FactApprovalSummary> {
+    // P0 #1: 记录自动审批决定——derived 事实视为 runtime 自动批准，写入 decided_by/decided_at 以便审计。
+    // 此前该函数仅做统计、不改 authority，导致"审批"形同虚设。
+    await this.pool.query(
+      "UPDATE memory_claims SET decided_by='runtime', decided_at=now() WHERE project_id=$1 AND source_artifact_id=$2 AND authority='derived'",
+      [input.projectId, input.artifactId],
+    );
     const result = await this.pool.query<{ authority: string; count: string }>(
       "SELECT authority,count(*)::text AS count FROM memory_claims WHERE project_id=$1 AND source_artifact_id=$2 GROUP BY authority",
       [input.projectId, input.artifactId],
     );
     const counts = new Map(result.rows.map((row) => [row.authority, Number(row.count)]));
-    const summary = { autoApproved: counts.get("derived") ?? 0, pending: counts.get("candidate") ?? 0 };
+    const pendingIds = (await this.pool.query<{ id: string }>(
+      "SELECT id FROM memory_claims WHERE project_id=$1 AND source_artifact_id=$2 AND authority='candidate'",
+      [input.projectId, input.artifactId],
+    )).rows.map((row) => row.id);
+    const summary: FactApprovalSummary = { autoApproved: counts.get("derived") ?? 0, pending: counts.get("candidate") ?? 0, pendingIds };
     await this.pool.query(
       "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,'runtime','fact-approval.policy-applied','artifact',$2,$3)",
       [input.projectId, input.artifactId, { workflowId: input.workflowId, ...summary }],
     );
     await this.appendOutbox("artifact", input.artifactId, "fact-approval.policy-applied", { projectId: input.projectId, workflowId: input.workflowId, ...summary });
     return summary;
+  }
+
+  /**
+   * P0 #1: 批量批准事实候选（人工事实审批门通过时调用）。
+   * 将 candidate 事实翻转为 approved（authority=approved, decided_by='author'）。
+   * 返回更新后的 MemoryClaim 列表，由 activity 层（createNovelWorkflowActivities.approveFactClaims）
+   * 写回 Qdrant 向量索引；本函数只负责 PostgreSQL 真源。
+   */
+  async approveFactClaims(input: { projectId: string; ids: string[] }): Promise<MemoryClaim[]> {
+    if (input.ids.length === 0) return [];
+    await this.pool.query(
+      "UPDATE memory_claims SET authority='approved', decided_by='author', decided_at=now() WHERE project_id=$1 AND id = ANY($2::text[]) AND authority='candidate'",
+      [input.projectId, input.ids],
+    );
+    const result = await this.pool.query<any>(
+      "SELECT * FROM memory_claims WHERE project_id=$1 AND id = ANY($2::text[])",
+      [input.projectId, input.ids],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      kind: row.kind,
+      title: row.title,
+      content: row.content,
+      subjectRefs: row.subject_refs ?? [],
+      narrativeRange: { start: row.narrative_start ?? undefined, end: row.narrative_end ?? undefined },
+      knowledgeScope: row.knowledge_scope,
+      authority: row.authority,
+      confidence: Number(row.confidence),
+      sourceRevisionIds: row.source_revision_ids ?? [],
+      contentHash: row.content_hash,
+      supersedes: row.supersedes ?? [],
+      predicate: row.predicate ?? undefined,
+      sourceArtifactId: row.source_artifact_id ?? undefined,
+      decidedBy: row.decided_by ?? undefined,
+      decidedAt: row.decided_at ? iso(row.decided_at) : undefined,
+    }));
   }
 
   async appendCreativeRunEvent(runId: string, eventType: string, payload: Record<string, unknown>): Promise<void> {

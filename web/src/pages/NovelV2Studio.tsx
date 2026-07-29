@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { Alert, Button, Descriptions, Form, Input, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Typography, message } from "antd";
+import { Alert, Button, Checkbox, Descriptions, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Spin, Tabs, Tag, Typography, message } from "antd";
 import {
   ArrowLeftOutlined,
   AuditOutlined,
@@ -10,6 +10,7 @@ import {
   EditOutlined,
   EyeOutlined,
   FileAddOutlined,
+  NodeIndexOutlined,
   ReloadOutlined,
   SendOutlined,
   ThunderboltOutlined,
@@ -19,6 +20,9 @@ import { motion } from "motion/react";
 import "./novel-v2.css";
 import { describeEvent, documentStatusMeta, relativeTime, shortId, statusMeta, workflowTypeMeta } from "./novel-v2/presentation";
 import ArtifactContentModal, { ArtifactCard, type ArtifactSummary } from "./novel-v2/ArtifactContentModal";
+import ManuscriptEditor from "./novel-v2/ManuscriptEditor";
+import TextDiff from "./novel-v2/TextDiff";
+import "./novel-v2/manuscript-tools.css";
 
 // 懒加载子面板，避免主 bundle 过大
 const EvaluationPanel = lazy(() => import("./novel-v2/EvaluationPanel").then((m) => ({ default: m.default })));
@@ -57,6 +61,7 @@ export default function NovelV2Studio() {
   const navigate = useNavigate();
   const [project, setProject] = useState<ProjectDetail>();
   const [objective, setObjective] = useState("");
+  const [manualFactApproval, setManualFactApproval] = useState(false);
   const [targetDocumentId, setTargetDocumentId] = useState<string>();
   const [run, setRun] = useState<Run>();
   const [runs, setRuns] = useState<WorkflowRunRecord[]>([]);
@@ -74,6 +79,7 @@ export default function NovelV2Studio() {
   const [reviewInstruction, setReviewInstruction] = useState("从严审视叙事逻辑、人物声音、连续性、场景呈现与读者留存，并只修改有明确证据的问题。");
   const [authorEditOpen, setAuthorEditOpen] = useState(false);
   const [authorText, setAuthorText] = useState("");
+  const [authorEditMode, setAuthorEditMode] = useState<"edit" | "diff">("edit");
   const [factCandidates, setFactCandidates] = useState<FactCandidate[]>([]);
   const [factApprovalOpen, setFactApprovalOpen] = useState(false);
   const [viewingArtifact, setViewingArtifact] = useState<ArtifactSummary | null>(null);
@@ -191,7 +197,7 @@ export default function NovelV2Studio() {
       const body = await readJson<{ workflowId: string; runId?: string }>("/v2/intents", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ projectId, objective, idempotencyKey: `${projectId}:${Date.now()}`, source: "web", requestedStage: target ? "drafting" : "planning", target }),
+        body: JSON.stringify({ projectId, objective, idempotencyKey: `${projectId}:${Date.now()}`, source: "web", requestedStage: target ? "drafting" : "planning", target, factApprovalMode: manualFactApproval ? "manual" : "auto" }),
       });
       setRun({ workflowId: body.workflowId, status: "received", runId: body.runId });
       setObjective("");
@@ -258,6 +264,13 @@ export default function NovelV2Studio() {
           <span className="novel-status-pill novel-status-pill-done">
             revision {project?.currentRevision ?? 0}
           </span>
+          <Button
+            type="primary"
+            icon={<NodeIndexOutlined />}
+            onClick={() => navigate(`/novels/${encodeURIComponent(projectId)}/pipeline`)}
+          >
+            流水线指挥中心
+          </Button>
           <Button
             type="primary"
             ghost
@@ -369,6 +382,9 @@ export default function NovelV2Studio() {
                         placeholder="例如：根据当前记忆和 Skill 创作下一章，并保持已知事实一致"
                         autoSize={{ minRows: 4, maxRows: 8 }}
                       />
+                      <Checkbox checked={manualFactApproval} onChange={(event) => setManualFactApproval(event.target.checked)}>
+                        提交定稿前人工审批事实候选
+                      </Checkbox>
                       {selectedDocument?.arcPlanningStatus && selectedDocument.arcPlanningStatus !== "approved" && <Alert type="warning" showIcon message="故事弧蓝图已失效，请先重基线并重新批准。" />}
                       <Button type="primary" size="large" icon={<SendOutlined />} disabled={!objective.trim() || !selectedDocument || selectedDocument.arcPlanningStatus !== "approved"} onClick={() => void submit()} block>
                         提交到 Temporal Runtime
@@ -691,9 +707,22 @@ export default function NovelV2Studio() {
         <Input.TextArea value={reviewInstruction} onChange={(event) => setReviewInstruction(event.target.value)} autoSize={{ minRows: 4, maxRows: 8 }} />
       </Modal>
 
-      <Modal width={900} title="编辑正文并提交审校" open={authorEditOpen} onCancel={() => setAuthorEditOpen(false)} onOk={() => startChapterReview(authorText).catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))} okText="提交审校" okButtonProps={{ disabled: !authorText.trim() }}>
+      <Modal width={960} title="编辑正文并提交审校" open={authorEditOpen} onCancel={() => setAuthorEditOpen(false)} onOk={() => startChapterReview(authorText).catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))} okText="提交审校" okButtonProps={{ disabled: !authorText.trim() }}>
         <Typography.Paragraph type="secondary">作者修改先保存为不可变 proposal，再复用正式审核、修订、事实提取与提交闭环；不会直接覆盖定稿。</Typography.Paragraph>
-        <Input.TextArea value={authorText} onChange={(event) => setAuthorText(event.target.value)} autoSize={{ minRows: 18, maxRows: 28 }} />
+        <Segmented
+          value={authorEditMode}
+          onChange={(value) => setAuthorEditMode(value as "edit" | "diff")}
+          options={[
+            { value: "edit", label: "编辑正文" },
+            { value: "diff", label: "对比修改" },
+          ]}
+          style={{ marginBottom: 12 }}
+        />
+        {authorEditMode === "edit" ? (
+          <ManuscriptEditor key={documentContent?.contentHash ?? "author-edit"} value={authorText} onChange={setAuthorText} minHeight={440} autofocus={false} />
+        ) : (
+          <TextDiff baseText={documentContent?.plainText ?? ""} newText={authorText} baseLabel="当前定稿" newLabel="我的修改" emptyText="尚未做任何修改" />
+        )}
       </Modal>
 
       <Modal width={720} title="事实候选审批" open={factApprovalOpen} onCancel={() => setFactApprovalOpen(false)} footer={null}>

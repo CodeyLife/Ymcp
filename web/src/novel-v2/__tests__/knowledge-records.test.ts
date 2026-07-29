@@ -42,10 +42,10 @@ describe("V2 formal knowledge records", () => {
 
     expect((await repository.listKnowledgeRecords(projectId, "planning")).some((row) => row.id === planning.id)).toBe(true);
     expect((await repository.listKnowledgeRecords(projectId, "worldview")).some((row) => row.id === worldview.id)).toBe(true);
-    expect((await repository.listKnowledgeRecords(projectId, "relations")).some((row) => row.id === relation.id)).toBe(true);
-    expect((await repository.listKnowledgeRecords(projectId, "timeline")).some((row) => row.id === timeline.id)).toBe(true);
-    expect((await repository.listKnowledgeRecords(projectId, "facts")).some((row) => row.id === fact.id)).toBe(true);
-    expect((await repository.listKnowledgeRecords(projectId, "skills")).some((row) => row.id === skillId)).toBe(true);
+    expect((await repository.listKnowledgeRecords(projectId, "relations")).find((row) => row.id === relation.id)).toMatchObject({ subjectId: character.id, objectId: mentor.id });
+    expect((await repository.listKnowledgeRecords(projectId, "timeline")).find((row) => row.id === timeline.id)).toMatchObject({ narrativeTime: 3, eventType: "discovery" });
+    expect((await repository.listKnowledgeRecords(projectId, "facts")).find((row) => row.id === fact.id)).toMatchObject({ subjectId: character.id, objectValue: { item: "密信" }, truthStatus: "objective" });
+    expect((await repository.listKnowledgeRecords(projectId, "skills")).find((row) => row.id === skillId)).toMatchObject({ applicableTasks: ["drafting"], promptSections: { drafting: "保持人物知识边界。" } });
 
     const audit = await repository.pool.query("SELECT action FROM audit_records WHERE project_id=$1 AND action='knowledge.upsert'", [projectId]);
     expect(audit.rowCount).toBeGreaterThanOrEqual(8);

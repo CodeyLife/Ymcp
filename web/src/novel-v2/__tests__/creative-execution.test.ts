@@ -27,11 +27,13 @@ import {
   listCreativeRuns,
   pauseCreativeRun,
   resumeCreativeRun,
+  updateRunStatusFromWork,
 } from "../creative/run-manager";
 import {
   enqueueCreativeWork,
   startWork,
   acceptWork,
+  failWork,
   reviseWork,
 } from "../creative/work-item";
 import { submitReview, checkGate } from "../creative/review-gate";
@@ -250,6 +252,18 @@ describe("creative-execution integration", () => {
       it("pending → resume throws (requires paused)", async () => {
         const { run } = await setupProjectAndRun();
         await expect(resumeCreativeRun(repository, run.id)).rejects.toThrow(/无法恢复/);
+      });
+
+      it("moves a running run with failed work into the failed terminal state", async () => {
+        const { run } = await setupProjectAndRun();
+        await setRunStatus(run.id, "running");
+        const work = await enqueueCreativeWork(repository, run.id, { kind: "generation", instruction: "生成章节" });
+        await startWork(repository, work.id);
+        await failWork(repository, work.id, "maxRetriesExceeded:test");
+
+        const updated = await updateRunStatusFromWork(repository, run.id);
+
+        expect(updated.status).toBe("failed");
       });
     });
 

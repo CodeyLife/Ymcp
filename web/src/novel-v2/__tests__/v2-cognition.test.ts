@@ -38,6 +38,18 @@ describe("V2 cognition compiler", () => {
     expect(memory.claims.map((claim) => claim.id)).toEqual(["approved", "thread", "foreshadowing", "candidate"]);
     expect(manifest).toMatchObject({ memoryBundleId: memory.id, includedClaimIds: ["approved", "thread", "foreshadowing", "candidate"], excludedClaimIds: ["excluded"], truncationReason: "budget" });
     expect(blueprint.contextManifestId).toBe(manifest.id);
+    expect(blueprint.factApprovalMode).toBe("auto");
+  });
+
+  it("preserves an explicit manual fact approval policy in the execution blueprint", async () => {
+    const manualIntent: NovelIntent = { ...intent, factApprovalMode: "manual" };
+    const plan = createPreflightPlan(manualIntent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 });
+    const memory = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [{ id: "known-fact", projectId: "p1", kind: "canonical", title: "已知事实", content: "当前章节可见", subjectRefs: [], narrativeRange: { start: 1 }, knowledgeScope: "author", authority: "approved", confidence: 1, sourceRevisionIds: ["r1"], contentHash: "known-fact", supersedes: [], score: 1, matchedFacet: "fact", reason: "exact" }] } });
+    const skills = await resolveSkillBundle(plan, memory, { projectId: "p1", provider: { list: async () => [] } satisfies SkillProvider });
+
+    const blueprint = compileExecutionBlueprint(manualIntent, plan, memory, skills, { projectId: "p1", currentRevision: 7 });
+
+    expect(blueprint.factApprovalMode).toBe("manual");
   });
 
   it("rejects high-risk execution when required memory is missing", async () => {

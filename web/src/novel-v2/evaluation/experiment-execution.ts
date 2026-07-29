@@ -91,7 +91,7 @@ export async function executeChapterReviewExperiment(input: {
         if (generated.kind !== "completed") throw new Error(`实验事实提取不允许等待 external-mcp：${generated.task.id}`);
         return generated.artifact;
       },
-      approveFacts: (factArtifact) => activities.approveFacts({ workflowId: workflowRunId, projectId: input.projectId, artifact: factArtifact }).then(() => undefined),
+      approveFacts: (factArtifact) => activities.approveFacts({ workflowId: workflowRunId, projectId: input.projectId, artifact: factArtifact }),
       commit: (current, reviews) => activities.commit({ projectId: input.projectId, documentId: input.documentId, artifact: current.artifact, text: current.text, reviews, baseRevision: documentState.baseRevision, idempotencyKey: workflowRunId }),
       enrich: async (current, commitResult) => {
         if (snapshot.targetDocumentOrder === undefined) return;

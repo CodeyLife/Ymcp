@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import Ajv from "ajv";
-import type { Artifact, ContextManifest, CreativeRun, CreativeWorkItem, ExecutionBlueprint, MemoryBundle, MemoryHit, MemoryProvider, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, RuntimeLearningAssessmentV2, SkillBundle, SkillProvider, TaskAttemptRecord } from "../protocol";
+import type { Artifact, ContextManifest, CreativeRun, CreativeWorkItem, ExecutionBlueprint, MemoryBundle, MemoryClaim, MemoryHit, MemoryProvider, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, RuntimeLearningAssessmentV2, SkillBundle, SkillProvider, TaskAttemptRecord } from "../protocol";
 import { buildContextManifest, buildMemoryBundle, compileExecutionBlueprint, computeTokenBudget, createPreflightPlan, resolveSkillBundle } from "../cognition";
 import { NovelPostgresRepository } from "../postgres-repository";
 import type { ModelGateway } from "../model-gateway";
@@ -35,6 +35,7 @@ import {
   reviseWork as creativeReviseWork,
   startWork as creativeStartWork,
   updateRunStatusFromWork,
+  failWork as creativeFailWork,
 } from "../creative";
 
 type GeneratedTextResult = { kind: "completed"; artifact: Artifact; text: string } | { kind: "external"; task: ModelTaskRecord };
@@ -367,7 +368,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         // Phase 3.1: 写入叙事元素（伏笔/承诺/兑现），失败不阻塞 fact-extraction
         if (result.narrativeElements) {
           try {
-            await deps.repository.recordNarrativeElements({ projectId: input.projectId, artifact: factArtifact, narrativeElements: result.narrativeElements });
+            await deps.repository.recordNarrativeElements({ projectId: input.projectId, artifact: factArtifact, narrativeElements: result.narrativeElements, narrativeOrder: input.narrativeOrder });
           } catch (narrativeError) {
             console.warn(`[extractFacts] narrativeElements 写入失败（不阻塞 fact-extraction）：${(narrativeError as Error).message}`);
           }
@@ -407,7 +408,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       // Phase 3.1: 外部 MCP 路径也写入 narrativeElements
       if (projected.narrativeElements) {
         try {
-          await deps.repository.recordNarrativeElements({ projectId: input.projectId, artifact: input.artifact, narrativeElements: projected.narrativeElements });
+          await deps.repository.recordNarrativeElements({ projectId: input.projectId, artifact: input.artifact, narrativeElements: projected.narrativeElements, narrativeOrder: input.narrativeOrder });
         } catch (narrativeError) {
           console.warn(`[materializeExternalFacts] narrativeElements 写入失败：${(narrativeError as Error).message}`);
         }
@@ -461,6 +462,20 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
     },
     commit: (input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commit(input),
     commitAuthorApproved: (input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commitAuthorApproved(input),
+    /** P0 #1: 人工事实审批门通过后，批量批准 pending 事实候选（candidate → approved）。
+     *  内部同时写回 Qdrant 向量索引，与 recordFactExtraction 模式一致；
+     *  Qdrant 失败不阻塞（PostgreSQL 真源已保留），只警告。 */
+    approveFactClaims: async (input: { projectId: string; ids: string[] }): Promise<MemoryClaim[]> => {
+      const approved = await deps.repository.approveFactClaims(input);
+      if (approved.length && deps.memoryIndex) {
+        try {
+          await deps.memoryIndex.upsertClaims(input.projectId, approved);
+        } catch (error) {
+          console.warn(`[fact-approval] Qdrant 索引失败（PostgreSQL 真源已保留）：${(error as Error).message}`);
+        }
+      }
+      return approved;
+    },
 
     /**
      * 角色富化（character enrichment）activity。
@@ -831,6 +846,15 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
     recordEvent: async (input: { runId: string; eventType: string; payload: Record<string, unknown> }): Promise<unknown> => {
       await deps.repository.appendCreativeRunEvent(input.runId, input.eventType, input.payload);
       return { recorded: true };
+    },
+
+    /**
+     * 标记 work item 失败并写入 run 事件（闭环状态机）。
+     * 用于 CreativeRun 达到重试上限时，避免 work item 永久停留在 running。
+     * 包装 creative.failWork。
+     */
+    failWork: async (input: { runId: string; workItemId: string; reason?: string }): Promise<CreativeWorkItem> => {
+      return creativeFailWork(deps.repository, input.workItemId, input.reason ?? "maxRetriesExceeded");
     },
 
     getStoryArcRoutingSnapshot: async (): Promise<ModelRoutingSnapshot> => model.getRoutingSnapshot(),

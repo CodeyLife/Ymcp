@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Input, Modal, Popconfirm, Space, Table, Tabs, Tag, message } from "antd";
+import { Button, Input, Modal, Popconfirm, Segmented, Space, Table, Tabs, message } from "antd";
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { motion } from "motion/react";
 import "../novel-v2.css";
 import { knowledgeKindMeta, shortId } from "./presentation";
+import KnowledgeRecordForm, { type KnowledgeFormKind } from "./KnowledgeRecordForm";
 
-type KnowledgeKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills" | "foundation";
+type KnowledgeKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills";
 type KnowledgeRecord = Record<string, unknown> & { id?: string };
 
 const KINDS: Array<{ key: KnowledgeKind; label: string }> = [
@@ -16,10 +17,9 @@ const KINDS: Array<{ key: KnowledgeKind; label: string }> = [
   { key: "timeline", label: "时间线" },
   { key: "facts", label: "事实账本" },
   { key: "skills", label: "Skill 治理" },
-  { key: "foundation", label: "Foundation" },
 ];
 
-const NEW_RECORD: Record<Exclude<KnowledgeKind, "foundation">, KnowledgeRecord> = {
+const NEW_RECORD: Record<KnowledgeKind, KnowledgeRecord> = {
   planning: { name: "", payload: { objective: "", constraints: [] } },
   worldview: { name: "", payload: { rule: "", boundary: "" } },
   characters: { name: "", payload: { role: "", motivation: "", voiceAnchor: "" } },
@@ -65,8 +65,6 @@ function describeRecord(kind: KnowledgeKind, record: KnowledgeRecord): string {
       const enabled = record.enabled === false ? "已禁用" : "已启用";
       return `${enabled}${ver ? ` · v${ver}` : ""} · ${caps} 项能力`;
     }
-    case "foundation":
-      return "Foundation 只读版本产物";
     default:
       return str(record.name) || "记录";
   }
@@ -77,7 +75,9 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
   const [records, setRecords] = useState<KnowledgeRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<KnowledgeRecord>();
-  const [editorText, setEditorText] = useState("");
+  const [draft, setDraft] = useState<KnowledgeRecord>({});
+  const [jsonText, setJsonText] = useState("");
+  const [editorMode, setEditorMode] = useState<"form" | "json">("form");
 
   async function readJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
     const response = await fetch(input, init);
@@ -101,24 +101,31 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
   useEffect(() => { void load(kind); }, [projectId, kind]);
 
   function openCreate() {
-    if (kind === "foundation") return;
     setEditing({});
-    setEditorText(JSON.stringify(NEW_RECORD[kind], null, 2));
+    setDraft(NEW_RECORD[kind]);
+    setJsonText(JSON.stringify(NEW_RECORD[kind], null, 2));
+    setEditorMode("form");
   }
 
   function openEdit(record: KnowledgeRecord) {
     setEditing(record);
-    setEditorText(JSON.stringify(record, null, 2));
+    setDraft(record);
+    setJsonText(JSON.stringify(record, null, 2));
+    setEditorMode("form");
   }
 
   async function save() {
-    if (!editing || kind === "foundation") return;
+    if (!editing) return;
     let value: KnowledgeRecord;
-    try {
-      value = JSON.parse(editorText) as KnowledgeRecord;
-    } catch {
-      message.error("JSON 格式无效");
-      return;
+    if (editorMode === "json") {
+      try {
+        value = JSON.parse(jsonText) as KnowledgeRecord;
+      } catch {
+        message.error("JSON 格式无效");
+        return;
+      }
+    } else {
+      value = draft;
     }
     const id = recordId(editing);
     const path = `/v2/projects/${encodeURIComponent(projectId)}/knowledge/${kind}${id ? `/${encodeURIComponent(id)}` : ""}`;
@@ -130,7 +137,7 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
 
   async function remove(record: KnowledgeRecord) {
     const id = recordId(record);
-    if (!id || kind === "foundation") return;
+    if (!id) return;
     await readJson(`/v2/projects/${encodeURIComponent(projectId)}/knowledge/${kind}/${encodeURIComponent(id)}`, { method: "DELETE" });
     await load();
     message.success("记录已删除");
@@ -152,7 +159,7 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
     )},
     {
       title: "操作", key: "actions", width: 120,
-      render: (_: unknown, record: KnowledgeRecord) => kind === "foundation" ? <Tag>只读</Tag> : (
+      render: (_: unknown, record: KnowledgeRecord) => (
         <Space size="small">
           <Button type="text" icon={<EditOutlined />} aria-label="编辑" onClick={() => openEdit(record)} />
           <Popconfirm title="删除此记录？" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => void remove(record)}>
@@ -177,13 +184,30 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
-          {kind !== "foundation" && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>}
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
         </Space>
       </div>
       <Tabs activeKey={kind} items={KINDS.map((item) => ({ key: item.key, label: item.label }))} onChange={(value) => setKind(value as KnowledgeKind)} />
       <Table rowKey={(record) => recordId(record) || JSON.stringify(record)} loading={loading} dataSource={records} columns={columns} pagination={{ pageSize: 12 }} scroll={{ x: 760 }} />
-      <Modal title={recordId(editing ?? {}) ? "编辑记录" : "新增记录"} open={Boolean(editing)} onCancel={() => setEditing(undefined)} onOk={() => void save()} okText="保存" width={760} destroyOnHidden>
-        <Input.TextArea value={editorText} onChange={(event) => setEditorText(event.target.value)} autoSize={{ minRows: 16, maxRows: 28 }} spellCheck={false} style={{ fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace" }} />
+      <Modal title={recordId(editing ?? {}) ? "编辑记录" : "新增记录"} open={Boolean(editing)} onCancel={() => setEditing(undefined)} onOk={() => void save()} okText="保存" width={820} destroyOnHidden>
+        <Segmented
+          value={editorMode}
+          onChange={(v) => {
+            const next = v as "form" | "json";
+            if (next === "json") setJsonText(JSON.stringify(draft, null, 2));
+            else {
+              try { setDraft(JSON.parse(jsonText) as KnowledgeRecord); } catch { /* 保留 draft，非法 JSON 不回灌 */ }
+            }
+            setEditorMode(next);
+          }}
+          options={[{ value: "form", label: "结构化" }, { value: "json", label: "JSON" }]}
+          style={{ marginBottom: 14 }}
+        />
+        {editorMode === "form" ? (
+          <KnowledgeRecordForm kind={kind as KnowledgeFormKind} value={draft} onChange={setDraft} />
+        ) : (
+          <Input.TextArea value={jsonText} onChange={(event) => setJsonText(event.target.value)} autoSize={{ minRows: 16, maxRows: 28 }} spellCheck={false} style={{ fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace" }} />
+        )}
       </Modal>
     </motion.section>
   );

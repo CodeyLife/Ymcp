@@ -8,6 +8,7 @@ const VideoGen = lazy(() => import("@/pages/VideoGen"));
 const V2ProjectsPage = lazy(() => import("@/pages/NovelV2Projects"));
 const V2StudioPage = lazy(() => import("@/pages/NovelV2Studio"));
 const V2WorkflowShowcase = lazy(() => import("@/pages/novel-v2/workflow-showcase/WorkflowShowcase"));
+const V2PipelineBoard = lazy(() => import("@/pages/novel-v2/NovelPipelineBoard"));
 const Workbench = lazy(() => import("@/pages/Workbench"));
 const Matte = lazy(() => import("@/pages/Matte"));
 const SpriteSplit = lazy(() => import("@/pages/SpriteSplit"));
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="novels" element={<Suspense fallback={<RouteFallback />}><V2ProjectsPage /></Suspense>} />
         <Route path="novels/:projectId" element={<Suspense fallback={<RouteFallback />}><V2StudioPage /></Suspense>} />
         <Route path="novels/:projectId/showcase" element={<Suspense fallback={<RouteFallback />}><V2WorkflowShowcase /></Suspense>} />
+        <Route path="novels/:projectId/pipeline" element={<Suspense fallback={<RouteFallback />}><V2PipelineBoard /></Suspense>} />
         <Route path="workbench" element={<Suspense fallback={<RouteFallback />}><Workbench /></Suspense>} />
         <Route path="matte" element={<Suspense fallback={<RouteFallback />}><Matte /></Suspense>} />
         <Route path="sprite-split" element={<Suspense fallback={<RouteFallback />}><SpriteSplit /></Suspense>} />

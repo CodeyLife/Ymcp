@@ -11,8 +11,11 @@ dist-ssr
 .goal/
 config/model-providers.local.yaml
 .data/
-tmp/novel-v2-*.log
+tmp/
 
 # novel bench 历史基线与 fixture（本地生成，不入库）
 .novel-bench/
 src/features/novel/__tests__/bench/fixtures/*.json
+
+# 工具产物（本地 agent 记忆，不入库）
+.workbuddy/

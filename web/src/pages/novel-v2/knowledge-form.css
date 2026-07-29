@@ -1,0 +1,9 @@
+/* KnowledgeRecordForm — 结构化知识库表单样式（沿用 emerald 暗色令牌） */
+.krf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.krf-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.krf-field.is-span2 { grid-column: 1 / -1; }
+.krf-label { font-size: 12px; font-weight: 600; color: var(--color-ink); }
+.krf-help { font-size: 11px; color: var(--color-ink-muted); }
+.krf-json.is-invalid textarea { border-color: #ef4444 !important; }
+.krf-json-error { font-size: 11px; color: #f87171; margin-top: 4px; }
+@media (max-width: 640px) { .krf-grid { grid-template-columns: 1fr; } }

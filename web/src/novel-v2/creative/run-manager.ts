@@ -268,10 +268,10 @@ export async function cancelCreativeRun(
  *
  * 规则：
  * - 所有 work items 均为 accepted → run.completed
- * - 存在 failed work item → 保持当前 run 状态（不自动推进）
+ * - 存在 failed work item → run.failed
  * - 否则 → running
  *
- * 注意：当 run 已 cancelled/completed 时，不强制改回 running。
+ * 注意：当 run 已 failed/cancelled/completed 时，不强制改回 running。
  */
 export async function updateRunStatusFromWork(
   repository: NovelPostgresRepository,
@@ -281,7 +281,7 @@ export async function updateRunStatusFromWork(
   if (!existing) throw new Error(`CreativeRun 不存在：${runId}`);
 
   // 已终态的 run 不被 work item 状态反向修改
-  if (existing.status === "completed" || existing.status === "cancelled") {
+  if (existing.status === "completed" || existing.status === "failed" || existing.status === "cancelled") {
     return existing;
   }
 
@@ -298,8 +298,7 @@ export async function updateRunStatusFromWork(
   } else if (statuses.every((s) => s === "accepted")) {
     nextStatus = "completed";
   } else if (statuses.some((s) => s === "failed")) {
-    // 有 failed：保持当前状态
-    return existing;
+    nextStatus = "failed";
   } else {
     nextStatus = "running";
   }

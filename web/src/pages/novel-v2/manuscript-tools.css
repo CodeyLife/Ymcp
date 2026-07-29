@@ -1,0 +1,124 @@
+/* ============================================================
+ * manuscript-tools.css — ManuscriptEditor + TextDiff 样式
+ * 沿用主应用 emerald + 暗色玻璃设计令牌
+ * ============================================================ */
+
+/* ---------- TextDiff ---------- */
+.td-view {
+  border: 1px solid var(--color-line-soft);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+.td-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-line-soft);
+  background: var(--color-surface-raised);
+  font-size: 12px;
+}
+.td-stat { font-weight: 700; font-variant-numeric: tabular-nums; }
+.td-stat.is-del { color: #f87171; }
+.td-stat.is-add { color: var(--color-accent-hover); }
+.td-legend { display: inline-flex; align-items: center; gap: 6px; color: var(--color-ink-muted); margin-left: auto; }
+.td-legend + .td-legend { margin-left: 0; }
+.td-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.td-swatch.is-del { background: color-mix(in srgb, #ef4444 30%, transparent); }
+.td-swatch.is-add { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+
+.td-body { max-height: 520px; overflow: auto; font-family: "Geist Mono", ui-monospace, monospace; font-size: 12.5px; line-height: 1.7; }
+.td-line { display: flex; align-items: stretch; white-space: pre-wrap; word-break: break-word; }
+.td-line.is-add { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.td-line.is-del { background: color-mix(in srgb, #ef4444 10%, transparent); }
+.td-no {
+  flex: 0 0 44px; padding: 0 8px; text-align: right;
+  color: var(--color-line); user-select: none;
+  background: color-mix(in srgb, var(--color-surface) 40%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.td-line.is-add .td-no { color: color-mix(in srgb, var(--color-accent) 70%, transparent); }
+.td-line.is-del .td-no { color: #f87171; }
+.td-sign { flex: 0 0 20px; text-align: center; color: var(--color-ink-muted); user-select: none; }
+.td-text { flex: 1; padding: 0 12px 0 4px; color: var(--color-ink); }
+.td-tok.is-del { background: color-mix(in srgb, #ef4444 32%, transparent); color: #fecaca; border-radius: 3px; text-decoration: line-through; }
+.td-tok.is-add { background: color-mix(in srgb, var(--color-accent) 32%, transparent); color: #a7f3d0; border-radius: 3px; }
+.td-empty { padding: 24px; text-align: center; color: var(--color-ink-muted); font-size: 13px; }
+.td-collapse {
+  display: block; width: 100%; text-align: center;
+  padding: 6px; border: none; cursor: pointer;
+  background: color-mix(in srgb, var(--color-surface) 50%, transparent);
+  color: var(--color-accent-muted); font-size: 11.5px;
+  border-top: 1px solid var(--color-line-soft); border-bottom: 1px solid var(--color-line-soft);
+}
+.td-collapse:hover { background: var(--color-surface-raised); }
+.td-viewmode { margin-left: 12px; }
+
+/* ---------- TextDiff 并排（side-by-side） ---------- */
+.tds-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--color-line-soft); }
+.tds-row:last-child { border-bottom: none; }
+.tds-cell { display: flex; align-items: stretch; white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.tds-cell + .tds-cell { border-left: 1px solid var(--color-line-soft); }
+.tds-cell.is-add { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.tds-cell.is-del { background: color-mix(in srgb, #ef4444 10%, transparent); }
+.tds-cell.is-empty { background: color-mix(in srgb, var(--color-surface) 60%, transparent); }
+.tds-text { flex: 1; padding: 0 10px 0 6px; color: var(--color-ink); }
+
+/* ---------- ManuscriptEditor ---------- */
+.me-editor {
+  border: 1px solid var(--color-line-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.me-editor.is-readonly { border-style: dashed; }
+.me-toolbar {
+  display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
+  padding: 6px 8px; border-bottom: 1px solid var(--color-line-soft);
+  background: var(--color-surface-raised);
+  position: sticky; top: 0; z-index: 2;
+}
+.me-tb-btn {
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border: none; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--color-ink-muted); font-size: 14px;
+  transition: background 0.12s, color 0.12s;
+}
+.me-tb-btn:hover:not(:disabled) { background: var(--color-surface-overlay); color: var(--color-ink); }
+.me-tb-btn.is-active { background: color-mix(in srgb, var(--color-accent) 18%, transparent); color: var(--color-accent-hover); }
+.me-tb-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.me-tb-text { font-size: 12px; font-weight: 700; }
+.me-content { flex: 1; overflow-y: auto; }
+.me-content .ProseMirror {
+  outline: none;
+  min-height: var(--me-min-height, 360px);
+  padding: 16px 18px;
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.9;
+}
+.me-content .ProseMirror p { margin: 0 0 0.9em; }
+.me-content .ProseMirror h1, .me-content .ProseMirror h2, .me-content .ProseMirror h3 {
+  margin: 1em 0 0.5em; line-height: 1.4; color: var(--color-ink);
+}
+.me-content .ProseMirror blockquote {
+  margin: 0.8em 0; padding-left: 14px;
+  border-left: 3px solid var(--color-accent); color: var(--color-ink-muted);
+}
+.me-content .ProseMirror ul, .me-content .ProseMirror ol { padding-left: 22px; margin: 0.5em 0; }
+.me-content .ProseMirror hr { border: none; border-top: 1px solid var(--color-line); margin: 1.2em 0; }
+.me-content .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--color-ink-muted);
+  float: left; height: 0; pointer-events: none;
+}
+.me-footer {
+  display: flex; justify-content: flex-end; gap: 12px;
+  padding: 6px 12px; border-top: 1px solid var(--color-line-soft);
+  font-size: 11px; color: var(--color-ink-muted);
+  background: color-mix(in srgb, var(--color-surface) 50%, transparent);
+}
