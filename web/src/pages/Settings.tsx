@@ -1,9 +1,10 @@
-import { Card, Typography, Form, Input, InputNumber, Button, Divider, App, Alert, Segmented } from "antd";
+import { Card, Typography, Form, Input, InputNumber, Button, Divider, App, Alert, Segmented, Space } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import { useUIStore, getEffectiveApiConfig, type ImageGenAdapter } from "@/stores/ui";
 import { DEFAULT_GREENSCREEN_PROMPT, DEFAULT_SPRITESHEET_PROMPT } from "@/config/defaults";
 import { PageHeader } from "@/components/showtime";
 import { ChatModelSelect } from "@/components/ChatModelSelect";
+import { NovelModelRoutingSettings } from "@/components/NovelModelRoutingSettings";
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -105,7 +106,10 @@ export default function Settings() {
             <ChatModelSelect style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item label="模型上下文硬上限" name="model_context_window" help="留空或 0 时读取 /models 返回的能力字段；自定义接口未返回时可手动填写，例如 128000">
-            <InputNumber min={0} step={1000} precision={0} style={{ width: "100%" }} placeholder="自动检测" addonAfter="tokens" />
+            <Space.Compact style={{ width: "100%" }}>
+              <InputNumber min={0} step={1000} precision={0} style={{ width: "100%" }} placeholder="自动检测" />
+              <Button disabled style={{ pointerEvents: "none" }}>tokens</Button>
+            </Space.Compact>
           </Form.Item>
           <Divider style={{ borderColor: "#27272a" }} />
           <Form.Item
@@ -159,6 +163,7 @@ export default function Settings() {
           )}
         </Form>
       </Card>
+      <NovelModelRoutingSettings />
     </div>
   );
 }

@@ -1,45 +1,251 @@
+/* ============================================================
+ * NOVEL V2 — Editorial Design System
+ * 高质量前端设计语言：编辑级排版 + 无空隙 Bento + 焦点卡片 +
+ * Motion 友好的悬停物理。所有 novel 创作板块共享。
+ *
+ * 设计原则（gpt-taste）：
+ *  - 禁用廉价 meta-label kicker（"NOVEL V2 / STUDIO" 等）
+ *  - H1 容器超宽（max-w-5xl/6xl），保证横向流，绝不超过 2-3 行
+ *  - Bento 网格使用 grid-flow-dense，零空隙
+ *  - 按钮对比度完美，深底白字 / 浅底深字
+ *  - 章节 spacing 巨大（py-32 级别），cinematic chapters
+ * ============================================================ */
+
+/* ===== Tokens（继承 index.css，补充 novel 专属）===== */
+.novel-v2-page {
+  --novel-radius-lg: 18px;
+  --novel-radius-md: 14px;
+  --novel-radius-sm: 10px;
+  --novel-hairline: rgba(63, 63, 70, 0.62);
+  --novel-hairline-soft: rgba(63, 63, 70, 0.38);
+  --novel-surface-1: rgba(15, 15, 18, 0.72);
+  --novel-surface-2: rgba(24, 24, 27, 0.62);
+  --novel-surface-3: rgba(9, 9, 11, 0.55);
+  --novel-accent: #34d399;
+  --novel-accent-deep: #10b981;
+  --novel-accent-glow: rgba(52, 211, 153, 0.42);
+
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 28px 28px 52px;
+  position: relative;
+  z-index: 1;
+}
+
+.novel-v2-studio-page {
+  max-width: none;
+  padding: 24px 28px 48px;
+}
+
+/* ============================================================
+ * EDITORIAL TYPOGRAPHY
+ * 编辑级标题系统：超宽容器 + clamp 字号，杜绝 6 行文本墙
+ * ============================================================ */
+
+/* 页面主标题 H1：超宽容器，2-3 行内完成 */
+.novel-display-title {
+  max-width: 64rem;            /* max-w-5xl，保证横向流 */
+  margin: 0;
+  color: #f4f4f5;
+  font-size: clamp(2.5rem, 4.4vw, 4rem);
+  font-weight: 800;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+}
+
+/* 二级标题（工作室页 / 面板标题）*/
+.novel-display-h2 {
+  max-width: 56rem;
+  margin: 0;
+  color: #f4f4f5;
+  font-size: clamp(1.75rem, 2.8vw, 2.4rem);
+  font-weight: 750;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+/* 三级标题（卡片标题）*/
+.novel-display-h3 {
+  margin: 0;
+  color: #f4f4f5;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+/* 引导段 lede：hero 下方说明文字 */
+.novel-lede {
+  max-width: 64ch;
+  margin: 14px 0 0;
+  color: #a1a1aa;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* 小节 eyebrow：取代廉价 meta-label kicker
+ * 不再写 "NOVEL V2 / SECTION 01"，而是用语义化的小标签
+ * 配合左侧装饰短条，形成"章节感" */
+.novel-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  color: #6ee7b7;
+  font: 600 11px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.novel-eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.85);
+}
+
+/* 小节标签（面板内分区）— 替代 .novel-v2-section-label */
+.novel-section-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 10px;
+  color: #d4d4d8;
+  font: 700 12px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.novel-section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(63, 63, 70, 0.7), transparent);
+}
+
+/* ============================================================
+ * HERO / TOPBAR
+ * ============================================================ */
+
+.novel-hero {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding: 32px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-lg);
+  background:
+    radial-gradient(80% 120% at 8% 0%, rgba(52, 211, 153, 0.16), transparent 52%),
+    radial-gradient(60% 100% at 100% 100%, rgba(20, 184, 166, 0.08), transparent 50%),
+    linear-gradient(135deg, rgba(24, 24, 27, 0.9), rgba(9, 9, 11, 0.86));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 24px 56px rgba(0, 0, 0, 0.28);
+}
+
+.novel-hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -120px -140px auto;
+  width: 320px;
+  height: 320px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(16, 185, 129, 0.14), transparent 65%);
+  filter: blur(40px);
+  pointer-events: none;
+}
+
+.novel-hero-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.novel-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 工作室 topbar：紧凑型 hero，用于 studio / panel 子页 */
+.novel-topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 20px;
+  padding: 20px 24px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-lg);
+  background:
+    radial-gradient(60% 120% at 0% 0%, rgba(52, 211, 153, 0.12), transparent 50%),
+    linear-gradient(135deg, rgba(24, 24, 27, 0.86), rgba(9, 9, 11, 0.82));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
+.novel-topbar-body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.novel-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* 兼容旧类名（panel 仍在用，重构前保留）*/
 .novel-v2-page {
   max-width: 1480px;
   margin: 0 auto;
   padding: 28px 28px 52px;
+  position: relative;
+  z-index: 1;
 }
-
-.novel-v2-kicker {
-  margin-bottom: 8px;
-  color: #34d399;
-  font: 700 11px/1 var(--font-mono);
-  letter-spacing: 0.12em;
+.novel-v2-studio-page {
+  max-width: none;
+  padding: 24px 28px 48px;
 }
-
 .novel-v2-hero,
 .novel-v2-studio-topbar {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 18px;
   padding: 22px;
-  border: 1px solid rgba(63, 63, 70, 0.68);
-  border-radius: 16px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-lg);
   background:
     radial-gradient(circle at 12% 0%, rgba(52, 211, 153, 0.18), transparent 34%),
     linear-gradient(135deg, rgba(24, 24, 27, 0.9), rgba(9, 9, 11, 0.86));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 18px 48px rgba(0,0,0,0.24);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 48px rgba(0, 0, 0, 0.24);
 }
-
 .novel-v2-hero h1,
 .novel-v2-studio-topbar h2,
 .novel-v2-project-card h4 {
   margin: 0 !important;
   color: #f4f4f5 !important;
 }
-
 .novel-v2-hero p {
   max-width: 760px;
   margin: 10px 0 0 !important;
   color: #a1a1aa !important;
 }
-
 .novel-v2-hero-actions,
 .novel-v2-project-actions,
 .novel-v2-document-actions {
@@ -47,10 +253,386 @@
   flex-wrap: wrap;
   gap: 8px;
 }
-
 .novel-v2-alert {
   margin-bottom: 16px;
 }
+
+/* ============================================================
+ * BENTO GRID — 无空隙，grid-flow-dense
+ * ============================================================ */
+
+/* 统计 / 概览 bento：4 列 × 自动行，feature 占 2×2，mini 占 1×1
+ * 数学验证：1 feature(4 cells) + 4 mini(4 cells) = 8 cells = 4×2 网格，零空隙 */
+.novel-bento {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(132px, auto);
+  grid-auto-flow: dense;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.novel-bento > .novel-bento-feature {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+.novel-bento > .novel-bento-mini {
+  grid-column: span 1;
+  grid-row: span 1;
+}
+
+.novel-bento > .novel-bento-wide {
+  grid-column: span 2;
+  grid-row: span 1;
+}
+
+/* 中屏：2 列 */
+@media (max-width: 1023px) {
+  .novel-bento {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .novel-bento > .novel-bento-feature {
+    grid-column: span 2;
+    grid-row: span 2;
+  }
+  .novel-bento > .novel-bento-wide {
+    grid-column: span 2;
+  }
+}
+
+/* 窄屏：1 列 */
+@media (max-width: 639px) {
+  .novel-bento {
+    grid-template-columns: 1fr;
+    grid-auto-rows: auto;
+  }
+  .novel-bento > .novel-bento-feature,
+  .novel-bento > .novel-bento-mini,
+  .novel-bento > .novel-bento-wide {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+}
+
+/* ============================================================
+ * CARD VARIANTS — 焦点 / 支撑 / 数据
+ * 不同视觉角色，打破 antd Card 默认单调
+ * ============================================================ */
+
+/* 焦点卡：feature 位，带强调光晕与渐变 */
+.novel-card-focal {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: var(--novel-radius-lg);
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(16, 185, 129, 0.14), transparent 48%),
+    linear-gradient(160deg, rgba(24, 24, 27, 0.88), rgba(9, 9, 11, 0.78));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 20px 48px rgba(0, 0, 0, 0.24);
+  transition: border-color 0.25s ease, transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.35s ease;
+}
+
+.novel-card-focal:hover {
+  border-color: rgba(52, 211, 153, 0.5);
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 28px 64px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(52, 211, 153, 0.18);
+}
+
+/* mini 数据卡：紧凑统计 */
+.novel-card-mini {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-md);
+  background: linear-gradient(180deg, rgba(24, 24, 27, 0.72), rgba(9, 9, 11, 0.58));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.25s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.novel-card-mini:hover {
+  border-color: rgba(52, 211, 153, 0.4);
+  transform: translateY(-2px);
+}
+
+.novel-card-mini-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #71717a;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.novel-card-mini-value {
+  color: #f4f4f5;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.novel-card-mini-value-accent {
+  background: linear-gradient(135deg, #6ee7b7 0%, #34d399 50%, #10b981 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.novel-card-mini-hint {
+  color: #71717a;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* 支撑卡：通用内容卡 */
+.novel-card-support {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-md);
+  background: linear-gradient(180deg, rgba(24, 24, 27, 0.72), rgba(9, 9, 11, 0.6));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 32px rgba(0, 0, 0, 0.18);
+  transition: border-color 0.25s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease;
+}
+
+.novel-card-support:hover {
+  border-color: rgba(52, 211, 153, 0.34);
+  transform: translateY(-2px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 40px rgba(0, 0, 0, 0.24);
+}
+
+.novel-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ============================================================
+ * PROJECT GRID / PROJECT CARD
+ * 作品库网格 + 单卡设计
+ * ============================================================ */
+
+.novel-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.novel-project-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 196px;
+  padding: 20px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-lg);
+  background:
+    radial-gradient(100% 60% at 100% 0%, rgba(52, 211, 153, 0.06), transparent 50%),
+    linear-gradient(180deg, rgba(24, 24, 27, 0.82), rgba(9, 9, 11, 0.68));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 14px 36px rgba(0, 0, 0, 0.2);
+  transition: border-color 0.28s ease, transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.35s ease;
+}
+
+.novel-project-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(52, 211, 153, 0.55), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.novel-project-card:hover {
+  border-color: rgba(52, 211, 153, 0.42);
+  transform: translateY(-3px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 24px 52px rgba(0, 0, 0, 0.28),
+    0 0 0 1px rgba(52, 211, 153, 0.14);
+}
+
+.novel-project-card:hover::before {
+  opacity: 1;
+}
+
+.novel-project-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.novel-project-card-title {
+  margin: 0;
+  color: #f4f4f5;
+  font-size: 1.25rem;
+  font-weight: 750;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.novel-project-card-id {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #71717a;
+  font: 600 11px/1.4 var(--font-mono);
+}
+
+.novel-project-card-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(63, 63, 70, 0.42);
+  color: #71717a;
+  font-size: 12px;
+}
+
+.novel-project-card-meta strong {
+  color: #d4d4d8;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.novel-project-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 状态点（取代纯 Tag，更精致）*/
+.novel-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.novel-status-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.novel-status-pill-idle {
+  color: #71717a;
+  background: rgba(113, 113, 122, 0.14);
+  border: 1px solid rgba(113, 113, 122, 0.32);
+}
+
+.novel-status-pill-running {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.14);
+  border: 1px solid rgba(96, 165, 250, 0.34);
+}
+
+.novel-status-pill-running::before {
+  animation: novel-status-pulse 1.6s ease-in-out infinite;
+}
+
+.novel-status-pill-done {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.34);
+}
+
+.novel-status-pill-failed {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.34);
+}
+
+@keyframes novel-status-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* ============================================================
+ * EMPTY STATE — 自定义，不用 antd 默认
+ * ============================================================ */
+
+.novel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.novel-empty-mark {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(52, 211, 153, 0.18), transparent 60%),
+    rgba(24, 24, 27, 0.72);
+  color: #34d399;
+  font-size: 22px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.novel-empty-title {
+  color: #f4f4f5;
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.novel-empty-desc {
+  max-width: 42ch;
+  color: #71717a;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+ * STUDIO GRID / PANEL（保留旧类名，后续 loop 重构）
+ * ============================================================ */
 
 .novel-v2-stats-grid {
   display: grid;
@@ -76,10 +658,10 @@
   justify-content: space-between;
   gap: 16px;
   padding: 16px;
-  border: 1px solid rgba(63, 63, 70, 0.72);
+  border: 1px solid var(--novel-hairline);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(24,24,27,0.74), rgba(9,9,11,0.62));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  background: linear-gradient(180deg, rgba(24, 24, 27, 0.74), rgba(9, 9, 11, 0.62));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .novel-v2-project-card-head {
@@ -96,10 +678,6 @@
   font-size: 12px;
 }
 
-.novel-v2-studio-page {
-  max-width: none;
-}
-
 .novel-v2-studio-grid {
   display: grid;
   grid-template-columns: minmax(240px, 0.72fr) minmax(420px, 1.35fr) minmax(320px, 0.93fr);
@@ -107,13 +685,25 @@
   align-items: start;
 }
 
+.novel-v2-studio-tabs {
+  margin-top: 8px;
+}
+
+.novel-v2-studio-tabs .ant-tabs-tabpane {
+  padding-top: 4px;
+}
+
+.novel-v2-studio-tabs .ant-tabs-nav {
+  margin-bottom: 16px;
+}
+
 .novel-v2-panel {
   min-height: 560px;
   padding: 14px;
-  border: 1px solid rgba(63, 63, 70, 0.68);
-  border-radius: 16px;
-  background: rgba(15, 15, 18, 0.72);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 18px 46px rgba(0,0,0,0.18);
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-lg);
+  background: var(--novel-surface-1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 46px rgba(0, 0, 0, 0.18);
 }
 
 .novel-v2-panel-head {
@@ -218,6 +808,1058 @@
   font-size: 12px;
 }
 
+/* 兼容旧 .novel-v2-kicker，但视觉降级（不再鼓励使用）*/
+.novel-v2-kicker {
+  margin-bottom: 8px;
+  color: #34d399;
+  font: 700 11px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+}
+
+/* ============================================================
+ * MOTION UTILITIES — 入场 stagger + 滚动揭示
+ * 配合 motion/react 使用，CSS 只提供 reduce 兜底
+ * ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .novel-card-focal,
+  .novel-card-mini,
+  .novel-card-support,
+  .novel-project-card {
+    transition: border-color 0.18s ease !important;
+    transform: none !important;
+  }
+  .novel-status-pill-running::before {
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+ * STUDIO FOCAL WORKSPACE — 章节工作流 3-栏焦点布局
+ * 三栏有意识地区分视觉角色：章节轨 / 焦点命令 / 观察者
+ * ============================================================ */
+
+.novel-studio-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.6fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+
+/* 章节轨：左栏，堆叠卡片感，大章节序号 */
+.novel-chapter-rail {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-lg);
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgba(16, 185, 129, 0.06), transparent 50%),
+    linear-gradient(180deg, rgba(15, 15, 18, 0.82), rgba(9, 9, 11, 0.72));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 44px rgba(0, 0, 0, 0.2);
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+}
+
+.novel-chapter-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(63, 63, 70, 0.42);
+}
+
+.novel-chapter-rail-head-body strong {
+  display: block;
+  color: #f4f4f5;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.novel-chapter-rail-head-body span {
+  display: block;
+  margin-top: 3px;
+  color: #71717a;
+  font-size: 11.5px;
+}
+
+.novel-chapter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 章节卡：大序号 + 标题 + 状态点，inline-typography 风格 */
+.novel-chapter-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 12px 12px 12px 10px;
+  border: 1px solid rgba(63, 63, 70, 0.55);
+  border-radius: 12px;
+  background: rgba(24, 24, 27, 0.58);
+  color: #d4d4d8;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  transition: border-color 0.22s ease, background 0.22s ease, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.novel-chapter-group-item { display: grid; }
+.novel-chapter-group-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 7px; color: #71717a; font-size: 11px; border-top: 1px solid var(--novel-hairline-soft); }
+.novel-chapter-group-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.novel-chapter-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, #34d399, #10b981);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+
+.novel-chapter-card:hover {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: rgba(24, 24, 27, 0.78);
+  transform: translateX(2px);
+}
+
+.novel-chapter-card.is-active {
+  border-color: rgba(52, 211, 153, 0.6);
+  background:
+    linear-gradient(90deg, rgba(16, 185, 129, 0.14) 0%, rgba(16, 185, 129, 0.04) 50%, transparent 100%),
+    rgba(24, 24, 27, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.14);
+}
+
+.novel-chapter-card.is-active::before {
+  opacity: 1;
+}
+
+/* 大章节序号：inline-typography 图片的等价物 */
+.novel-chapter-num {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(52, 211, 153, 0.18), transparent 60%),
+    rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(63, 63, 70, 0.55);
+  color: #f4f4f5;
+  font: 800 18px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  transition: border-color 0.22s ease, color 0.22s ease;
+}
+
+.novel-chapter-card.is-active .novel-chapter-num {
+  border-color: rgba(52, 211, 153, 0.55);
+  color: #6ee7b7;
+}
+
+.novel-chapter-card-body {
+  min-width: 0;
+}
+
+.novel-chapter-card-title {
+  display: block;
+  color: #f4f4f5;
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.novel-chapter-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.novel-chapter-card-meta .ant-tag {
+  margin: 0;
+  font-size: 10.5px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+/* 焦点命令栏：中间，最突出 */
+.novel-focal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.novel-focal-card {
+  position: relative;
+  overflow: hidden;
+  padding: 22px;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: var(--novel-radius-lg);
+  background:
+    radial-gradient(100% 80% at 0% 0%, rgba(16, 185, 129, 0.12), transparent 48%),
+    linear-gradient(160deg, rgba(24, 24, 27, 0.88), rgba(9, 9, 11, 0.78));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 20px 48px rgba(0, 0, 0, 0.24);
+}
+
+.novel-focal-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.novel-focal-card-head h3 {
+  margin: 0;
+  color: #f4f4f5;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.novel-focal-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 观察者栏：右栏，深色，密集数据 */
+.novel-observer-panel {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--novel-hairline);
+  border-radius: var(--novel-radius-lg);
+  background:
+    linear-gradient(180deg, rgba(9, 9, 11, 0.82), rgba(15, 15, 18, 0.72));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 44px rgba(0, 0, 0, 0.22);
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+}
+
+.novel-observer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(63, 63, 70, 0.42);
+}
+
+.novel-observer-head-body strong {
+  display: block;
+  color: #f4f4f5;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.novel-observer-head-body code {
+  display: block;
+  margin-top: 4px;
+  color: #71717a;
+  font: 600 11px/1.3 var(--font-mono);
+  word-break: break-all;
+}
+
+/* 事件时间线：精致化 */
+.novel-event-timeline {
+  position: relative;
+  padding-left: 18px;
+}
+
+.novel-event-timeline::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.5), rgba(63, 63, 70, 0.4));
+}
+
+.novel-event-item {
+  position: relative;
+  padding: 6px 0 10px 4px;
+}
+
+.novel-event-item::before {
+  content: "";
+  position: absolute;
+  left: -17px;
+  top: 10px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 0 2px rgba(15, 15, 18, 0.95), 0 0 8px rgba(52, 211, 153, 0.6);
+}
+
+/* 事件头部：可点击展开/折叠 */
+.novel-event-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: default;
+  padding: 2px 0;
+}
+
+.novel-event-item-header[style*="cursor"],
+.novel-event-item:hover .novel-event-item-header {
+  cursor: pointer;
+}
+
+.novel-event-item-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #34d399;
+  font-size: 13px;
+}
+
+.novel-event-item-title {
+  color: #f4f4f5;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.novel-event-item-cat.ant-tag {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+  border-radius: 4px;
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.22);
+  color: #6ee7b7;
+}
+
+.novel-event-item-toggle {
+  color: #71717a;
+  font-size: 9px;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.novel-event-item-toggle.is-open {
+  transform: rotate(180deg);
+  color: #a1a1aa;
+}
+
+.novel-event-item-time {
+  flex-shrink: 0;
+  color: #71717a;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 事件摘要：一句话人话描述 */
+.novel-event-item-summary {
+  margin: 3px 0 0;
+  color: #a1a1aa;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* 事件关键字段：从 payload 提取的标签-值对，替代 raw JSON */
+.novel-event-item-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 5px 0 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(63, 63, 70, 0.4);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.novel-event-item-field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.novel-event-item-field-label {
+  color: #71717a;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.novel-event-item-field-value,
+.novel-event-item-field-value-mono {
+  font-size: 11px;
+  color: #d4d4d8;
+}
+
+.novel-event-item-field-value-mono {
+  font: 600 11px/1.3 var(--font-mono);
+  color: #a1a1aa;
+}
+
+/* "原始数据"折叠开关：低调的调试入口，不抢视觉焦点 */
+.novel-event-item-raw-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: #52525b;
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s ease;
+}
+
+.novel-event-item-raw-toggle:hover {
+  color: #71717a;
+}
+
+/* 事件 payload：默认折叠，展开时才显示 */
+.novel-event-item-payload {
+  display: block;
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(63, 63, 70, 0.55);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.38);
+  color: #a1a1aa;
+  font: 500 10.5px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ===== 最近运行列表（语义化）===== */
+.novel-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.novel-run-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(63, 63, 70, 0.5);
+  border-radius: 10px;
+  background: rgba(24, 24, 27, 0.5);
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+
+.novel-run-item:hover {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: rgba(24, 24, 27, 0.7);
+  transform: translateY(-1px);
+}
+
+.novel-run-item-left {
+  min-width: 0;
+  flex: 1;
+}
+
+.novel-run-item-header {
+  display: flex;
+  align-items: center;
+}
+
+.novel-run-item-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #34d399;
+  font-size: 13px;
+}
+
+.novel-run-item-title {
+  color: #f4f4f5;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.novel-run-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.novel-run-item-meta code {
+  color: #a1a1aa;
+  font: 600 11px/1.3 var(--font-mono);
+}
+
+.novel-run-item-time {
+  color: #71717a;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 观察者栏：状态块 + 产物列表 ===== */
+.novel-observer-status-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.novel-observer-wf-id {
+  color: #71717a;
+  font: 600 11px/1.3 var(--font-mono);
+}
+
+.novel-artifact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.novel-artifact-item {
+  padding: 8px 10px;
+  border: 1px solid rgba(63, 63, 70, 0.5);
+  border-radius: 8px;
+  background: rgba(24, 24, 27, 0.5);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.novel-artifact-item:hover {
+  border-color: rgba(52, 211, 153, 0.32);
+  background: rgba(24, 24, 27, 0.7);
+}
+
+.novel-artifact-item-header {
+  display: flex;
+  align-items: center;
+}
+
+.novel-artifact-item-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #34d399;
+  font-size: 12.5px;
+}
+
+.novel-artifact-item-kind {
+  color: #f4f4f5;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.novel-artifact-item-id {
+  color: #a1a1aa;
+  font: 600 10.5px/1.3 var(--font-mono);
+}
+
+.novel-artifact-item-fingerprint {
+  margin-top: 4px;
+}
+
+.novel-artifact-item-fingerprint .ant-typography-code {
+  color: #71717a;
+  font-size: 10px;
+}
+
+/* 产物摘要 + 查看内容按钮（替代旧 shortId/fingerprint 展示） */
+.novel-artifact-item-header {
+  justify-content: space-between;
+}
+
+.novel-artifact-item-summary {
+  margin-top: 6px;
+  color: #d4d4d8;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.novel-artifact-item-time {
+  margin-top: 4px;
+  color: #71717a;
+  font-size: 10.5px;
+}
+
+.novel-artifact-item-view-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid rgba(52, 211, 153, 0.32);
+  border-radius: 6px;
+  background: rgba(52, 211, 153, 0.08);
+  color: #34d399;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.novel-artifact-item-view-btn:hover {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.55);
+}
+
+/* ===== 产物内容查看 Modal ===== */
+.novel-artifact-modal .ant-modal-body {
+  padding-top: 16px;
+}
+
+.novel-artifact-modal-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(63, 63, 70, 0.5);
+  border-radius: 8px;
+  background: rgba(24, 24, 27, 0.5);
+}
+
+.novel-artifact-modal-meta-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.novel-artifact-modal-meta-label {
+  flex: 0 0 64px;
+  color: #71717a;
+  font-weight: 600;
+}
+
+.novel-artifact-modal-meta-value {
+  color: #d4d4d8;
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.novel-artifact-modal-meta-mono {
+  color: #a1a1aa;
+  font: 600 11.5px/1.3 var(--font-mono);
+}
+
+.novel-artifact-modal-body {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid rgba(63, 63, 70, 0.5);
+  border-radius: 8px;
+  background: rgba(24, 24, 27, 0.6);
+}
+
+.novel-artifact-modal-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 16px;
+}
+
+.novel-artifact-modal-loading-hint {
+  color: #71717a;
+  font-size: 12px;
+}
+
+.novel-artifact-modal-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #a1a1aa;
+}
+
+.novel-artifact-modal-error-hint {
+  color: #71717a;
+  font-size: 11.5px;
+}
+
+.novel-artifact-modal-text {
+  margin: 0 !important;
+  padding: 16px 18px;
+  white-space: pre-wrap;
+  color: #e4e4e7;
+  font-size: 13.5px;
+  line-height: 1.75;
+  font-family: var(--font-mono);
+}
+
+/* ===== 表格语义化单元格（双行堆叠：主信息 + 短ID/时间）===== */
+.novel-table-cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.novel-table-cell-sub {
+  color: #71717a;
+  font: 600 10.5px/1.3 var(--font-mono);
+}
+
+/* ===== MCP 执行结果：可折叠头部 ===== */
+.novel-mcp-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(63, 63, 70, 0.5);
+  border-radius: 8px;
+  background: rgba(24, 24, 27, 0.5);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.novel-mcp-result-head:hover {
+  border-color: rgba(52, 211, 153, 0.32);
+  background: rgba(24, 24, 27, 0.7);
+}
+
+/* Tabs 编辑级强调 */
+.novel-studio-tabs .ant-tabs-nav {
+  margin-bottom: 18px;
+  padding: 6px 4px 0;
+}
+
+.novel-studio-tabs .ant-tabs-tab {
+  padding: 8px 16px !important;
+  border-radius: 10px !important;
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  color: #a1a1aa !important;
+  transition: background 0.22s ease, color 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.novel-studio-tabs .ant-tabs-tab:hover {
+  color: #f4f4f5 !important;
+  background: rgba(255, 255, 255, 0.04);
+  transform: translateY(-1px);
+}
+
+.novel-studio-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #34d399 !important;
+  font-weight: 700 !important;
+}
+
+.novel-studio-tabs .ant-tabs-ink-bar {
+  background: linear-gradient(90deg, #6ee7b7, #34d399, #10b981) !important;
+  height: 2px !important;
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+}
+
+/* ============================================================
+ * EVALUATION WORKSPACE — 评估闭环 2 列布局
+ * 左：候选焦点卡 + 候选预览支撑卡
+ * 右：数据密集区（快照/实验/候选/收据 表格列表）
+ * ============================================================ */
+
+.novel-eval-page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 4px 0 24px;
+  position: relative;
+  z-index: 1;
+}
+
+.novel-creative-page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 4px 0 24px;
+  position: relative;
+  z-index: 1;
+}
+
+.novel-mcp-page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 4px 0 24px;
+  position: relative;
+  z-index: 1;
+}
+
+/* MCP 工具分组网格：自适应列，gapless 风格 */
+.novel-mcp-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+  align-items: start;
+}
+
+.novel-mcp-group-card {
+  padding: 16px 18px;
+}
+
+.novel-mcp-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.novel-mcp-tool-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(63, 63, 70, 0.4);
+  border-radius: var(--novel-radius-sm);
+  background: rgba(24, 24, 27, 0.5);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), background 0.22s ease;
+}
+
+.novel-mcp-tool-item:hover {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(24, 24, 27, 0.72);
+  transform: translateY(-1px);
+}
+
+.novel-mcp-tool-item.is-active {
+  border-color: rgba(52, 211, 153, 0.65);
+  background: rgba(16, 185, 129, 0.08);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.25);
+}
+
+.novel-mcp-tool-name {
+  color: #f4f4f5;
+  font: 600 12.5px/1.4 var(--font-mono);
+  word-break: break-all;
+}
+
+.novel-mcp-tool-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.novel-eval-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.novel-eval-focal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.novel-eval-observer {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* 紧凑数据卡：覆盖 antd Card 默认 padding，让 Table 更密 */
+.novel-eval-data-card.ant-card {
+  background: linear-gradient(180deg, rgba(24, 24, 27, 0.72), rgba(9, 9, 11, 0.58));
+  border-color: var(--novel-hairline);
+  border-radius: var(--novel-radius-md);
+}
+
+.novel-eval-data-card .ant-card-head {
+  min-height: 40px;
+  padding: 10px 14px;
+  border-bottom-color: rgba(63, 63, 70, 0.5);
+}
+
+.novel-eval-data-card .ant-card-head-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: #f4f4f5;
+}
+
+.novel-eval-data-card .ant-card-body {
+  padding: 10px 12px 12px;
+}
+
+.novel-eval-data-card .ant-table {
+  background: transparent;
+}
+
+.novel-eval-data-card .ant-table-thead > tr > th {
+  background: rgba(0, 0, 0, 0.2) !important;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #a1a1aa;
+  border-bottom-color: rgba(63, 63, 70, 0.55) !important;
+}
+
+.novel-eval-data-card .ant-table-tbody > tr > td {
+  font-size: 12.5px;
+  border-bottom-color: rgba(63, 63, 70, 0.32) !important;
+}
+
+/* 候选预览容器 */
+.novel-candidate-preview {
+  display: flex;
+  flex-direction: column;
+}
+
+.novel-manuscript-text {
+  padding: 14px 16px;
+  border: 1px solid rgba(63, 63, 70, 0.5);
+  border-radius: var(--novel-radius-sm);
+  background: rgba(0, 0, 0, 0.28);
+  color: #d4d4d8;
+  font-size: 13.5px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 采纳事实列表 */
+.novel-fact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.novel-fact-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(63, 63, 70, 0.45);
+  border-radius: var(--novel-radius-sm);
+  background: rgba(24, 24, 27, 0.5);
+  font-size: 12.5px;
+  transition: border-color 0.2s ease;
+}
+
+.novel-fact-item:hover {
+  border-color: rgba(52, 211, 153, 0.4);
+}
+
+/* 技能迭代列表 */
+.novel-skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.novel-skill-item {
+  padding: 12px 14px;
+  border: 1px solid rgba(63, 63, 70, 0.45);
+  border-radius: var(--novel-radius-sm);
+  background: rgba(24, 24, 27, 0.5);
+}
+
+.novel-skill-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #34d399;
+  font-size: 13px;
+}
+
+.novel-skill-diff {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.novel-skill-diff-before,
+.novel-skill-diff-after {
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.novel-skill-diff-before {
+  border-left: 2px solid rgba(244, 63, 94, 0.5);
+  background: rgba(244, 63, 94, 0.05);
+}
+
+.novel-skill-diff-after {
+  border-left: 2px solid rgba(52, 211, 153, 0.5);
+  background: rgba(16, 185, 129, 0.06);
+}
+
+/* 收据列表（替代表格，更紧凑） */
+.novel-receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.novel-receipt-item {
+  padding: 10px 12px;
+  border: 1px solid rgba(63, 63, 70, 0.45);
+  border-radius: var(--novel-radius-sm);
+  background: rgba(24, 24, 27, 0.5);
+  transition: border-color 0.2s ease;
+}
+
+.novel-receipt-item:hover {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.novel-receipt-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.novel-receipt-item-head code {
+  color: #a1a1aa;
+  font-size: 11.5px;
+}
+
+.novel-receipt-item-meta {
+  margin-top: 4px;
+  color: #71717a;
+  font-size: 11.5px;
+}
+
+.novel-receipt-item-reason {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(244, 63, 94, 0.08);
+  color: #fca5a5;
+  font-size: 11.5px;
+}
+
+/* ============================================================
+ * RESPONSIVE
+ * ============================================================ */
+
 @media (max-width: 1180px) {
   .novel-v2-studio-grid {
     grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
@@ -226,11 +1868,44 @@
     grid-column: 1 / -1;
     min-height: auto;
   }
+  .novel-studio-grid {
+    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+  }
+  .novel-observer-panel {
+    grid-column: 1 / -1;
+    position: static;
+    max-height: none;
+  }
+  .novel-chapter-rail {
+    position: static;
+    max-height: none;
+  }
+  .novel-eval-workspace {
+    grid-template-columns: 1fr;
+  }
+  .novel-eval-observer {
+    position: static;
+    max-height: none;
+  }
 }
 
 @media (max-width: 820px) {
-  .novel-v2-page {
+  .novel-v2-page,
+  .novel-v2-studio-page {
     padding: 18px 14px 36px;
+  }
+  .novel-hero,
+  .novel-topbar {
+    padding: 22px 18px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .novel-topbar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .novel-topbar-actions > * {
+    flex: 0 0 auto;
   }
   .novel-v2-hero,
   .novel-v2-studio-topbar,
@@ -249,4 +1924,210 @@
   .novel-v2-panel {
     min-height: auto;
   }
+  .novel-display-title {
+    font-size: clamp(2rem, 7vw, 2.6rem);
+  }
+  .novel-studio-grid {
+    grid-template-columns: 1fr;
+  }
+  .novel-chapter-rail,
+  .novel-observer-panel {
+    position: static;
+    max-height: none;
+  }
+  .novel-chapter-list {
+    max-height: 340px;
+    overflow-y: auto;
+  }
+  .novel-chapter-card {
+    flex: 0 0 auto;
+  }
+}
+.novel-manuscript-preview {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--novel-border, #e5e7eb);
+}
+
+.novel-manuscript-scroll {
+  max-height: 360px;
+  overflow: auto;
+  margin-top: 10px;
+  padding-right: 8px;
+  white-space: pre-wrap;
+  line-height: 1.85;
+}
+.novel-fact-candidate-list {
+  display: grid;
+  gap: 12px;
+  max-height: min(62vh, 620px);
+  overflow: auto;
+}
+
+.novel-fact-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--novel-border, rgba(255, 255, 255, 0.1));
+}
+
+.novel-fact-candidate-body {
+  min-width: 0;
+}
+
+.novel-fact-candidate-body .ant-typography {
+  margin: 6px 0 10px;
+}
+
+@media (max-width: 640px) {
+  .novel-fact-candidate {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== Project plan workspace ===== */
+.novel-plan-loading,
+.novel-plan-empty {
+  min-height: 520px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+}
+
+.novel-plan-empty {
+  max-width: 680px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.novel-plan-empty h2 { margin: 0; color: #f4f4f5; font-size: 30px; letter-spacing: 0; }
+.novel-plan-empty .ant-input { width: min(620px, 82vw); }
+.novel-plan-empty-mark { display: grid; place-items: center; width: 56px; height: 56px; border: 1px solid var(--novel-hairline); border-radius: 8px; color: var(--novel-accent); font-size: 24px; }
+
+.novel-plan-workspace {
+  display: grid;
+  grid-template-columns: minmax(210px, 250px) minmax(0, 1fr) minmax(220px, 270px);
+  min-height: 700px;
+  border: 1px solid var(--novel-hairline);
+  background: var(--novel-surface-3);
+}
+
+.novel-plan-stage-rail,
+.novel-plan-actions { background: rgba(12, 12, 15, .84); }
+.novel-plan-stage-rail { border-right: 1px solid var(--novel-hairline); }
+.novel-plan-actions { border-left: 1px solid var(--novel-hairline); padding: 20px; display: flex; flex-direction: column; gap: 24px; }
+.novel-plan-actions > div { display: grid; gap: 7px; }
+.novel-plan-actions > div > strong { color: #f4f4f5; font-size: 18px; }
+.novel-plan-actions > div > small { color: #71717a; }
+
+.novel-plan-progress { padding: 20px; border-bottom: 1px solid var(--novel-hairline); }
+.novel-plan-progress > div { display: flex; justify-content: space-between; margin-bottom: 12px; color: #f4f4f5; }
+.novel-plan-progress span { color: var(--novel-accent); font-variant-numeric: tabular-nums; }
+.novel-plan-stage-list { display: grid; }
+.novel-plan-stage { width: 100%; min-height: 58px; display: grid; grid-template-columns: 34px minmax(0, 1fr) 8px; align-items: center; gap: 10px; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--novel-hairline-soft); background: transparent; color: #d4d4d8; text-align: left; cursor: pointer; }
+.novel-plan-stage:hover { background: rgba(39, 39, 42, .52); }
+.novel-plan-stage.is-active { background: rgba(52, 211, 153, .08); box-shadow: inset 3px 0 var(--novel-accent); }
+.novel-plan-stage-index { color: #71717a; font: 11px ui-monospace, Consolas, monospace; }
+.novel-plan-stage > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.novel-plan-stage strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-plan-stage small { color: #71717a; }
+.novel-plan-stage-dot { width: 7px; height: 7px; border-radius: 50%; background: #52525b; }
+.novel-plan-stage-dot.is-running { background: #60a5fa; }
+.novel-plan-stage-dot.is-warning { background: #fbbf24; }
+.novel-plan-stage-dot.is-done { background: #34d399; }
+.novel-plan-stage-dot.is-failed { background: #f87171; }
+
+.novel-plan-reader { min-width: 0; padding: 34px clamp(24px, 4vw, 56px) 56px; overflow: auto; }
+.novel-plan-reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--novel-hairline); }
+.novel-plan-reader-head h2 { max-width: 760px; margin: 5px 0 0; color: #fafafa; font-size: 28px; line-height: 1.25; letter-spacing: 0; }
+.novel-plan-summary { margin: 28px 0; color: #d4d4d8; font-size: 16px; line-height: 1.9; white-space: pre-wrap; }
+.novel-plan-placeholder { display: grid; min-height: 360px; place-items: center; color: #71717a; }
+.novel-plan-section { padding: 24px 0; border-top: 1px solid var(--novel-hairline-soft); }
+.novel-plan-section h3 { margin: 0 0 12px; color: #f4f4f5; font-size: 18px; letter-spacing: 0; }
+.novel-plan-section p { margin: 0; color: #a1a1aa; line-height: 1.85; white-space: pre-wrap; }
+.novel-plan-item-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 16px; }
+.novel-plan-item { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--novel-hairline); border-radius: 6px; background: rgba(24, 24, 27, .42); }
+.novel-plan-item strong { color: #e4e4e7; }
+.novel-plan-item span { color: #a1a1aa; line-height: 1.65; }
+
+.novel-plan-chapter-table { margin-top: 24px; border: 1px solid var(--novel-hairline); }
+.novel-plan-chapter-row { display: grid; grid-template-columns: 44px minmax(260px, 1.6fr) minmax(160px, .8fr) minmax(180px, 1fr); gap: 14px; align-items: start; padding: 14px 16px; border-top: 1px solid var(--novel-hairline-soft); color: #d4d4d8; }
+.novel-plan-chapter-row:first-child { border-top: 0; }
+.novel-plan-chapter-row.is-head { color: #71717a; font-size: 11px; text-transform: uppercase; }
+.novel-plan-chapter-row > span { min-width: 0; display: grid; gap: 5px; }
+.novel-plan-chapter-row b { color: #f4f4f5; }
+.novel-plan-chapter-row small { color: #71717a; line-height: 1.55; }
+
+.novel-plan-audit { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--novel-hairline); color: #71717a; }
+.novel-plan-audit summary { cursor: pointer; }
+.novel-plan-audit code { display: block; margin-top: 8px; overflow-wrap: anywhere; font-size: 10px; }
+.novel-plan-editor { display: grid; gap: 18px; max-height: 68vh; overflow: auto; padding-right: 8px; }
+.novel-plan-editor label, .novel-plan-editor section { display: grid; gap: 8px; }
+.novel-plan-editor label > span { color: #a1a1aa; font-size: 12px; }
+.novel-plan-editor > section, .novel-plan-chapter-editor > section { padding: 14px; border: 1px solid var(--novel-hairline); border-radius: 6px; }
+.novel-plan-chapter-editor { display: grid; gap: 12px; }
+.novel-plan-chapter-editor > section { display: grid; gap: 8px; }
+.novel-plan-apply-preview { display: grid; gap: 10px; max-height: 55vh; overflow: auto; }
+
+/* ===== Story arc workspace ===== */
+.novel-arc-workspace { display: grid; grid-template-columns: minmax(210px, 250px) minmax(0, 1fr) minmax(220px, 270px); min-height: 700px; border: 1px solid var(--novel-hairline); background: var(--novel-surface-3); }
+.novel-arc-rail { background: rgba(12, 12, 15, .84); border-right: 1px solid var(--novel-hairline); }
+.novel-arc-rail > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 68px; padding: 14px; border-bottom: 1px solid var(--novel-hairline); color: #f4f4f5; }
+.novel-arc-nav { width: 100%; min-height: 70px; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 4px 10px; align-items: center; padding: 12px 14px; border: 0; border-bottom: 1px solid var(--novel-hairline-soft); color: #d4d4d8; background: transparent; text-align: left; cursor: pointer; }
+.novel-arc-nav:hover { background: rgba(39, 39, 42, .52); }
+.novel-arc-nav.is-active { background: rgba(52, 211, 153, .08); box-shadow: inset 3px 0 var(--novel-accent); }
+.novel-arc-nav > span { grid-row: 1 / 3; color: #71717a; font: 11px ui-monospace, Consolas, monospace; }
+.novel-arc-nav strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-arc-nav small { color: #71717a; }
+.novel-arc-reader { min-width: 0; padding: 34px clamp(24px, 4vw, 56px) 56px; overflow: auto; }
+.novel-arc-summary { padding: 26px 0; border-bottom: 1px solid var(--novel-hairline); }
+.novel-arc-summary > p { margin: 0 0 20px; color: #d4d4d8; font-size: 16px; line-height: 1.85; }
+.novel-arc-summary dl { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px 18px; margin: 0; }
+.novel-arc-summary dt { color: #71717a; }
+.novel-arc-summary dd { margin: 0; color: #d4d4d8; line-height: 1.65; }
+.novel-arc-chapters { display: grid; }
+.novel-arc-chapters > article { padding: 24px 0; border-bottom: 1px solid var(--novel-hairline-soft); }
+.novel-arc-chapters > article > header { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 14px; align-items: start; }
+.novel-arc-chapters > article > header > span { color: var(--novel-accent); font: 12px ui-monospace, Consolas, monospace; }
+.novel-arc-chapters h3 { margin: 0 0 6px; color: #f4f4f5; font-size: 18px; letter-spacing: 0; }
+.novel-arc-chapters p { margin: 0; color: #a1a1aa; line-height: 1.7; }
+.novel-arc-chapter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; margin: 18px 0 0 52px; }
+.novel-arc-chapter-grid > span { display: grid; gap: 4px; color: #a1a1aa; line-height: 1.55; }
+.novel-arc-chapter-grid b { color: #71717a; font-size: 11px; font-weight: 500; }
+.novel-arc-chapters details { margin: 16px 0 0 52px; color: #71717a; }
+.novel-arc-chapters details p { margin-top: 10px; }
+.novel-arc-editor { display: grid; gap: 14px; max-height: 70vh; overflow: auto; padding-right: 8px; }
+.novel-arc-editor > label { display: grid; gap: 7px; }
+.novel-arc-editor > label > span { color: #71717a; font-size: 12px; }
+.novel-arc-editor-head, .novel-arc-editor > section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.novel-arc-editor > section { display: grid; gap: 9px; padding: 18px 0; border-top: 1px solid var(--novel-hairline); }
+.novel-arc-scenes { display: grid; gap: 8px; padding: 12px; border-left: 2px solid var(--novel-hairline); }
+.novel-arc-scenes > div { display: grid; grid-template-columns: minmax(130px, .35fr) minmax(220px, 1fr) 36px; gap: 8px; }
+
+@media (max-width: 1100px) {
+  .novel-plan-workspace { grid-template-columns: 220px minmax(0, 1fr); }
+  .novel-plan-actions { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--novel-hairline); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .novel-arc-workspace { grid-template-columns: 220px minmax(0, 1fr); }
+  .novel-arc-workspace > .novel-plan-actions { grid-column: 1 / -1; }
+}
+
+@media (max-width: 720px) {
+  .novel-plan-workspace { grid-template-columns: 1fr; }
+  .novel-plan-stage-rail { border-right: 0; border-bottom: 1px solid var(--novel-hairline); }
+  .novel-plan-stage-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .novel-plan-reader { padding: 24px 16px 40px; }
+  .novel-plan-reader-head { flex-direction: column; }
+  .novel-plan-actions { grid-template-columns: 1fr; }
+  .novel-plan-chapter-table { overflow-x: auto; }
+  .novel-plan-chapter-row { min-width: 760px; }
+  .novel-arc-workspace { grid-template-columns: 1fr; }
+  .novel-arc-rail { border-right: 0; border-bottom: 1px solid var(--novel-hairline); }
+  .novel-arc-reader { padding: 24px 16px 40px; }
+  .novel-arc-chapter-grid { grid-template-columns: 1fr; margin-left: 0; }
+  .novel-arc-chapters details { margin-left: 0; }
+  .novel-arc-scenes > div { grid-template-columns: 1fr 36px; }
+  .novel-arc-scenes > div .ant-input-textarea { grid-column: 1 / -1; }
 }

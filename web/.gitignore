@@ -9,6 +9,9 @@ dist-ssr
 .vite
 .DS_Store
 .goal/
+config/model-providers.local.yaml
+.data/
+tmp/novel-v2-*.log
 
 # novel bench 历史基线与 fixture（本地生成，不入库）
 .novel-bench/

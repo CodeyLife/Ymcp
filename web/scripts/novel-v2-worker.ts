@@ -3,18 +3,23 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 import { NovelPostgresRepository } from "../src/novel-v2/postgres-repository";
 import { createNovelWorkflowActivities } from "../src/novel-v2/temporal/activities";
 import { fileURLToPath } from "node:url";
-import { LiteLlmGateway } from "../src/novel-v2/model-gateway";
+import { createRuntimeModelGateway } from "../src/novel-v2/model-runtime";
 import { QdrantMemoryProvider } from "../src/novel-v2/qdrant-memory";
+import { createFusionMemoryProvider } from "../src/novel-v2/fusion-memory";
 import { ContentObjectStore } from "../src/novel-v2/object-store";
-import { CommitService } from "../src/novel-v2/commit-service";
 
 const repository = new NovelPostgresRepository();
 await repository.migrate();
 const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? "http://127.0.0.1:6333" });
-const modelGateway = new LiteLlmGateway();
+const { gateway: modelGateway } = await createRuntimeModelGateway(repository);
 const qdrantMemory = new QdrantMemoryProvider(qdrant, modelGateway);
 const objectStore = new ContentObjectStore();
 const workflowsPath = fileURLToPath(new URL("../src/novel-v2/temporal/workflows.ts", import.meta.url));
+
+// P2-G2: 三轨加权融合（semantic 0.5 + lexical 0.3 + graph 0.2）
+// 设计依据：AGENTS.md「reusable contracts」——融合逻辑从 worker 内联抽到
+// FusionMemoryProvider 共享层，min-max 归一化 + 权重重分配，避免 last-wins 丢信号。
+const fusionMemory = createFusionMemoryProvider(qdrantMemory, repository);
 
 const worker = await Worker.create({
   connection: await NativeConnection.connect({ address: process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233" }),
@@ -23,12 +28,14 @@ const worker = await Worker.create({
   workflowsPath,
   activities: createNovelWorkflowActivities({
     repository,
-    memoryProvider: { search: async (input) => { const lexical = await repository.searchMemory(input); try { const semantic = await qdrantMemory.search(input); return [...new Map([...semantic, ...lexical].map((claim) => [claim.id, claim])).values()]; } catch (error) { console.warn("Qdrant 检索失败，回退 PostgreSQL 事实召回", error); return lexical; } } },
+    memoryProvider: fusionMemory,
     skillProvider: { list: (projectId) => repository.listSkills(projectId) },
     modelGateway,
     objectStore,
-    commitService: new CommitService(repository, objectStore),
+    // CommitService 由 createNovelWorkflowActivities 自动注入 chapter memory 依赖
+    // 设计依据：AGENTS.md「commit-stage 对新 DocumentRevision 创建 chapter memory」契约
     memoryIndex: { upsertClaims: async (projectId, claims) => { try { await qdrantMemory.upsertClaims(projectId, claims); } catch (error) { console.warn("Qdrant 写入失败，PostgreSQL memory_claims 已保留为真源", error); } } },
+    enableChapterMemory: true,
   }),
 });
 

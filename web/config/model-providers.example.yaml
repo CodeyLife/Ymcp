@@ -1,0 +1,85 @@
+version: 1
+profiles:
+  - id: web-chat
+    label: Stateless Web Chat
+    protocol: chat-completions
+    baseUrl: https://chat.example.com/v1
+    model: web-chat-model
+    responseMode: sse
+    capabilities: [text, structured, stream]
+    secret:
+      source: env
+      name: WEB_CHAT_API_KEY
+    enabled: true
+    timeoutMs: 180000
+  - id: responses-primary
+    label: Responses API
+    protocol: responses
+    baseUrl: https://api.example.com/v1
+    model: responses-model
+    responseMode: json
+    capabilities: [text, structured, responses-continuation]
+    secret:
+      source: env
+      name: RESPONSES_API_KEY
+    enabled: true
+    timeoutMs: 180000
+routes:
+  "planning.foundation":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: web-chat
+      - executor: api
+        profileId: responses-primary
+      - executor: external-mcp
+  "planning.blueprint":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: responses-primary
+      - executor: api
+        profileId: web-chat
+      - executor: external-mcp
+  "writing.*":
+    conversationPolicy: task-chain
+    candidates:
+      - executor: api
+        profileId: responses-primary
+      - executor: api
+        profileId: web-chat
+      - executor: external-mcp
+  "review.*":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: web-chat
+      - executor: external-mcp
+  "facts.extract":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: responses-primary
+      - executor: external-mcp
+  "learning.assess":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: web-chat
+      - executor: external-mcp
+  "skill.iterate":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: responses-primary
+      - executor: api
+        profileId: web-chat
+      - executor: external-mcp
+  "memory.*":
+    conversationPolicy: stateless
+    candidates:
+      - executor: external-mcp
+  "*":
+    conversationPolicy: stateless
+    candidates:
+      - executor: external-mcp

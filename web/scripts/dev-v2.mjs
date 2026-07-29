@@ -12,11 +12,9 @@ const env = {
   S3_BUCKET: process.env.S3_BUCKET ?? process.env.MINIO_BUCKET ?? "ymcp-novel",
   S3_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY_ID ?? process.env.MINIO_ROOT_USER ?? "ymcp",
   S3_SECRET_ACCESS_KEY: process.env.S3_SECRET_ACCESS_KEY ?? process.env.MINIO_ROOT_PASSWORD ?? "ymcp-minio-local",
-  LITELLM_MASTER_KEY: process.env.LITELLM_MASTER_KEY ?? "sk-ymcp-local",
   DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://ymcp:ymcp@127.0.0.1:5432/ymcp",
   TEMPORAL_ADDRESS: process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
   QDRANT_URL: process.env.QDRANT_URL ?? "http://127.0.0.1:6333",
-  LITELLM_BASE_URL: process.env.LITELLM_BASE_URL ?? "http://127.0.0.1:4000",
 };
 const children = [];
 let stopping = false;

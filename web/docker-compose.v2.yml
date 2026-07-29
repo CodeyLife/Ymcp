@@ -45,10 +45,6 @@ services:
     ports: ["6333:6333", "6334:6334"]
     volumes: ["ymcp-qdrant:/qdrant/storage"]
 
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
-
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -62,23 +58,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
-    environment:
-      DATABASE_URL: postgresql://ymcp:${POSTGRES_PASSWORD:-ymcp}@postgres:5432/ymcp
-      REDIS_HOST: redis
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-ymcp-local}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-    volumes: ["./deploy/litellm.config.yaml:/app/config.yaml:ro"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    ports: ["4000:4000"]
 
 volumes:
   ymcp-postgres:

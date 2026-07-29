@@ -4,7 +4,7 @@ import {
   buildPolishUserMessage,
 } from "@/lib/imagegenPresets";
 import { DEFAULT_BASE_URL } from "@/config/defaults";
-import { recordModelContextWindow } from "@/features/novel/model-capabilities";
+import { recordModelContextWindow } from "@/lib/model-capabilities";
 
 export const api = axios.create({
   baseURL: "/api",

@@ -6,9 +6,10 @@ export default defineConfig({
   test: {
     environment: "node",
     fileParallelism: false,
-    setupFiles: ["./src/features/novel/__tests__/setup.ts"],
+    setupFiles: ["./src/novel-v2/__tests__/setup.ts"],
     include: [
-      "src/features/novel/**/__tests__/v2-*.test.{ts,tsx}",
+      "src/novel-v2/**/__tests__/*.test.{ts,tsx}",
+      "src/pages/novel-v2/**/__tests__/*.test.{ts,tsx}",
       "src/lib/**/__tests__/*.test.{ts,tsx}",
       "src/shared/**/__tests__/*.test.{ts,tsx}",
       "src/stores/**/__tests__/*.test.{ts,tsx}"
