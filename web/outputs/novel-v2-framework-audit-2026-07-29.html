@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Novel V2 小说自动创作框架全面审核报告</title>
+<style>
+:root{--bg:#f5f7f8;--paper:#fff;--ink:#17211d;--muted:#607069;--line:#dce5e0;--green:#167a55;--green2:#e9f7f1;--blue:#1d5f99;--blue2:#edf5fb;--amber:#9a5a00;--amber2:#fff5dc;--red:#b3261e;--red2:#fff0ee;--purple:#7048a8;--purple2:#f5effc;--shadow:0 8px 28px rgba(25,52,40,.08)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}.wrap{max-width:1220px;margin:auto;padding:32px 24px 80px}.hero{background:linear-gradient(135deg,#effaf5 0,#fff 56%,#eef5fb 100%);border:1px solid var(--line);border-radius:20px;padding:34px 38px;box-shadow:var(--shadow)}h1{font-size:34px;line-height:1.22;margin:0 0 12px;letter-spacing:-.5px}.sub{font-size:17px;color:var(--muted);max-width:940px}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}.pill{border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:#fff;color:#4b5c54}.verdict{margin-top:24px;border-left:5px solid var(--amber);background:var(--amber2);padding:18px 20px;border-radius:10px;font-size:16px}.score-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:24px 0}.score{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:17px;box-shadow:var(--shadow)}.score b{display:block;font-size:26px;color:var(--green)}.score span{color:var(--muted)}section{margin-top:28px;background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:28px;box-shadow:var(--shadow)}h2{font-size:23px;margin:0 0 17px}h3{font-size:17px;margin:24px 0 10px}.lede{color:var(--muted);margin-top:-8px}.callout{padding:15px 17px;border-radius:10px;margin:14px 0}.ok{background:var(--green2);border-left:4px solid var(--green)}.warn{background:var(--amber2);border-left:4px solid var(--amber)}.danger{background:var(--red2);border-left:4px solid var(--red)}.info{background:var(--blue2);border-left:4px solid var(--blue)}table{width:100%;border-collapse:separate;border-spacing:0;margin:14px 0;font-size:13px}th,td{padding:11px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);vertical-align:top}th{background:#f3f7f5;text-align:left;color:#34453d}tr:first-child th{border-top:1px solid var(--line)}th:first-child,td:first-child{border-left:1px solid var(--line)}tr:first-child th:first-child{border-top-left-radius:9px}tr:first-child th:last-child{border-top-right-radius:9px}.tag{display:inline-block;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:700;white-space:nowrap}.p0{color:var(--red);background:var(--red2)}.p1{color:var(--amber);background:var(--amber2)}.p2{color:var(--blue);background:var(--blue2)}.done{color:var(--green);background:var(--green2)}.partial{color:var(--amber);background:var(--amber2)}.design{color:var(--purple);background:var(--purple2)}.missing{color:var(--red);background:var(--red2)}code{font-family:Consolas,"SFMono-Regular",monospace;background:#eef3f0;border-radius:4px;padding:1px 5px;color:#25483a}pre{white-space:pre-wrap;background:#14201b;color:#e8f4ee;border-radius:12px;padding:16px;overflow:auto;font:12px/1.55 Consolas,monospace}.flow{overflow:auto;border:1px solid var(--line);border-radius:14px;background:#fbfdfc;padding:14px}.flow svg{min-width:1040px;width:100%;height:auto}.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}.bars{display:grid;gap:11px}.bar{display:grid;grid-template-columns:190px 1fr 48px;gap:12px;align-items:center}.track{height:10px;background:#e7eeea;border-radius:99px;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--green),#3cab7e);border-radius:99px}.road{display:grid;grid-template-columns:110px 1fr;gap:16px;border-top:1px solid var(--line);padding:17px 0}.road:first-of-type{border-top:0}.road strong{color:var(--green)}ul,ol{padding-left:21px}.small{font-size:12px;color:var(--muted)}.footer{text-align:center;color:var(--muted);margin-top:28px}@media(max-width:850px){.score-grid{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.bar{grid-template-columns:125px 1fr 42px}.wrap{padding:16px 12px 50px}.hero,section{padding:21px}h1{font-size:28px}}
+</style>
+</head>
+<body><main class="wrap">
+<header class="hero">
+  <h1>Novel V2 小说自动创作框架全面审核</h1>
+  <div class="sub">审核目标不是确认“模块存在”，而是判断当前实现能否长期、稳定、可审计地生成数百万字高质量中文网文。结论基于当前工作树代码、PostgreSQL 迁移、Temporal 状态机、测试配置、构建结果与现有章节产物。</div>
+  <div class="meta"><span class="pill">审核日期：2026-07-29</span><span class="pill">范围：src/novel-v2 + deploy/postgres + config + tests + 真实章节</span><span class="pill">基线：commit 91db80c</span><span class="pill">复审：2026-07-29 17:05</span><span class="pill">审核过程未改业务代码</span></div>
+  <div class="verdict"><strong>总判断：</strong>当前系统已经是“具备耐久工作流、规划、审校、事实与学习闭环的高级小说生成工程原型”，但还不能证明、也尚未具备足够机制保证“数百万字中文顶尖网文”的稳定生产。复审确认两项原 P0（五审硬门禁、爽点 revision provenance）已在 commit 91db80c 根因级修复；<strong>剩余关键阻断</strong>是测试证据链不可用、长期记忆无分层整合、融合检索固定 32 条上限、ContextManifest 预算排除缺失、independent reviewer 不保证独立模型、回归仅覆盖原失败场景。修复这些并补 50/200/500 章证据前，仍不能宣称具备百万字稳定生产能力。</div>
+</header>
+
+<section style="border-left:5px solid var(--green)">
+<h2>0. 复审更新（2026-07-29 17:05）</h2>
+<p class="lede">距首次审核，基线已从“含未提交改动”推进到 <code>commit 91db80c</code>。本次复审复核了全部 P0/P1 的真实代码状态并复跑测试。</p>
+<div class="ok callout"><strong>自首次审核已实质修复（已提交）：</strong>
+<ul style="margin:8px 0 0">
+<li><strong>五审硬门禁（原 P0）：</strong><code>evaluateCommitGate</code> 已改为以 <code>REQUIRED_CHAPTER_REVIEWERS</code> 五元组为硬门禁，缺失任一角色即拒绝提交；<code>runAllReviewers</code> 失败的 reviewer 不产生伪回执，自然转入人工队列。曾“2/5 审校可提交”的最坏情况已消除。</li>
+<li><strong>爽点 provenance（原 P0）：</strong>fact-extraction 不再在 commit 前写 <code>payoff_curve</code>，改为暂存 artifact，commit 后用正式 <code>result.revisionId</code> 落库，从机制上消除 fact artifact ID 冒充正文 revision。</li>
+<li><strong>人工事实审批门禁、未来伏笔 narrative_order cutoff、CreativeRun failWork、Reflection 修订计数</strong>均已正式提交（见第 4 节）。</li>
+</ul></div>
+<div class="danger callout"><strong>复审确认仍未修复：</strong>测试基础设施（Vitest 4.1.10 suite 注册失败、0 tests 执行）、百万字分层长期记忆（仍仅章节级、参考最近 5 章）、融合检索固定 32 条上限、ContextManifest 预算排除项恒空、independent reviewer 不保证独立模型、回归只覆盖原失败场景。</div>
+</section>
+
+<div class="score-grid">
+ <div class="score"><b>7.5/10</b><span>工作流耐久性</span></div>
+ <div class="score"><b>7.5/10</b><span>单章质量闭环</span></div>
+ <div class="score"><b>6.5/10</b><span>连续性与事实</span></div>
+ <div class="score"><b>3.5/10</b><span>百万字支撑</span></div>
+ <div class="score"><b>2.5/10</b><span>顶尖质量证据</span></div>
+</div>
+
+<section>
+<h2>1. 端到端真实执行链</h2>
+<p class="lede">正式章节生成与已定稿章节重审都复用共享生命周期；这比“提示词串联”成熟得多。</p>
+<div class="flow"><svg viewBox="0 0 1160 425" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="小说端到端工作流">
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8z" fill="#668078"/></marker></defs>
+<rect width="1160" height="425" rx="14" fill="#fbfdfc"/>
+<g font-family="Segoe UI,Microsoft YaHei" font-size="13" fill="#17211d">
+<text x="28" y="28" font-size="15" font-weight="700">Foundation 与滚动规划</text>
+<g fill="#edf5fb" stroke="#93b7d2"><rect x="25" y="43" width="150" height="54" rx="10"/><rect x="210" y="43" width="150" height="54" rx="10"/><rect x="395" y="43" width="150" height="54" rx="10"/><rect x="580" y="43" width="150" height="54" rx="10"/></g>
+<text x="100" y="65" text-anchor="middle"><tspan x="100">10 阶段全书规划 DAG</tspan><tspan x="100" dy="18">审批 / stale 传播</tspan></text>
+<text x="285" y="65" text-anchor="middle"><tspan x="285">Story Arc Bundle</tspan><tspan x="285" dy="18">fingerprint 重基线</tspan></text>
+<text x="470" y="65" text-anchor="middle"><tspan x="470">Chapter Blueprint</tspan><tspan x="470" dy="18">场景 / 状态差分</tspan></text>
+<text x="655" y="65" text-anchor="middle"><tspan x="655">Preflight + Memory</tspan><tspan x="655" dy="18">Skills + Context</tspan></text>
+<path d="M175 70H208M360 70H393M545 70H578" stroke="#668078" stroke-width="2" marker-end="url(#a)"/>
+<text x="28" y="137" font-size="15" font-weight="700">共享章节生命周期 runChapterLifecycle</text>
+<g fill="#e9f7f1" stroke="#76b89d"><rect x="25" y="153" width="120" height="54" rx="10"/><rect x="173" y="153" width="120" height="54" rx="10"/><rect x="321" y="153" width="120" height="54" rx="10"/><rect x="469" y="153" width="120" height="54" rx="10"/><rect x="617" y="153" width="120" height="54" rx="10"/><rect x="765" y="153" width="120" height="54" rx="10"/></g>
+<text x="85" y="185" text-anchor="middle">草稿</text><text x="233" y="175" text-anchor="middle"><tspan x="233">Reflection</tspan><tspan x="233" dy="18">最多 1 次修订</tspan></text><text x="381" y="175" text-anchor="middle"><tspan x="381">五角色 Review</tspan><tspan x="381" dy="18">当前允许缺席</tspan></text><text x="529" y="175" text-anchor="middle"><tspan x="529">Revision</tspan><tspan x="529" dy="18">最多 2 轮</tspan></text><text x="677" y="175" text-anchor="middle"><tspan x="677">Commit Gate</tspan><tspan x="677" dy="18">或人工审批</tspan></text><text x="825" y="175" text-anchor="middle"><tspan x="825">Learning</tspan><tspan x="825" dy="18">根因评估</tspan></text>
+<path d="M145 180H171M293 180H319M441 180H467M589 180H615M737 180H763" stroke="#668078" stroke-width="2" marker-end="url(#a)"/>
+<path d="M529 208C529 242 381 242 381 210" fill="none" stroke="#9a5a00" stroke-width="2" marker-end="url(#a)"/><text x="455" y="246" text-anchor="middle" fill="#9a5a00">blocker / major 回环</text>
+<text x="28" y="286" font-size="15" font-weight="700">事实与提交后闭环</text>
+<g fill="#f5effc" stroke="#b29bce"><rect x="25" y="303" width="130" height="54" rx="10"/><rect x="185" y="303" width="130" height="54" rx="10"/><rect x="345" y="303" width="130" height="54" rx="10"/><rect x="505" y="303" width="130" height="54" rx="10"/><rect x="665" y="303" width="130" height="54" rx="10"/><rect x="825" y="303" width="150" height="54" rx="10"/></g>
+<text x="90" y="325" text-anchor="middle"><tspan x="90">事实 / 伏笔 / 承诺</tspan><tspan x="90" dy="18">爽点提取</tspan></text><text x="250" y="325" text-anchor="middle"><tspan x="250">事实审批</tspan><tspan x="250" dy="18">auto / manual</tspan></text><text x="410" y="325" text-anchor="middle"><tspan x="410">正文 Commit</tspan><tspan x="410" dy="18">正式 revision</tspan></text><text x="570" y="325" text-anchor="middle"><tspan x="570">Chapter Memory</tspan><tspan x="570" dy="18">章节级摘要</tspan></text><text x="730" y="325" text-anchor="middle"><tspan x="730">角色富化</tspan><tspan x="730" dy="18">认知 / 关系</tspan></text><text x="900" y="325" text-anchor="middle"><tspan x="900">Skill / Prompt 迭代</tspan><tspan x="900" dy="18">Promote → 重跑 → rollback</tspan></text>
+<path d="M155 330H183M315 330H343M475 330H503M635 330H663M795 330H823" stroke="#668078" stroke-width="2" marker-end="url(#a)"/>
+<path d="M825 207V280H90V301" fill="none" stroke="#668078" stroke-width="2" marker-end="url(#a)"/>
+<rect x="995" y="43" width="140" height="314" rx="12" fill="#fff5dc" stroke="#d4aa57"/><text x="1065" y="70" text-anchor="middle" font-weight="700">人工门禁</text><text x="1065" y="100" text-anchor="middle"><tspan x="1065">蓝图审批</tspan><tspan x="1065" dy="24">正文审批</tspan><tspan x="1065" dy="24">事实审批</tspan><tspan x="1065" dy="24">规划重基线</tspan><tspan x="1065" dy="24">Candidate Promote</tspan></text><text x="1065" y="252" text-anchor="middle" fill="#9a5a00"><tspan x="1065">Temporal signal</tspan><tspan x="1065" dy="20">提供耐久等待</tspan></text>
+</g></svg></div>
+<div class="ok callout"><strong>已确认的架构优势：</strong>PostgreSQL 是正式状态源，Temporal 承担长任务、重试与人工 signal；规划存在 DAG 和 stale 传播；故事弧有宏观规划 fingerprint；章节重审复用正式生命周期；Learning 能把 underlying mechanism 送入 skill/prompt 迭代；Promote 后会从正式状态重跑，失败可 rollback。</div>
+</section>
+
+<section>
+<h2>2. 分阶段成熟度与实现状态</h2>
+<table><thead><tr><th>阶段</th><th>成熟度</th><th>实现状态</th><th>审核结论</th></tr></thead><tbody>
+<tr><td>全书 Foundation 规划</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>10 阶段 DAG、审批状态与下游 stale 传播存在；但 bootstrap 默认 <code>reviewGate: none</code>，章节入口仅显式要求 4 个规划 key。</td></tr>
+<tr><td>滚动故事弧 / 章节蓝图</td><td>7.5/10</td><td><span class="tag done">已实现</span></td><td>StoryArcBundle、ChapterBlueprint、审批与 context fingerprint 较完整；宏观规划漂移可阻断章节生成并要求重基线。</td></tr>
+<tr><td>Preflight / Context / Skill</td><td>6/10</td><td><span class="tag partial">部分实现</span></td><td>动态 32K/48K/64K 预算存在，但融合检索固定最多 32 条；ContextManifest 无法记录真实 budget 排除项。</td></tr>
+<tr><td>草稿 + Reflection</td><td>6.5/10</td><td><span class="tag done">已实现</span></td><td>Reflection 位于草稿后、五审前，可单独修订 1 次；但不生成正式审核凭证，也可能增加内容漂移。</td></tr>
+<tr><td>五角色审校</td><td>7.5/10</td><td><span class="tag done">已实现</span></td><td>五角色与独立 ModelPurpose 存在；复审确认 <code>evaluateCommitGate</code> 以 <code>REQUIRED_CHAPTER_REVIEWERS</code> 五元组为硬门禁，缺失角色即抛错；allSettled 失败的 reviewer 不产生伪回执而转人工队列。残留：人工批准路径 <code>commitAuthorApproved</code> 仅需 human passed，可单点绕过。</td></tr>
+<tr><td>自动修订 / 人工审批</td><td>6.5/10</td><td><span class="tag done">已实现</span></td><td>最多 2 轮、blocker 强制、改善阈值 0.15、上限后人工介入；定位失败时可退化整章重写，稳定性边界偏宽。</td></tr>
+<tr><td>事实 / 伏笔 / 承诺</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>MemoryClaim 时态、authority、knowledge scope、supersedes 已实现；人工事实门禁（factApprovalMode=manual）与伏笔 narrative_order cutoff 已提交 HEAD；默认事实审批仍 auto，未来伏笔 NULL 旧数据仍被返回（向后兼容边界）。</td></tr>
+<tr><td>Commit / Provenance</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>正式正文 revision 与对象存储提交完整；复审确认 fact-extraction 不再直接写 payoff_curve，改为暂存 artifact，commit 后用正式 <code>result.revisionId</code> 落库，provenance 已从机制上修正。残留：payoff_curve.setup_revision_id 暂留空，铺垫→兑现映射缺失。</td></tr>
+<tr><td>章节记忆 / 角色富化</td><td>5.5/10</td><td><span class="tag partial">部分实现</span></td><td>章节摘要、事件、角色状态、未解线索、情绪弧与 Qdrant 索引存在；仅参考最近 5 章，没有自动 story-unit/arc/volume/book rollup。</td></tr>
+<tr><td>Learning / Skill 迭代</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>支持 symptom、failingLayer、underlyingMechanism、affectedInputClass、boundary 与 regression risks，方向正确。</td></tr>
+<tr><td>Promote / 回归 / rollback</td><td>6/10</td><td><span class="tag partial">部分实现</span></td><td>真实实验、正式状态重跑和 rollback 存在；但只重跑原失败场景，缺跨题材反例和冻结评估器。</td></tr>
+<tr><td>百万字质量评估</td><td>2.5/10</td><td><span class="tag missing">证据缺失</span></td><td>只有 2 章可审读正文；没有 50/200/500 章压力样本、人工盲评、弃读/追更代理指标或长期漂移曲线。</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>3. 关键风险：根因、影响类别与修复边界</h2>
+<h3>P0 — 必须先修，否则质量门或审计不可信</h3>
+<table><thead><tr><th>风险</th><th>根因机制</th><th>影响输入类别</th><th>整改边界</th></tr></thead><tbody>
+<tr><td><span class="tag ok">已修复</span> 五审硬门禁</td><td>原 <code>evaluateCommitGate</code> 只要求一条 internal + 一条 independent；已在 commit 91db80c 重构为 <code>REQUIRED_CHAPTER_REVIEWERS</code> 五元组硬门禁，缺失角色即抛错，<code>runAllReviewers</code> 失败角色不产生伪回执。</td><td>所有章节提交路径；修复后最坏情况从“2/5 审校可提交”变为“缺失角色自动转人工队列”。</td><td>残留：人工批准路径 <code>commitAuthorApproved</code> 仅需 human passed，可单点绕过；建议明确作者对已五审章节的覆盖策略并补回归测试。</td></tr>
+<tr><td><span class="tag ok">已修复</span> 爽点 provenance</td><td>原事实提取在 commit 前用 <code>factArtifact.id</code> 写 payoff_curve.revision_id；已根因级重构：fact-extraction 暂存 payoffMoments 到 artifact，commit 后用正式 <code>result.revisionId</code> 落库。</td><td>所有含 payoff moment 的章节，特别是重审/重写/回滚后。</td><td>残留：payoff_curve.setup_revision_id 暂留空，铺垫→兑现映射未打通；建议补前章铺垫关联以支持爽点升级追踪与疲劳控制。</td></tr>
+<tr><td><span class="tag p0">P0</span> 测试证据链不可用</td><td>当前安装同时存在顶层与 pnpm store 两套不同 realpath 的 <code>@vitest/runner</code>/<code>@vitest/utils</code> 实例，suite collector context 分裂；结果是 describe 阶段读取不到 runner config。</td><td>全部 32 个测试文件；当前“测试文件存在”不等于任何行为已验证。</td><td>在干净环境执行冻结 lockfile 安装，确保单一 Vitest 模块实例；CI 加 <code>pnpm install --frozen-lockfile</code>、模块 realpath 自检和最小 smoke。先修基础设施再讨论断言结果。</td></tr>
+<tr><td><span class="tag p0">P0</span> 百万字记忆无分层整合</td><td>只有章节级 memory；提取时只参考最近 5 章；没有 story-unit、arc、volume、book-current-state、cold-memory 的自动归并与失效传播。</td><td>50 章后跨弧线索，200 章后人物状态和事实演变，500 章后卷级因果与主题回响。</td><td>增加“事件事实真源 + 分层投影”而不是无限加上下文：章节→故事单元→弧→卷→全书当前态；投影必须带 source revision、valid range、supersedes 和可重建能力。</td></tr>
+</tbody></table>
+<h3>P1 — 会显著限制长期质量或造成错误自信</h3>
+<table><thead><tr><th>风险</th><th>证据</th><th>建议</th></tr></thead><tbody>
+<tr><td><span class="tag p1">P1</span> 64K 预算与固定 32 条召回冲突</td><td><code>computeTokenBudget</code> 在 ≥200 章返回 64K，但 <code>FusionMemoryProvider</code> 最终固定 <code>slice(0, 32)</code>。</td><td>按 token 成本、facet coverage、recency、authority 和 diversity 做预算型选择；候选召回数与最终注入数分离。</td></tr>
+<tr><td><span class="tag p1">P1</span> ContextManifest 不完整</td><td>调用方把预算后的 <code>memory.claims</code> 同时当 <code>allClaimIds</code>，导致 excludedClaimIds 通常为空。</td><td>MemoryProvider 返回候选 receipt；manifest 记录 candidate/included/excluded、排除理由、分数与 token 成本。</td></tr>
+<tr><td><span class="tag p1">P1</span> 伏笔/承诺在预算与 fingerprint 后注入</td><td>MemoryBundle 先计算 budget、source revisions 与 fingerprint，activity 随后把 open narratives prepend 到 claims。</td><td>把高优先级 narrative obligations 纳入统一 bundle builder，重新预算并计算最终 fingerprint。</td></tr>
+<tr><td><span class="tag p1">P1</span> independent reviewer 不保证独立</td><td>示例路由的所有 <code>review.*</code> 默认使用同一个 <code>web-chat</code> profile；stateless 不等于模型独立。</td><td>门禁凭证记录 provider/profile/model/prompt-version；至少一类 independent 必须与生成模型不同 provider 或不同模型族，并隔离生成 rationale。</td></tr>
+<tr><td><span class="tag p1">P1</span> 规划默认缺质量审核</td><td>Bootstrap 默认 <code>reviewGate: none</code>；章节入口只直接检查 architecture/characters/worldview/plot-design。</td><td>生产模式默认 planning review；章节前验证完整依赖闭包 approved 且 fingerprint 一致，而非只看 4 个叶节点。</td></tr>
+<tr><td><span class="tag p1">P1</span> 回归只覆盖原失败场景</td><td><code>regressionPassed</code> 只检查旧 blocker/major pattern 消失且分数不降。</td><td>候选晋升前运行：原失败场景 + 跨题材 counterexample + 不同章节功能 + 冻结审核器 + 人工抽检；避免生成器与审核器共同迎合新规则。</td></tr>
+<tr><td><span class="tag p1">P1</span> 整章重写退化路径</td><td>定位窗口失败或未发生替换时，activity 可退化整章重写。</td><td>按 issue 类型定义允许改写范围；大范围变更必须重新做蓝图覆盖、事实 diff、角色状态 diff 和人工审批。</td></tr>
+</tbody></table>
+<h3>P2 — 应进入工程整治清单</h3>
+<ul>
+<li>Promise 的 <code>promiser/promisee</code> 仍为空 TODO，结构化承诺链未完成。</li>
+<li>Qdrant 失败虽不阻断 PostgreSQL 真源，但索引修复和 learning/actionable recovery 尚不完整。</li>
+<li><code>contentHtml</code> 与正文 revision 的一致持久化仍需统一契约。</li>
+<li>关系 <code>valid_from/valid_to</code> 应表达故事时间，不应混入现实 wall-clock 语义。</li>
+<li>文档仍把旧 <code>chapter-plan</code> 描述为必填，与 StoryArc/ChapterBlueprint 现状漂移。</li>
+</ul>
+</section>
+
+<section>
+<h2>4. 当前工作树中的修复：不能与正式能力混为一谈</h2>
+<table><thead><tr><th>事项</th><th>当前状态</th><th>评价</th></tr></thead><tbody>
+<tr><td>未来伏笔 narrative cutoff</td><td><span class="tag done">已提交</span></td><td>迁移 020 与 narrative_order 过滤已落地 HEAD；当前代码对 cutoff 下 NULL 旧数据仍返回（向后兼容边界）。无集成测试执行（Vitest 基础设施不可用）。</td></tr>
+<tr><td>人工事实审批门禁</td><td><span class="tag done">已提交</span></td><td><code>factApprovalMode=manual</code> 可在 commit 前阻断并等待 signal；默认仍 auto，且尚无可运行测试证据。</td></tr>
+<tr><td>CreativeRun 重试上限 failWork</td><td><span class="tag done">已提交</span></td><td>从只记录事件改为真正结束 work item，可消除 running 悬挂；仍需 Temporal 恢复/重放测试。</td></tr>
+<tr><td>Reflection 修订计数</td><td><span class="tag done">已提交</span></td><td>显式常量化为 1 次，行为边界更清楚；仍应纳入总变更预算和 artifact lineage。</td></tr>
+<tr><td>五审硬门禁</td><td><span class="tag done">已提交</span></td><td><code>evaluateCommitGate</code> 五元组硬门禁，缺失角色即抛错；见第 3 节 P0 修复。</td></tr>
+<tr><td>爽点 provenance 重构</td><td><span class="tag done">已提交</span></td><td>payoff 推迟到 commit 后用正式 revisionId 落库；见第 3 节 P0 修复。</td></tr>
+</tbody></table>
+<div class="warn callout">上述事项已正式提交至 <code>commit 91db80c</code>。但当前测试 runner 仍不可用（见剩余 P0），因此它们属于“已实现代码”而非“已通过测试验证的能力”。报告不把它们算作已证明的生产能力，直到 Vitest 基础设施修复并有可运行回归。</div>
+</section>
+
+<section>
+<h2>5. 真实章节产物评估</h2>
+<div class="two">
+<div><h3>样本事实</h3><ul><li>只有第 0、1 章为 final，约 3,848 与 3,958 字。</li><li>第 2、3 章只有 outline，正文为空，不能验证连续生成。</li><li>第一章原稿 246 段，其中 213 段不超过 30 字；优化稿降至 58 段、短段 15，机械碎段明显改善。</li><li>第二章原稿 308 段，其中 290 个短段；优化稿 130 段、短段 60。</li></ul></div>
+<div><h3>文学与商业性判断</h3><ul><li><strong>优点：</strong>“程序员修仙”卖点清楚，概念统一，主角方法论稳定，因果链基本可读。</li><li><strong>优化有效：</strong>禁忌线索、人物选择困境、章尾 hook 和段落连贯度均增强。</li><li><strong>仍有缺口：</strong>工程类比和“结构/节点/运行”等概念密集重复；主角试错成本低；配角主要服务于认可主角；强冲突、损失、竞争和不可逆选择不足。</li><li><strong>结论：</strong>达到“可读商业稿”而非“已证明的顶尖网文”。</li></ul></div>
+</div>
+<div class="danger callout"><strong>证据边界：</strong>两章无法验证 50 章后的角色差异、200 章后的事实连续性、卷级高潮、爽点升级和百万字疲劳控制。任何“已能稳定写百万字”的结论都会超出证据。</div>
+</section>
+
+<section>
+<h2>6. 构建与测试验证结果</h2>
+<table><thead><tr><th>验证项</th><th>结果</th><th>解释</th></tr></thead><tbody>
+<tr><td>关键 Vitest：revision-policy + chapter-lifecycle</td><td><span class="tag p0">失败</span></td><td>2 个 suite、0 个 test；均在 <code>describe</code> 注册阶段报 <code>Cannot read properties of undefined (reading 'config')</code>。这不是业务断言失败，而是 runner context 失效。</td></tr>
+<tr><td>全量 Vitest</td><td><span class="tag p0">失败</span></td><td>32 个 test files failed，Tests no tests。当前自动化测试证据链不可用。</td></tr>
+<tr><td>依赖实例检查</td><td><span class="tag p0">异常</span></td><td>顶层与 Vitest 内部解析到的 <code>@vitest/runner</code>/<code>@vitest/utils</code> 版本同为 4.1.10，但 realpath 不同，属于重复模块实例；与 suite collector 分裂症状吻合。</td></tr>
+<tr><td><code>tsc -p tsconfig.runtime.json</code></td><td><span class="tag done">通过</span></td><td>运行时 TypeScript 配置无错误。</td></tr>
+<tr><td><code>npm run lint</code></td><td><span class="tag p1">失败</span></td><td>前端 <code>KnowledgeWorkbenchPanel.tsx</code> 有未使用的 <code>Tag</code> 导入；第一段 tsc 因此中止。</td></tr>
+<tr><td>生产打包到全新临时目录</td><td><span class="tag done">通过</span></td><td>Vite 6.4.3 成功转换 3,685 个模块并生成产物；有 vendor-antd 超过 500kB 的 chunk warning。</td></tr>
+<tr><td>标准 <code>npm run build</code></td><td><span class="tag partial">环境拦截</span></td><td>TypeScript 与模块转换成功；清空现有 dist/assets 时触发安全删除批量确认，不属于源码编译错误。</td></tr>
+</tbody></table>
+<pre>建议的测试基础设施修复顺序：
+1. 在隔离目录/CI 中执行 pnpm install --frozen-lockfile，禁止复用当前异常 node_modules。
+2. 断言 vitest、@vitest/runner、@vitest/utils 均解析到同一 pnpm store 实例。
+3. 先运行 1 个仅含 describe/it 的最小 smoke，再跑 revision-policy。
+4. 跑 chapter-lifecycle、foreshadowing-order，再跑全量 32 suites。
+5. 不要通过改测试 import 或添加业务特判绕过 collector 分裂。</pre>
+</section>
+
+<section>
+<h2>7. 百万字能力建设路线图</h2>
+<div class="road"><strong>阶段 0<br>P0 止血</strong><div><b>先让质量门与证据可信。</b><ul><li>五角色完整门禁 + reviewer 重试/替代路由凭证。</li><li>修复 payoff candidate → committed revision lineage。</li><li>恢复单实例 Vitest 与 CI，补 Temporal/Postgres 集成 smoke。</li><li>将当前未提交的事实审批、伏笔顺序和 failWork 修复正式化并验证。</li></ul><b>退出条件：</b>全量单测可执行；任一 reviewer 缺席时禁止自动 commit；revision 回滚后不存在错误爽点记录。</div></div>
+<div class="road"><strong>阶段 1<br>50 章</strong><div><b>验证单卷内稳定性。</b><ul><li>建立 story-unit summary 与 arc current state；检索按 facet coverage + token budget 选择。</li><li>构建 5 种章节功能集：开篇、过渡、冲突升级、高潮、余波；至少 3 种题材。</li><li>记录事实冲突率、角色声部混淆率、伏笔漏兑现率、重复意象/句式率、人工返修字数。</li></ul><b>门槛建议：</b>50 章无 blocker continuity；关键角色声部盲测可区分；每 10 章人工抽检，不能出现持续退化趋势。</div></div>
+<div class="road"><strong>阶段 2<br>200 章</strong><div><b>验证跨弧与跨卷因果。</b><ul><li>增加 volume summary、book current state、cold memory 和可重建投影。</li><li>规划变更产生 impact report：受影响事实、弧、伏笔、已写正文和人工决策。</li><li>召回候选数量与注入预算解耦；ContextManifest 完整记录排除原因。</li><li>引入爽点“铺垫成本—兑现强度—类型疲劳—升级曲线”模型。</li></ul><b>门槛建议：</b>随机抽取 100 个跨 100 章事实问答；关键状态准确率达到预设线；卷级高潮由冻结评审器和人工双评。</div></div>
+<div class="road"><strong>阶段 3<br>500 章</strong><div><b>验证百万字前的长期疲劳和自我迭代安全。</b><ul><li>跨题材 counterexample 回归集与冻结评估器；生成器、审校器、晋升器职责隔离。</li><li>每次 skill/prompt promote 跑失败场景、反例、不同章节功能及历史金标；不只看自评分。</li><li>建立重复模式、人物工具化、冲突成本、弃读风险、追更动力的时间序列。</li><li>真实作者盲评与目标读者小样本 A/B，保留人工否决权。</li></ul><b>退出条件：</b>500 章压力运行完成，质量曲线没有不可逆下滑；回滚能恢复内容规则与投影状态；人工评审认可达到预设稳定线。</div></div>
+<div class="road"><strong>阶段 4<br>百万字</strong><div><b>只能在前三级证据通过后宣称能力。</b>百万字不是“上下文更长”，而是可追溯事实、分层状态、节奏规划、跨场景回归和人工质量校准共同成立。系统应输出能力置信区间和失败模式，而不是单一“顶尖”标签。</div></div>
+</section>
+
+<section>
+<h2>8. 推荐执行顺序与验收矩阵</h2>
+<table><thead><tr><th>优先级</th><th>实施包</th><th>必须验证的原场景</th><th>至少一个跨场景反例</th></tr></thead><tbody>
+<tr><td>1</td><td>五审完整门禁</td><td>3 个 reviewer 超时、剩余 2 个 passed 时不得 commit</td><td>单个 reviewer 首次失败、替代路由成功后五角色齐全可 commit</td></tr>
+<tr><td>2</td><td>测试 runner 单实例化</td><td>现有 describe 注册错误消失</td><td>全新 checkout + frozen lockfile 在 CI 重现通过</td></tr>
+<tr><td>3</td><td>Payoff revision lineage</td><td>首次正文 commit 后 payoff 指向 manuscript revision</td><td>定稿重审产生新 revision，旧 payoff 失效或保留历史但不参与当前曲线</td></tr>
+<tr><td>4</td><td>统一 MemoryBundle 构建</td><td>被预算裁剪 claim 出现在 manifest excluded 中</td><td>open promise/foreshadowing 加入后仍不超预算，fingerprint 可复现</td></tr>
+<tr><td>5</td><td>分层记忆投影</td><td>跨 50 章伏笔和人物状态准确召回</td><td>旧事实被 supersede 后，卷摘要和全书当前态可重建且不保留错误当前值</td></tr>
+<tr><td>6</td><td>跨场景晋升回归</td><td>原 blocking pattern 消失且分数不降</td><td>不同题材、POV、章节功能不发生新 blocker；冻结评估器不与生成器共用新规则</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>9. 最终结论</h2>
+<div class="info callout"><strong>工程层面：</strong>框架已经超出普通原型：耐久化工作流、人工 signal、规划重基线、事实账本、章节重审复用和 learning/promote/rollback 都有真实代码基础。</div>
+<div class="warn callout"><strong>产品层面：</strong>它目前能够支持“可控地生成并审核章节”，但还不具备经过证明的长期叙事操作系统。固定 32 条召回、章节级记忆、五审缺席容忍、provenance 错误和单场景回归，会在篇幅增长后累积成结构性质量风险。</div>
+<div class="danger callout"><strong>对目标的回答：</strong>现在不能合理宣称能自动创作“高质量、数百万字、顶尖中文网文”。应先完成 P0 止血，再按 50→200→500 章证据阶梯验证。达到百万字目标的最短路径不是继续堆提示词，而是把<strong>审核门完整性、分层状态投影、可复现上下文、跨场景回归与真实读者评价</strong>建设成硬契约。</div>
+</section>
+<div class="footer">报告基于 2026-07-29 当前工作树。未执行真实 PostgreSQL / Temporal / Qdrant 端到端环境，也未进行真实模型 50+ 章压力生成；相关能力明确标记为待验证。</div>
+</main></body></html>
