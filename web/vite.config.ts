@@ -96,7 +96,7 @@ export default defineConfig({
           if (/[\\/]node_modules[\\/](\.pnpm[\\/])?(antd|@ant-design|rc-[^\\/]+)[\\/]/.test(id)) {
             return "vendor-antd";
           }
-          if (id.includes("motion")) {
+          if (id.includes("motion") || id.includes("gsap")) {
             return "vendor-motion";
           }
           if (id.includes("@tanstack")) {

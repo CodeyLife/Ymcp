@@ -28,13 +28,14 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
   "project-positioning": {
     dimension: "确立全书的题材定位、目标读者与核心卖点，为后续所有架构决策提供基线。",
     focus: [
+      "正式书名：根据作品核心意象、冲突与题材确定简洁、可辨识的中文书名；不要沿用项目 ID、英文代号或临时标题",
       "核心卖点：本书区别于同类作品的最显著特征（不超过 3 条）",
       "目标读者画像：年龄段、阅读偏好、容忍度（如慢热/快节奏）",
       "基调与情绪曲线：整体情绪走向（如先抑后扬、悲壮、诙谐）",
       "差异化策略：与同类作品相比，本作品在哪些维度上做了不同选择",
       "核心冲突预设：贯穿全书的核心矛盾（不展开具体事件）",
     ],
-    structuredDataHint: "positioning: { sellingPoints: string[], targetReader: {...}, tone: string, differentiation: string[], coreConflict: string }",
+    structuredDataHint: "positioning: { bookTitle: string, namingRationale: string, sellingPoints: string[], targetReader: {...}, tone: string, differentiation: string[], coreConflict: string }",
   },
   architecture: {
     dimension: "设计全书的叙事结构与章节布局，确定故事的骨架。",

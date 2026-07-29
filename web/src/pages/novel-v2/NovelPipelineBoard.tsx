@@ -12,12 +12,11 @@
  * 复用：stage-meta.ts（11 阶段 + 8 维质量）、presentation.tsx（语义转译）、novelApi.ts（数据层）
  * ============================================================ */
 
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import { motion } from "motion/react";
-import { Alert, Button, Empty, Input, Progress, Segmented, Tag, message } from "antd";
+import { Alert, Button, Drawer, Empty, Input, Popconfirm, Progress, Segmented, Select, Tag, message } from "antd";
 import {
-  ArrowLeftOutlined,
   AuditOutlined,
   CheckCircleFilled,
   CheckOutlined,
@@ -34,7 +33,7 @@ import {
 
 import { STAGE_META, QUALITY_DIMENSIONS, type StageMeta } from "./workflow-showcase/stage-meta";
 import type { WorkflowStage } from "@/novel-v2/protocol";
-import { describeEvent, documentStatusMeta, relativeTime, shortId, statusMeta, type EventCategory } from "./presentation";
+import { describeEvent, documentStatusMeta, relativeTime, statusMeta, type EventCategory } from "./presentation";
 import ArtifactContentModal, { ArtifactCard, type ArtifactSummary } from "./ArtifactContentModal";
 import ManuscriptEditor from "./ManuscriptEditor";
 import TextDiff from "./TextDiff";
@@ -48,10 +47,14 @@ import {
   useNovelRun,
   useNovelRunArtifacts,
   useNovelRunEvents,
+  useNovelRunReviews,
   useSignalHumanDecision,
   useSubmitChapterReview,
+  isChapterWorkflowRun,
+  novelRunDocumentId,
   type NovelArtifactSummary,
   type NovelDocumentSummary,
+  type NovelReviewSummary,
   type NovelRunEvent,
   type NovelRunState,
   type NovelWorkflowRunRecord,
@@ -61,8 +64,49 @@ import "./manuscript-tools.css";
 
 type StageNodeStatus = "done" | "active" | "pending" | "gate" | "failed";
 
+export { novelRunDocumentId };
+
 /** EventCategory（中文）→ 事件点配色 class key */
 const EVENT_CATEGORY_CLASS: Record<EventCategory, string> = { 运行: "run", 任务: "task", 产物: "artifact", 记忆: "memory", 学习: "learning", 文档: "doc", 其他: "default" };
+const RUN_FAILURE_STATUSES = new Set(["failed", "rejected", "cancelled", "terminated"]);
+const RUN_ACTIVE_STATUSES = new Set(["running", "pending", "accepted", "paused"]);
+
+export type ChapterWorkspaceMode = "empty" | "planned" | "running" | "manuscript-review" | "fact-review" | "final" | "failed" | "stalled";
+
+export interface ChapterWorkspaceState {
+  mode: ChapterWorkspaceMode;
+  latestRun?: NovelWorkflowRunRecord;
+  reasonCode?: string;
+}
+
+/** 用户状态只由章节的最新运行决定；更旧的运行仅属于诊断历史。 */
+export function deriveChapterWorkspaceState(document: NovelDocumentSummary | undefined, runs: NovelWorkflowRunRecord[]): ChapterWorkspaceState {
+  if (!document) return { mode: "empty" };
+  const latestRun = [...runs]
+    .filter((run) => novelRunDocumentId(run) === document.id)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const reasonCode = typeof latestRun?.payload.reasonCode === "string" ? latestRun.payload.reasonCode : undefined;
+
+  if (latestRun?.status === "manual-review-required") {
+    return { mode: reasonCode === "fact-approval-pending" ? "fact-review" : "manuscript-review", latestRun, reasonCode };
+  }
+  if (latestRun && RUN_ACTIVE_STATUSES.has(latestRun.status)) return { mode: "running", latestRun, reasonCode };
+  if (latestRun && RUN_FAILURE_STATUSES.has(latestRun.status)) return { mode: "failed", latestRun, reasonCode };
+  if (document.status === "final") return { mode: "final", latestRun, reasonCode };
+  if (document.status === "planned" && !latestRun) return { mode: "planned" };
+  return { mode: "stalled", latestRun, reasonCode };
+}
+
+const CHAPTER_MODE_META: Record<ChapterWorkspaceMode, { label: string; tone: string }> = {
+  empty: { label: "未选择", tone: "idle" },
+  planned: { label: "未开始", tone: "idle" },
+  running: { label: "创作中", tone: "running" },
+  "manuscript-review": { label: "待审正文", tone: "review" },
+  "fact-review": { label: "待核事实", tone: "review" },
+  final: { label: "已定稿", tone: "done" },
+  failed: { label: "需处理", tone: "failed" },
+  stalled: { label: "待恢复", tone: "failed" },
+};
 
 /** NovelArtifactSummary → ArtifactCard/Modal 期望的 ArtifactSummary（createdAt 统一为 number） */
 function toArtifactSummary(a: NovelArtifactSummary): ArtifactSummary {
@@ -87,8 +131,25 @@ function normalizeStageKey(raw?: string): WorkflowStage | undefined {
   return undefined;
 }
 
-/** 由 run 状态 + 产物推导 11 阶段状态（防御式：字段缺失时退化为 pending） */
-function deriveStageStates(run: NovelRunState | undefined, artifacts: NovelArtifactSummary[]): Record<string, StageNodeStatus> {
+function artifactStage(artifact: NovelArtifactSummary): WorkflowStage | undefined {
+  if (artifact.kind === "chapter-blueprint") return "blueprint";
+  if (artifact.kind === "draft") return "draft";
+  if (artifact.kind === "review" || artifact.kind === "summary") return "review";
+  if (artifact.kind === "revision") return "revision";
+  if (artifact.kind === "fact-extraction") return "fact-extraction";
+  return normalizeStageKey(artifact.taskId);
+}
+
+function failedStage(payload: Record<string, unknown>, artifacts: NovelArtifactSummary[]): WorkflowStage {
+  const explicit = normalizeStageKey(typeof payload.stage === "string" ? payload.stage : undefined);
+  if (explicit) return explicit;
+  const error = typeof payload.error === "string" ? payload.error.toLowerCase() : "";
+  if (/memory|context|preflight|记忆|上下文/u.test(error)) return "context";
+  return artifacts.map(artifactStage).find(Boolean) ?? "context";
+}
+
+/** 由 run 状态 + 产物推导 11 阶段状态（防御式：字段缺失时将预检失败落到上下文阶段） */
+export function deriveStageStates(run: NovelRunState | undefined, artifacts: NovelArtifactSummary[]): Record<string, StageNodeStatus> {
   const order = STAGE_META.map((m) => m.stage);
   const states: Record<string, StageNodeStatus> = {};
   const status = run?.status;
@@ -110,7 +171,7 @@ function deriveStageStates(run: NovelRunState | undefined, artifacts: NovelArtif
   }
 
   if (status === "failed" || status === "rejected" || status === "cancelled") {
-    const lastIdx = activeStage ? order.indexOf(activeStage) : -1;
+    const lastIdx = order.indexOf(activeStage ?? failedStage(payload, artifacts));
     order.forEach((s, i) => (states[s] = i < lastIdx ? "done" : i === lastIdx ? "failed" : "pending"));
     return states;
   }
@@ -150,6 +211,14 @@ interface QualityData {
   reviewCount: number;
 }
 
+const REVIEW_ROLE_DIMENSIONS: Record<string, string[]> = {
+  "style-reviewer": ["sceneEmbodiment", "specificity"],
+  "character-reviewer": ["characterVoice", "dialogue"],
+  "continuity-reviewer": ["continuity"],
+  "plot-reviewer": ["plot", "hookPayoff"],
+  "reader-reviewer": ["readerRetention"],
+};
+
 function parseIssues(value: unknown): QualityIssue[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -170,15 +239,28 @@ function parseIssues(value: unknown): QualityIssue[] {
     .filter((x): x is QualityIssue => Boolean(x));
 }
 
-function deriveQuality(run: NovelRunState | undefined, artifacts: NovelArtifactSummary[]): QualityData {
-  const reviewArtifacts = artifacts.filter((a) => a.kind === "review");
+export function deriveQuality(run: NovelRunState | undefined, artifacts: NovelArtifactSummary[], reviews: NovelReviewSummary[] = []): QualityData {
+  const latestReviewedArtifact = artifacts.find((artifact) => reviews.some((review) => review.artifactId === artifact.id));
+  const currentReviews = latestReviewedArtifact ? reviews.filter((review) => review.artifactId === latestReviewedArtifact.id) : reviews;
+  const reviewArtifacts = artifacts.filter((a) => a.kind === "review" || a.kind === "summary");
   const issues: QualityIssue[] = [];
   const dimScores: Record<string, number[]> = {};
   let overallFromArtifact: number | null = null;
 
+  for (const review of currentReviews) {
+    issues.push(...parseIssues(review.issues));
+    if (typeof review.score === "number" && review.role) {
+      for (const dimension of REVIEW_ROLE_DIMENSIONS[review.role] ?? []) (dimScores[dimension] ??= []).push(review.score);
+    }
+  }
+
   for (const a of reviewArtifacts) {
     const sd = (a.structuredData ?? {}) as Record<string, unknown>;
-    issues.push(...parseIssues(sd.issues));
+    if (currentReviews.length === 0) {
+      issues.push(...parseIssues(sd.issues));
+      const critique = sd.critique;
+      if (critique && typeof critique === "object" && !Array.isArray(critique)) issues.push(...parseIssues((critique as Record<string, unknown>).issues));
+    }
     const scores = sd.scores;
     if (scores && typeof scores === "object") {
       for (const [k, v] of Object.entries(scores as Record<string, unknown>)) {
@@ -190,7 +272,8 @@ function deriveQuality(run: NovelRunState | undefined, artifacts: NovelArtifactS
 
   const payload = (run?.record?.payload ?? {}) as Record<string, unknown>;
   const finalScore = typeof payload.finalScore === "number" ? payload.finalScore : null;
-  const overall = finalScore ?? overallFromArtifact;
+  const currentScore = typeof payload.currentScore === "number" ? payload.currentScore : null;
+  const overall = finalScore ?? currentScore ?? overallFromArtifact;
 
   const dims = QUALITY_DIMENSIONS.map((d) => {
     const arr = dimScores[d.key];
@@ -202,7 +285,21 @@ function deriveQuality(run: NovelRunState | undefined, artifacts: NovelArtifactS
     return { key: d.key, label: d.label, score: Math.max(0, 5 - penalty) };
   });
 
-  return { overall, dims, issues, reviewCount: reviewArtifacts.length };
+  const uniqueIssues = issues.filter((issue, index, all) => all.findIndex((candidate) => `${candidate.title ?? candidate.rule}|${candidate.excerpt ?? candidate.description}` === `${issue.title ?? issue.rule}|${issue.excerpt ?? issue.description}`) === index);
+  return { overall, dims, issues: uniqueIssues, reviewCount: currentReviews.length || reviewArtifacts.length };
+}
+
+export function artifactsForStage(stage: string, artifacts: NovelArtifactSummary[]): NovelArtifactSummary[] {
+  if (stage === "blueprint" || stage === "blueprint-approval") return artifacts.filter((artifact) => artifact.kind === "chapter-blueprint");
+  if (stage === "draft") return artifacts.filter((artifact) => artifact.kind === "draft");
+  if (stage === "review") return artifacts.filter((artifact) => artifact.kind === "review" || artifact.kind === "summary");
+  if (stage === "revision") return artifacts.filter((artifact) => artifact.kind === "revision");
+  if (stage === "manuscript-approval") {
+    const latest = artifacts.find((artifact) => artifact.kind === "revision") ?? artifacts.find((artifact) => artifact.kind === "draft");
+    return latest ? [latest] : [];
+  }
+  if (stage === "fact-extraction" || stage === "fact-approval") return artifacts.filter((artifact) => artifact.kind === "fact-extraction");
+  return [];
 }
 
 // ---------- 小组件 ----------
@@ -249,28 +346,6 @@ function PipelineTracker({ states, selected, onSelect }: { states: Record<string
   );
 }
 
-function GateBanner({ run, onDecide, deciding }: { run: NovelRunState; onDecide: (d: "approve" | "reject", feedback?: string) => void; deciding: boolean }) {
-  const [feedback, setFeedback] = useState("");
-  const payload = (run.record?.payload ?? {}) as Record<string, unknown>;
-  const reasonCode = typeof payload.reasonCode === "string" ? payload.reasonCode : "quality-gate-not-passed";
-  const isFact = reasonCode === "fact-approval-pending";
-  const pendingIds = Array.isArray(payload.pendingIds) ? (payload.pendingIds as string[]) : [];
-  return (
-    <motion.section className={`pb-gate ${isFact ? "is-fact" : "is-quality"}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-      <div className="pb-gate-icon">{isFact ? <DatabaseOutlined /> : <AuditOutlined />}</div>
-      <div className="pb-gate-body">
-        <h3>{isFact ? "等待事实审批" : "等待正文审批"}</h3>
-        <p>{isFact ? `检测到 ${pendingIds.length} 条待确认事实，需作者决定后方可提交。` : "审校门禁未通过，需作者决定批准进入事实提取，或退回继续修订。"}</p>
-        <Input.TextArea value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="审批意见（可选）" rows={2} className="pb-gate-feedback" />
-      </div>
-      <div className="pb-gate-actions">
-        <Button type="primary" icon={<CheckOutlined />} loading={deciding} onClick={() => onDecide("approve", feedback || undefined)}>批准</Button>
-        <Button danger icon={<CloseOutlined />} loading={deciding} onClick={() => onDecide("reject", feedback || undefined)}>退回</Button>
-      </div>
-    </motion.section>
-  );
-}
-
 function QualityPanel({ quality }: { quality: QualityData }) {
   const [showIssues, setShowIssues] = useState(true);
   const score = quality.overall;
@@ -279,9 +354,11 @@ function QualityPanel({ quality }: { quality: QualityData }) {
     <section className="pb-card">
       <header className="pb-card-head">
         <span className="pb-card-title"><AuditOutlined /> 质量报告</span>
-        {quality.reviewCount > 0 && <Tag>{quality.reviewCount} 组审校</Tag>}
+        {quality.reviewCount > 0 && <Tag>{quality.reviewCount} 位审校</Tag>}
       </header>
-      <div className="pb-quality">
+      {score == null && quality.reviewCount === 0 && quality.issues.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="此运行尚未产生审校数据" />
+      ) : <div className="pb-quality">
         <div className="pb-quality-score" style={{ color: scoreColor }}>{score == null ? "—" : score.toFixed(1)}<small>/5</small></div>
         <div className="pb-quality-dims">
           {quality.dims.map((d) => (
@@ -292,7 +369,7 @@ function QualityPanel({ quality }: { quality: QualityData }) {
             </div>
           ))}
         </div>
-      </div>
+      </div>}
       {quality.issues.length > 0 && (
         <div className="pb-issues">
           <button type="button" className="pb-issues-toggle" onClick={() => setShowIssues((v) => !v)}>
@@ -315,14 +392,64 @@ function QualityPanel({ quality }: { quality: QualityData }) {
           )}
         </div>
       )}
-      {quality.reviewCount === 0 && quality.issues.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无审校数据" />}
     </section>
   );
 }
 
+const STAGE_STATUS_LABEL: Record<StageNodeStatus, string> = { done: "已完成", active: "执行中", pending: "未开始", gate: "等待审批", failed: "失败" };
+
+function StageDetail({ meta, status, artifacts, onView }: { meta: StageMeta; status: StageNodeStatus; artifacts: NovelArtifactSummary[]; onView: (artifact: ArtifactSummary) => void }) {
+  const isApproval = meta.stage === "blueprint-approval" || meta.stage === "manuscript-approval" || meta.stage === "fact-approval";
+  const guidance = status === "gate"
+    ? "当前确实需要作者处理，请使用页面上方审批区的批准或退回操作。"
+    : status === "failed"
+      ? "运行在此阶段失败。失败原因和下一步操作见上方运行状态。"
+      : isApproval && status === "done"
+        ? "本次运行已通过该审批阶段，无需再次操作。"
+        : isApproval && status === "pending"
+          ? "工作流尚未到达该审批阶段，现在无需操作。"
+          : status === "active"
+            ? "该阶段正在由 Runtime 执行，无需手工操作。"
+            : status === "done"
+              ? "该阶段已完成，可查看下方关联产物。"
+              : "该阶段尚未开始，前序阶段完成后会自动进入。";
+  return <section className={`pb-card pb-stage-detail is-${status}`}>
+    <header className="pb-card-head">
+      <span className="pb-card-title">{meta.label}</span>
+      <span className="pb-card-head-right"><Tag>{meta.categoryLabel}</Tag><Tag color={status === "failed" ? "red" : status === "gate" ? "gold" : status === "done" ? "green" : "default"}>{STAGE_STATUS_LABEL[status]}</Tag></span>
+    </header>
+    <p className="pb-stage-desc">{meta.description}</p>
+    <Alert type={status === "failed" ? "error" : status === "gate" ? "warning" : "info"} showIcon message={guidance} />
+    <div className="pb-stage-artifacts">
+      {artifacts.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="此阶段没有独立产物" />}
+      {artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={toArtifactSummary(artifact)} onView={onView} />)}
+    </div>
+  </section>;
+}
+
+function RunStatusPanel({ run, document, superseded }: { run?: NovelRunState; document?: NovelDocumentSummary; superseded: boolean }) {
+  if (!run) return <Alert type="info" showIcon message="该章节暂无生产运行" description="可从右上角“发起创作”创建本章的第一条运行。" />;
+  const payload = (run.record?.payload ?? {}) as Record<string, unknown>;
+  const error = typeof payload.error === "string" ? payload.error : undefined;
+  if (["failed", "rejected", "cancelled", "terminated"].includes(run.status)) {
+    const stage = failedStage(payload, []);
+    const stageLabel = STAGE_META.find((item) => item.stage === stage)?.label ?? "未知阶段";
+    return <Alert
+      type="error"
+      showIcon
+      message={`运行失败于“${stageLabel}”`}
+      description={<><strong>{error ?? "运行未提供详细错误信息"}</strong><br />{superseded ? "这是历史失败记录，同一章节已有更新运行，通常无需重复处理。" : "请重新发起本章创作；若仍提示资料或记忆缺失，先到“创作资料”补全对应内容后再试。"}</>}
+    />;
+  }
+  if (run.status === "completed" || run.status === "succeeded") return <Alert type="success" showIcon message={document?.status === "final" ? "本次运行已完成，章节已经定稿" : "本次运行已完成"} description="流水线中的审批节点是历史执行记录，无需再次点击批准。" />;
+  if (run.status === "manual-review-required") return null;
+  const stage = normalizeStageKey(typeof payload.stage === "string" ? payload.stage : undefined);
+  return <Alert type="info" showIcon message={`运行${statusMeta(run.status).label}`} description={stage ? `当前正在执行“${STAGE_META.find((item) => item.stage === stage)?.label ?? stage}”，完成后会自动刷新。` : "Runtime 已受理任务，正在准备执行上下文。"} />;
+}
+
 /** 章节正文工作台：查看 / tiptap 编辑 / 修订前后对比 / 提交审校 */
 function ManuscriptWorkbench({ projectId, documentId }: { projectId: string; documentId?: string }) {
-  const { data, isLoading } = useNovelDocumentContent(projectId, documentId);
+  const { data, isLoading, isError, refetch } = useNovelDocumentContent(projectId, documentId);
   const [mode, setMode] = useState<"read" | "edit" | "diff">("read");
   const [edited, setEdited] = useState("");
   const submit = useSubmitChapterReview(projectId, documentId);
@@ -370,7 +497,8 @@ function ManuscriptWorkbench({ projectId, documentId }: { projectId: string; doc
         </span>
       </header>
       {isLoading && <div className="pb-loading"><LoadingOutlined /> 加载正文…</div>}
-      {!isLoading && !data && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择左侧章节查看正文" />}
+      {!isLoading && isError && <Alert type="error" showIcon message="正文暂时无法读取" description="Runtime 未能从统一对象存储取得本章定稿，请重试；持续失败时可在运行详情中查看诊断信息。" action={<Button size="small" onClick={() => void refetch()}>重试</Button>} />}
+      {!isLoading && !isError && !data && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={documentId ? "当前章节尚无可读取的正文" : "选择左侧章节查看正文"} />}
       {data && mode === "read" && <div className="pb-manuscript">{original || <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正文为空" />}</div>}
       {data && mode === "edit" && <ManuscriptEditor key={data.contentHash} value={edited || original} onChange={setEdited} minHeight={440} />}
       {data && mode === "diff" && <TextDiff baseText={original} newText={edited} baseLabel="当前定稿" newLabel="我的修改" emptyText="尚未做任何修改（切到「编辑」修改后再来对比）" />}
@@ -400,37 +528,6 @@ function RevisionDiffInner({ draftId, revisionId }: { draftId: string; revisionI
       {!loading && (draftQ.data || revisionQ.data) && (
         <TextDiff baseText={draftQ.data?.text ?? ""} newText={revisionQ.data?.text ?? ""} baseLabel="初稿" newLabel="修订稿" emptyText="修订稿与初稿一致" />
       )}
-    </section>
-  );
-}
-
-function FactsPanel({ projectId, documentId }: { projectId: string; documentId?: string }) {
-  const { data: candidates = [], isLoading } = useNovelFactCandidates(projectId, documentId);
-  const decide = useDecideFactCandidate(projectId, documentId);
-  if (!documentId) return null;
-  return (
-    <section className="pb-card">
-      <header className="pb-card-head">
-        <span className="pb-card-title"><DatabaseOutlined /> 事实候选</span>
-        <Tag color={candidates.length ? "gold" : "default"}>{candidates.length} 待审批</Tag>
-      </header>
-      {isLoading && <div className="pb-loading"><LoadingOutlined /> 加载事实候选…</div>}
-      {!isLoading && candidates.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无待审批事实" />}
-      <ul className="pb-fact-list">
-        {candidates.map((c) => (
-          <li key={c.id} className="pb-fact">
-            <div className="pb-fact-body">
-              <div className="pb-fact-title">{c.title}</div>
-              <div className="pb-fact-content">{c.content}</div>
-              <div className="pb-fact-meta">置信度 {(c.confidence * 100).toFixed(0)}%</div>
-            </div>
-            <div className="pb-fact-actions">
-              <Button size="small" type="primary" ghost icon={<CheckOutlined />} loading={decide.isPending && decide.variables?.claimId === c.id} onClick={() => decide.mutate({ claimId: c.id, decision: "approve" })}>批准</Button>
-              <Button size="small" danger icon={<CloseOutlined />} loading={decide.isPending && decide.variables?.claimId === c.id} onClick={() => decide.mutate({ claimId: c.id, decision: "reject" })}>拒绝</Button>
-            </div>
-          </li>
-        ))}
-      </ul>
     </section>
   );
 }
@@ -466,33 +563,53 @@ function EventTimeline({ events }: { events: NovelRunEvent[] }) {
   );
 }
 
-function ChapterRail({ documents, selectedId, onSelect }: { documents: NovelDocumentSummary[]; selectedId?: string; onSelect: (id: string) => void }) {
+function ChapterRail({ documents, runs, selectedId, onSelect }: { documents: NovelDocumentSummary[]; runs: NovelWorkflowRunRecord[]; selectedId?: string; onSelect: (id: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [modeFilter, setModeFilter] = useState<ChapterWorkspaceMode | "all">("all");
+  const visibleDocuments = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    return documents.filter((document) => {
+      const state = deriveChapterWorkspaceState(document, runs);
+      const matchesQuery = !keyword || `${document.title} ${document.narrativeOrder} ${document.arcTitle ?? ""}`.toLowerCase().includes(keyword);
+      return matchesQuery && (modeFilter === "all" || state.mode === modeFilter);
+    });
+  }, [documents, modeFilter, query, runs]);
   const groups = useMemo(() => {
     const map = new Map<string, NovelDocumentSummary[]>();
-    for (const doc of [...documents].sort((a, b) => a.narrativeOrder - b.narrativeOrder)) {
+    for (const doc of [...visibleDocuments].sort((a, b) => a.narrativeOrder - b.narrativeOrder)) {
       const key = doc.arcId ?? "__none__";
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(doc);
     }
     return [...map.entries()];
-  }, [documents]);
+  }, [visibleDocuments]);
   return (
     <section className="pb-card pb-rail">
-      <header className="pb-card-head"><span className="pb-card-title"><FileTextOutlined /> 章节</span></header>
+      <header className="pb-card-head"><span className="pb-card-title"><FileTextOutlined /> 章节</span><Tag>{visibleDocuments.length}</Tag></header>
+      <div className="pb-chapter-filters">
+        <Input allowClear value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节" />
+        <Select value={modeFilter} onChange={(value) => setModeFilter(value as ChapterWorkspaceMode | "all")} options={[
+          { value: "all", label: "全部状态" },
+          ...(["planned", "running", "manuscript-review", "fact-review", "final", "failed", "stalled"] as ChapterWorkspaceMode[]).map((value) => ({ value, label: CHAPTER_MODE_META[value].label })),
+        ]} />
+      </div>
       {documents.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无章节" />}
+      {documents.length > 0 && visibleDocuments.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的章节" />}
       {groups.map(([arcId, docs]) => (
         <div key={arcId} className="pb-arc-group">
           {docs[0]?.arcTitle && <div className="pb-arc-title">{docs[0].arcTitle}</div>}
           <ul className="pb-chapter-list">
-            {docs.map((doc) => (
-              <li key={doc.id}>
+            {docs.map((doc) => {
+              const state = deriveChapterWorkspaceState(doc, runs);
+              const meta = CHAPTER_MODE_META[state.mode];
+              return <li key={doc.id}>
                 <button type="button" className={`pb-chapter ${selectedId === doc.id ? "is-selected" : ""}`} onClick={() => onSelect(doc.id)}>
                   <span className="pb-chapter-num">{doc.narrativeOrder}</span>
                   <span className="pb-chapter-name">{doc.title}</span>
-                  <span className={`pb-chapter-status ${documentStatusMeta(doc.status).pill}`}>{documentStatusMeta(doc.status).label}</span>
+                  <span className={`pb-chapter-mode is-${meta.tone}`}>{meta.label}</span>
                 </button>
               </li>
-            ))}
+            })}
           </ul>
         </div>
       ))}
@@ -527,46 +644,225 @@ function RunRail({ runs, selectedWfId, onSelect }: { runs: NovelWorkflowRunRecor
   );
 }
 
-// ---------- 主页面 ----------
-export default function NovelPipelineBoard() {
-  const { projectId = "" } = useParams();
-  const navigate = useNavigate();
-  const [selectedDocId, setSelectedDocId] = useState<string>();
-  const [selectedWfId, setSelectedWfId] = useState<string>();
-  const [selectedStage, setSelectedStage] = useState<string | null>(null);
+function chapterProgress(run: NovelWorkflowRunRecord | undefined) {
+  const raw = typeof run?.payload.stage === "string" ? run.payload.stage : undefined;
+  const stage = normalizeStageKey(raw);
+  if (stage === "context" || stage === "blueprint" || stage === "blueprint-approval") return { index: 0, title: "正在准备章节方案", next: "完成后将开始生成正文" };
+  if (stage === "draft") return { index: 1, title: "正在创作正文", next: "正文完成后会自动进入专业审校" };
+  if (stage === "review" || stage === "revision" || stage === "manuscript-approval") return { index: 2, title: "正在审校与修订", next: "达到质量要求后将整理事实并定稿" };
+  if (stage === "fact-extraction" || stage === "fact-approval" || stage === "commit" || stage === "character-enrichment") return { index: 3, title: "正在整理并提交定稿", next: "完成后正文会自动更新" };
+  return { index: 0, title: "Runtime 已接收创作任务", next: "正在加载创作所需的资料与记忆" };
+}
+
+function WorkspaceEmpty({ children }: { children: React.ReactNode }) {
+  return <section className="pb-author-empty">{children}</section>;
+}
+
+function PlannedWorkspace({ document, onStart, onEdit, onDelete }: { document: NovelDocumentSummary; onStart?: () => void; onEdit?: () => void; onDelete?: () => void }) {
+  return <WorkspaceEmpty>
+    <span className="pb-author-empty-icon"><FileTextOutlined /></span>
+    <span className="pb-eyebrow">章节目标已就绪</span>
+    <h3>从本章的创作意图开始</h3>
+    <p>{document.arcTitle ?? "尚未归属故事弧"}{document.povCharacterId ? ` · POV ${document.povCharacterId}` : ""}</p>
+    <div className="pb-author-empty-actions">
+      <Button type="primary" icon={<RocketOutlined />} onClick={onStart}>开始创作</Button>
+      <Button onClick={onEdit}>编辑章节信息</Button>
+      <Button danger onClick={onDelete}>删除章节</Button>
+    </div>
+  </WorkspaceEmpty>;
+}
+
+function RunningWorkspace({ run }: { run?: NovelWorkflowRunRecord }) {
+  const progress = chapterProgress(run);
+  const phases = ["准备", "创作", "审校", "定稿"];
+  return <section className="pb-author-running">
+    <div className="pb-running-copy"><LoadingOutlined /><div><span className="pb-eyebrow">创作进行中</span><h3>{progress.title}</h3><p>{progress.next}</p></div></div>
+    <div className="pb-author-progress" aria-label={`当前进度：${phases[progress.index]}`}>
+      {phases.map((phase, index) => <div key={phase} className={index < progress.index ? "is-done" : index === progress.index ? "is-active" : ""}><span>{index < progress.index ? <CheckOutlined /> : index + 1}</span><strong>{phase}</strong></div>)}
+    </div>
+    <small>最近更新于 {relativeTime(run?.updatedAt)}</small>
+  </section>;
+}
+
+function CandidateReviewWorkspace({ text, loading, quality, onApprove, onReject, deciding }: { text: string; loading: boolean; quality: QualityData; onApprove: () => void; onReject: (feedback: string) => void; deciding: boolean }) {
+  const [activeIssue, setActiveIssue] = useState<number>();
+  const [feedback, setFeedback] = useState("");
+  const paragraphRefs = useRef<Array<HTMLParagraphElement | null>>([]);
+  const paragraphs = useMemo(() => text.split(/\n\s*\n/u).map((item) => item.trim()).filter(Boolean), [text]);
+  const issueParagraphs = useMemo(() => quality.issues.map((issue) => {
+    const needle = (issue.excerpt ?? "").replace(/\s+/gu, "").slice(0, 60);
+    return needle ? paragraphs.findIndex((paragraph) => paragraph.replace(/\s+/gu, "").includes(needle)) : -1;
+  }), [paragraphs, quality.issues]);
+  const hasSeriousIssue = quality.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major");
+
+  function focusIssue(index: number) {
+    setActiveIssue(index);
+    const paragraphIndex = issueParagraphs[index];
+    if (paragraphIndex >= 0) paragraphRefs.current[paragraphIndex]?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  return <div className="pb-review-workspace">
+    <section className="pb-review-manuscript">
+      <header><div><span className="pb-eyebrow">候选正文</span><h3>审阅当前修订稿</h3></div>{quality.overall != null && <strong className="pb-review-score">{quality.overall.toFixed(1)}<small>/5</small></strong>}</header>
+      {loading ? <div className="pb-loading"><LoadingOutlined /> 加载候选正文…</div> : paragraphs.length ? <div className="pb-review-text">{paragraphs.map((paragraph, index) => <p key={index} ref={(node) => { paragraphRefs.current[index] = node; }} className={activeIssue !== undefined && issueParagraphs[activeIssue] === index ? "is-highlighted" : ""}>{paragraph}</p>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="候选正文尚未就绪" />}
+    </section>
+    <aside className="pb-review-issues">
+      <header><div><span className="pb-eyebrow">审校意见</span><h3>{quality.issues.length} 个问题需要判断</h3></div></header>
+      {quality.issues.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有结构化问题记录" />}
+      <div className="pb-review-issue-list">{quality.issues.map((issue, index) => <button type="button" key={`${issue.title ?? issue.rule}-${index}`} className={`pb-review-issue is-${issue.severity} ${activeIssue === index ? "is-active" : ""}`} onClick={() => focusIssue(index)}>
+        <span>{issue.severity === "blocker" ? "阻断" : issue.severity === "major" ? "严重" : "提示"}</span><strong>{issue.title ?? issue.rule ?? "审校问题"}</strong>{issue.suggestion && <small>{issue.suggestion}</small>}
+      </button>)}</div>
+      <div className="pb-review-feedback"><label htmlFor="pb-review-feedback">退回意见</label><Input.TextArea id="pb-review-feedback" value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={4} placeholder="说明需要修改的位置、原因和预期效果" /></div>
+    </aside>
+    <footer className="pb-review-actions">
+      <span>批准会接受当前候选稿并继续事实提取与正式提交。</span>
+      <div>
+        <Button danger icon={<CloseOutlined />} disabled={!feedback.trim()} loading={deciding} onClick={() => onReject(feedback.trim())}>退回修改</Button>
+        {hasSeriousIssue ? <Popconfirm title="仍有严重审校问题" description="确认以作者判断接受当前稿并继续定稿？" okText="仍然接受" cancelText="继续审阅" onConfirm={onApprove}><Button type="primary" icon={<CheckOutlined />} loading={deciding}>接受当前稿并定稿</Button></Popconfirm> : <Button type="primary" icon={<CheckOutlined />} loading={deciding} onClick={onApprove}>接受当前稿并定稿</Button>}
+      </div>
+    </footer>
+  </div>;
+}
+
+function FactReviewWorkspace({ candidates, loading, deciding, onDecide, onContinue, onAbort }: { candidates: import("@/lib/novelApi").NovelFactCandidate[]; loading: boolean; deciding: boolean; onDecide: (id: string, decision: "approve" | "reject") => void; onContinue: () => void; onAbort: () => void }) {
+  return <section className="pb-fact-review">
+    <header><div><span className="pb-eyebrow">定稿前最后一步</span><h3>确认哪些事实可以进入后续创作记忆</h3><p>逐条判断正文明确支持的事实。拒绝项不会进入后续检索。</p></div><Tag color={candidates.length ? "gold" : "green"}>{candidates.length ? `${candidates.length} 条未处理` : "已全部处理"}</Tag></header>
+    {loading && <div className="pb-loading"><LoadingOutlined /> 加载事实候选…</div>}
+    {!loading && candidates.length === 0 && <div className="pb-fact-review-done"><CheckCircleFilled /><strong>事实决定已完成</strong><span>现在可以继续提交本章定稿。</span></div>}
+    <div className="pb-fact-review-list">{candidates.map((candidate) => <article key={candidate.id}>
+      <div><strong>{candidate.title}</strong><p>{candidate.content}</p><small>置信度 {Math.round(candidate.confidence * 100)}%{candidate.subjectRefs.length ? ` · ${candidate.subjectRefs.join("、")}` : ""}</small></div>
+      <div><Button type="primary" ghost icon={<CheckOutlined />} onClick={() => onDecide(candidate.id, "approve")}>保留</Button><Button danger icon={<CloseOutlined />} onClick={() => onDecide(candidate.id, "reject")}>排除</Button></div>
+    </article>)}</div>
+    <footer><Button danger onClick={onAbort}>放弃本次提交</Button><Button type="primary" icon={<CheckOutlined />} disabled={loading || candidates.length > 0} loading={deciding} onClick={onContinue}>确认决定并继续</Button></footer>
+  </section>;
+}
+
+function FinalWorkspace({ projectId, documentId, quality, artifacts }: { projectId: string; documentId?: string; quality: QualityData; artifacts: NovelArtifactSummary[] }) {
+  const [view, setView] = useState<"manuscript" | "review">("manuscript");
+  return <div className="pb-final-workspace">
+    <Segmented value={view} onChange={(value) => setView(value as "manuscript" | "review")} options={[{ value: "manuscript", label: "定稿正文" }, { value: "review", label: "最近审校" }]} />
+    {view === "manuscript" ? <ManuscriptWorkbench projectId={projectId} documentId={documentId} /> : <><QualityPanel quality={quality} /><RevisionDiffCard artifacts={artifacts} /></>}
+  </div>;
+}
+
+function AttentionWorkspace({ mode, run, onRetry, onKnowledge }: { mode: "failed" | "stalled"; run?: NovelWorkflowRunRecord; onRetry?: () => void; onKnowledge?: () => void }) {
+  const payload = run?.payload ?? {};
+  const error = typeof payload.error === "string" ? payload.error : undefined;
+  const stage = failedStage(payload, []);
+  const stageLabel = STAGE_META.find((item) => item.stage === stage)?.label ?? "章节处理";
+  const guidance = !error
+    ? mode === "failed" ? "本次运行没有完成，具体技术原因已保留在运行详情中。" : "可重新发起本章创作，Runtime 会从正式资料与最新章节状态重新开始。"
+    : /foreign key|relations?_object|constraint/iu.test(error)
+      ? "提交章节关联资料时发生数据一致性冲突。正文定稿仍然保留，可检查创作资料后重新发起。"
+      : /memory|context|preflight|记忆|上下文/iu.test(error)
+        ? "本章需要的创作资料或记忆不完整。请先检查创作资料，再重新发起。"
+        : /model|transport|timeout|gateway|模型|超时/iu.test(error)
+          ? "生成服务未能完成本次请求。可稍后重新发起，具体错误已保留在运行详情中。"
+          : "本次运行没有完成。可重新发起创作，具体技术原因已保留在运行详情中。";
+  return <WorkspaceEmpty>
+    <span className="pb-author-empty-icon is-danger"><CloseCircleFilled /></span>
+    <span className="pb-eyebrow">需要作者处理</span>
+    <h3>{mode === "failed" ? `本次创作在“${stageLabel}”未能完成` : "章节没有活跃运行，尚未形成定稿"}</h3>
+    <p>{guidance}</p>
+    <div className="pb-author-empty-actions"><Button type="primary" icon={<ReloadOutlined />} onClick={onRetry}>重新发起创作</Button><Button icon={<DatabaseOutlined />} onClick={onKnowledge}>检查创作资料</Button></div>
+  </WorkspaceEmpty>;
+}
+
+export interface NovelProductionWorkspaceProps {
+  projectId?: string;
+  embedded?: boolean;
+  documentId?: string;
+  workflowId?: string;
+  stage?: string;
+  onSelectionChange?: (selection: { documentId?: string; workflowId?: string; stage?: string }) => void;
+  onStartCreation?: (document: NovelDocumentSummary) => void;
+  onEditChapter?: (document: NovelDocumentSummary) => void;
+  onDeleteChapter?: (document: NovelDocumentSummary) => void;
+  onOpenKnowledge?: () => void;
+}
+
+// ---------- 章节生产工作区 ----------
+export default function NovelProductionWorkspace({
+  projectId: providedProjectId,
+  embedded = false,
+  documentId,
+  workflowId,
+  stage,
+  onSelectionChange,
+  onStartCreation,
+  onEditChapter,
+  onDeleteChapter,
+  onOpenKnowledge,
+}: NovelProductionWorkspaceProps = {}) {
+  const { projectId: routeProjectId = "" } = useParams();
+  const projectId = providedProjectId ?? routeProjectId;
+  const [selectedDocId, setSelectedDocId] = useState<string | undefined>(documentId);
+  const [diagnosticWfId, setDiagnosticWfId] = useState<string | undefined>(workflowId);
+  const [selectedStage, setSelectedStage] = useState<string | null>(stage ?? null);
   const [viewingArtifact, setViewingArtifact] = useState<ArtifactSummary | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(Boolean(workflowId || stage));
+
+  useEffect(() => { if (documentId !== undefined) setSelectedDocId(documentId); }, [documentId]);
+  useEffect(() => {
+    if (workflowId !== undefined) {
+      setDiagnosticWfId(workflowId);
+      setDiagnosticsOpen(true);
+    }
+  }, [workflowId]);
+  useEffect(() => {
+    setSelectedStage(stage ?? null);
+    if (stage) setDiagnosticsOpen(true);
+  }, [stage]);
 
   const projectQ = useNovelProject(projectId);
   const runsQ = useNovelProjectRuns(projectId);
-
   const runs = runsQ.data ?? projectQ.data?.latestRuns ?? [];
+  const chapterRuns = useMemo(() => runs.filter(isChapterWorkflowRun), [runs]);
+  const documents = projectQ.data?.documents ?? [];
+  const selectedDocument = documents.find((item) => item.id === selectedDocId);
+  const workspaceState = useMemo(() => deriveChapterWorkspaceState(selectedDocument, chapterRuns), [chapterRuns, selectedDocument]);
+  const mainWorkflowId = workspaceState.latestRun?.temporalWorkflowId;
+  const documentRuns = useMemo(() => chapterRuns.filter((item) => novelRunDocumentId(item) === selectedDocId), [chapterRuns, selectedDocId]);
 
-  // 默认选中最新运行
-  useEffect(() => {
-    if (selectedWfId) return;
-    const latest = [...runs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0];
-    if (latest) setSelectedWfId(latest.temporalWorkflowId);
-  }, [runs, selectedWfId]);
-
-  const runQ = useNovelRun(selectedWfId);
+  const runQ = useNovelRun(mainWorkflowId);
   const run = runQ.data;
   const isActive = run?.status === "running" || run?.status === "manual-review-required" || run?.status === "pending" || run?.status === "accepted";
-  const eventsQ = useNovelRunEvents(selectedWfId, isActive);
-  const artifactsQ = useNovelRunArtifacts(selectedWfId, isActive);
-  const events = eventsQ.data ?? [];
+  const eventsQ = useNovelRunEvents(mainWorkflowId, isActive);
+  const artifactsQ = useNovelRunArtifacts(mainWorkflowId, isActive);
+  const reviewsQ = useNovelRunReviews(mainWorkflowId, isActive);
   const artifacts = artifactsQ.data ?? [];
+  const reviews = reviewsQ.data ?? [];
+  const factsQ = useNovelFactCandidates(projectId, selectedDocId);
+  const factDecision = useDecideFactCandidate(projectId, selectedDocId);
+  const pendingArtifactId = typeof run?.record?.payload?.artifactId === "string" ? run.record.payload.artifactId : undefined;
+  const candidateTextQ = useNovelArtifactText(pendingArtifactId);
 
-  const documents = projectQ.data?.documents ?? [];
+  const effectiveDiagnosticWfId = diagnosticWfId ?? mainWorkflowId;
+  const diagnosticRunQ = useNovelRun(effectiveDiagnosticWfId);
+  const diagnosticRun = diagnosticRunQ.data;
+  const diagnosticActive = diagnosticRun?.status === "running" || diagnosticRun?.status === "manual-review-required" || diagnosticRun?.status === "pending" || diagnosticRun?.status === "accepted";
+  const diagnosticEventsQ = useNovelRunEvents(effectiveDiagnosticWfId, diagnosticActive);
+  const diagnosticArtifactsQ = useNovelRunArtifacts(effectiveDiagnosticWfId, diagnosticActive);
+  const diagnosticReviewsQ = useNovelRunReviews(effectiveDiagnosticWfId, diagnosticActive);
+
   useEffect(() => {
     if (selectedDocId) return;
-    if (documents[0]) setSelectedDocId(documents[0].id);
+    if (documents[0]) {
+      setSelectedDocId(documents[0].id);
+      onSelectionChange?.({ documentId: documents[0].id });
+    }
   }, [documents, selectedDocId]);
 
-  const stageStates = useMemo(() => deriveStageStates(run, artifacts), [run, artifacts]);
-  const quality = useMemo(() => deriveQuality(run, artifacts), [run, artifacts]);
+  useEffect(() => {
+    if (!selectedDocId) return;
+    setDiagnosticWfId(mainWorkflowId);
+    setSelectedStage(null);
+  }, [mainWorkflowId, selectedDocId]);
 
-  const signal = useSignalHumanDecision(selectedWfId);
-  const pendingArtifactId = typeof run?.record?.payload?.artifactId === "string" ? (run.record.payload.artifactId as string) : undefined;
+  const quality = useMemo(() => deriveQuality(run, artifacts, reviews), [run, artifacts, reviews]);
+  const diagnosticArtifacts = diagnosticArtifactsQ.data ?? [];
+  const diagnosticStageStates = useMemo(() => deriveStageStates(diagnosticRun, diagnosticArtifacts), [diagnosticArtifacts, diagnosticRun]);
+  const signal = useSignalHumanDecision(mainWorkflowId);
 
   async function handleGateDecision(decision: "approve" | "reject", feedback?: string) {
     if (!pendingArtifactId) {
@@ -581,63 +877,82 @@ export default function NovelPipelineBoard() {
     }
   }
 
-  const selectedStageMeta = selectedStage ? STAGE_META.find((m) => m.stage === selectedStage) : undefined;
-  const statusInfo = statusMeta(run?.status);
+  function selectDocument(next: string) {
+    setSelectedDocId(next);
+    setDiagnosticsOpen(false);
+    setSelectedStage(null);
+    onSelectionChange?.({ documentId: next, workflowId: undefined, stage: undefined });
+  }
+
+  function selectDiagnosticWorkflow(next: string) {
+    setDiagnosticWfId(next);
+    setSelectedStage(null);
+    onSelectionChange?.({ documentId: selectedDocId, workflowId: next, stage: undefined });
+  }
+
+  function selectStage(next: string | undefined) {
+    setSelectedStage(next ?? null);
+    onSelectionChange?.({ documentId: selectedDocId, workflowId: effectiveDiagnosticWfId, stage: next });
+  }
+
+  const selectedStageMeta = selectedStage ? STAGE_META.find((item) => item.stage === selectedStage) : undefined;
+  const selectedStageArtifacts = selectedStage ? artifactsForStage(selectedStage, diagnosticArtifacts) : [];
+  const chapterMeta = CHAPTER_MODE_META[workspaceState.mode];
+
+  function renderAuthorWorkspace() {
+    if (!selectedDocument) return <WorkspaceEmpty><span className="pb-author-empty-icon"><FileTextOutlined /></span><h3>选择一个章节开始工作</h3><p>左侧会根据每章当前状态显示需要处理的事项。</p></WorkspaceEmpty>;
+    if (workspaceState.mode === "planned") return <PlannedWorkspace document={selectedDocument} onStart={() => onStartCreation?.(selectedDocument)} onEdit={() => onEditChapter?.(selectedDocument)} onDelete={() => onDeleteChapter?.(selectedDocument)} />;
+    if (workspaceState.mode === "running") return <RunningWorkspace run={workspaceState.latestRun} />;
+    if (workspaceState.mode === "manuscript-review") return <CandidateReviewWorkspace text={candidateTextQ.data?.text ?? ""} loading={candidateTextQ.isLoading} quality={quality} deciding={signal.isPending} onApprove={() => void handleGateDecision("approve")} onReject={(feedback) => void handleGateDecision("reject", feedback)} />;
+    if (workspaceState.mode === "fact-review") return <FactReviewWorkspace candidates={factsQ.data ?? []} loading={factsQ.isLoading} deciding={signal.isPending || factDecision.isPending} onDecide={(claimId, decision) => factDecision.mutate({ claimId, decision })} onContinue={() => void handleGateDecision("approve")} onAbort={() => void handleGateDecision("reject", "作者放弃本次事实提交")} />;
+    if (workspaceState.mode === "final") return <FinalWorkspace projectId={projectId} documentId={selectedDocId} quality={quality} artifacts={artifacts} />;
+    return <AttentionWorkspace mode={workspaceState.mode === "failed" ? "failed" : "stalled"} run={workspaceState.latestRun} onRetry={() => onStartCreation?.(selectedDocument)} onKnowledge={onOpenKnowledge} />;
+  }
 
   return (
-    <div className="pb-page">
-      <motion.header className="pb-topbar" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/novels/${encodeURIComponent(projectId)}`)}>返回工作室</Button>
+    <div className={`pb-page ${embedded ? "pb-embedded" : ""}`}>
+      {!embedded && <motion.header className="pb-topbar" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
         <div className="pb-topbar-title">
-          <h1>创作流水线指挥中心</h1>
-          <p>{projectQ.data?.title ?? shortId(projectId, 12)}</p>
+          <h1>章节生产</h1>
+          <p>{projectQ.data?.title ?? "未命名作品"}</p>
         </div>
         <div className="pb-topbar-actions">
           <span className="novel-status-pill novel-status-pill-done">revision {projectQ.data?.currentRevision ?? 0}</span>
-          <span className={statusInfo.pill}>{statusInfo.icon} {statusInfo.label}</span>
           <Button icon={<ReloadOutlined />} onClick={() => { void projectQ.refetch(); void runsQ.refetch(); void runQ.refetch(); void eventsQ.refetch(); void artifactsQ.refetch(); }}>刷新</Button>
         </div>
-      </motion.header>
+      </motion.header>}
 
       {projectQ.isError && <Alert type="error" showIcon message="加载项目失败" description={projectQ.error instanceof Error ? projectQ.error.message : undefined} className="pb-alert" />}
       {runsQ.isError && <Alert type="warning" showIcon message="加载运行列表失败" className="pb-alert" />}
 
-      <PipelineTracker states={stageStates} selected={selectedStage} onSelect={(s) => setSelectedStage((cur) => (cur === s ? null : s))} />
-
-      {run?.status === "manual-review-required" && <GateBanner run={run} onDecide={handleGateDecision} deciding={signal.isPending} />}
-
-      <div className="pb-grid">
-        <div className="pb-col pb-col-left">
-          <ChapterRail documents={documents} selectedId={selectedDocId} onSelect={setSelectedDocId} />
-          <RunRail runs={runs} selectedWfId={selectedWfId} onSelect={setSelectedWfId} />
-        </div>
-
-        <div className="pb-col pb-col-center">
-          {selectedStageMeta && (
-            <section className="pb-card pb-stage-detail">
-              <header className="pb-card-head">
-                <span className="pb-card-title">{selectedStageMeta.label}</span>
-                <Tag>{selectedStageMeta.categoryLabel}</Tag>
-              </header>
-              <p className="pb-stage-desc">{selectedStageMeta.description}</p>
-              <div className="pb-stage-artifacts">
-                {artifacts.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该阶段暂无产物" />}
-                {artifacts.map((a) => (
-                  <ArtifactCard key={a.id} artifact={toArtifactSummary(a)} onView={(x) => setViewingArtifact(x)} />
-                ))}
-              </div>
-            </section>
-          )}
-          {!selectedStageMeta && <QualityPanel quality={quality} />}
-          <RevisionDiffCard artifacts={artifacts} />
-          <ManuscriptWorkbench projectId={projectId} documentId={selectedDocId} />
-          <FactsPanel projectId={projectId} documentId={selectedDocId} />
-        </div>
-
-        <div className="pb-col pb-col-right">
-          <EventTimeline events={events} />
-        </div>
+      <div className="pb-author-shell">
+        <aside className="pb-author-chapters"><ChapterRail documents={documents} runs={chapterRuns} selectedId={selectedDocId} onSelect={selectDocument} /></aside>
+        <main className="pb-author-main">
+          <header className="pb-author-header">
+            <div><span className="pb-eyebrow">{selectedDocument?.arcTitle ?? "章节工作台"}</span><h2>{selectedDocument?.title ?? "未选择章节"}</h2></div>
+            <div className="pb-author-meta">
+              {selectedDocument?.wordCount ? <span>{selectedDocument.wordCount.toLocaleString()} 字</span> : null}
+              {selectedDocument?.latestRevision ? <span>修订 {selectedDocument.latestRevision}</span> : null}
+              <span className={`pb-author-state is-${chapterMeta.tone}`}>{chapterMeta.label}</span>
+              {documentRuns.length > 0 && <Button onClick={() => { setDiagnosticWfId(mainWorkflowId); setDiagnosticsOpen(true); }}>运行详情</Button>}
+            </div>
+          </header>
+          {renderAuthorWorkspace()}
+        </main>
       </div>
+
+      <Drawer title="运行详情" width={720} open={diagnosticsOpen} onClose={() => { setDiagnosticsOpen(false); onSelectionChange?.({ documentId: selectedDocId, workflowId: undefined, stage: undefined }); }} destroyOnHidden>
+        <div className="pb-diagnostics">
+          <RunRail runs={documentRuns} selectedWfId={effectiveDiagnosticWfId} onSelect={selectDiagnosticWorkflow} />
+          <PipelineTracker states={diagnosticStageStates} selected={selectedStage} onSelect={(value) => selectStage(selectedStage === value ? undefined : value)} />
+          <RunStatusPanel run={diagnosticRun} document={selectedDocument} superseded={Boolean(effectiveDiagnosticWfId && effectiveDiagnosticWfId !== mainWorkflowId)} />
+          {effectiveDiagnosticWfId && <div className="pb-diagnostic-id"><span>Workflow ID</span><code>{effectiveDiagnosticWfId}</code></div>}
+          {selectedStageMeta && <StageDetail meta={selectedStageMeta} status={diagnosticStageStates[selectedStageMeta.stage] ?? "pending"} artifacts={selectedStageArtifacts} onView={setViewingArtifact} />}
+          <section className="pb-card pb-diagnostic-artifacts"><header className="pb-card-head"><span className="pb-card-title">阶段产物</span><Tag>{diagnosticArtifacts.length}</Tag></header><div>{diagnosticArtifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={toArtifactSummary(artifact)} onView={setViewingArtifact} />)}{diagnosticArtifacts.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无产物" />}</div></section>
+          <section className="pb-card pb-diagnostic-reviews"><header className="pb-card-head"><span className="pb-card-title">原始审校记录</span><Tag>{diagnosticReviewsQ.data?.length ?? 0}</Tag></header><div>{diagnosticReviewsQ.data?.map((review) => <article key={review.id}><strong>{review.role ?? review.reviewerId}</strong><span>{review.verdict} · {review.score?.toFixed(1) ?? "—"}/5</span><small>{review.issues.length} 个问题</small></article>)}</div></section>
+          <EventTimeline events={diagnosticEventsQ.data ?? []} />
+        </div>
+      </Drawer>
 
       {viewingArtifact && <ArtifactContentModal artifact={viewingArtifact} open={Boolean(viewingArtifact)} onClose={() => setViewingArtifact(null)} />}
     </div>

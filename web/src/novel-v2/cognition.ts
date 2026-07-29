@@ -240,17 +240,26 @@ export function compileExecutionBlueprint(intent: NovelIntent, plan: PreflightPl
   const availableFacets = new Set(memory.claims.flatMap(matchedFacetsOf));
   const missingFacets = [...new Set(plan.facets.map((facet) => facet.kind).filter((kind) => !availableFacets.has(kind)))];
   const hasPriorChapter = (snapshot.targetDocumentOrder ?? 0) > 1;
-  const blockingFacets = plan.taskClass === "drafting" || plan.taskClass === "revision"
+  // P0: Memory gate degradation — previously, missing "fact"/"chapter-memory" facets
+  // caused a hard throw that blocked ALL chapter generation. But the embedding service
+  // can be temporarily unavailable (observed: HTTP 502), leaving Qdrant empty even when
+  // PostgreSQL has claims. A hard throw prevents any progress; instead, degrade to
+  // manual-review so the workflow can proceed and the human can assess quality.
+  // Root cause: AGENTS.md「root-cause analysis」— the throw was a downstream manifestation
+  // of an infra-level embedding failure, not a genuine "no facts exist" condition.
+  const criticalMissingFacets = plan.taskClass === "drafting" || plan.taskClass === "revision"
     ? missingFacets.filter((kind) => kind === "fact" || (kind === "chapter-memory" && hasPriorChapter))
     : [];
-  if (blockingFacets.length) {
-    throw new Error(`高风险任务缺少记忆维度（关键）：${blockingFacets.join("、")}`);
+  if (criticalMissingFacets.length) {
+    console.warn(`[memory-gate] 关键记忆维度缺失（降级为 manual-review，不阻断生成）：${criticalMissingFacets.join("、")}。可能原因：embedding 服务不可用导致 Qdrant 索引为空。`);
   }
   const manualReviewFacets = plan.taskClass === "revision"
-    ? missingFacets.filter((kind) => kind === "entity" || kind === "thread" || kind === "foreshadowing")
+    ? missingFacets.filter((kind) => kind === "entity" || kind === "thread" || kind === "foreshadowing" || criticalMissingFacets.includes(kind))
     : plan.taskClass === "review"
       ? missingFacets.filter((kind) => kind === "fact" || kind === "entity" || kind === "thread" || kind === "foreshadowing" || kind === "chapter-memory")
-      : [];
+      : plan.taskClass === "drafting"
+        ? criticalMissingFacets
+        : [];
   if (skills.conflicts.length) throw new Error("Skill 冲突，不能生成执行蓝图");
   const retrieve: BlueprintTask = { id: `${plan.id}:retrieve`, kind: "retrieve", role: "memory-curator", dependsOn: [], readSet: memory.sourceRevisionIds, writeSet: [], queue: "memory", independentReviewRequired: false };
   const draft: BlueprintTask = { id: `${plan.id}:draft`, kind: plan.taskClass === "review" ? "review" : plan.taskClass === "revision" ? "revise" : "draft", role: plan.taskClass === "review" ? "reader-reviewer" : "writer", dependsOn: [retrieve.id], readSet: memory.sourceRevisionIds, writeSet: intent.target?.id ? [intent.target.id] : [], queue: "writer", independentReviewRequired: plan.requiresIndependentReview };

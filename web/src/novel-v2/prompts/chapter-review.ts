@@ -248,6 +248,7 @@ export function toReview(params: { artifact: Artifact; identity: "internal" | "i
     verdict: params.output.verdict,
     issues,
     score: roleScores.reduce((sum, score) => sum + score, 0) / roleScores.length,
+    dimensionScores: params.output.scores,
     createdAt: Date.now(),
     artifactFingerprint: params.artifact.fingerprint,
   };

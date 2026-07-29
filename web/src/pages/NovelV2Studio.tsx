@@ -1,799 +1,422 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { Alert, Button, Checkbox, Descriptions, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Spin, Tabs, Tag, Typography, message } from "antd";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useGSAP } from "@gsap/react";
+import gsap from "gsap";
 import {
+  Alert,
+  Button,
+  Checkbox,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Spin,
+  Tooltip,
+  message,
+} from "antd";
+import {
+  ApartmentOutlined,
   ArrowLeftOutlined,
-  AuditOutlined,
+  BookOutlined,
   CheckOutlined,
   CloseOutlined,
-  DeleteOutlined,
-  DownOutlined,
-  EditOutlined,
-  EyeOutlined,
+  DatabaseOutlined,
+  ExperimentOutlined,
   FileAddOutlined,
-  NodeIndexOutlined,
+  FileTextOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   ReloadOutlined,
+  RobotOutlined,
+  RocketOutlined,
+  SearchOutlined,
   SendOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { motion } from "motion/react";
+import {
+  useCreateNovelDocument,
+  useDeleteNovelDocument,
+  useDecideFactCandidate,
+  useNovelFactCandidates,
+  useNovelProject,
+  useNovelProjectRuns,
+  useNovelRun,
+  useNovelRunArtifacts,
+  useNovelRunEvents,
+  useSignalHumanDecision,
+  useSubmitNovelIntent,
+  useUpdateNovelDocument,
+  isChapterWorkflowRun,
+  novelRunDocumentId,
+  type NovelDocumentInput,
+  type NovelWorkflowRunRecord,
+} from "@/lib/novelApi";
+import { documentStatusMeta, relativeTime, statusMeta, workflowTypeMeta } from "./novel-v2/presentation";
 import "./novel-v2.css";
-import { describeEvent, documentStatusMeta, relativeTime, shortId, statusMeta, workflowTypeMeta } from "./novel-v2/presentation";
-import ArtifactContentModal, { ArtifactCard, type ArtifactSummary } from "./novel-v2/ArtifactContentModal";
-import ManuscriptEditor from "./novel-v2/ManuscriptEditor";
-import TextDiff from "./novel-v2/TextDiff";
-import "./novel-v2/manuscript-tools.css";
+import "./novel-v2/workspace-command.css";
 
-// 懒加载子面板，避免主 bundle 过大
-const EvaluationPanel = lazy(() => import("./novel-v2/EvaluationPanel").then((m) => ({ default: m.default })));
-const CreativeRunPanel = lazy(() => import("./novel-v2/CreativeRunPanel").then((m) => ({ default: m.default })));
-const McpToolGatewayPanel = lazy(() => import("./novel-v2/McpToolGatewayPanel").then((m) => ({ default: m.default })));
-const KnowledgeWorkbenchPanel = lazy(() => import("./novel-v2/KnowledgeWorkbenchPanel").then((m) => ({ default: m.default })));
-const ProjectPlanPanel = lazy(() => import("./novel-v2/ProjectPlanPanel").then((m) => ({ default: m.default })));
-const StoryArcPanel = lazy(() => import("./novel-v2/StoryArcPanel").then((m) => ({ default: m.default })));
+const EvaluationPanel = lazy(() => import("./novel-v2/EvaluationPanel"));
+const CreativeRunPanel = lazy(() => import("./novel-v2/CreativeRunPanel"));
+const McpToolGatewayPanel = lazy(() => import("./novel-v2/McpToolGatewayPanel"));
+const KnowledgeWorkbenchPanel = lazy(() => import("./novel-v2/KnowledgeWorkbenchPanel"));
+const ProjectPlanPanel = lazy(() => import("./novel-v2/ProjectPlanPanel"));
+const StoryArcPanel = lazy(() => import("./novel-v2/StoryArcPanel"));
+const NovelProductionWorkspace = lazy(() => import("./novel-v2/NovelPipelineBoard"));
 
-type DocumentSummary = { id: string; title: string; narrativeOrder: number; status: string; povCharacterId?: string; wordCount?: number; latestRevision?: number; blockingIssueCount?: number; arcId?: string; arcTitle?: string; arcPlanningStatus?: string };
-type WorkflowRunRecord = { id: string; workflowType: string; projectId: string; temporalWorkflowId: string; status: string; payload: Record<string, unknown>; createdAt: string; updatedAt: string };
-type ProjectDetail = { id: string; title: string; currentRevision: number; updatedAt: string; documents: DocumentSummary[]; latestRuns?: WorkflowRunRecord[] };
-type Run = { workflowId: string; status: string; runId?: string; record?: WorkflowRunRecord };
-type EventSummary = { id?: number; event_type?: string; eventType?: string; payload?: unknown; created_at?: string; createdAt?: string };
-type DocumentContent = { documentId: string; title: string; status: string; revision: number; contentHash: string; plainText: string };
-type FactCandidate = { id: string; title: string; content: string; confidence: number; subjectRefs: string[]; authority: "candidate" };
+export type NovelWorkspaceView = "overview" | "plan" | "arcs" | "production" | "knowledge" | "evaluation" | "creative" | "mcp";
 
-const statusOptions = ["planned", "draft", "review", "revision", "final", "archived"].map((value) => ({ value, label: documentStatusMeta(value).label }));
+const VIEW_ITEMS: Array<{ key: NovelWorkspaceView; label: string; icon: React.ReactNode }> = [
+  { key: "overview", label: "总览", icon: <ThunderboltOutlined /> },
+  { key: "plan", label: "全书规划", icon: <BookOutlined /> },
+  { key: "arcs", label: "故事弧", icon: <ApartmentOutlined /> },
+  { key: "production", label: "章节生产", icon: <FileTextOutlined /> },
+  { key: "knowledge", label: "创作资料", icon: <DatabaseOutlined /> },
+  { key: "evaluation", label: "评估闭环", icon: <ExperimentOutlined /> },
+  { key: "creative", label: "创意执行", icon: <RocketOutlined /> },
+  { key: "mcp", label: "MCP 工具", icon: <RobotOutlined /> },
+];
 
-function eventTime(event: EventSummary) {
-  return event.created_at ?? event.createdAt;
+const VALID_VIEWS = new Set(VIEW_ITEMS.map((item) => item.key));
+const ACTIVE_STATUSES = new Set(["running", "accepted", "received", "pending", "paused"]);
+const FAILED_STATUSES = new Set(["failed", "rejected", "cancelled", "terminated", "blocked"]);
+const DOCUMENT_STATUSES = ["planned", "draft", "review", "revision", "final", "archived"].map((value) => ({ value, label: documentStatusMeta(value).label }));
+
+function latestRun(runs: NovelWorkflowRunRecord[]) {
+  return [...runs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
 }
 
-const STUDIO_TABS = [
-  { key: "plan", label: "全书规划" },
-  { key: "arcs", label: "故事弧" },
-  { key: "studio", label: "章节创作" },
-  { key: "knowledge", label: "创作资料" },
-  { key: "evaluation", label: "评估闭环" },
-  { key: "creative", label: "创意执行" },
-  { key: "mcp", label: "MCP 工具" },
-] as const;
+function PanelFallback() {
+  return <div className="nwc-loading"><Spin /><span>正在加载工作区</span></div>;
+}
 
 export default function NovelV2Studio() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
-  const [project, setProject] = useState<ProjectDetail>();
-  const [objective, setObjective] = useState("");
-  const [manualFactApproval, setManualFactApproval] = useState(false);
-  const [targetDocumentId, setTargetDocumentId] = useState<string>();
-  const [run, setRun] = useState<Run>();
-  const [runs, setRuns] = useState<WorkflowRunRecord[]>([]);
-  const [error, setError] = useState<string>();
-  const [events, setEvents] = useState<EventSummary[]>([]);
-  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
-  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
-  const [documentOpen, setDocumentOpen] = useState(false);
-  const [editingDocument, setEditingDocument] = useState<DocumentSummary>();
-  const [form] = Form.useForm();
-  const [editForm] = Form.useForm();
-  const [documentContent, setDocumentContent] = useState<DocumentContent>();
-  const [contentLoading, setContentLoading] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewInstruction, setReviewInstruction] = useState("从严审视叙事逻辑、人物声音、连续性、场景呈现与读者留存，并只修改有明确证据的问题。");
-  const [authorEditOpen, setAuthorEditOpen] = useState(false);
-  const [authorText, setAuthorText] = useState("");
-  const [authorEditMode, setAuthorEditMode] = useState<"edit" | "diff">("edit");
-  const [factCandidates, setFactCandidates] = useState<FactCandidate[]>([]);
-  const [factApprovalOpen, setFactApprovalOpen] = useState(false);
-  const [viewingArtifact, setViewingArtifact] = useState<ArtifactSummary | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [chapterModal, setChapterModal] = useState<"create" | "edit" | null>(null);
+  const [intentOpen, setIntentOpen] = useState(false);
+  const [chapterQuery, setChapterQuery] = useState("");
+  const [chapterStatus, setChapterStatus] = useState<string>();
+  const [chapterForm] = Form.useForm<NovelDocumentInput>();
+  const [intentForm] = Form.useForm<{ objective: string; documentId?: string; manualFactApproval: boolean }>();
+  const pageRef = useRef<HTMLDivElement>(null);
 
-  async function readJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-    const response = await fetch(input, init);
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error ?? "V2 API 请求失败");
-    return body as T;
+  const projectQ = useNovelProject(projectId);
+  const runsQ = useNovelProjectRuns(projectId);
+  const project = projectQ.data;
+  const runs = runsQ.data ?? project?.latestRuns ?? [];
+  const chapterRuns = useMemo(() => runs.filter(isChapterWorkflowRun), [runs]);
+
+  const rawView = searchParams.get("view") ?? "overview";
+  const view: NovelWorkspaceView = VALID_VIEWS.has(rawView as NovelWorkspaceView) ? rawView as NovelWorkspaceView : "overview";
+  const selectedDocumentId = searchParams.get("document") ?? undefined;
+  const selectedWorkflowId = searchParams.get("run") ?? undefined;
+  const selectedStage = searchParams.get("stage") ?? undefined;
+  const selectedDocument = project?.documents.find((document) => document.id === selectedDocumentId);
+
+  const selectedRunQ = useNovelRun(selectedWorkflowId);
+  const selectedRun = selectedRunQ.data;
+  const runActive = ACTIVE_STATUSES.has(selectedRun?.status ?? "") || selectedRun?.status === "manual-review-required";
+  const eventsQ = useNovelRunEvents(selectedWorkflowId, runActive);
+  const artifactsQ = useNovelRunArtifacts(selectedWorkflowId, runActive);
+  const factsQ = useNovelFactCandidates(projectId, selectedDocumentId);
+  const factDecision = useDecideFactCandidate(projectId, selectedDocumentId);
+  const signalDecision = useSignalHumanDecision(selectedWorkflowId);
+  const createDocument = useCreateNovelDocument(projectId);
+  const updateDocument = useUpdateNovelDocument(projectId);
+  const deleteDocument = useDeleteNovelDocument(projectId);
+  const submitIntent = useSubmitNovelIntent(projectId);
+
+  function updateLocation(patch: Partial<Record<"view" | "document" | "run" | "stage", string | undefined>>) {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      for (const [key, value] of Object.entries(patch)) {
+        if (value) next.set(key, value);
+        else next.delete(key);
+      }
+      return next;
+    }, { replace: true });
   }
 
-  async function loadProject() {
-    const body = await readJson<{ project: ProjectDetail }>(`/v2/projects/${encodeURIComponent(projectId)}`);
-    setProject(body.project);
-    setRuns(body.project.latestRuns ?? []);
-    setTargetDocumentId((current) => current ?? body.project.documents[0]?.id);
-  }
+  useEffect(() => {
+    if (rawView !== view) updateLocation({ view });
+  }, [rawView, view]);
 
-  async function loadRuns() {
-    const body = await readJson<{ runs: WorkflowRunRecord[] }>(`/v2/projects/${encodeURIComponent(projectId)}/runs`);
-    setRuns(body.runs ?? []);
-  }
-
-  async function loadDocumentContent(documentId: string) {
-    setContentLoading(true);
-    try {
-      setDocumentContent(await readJson<DocumentContent>(`/v2/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/content`));
-    } catch {
-      setDocumentContent(undefined);
-    } finally {
-      setContentLoading(false);
+  useEffect(() => {
+    if (!project?.documents.length) return;
+    if (!selectedDocumentId || !project.documents.some((document) => document.id === selectedDocumentId)) {
+      const runDocumentId = novelRunDocumentId(runs.find((run) => run.temporalWorkflowId === selectedWorkflowId));
+      updateLocation({ document: runDocumentId && project.documents.some((document) => document.id === runDocumentId) ? runDocumentId : project.documents[0].id });
     }
-  }
-
-  async function loadFactCandidates(documentId: string) {
-    const body = await readJson<{ candidates: FactCandidate[] }>(`/v2/projects/${encodeURIComponent(projectId)}/fact-candidates?documentId=${encodeURIComponent(documentId)}`);
-    setFactCandidates(body.candidates ?? []);
-  }
+  }, [project?.documents, runs, selectedDocumentId, selectedWorkflowId]);
 
   useEffect(() => {
-    if (projectId) void loadProject().catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, [projectId]);
+    if (view === "production") return;
+    if (runs.length && (!selectedWorkflowId || !runs.some((run) => run.temporalWorkflowId === selectedWorkflowId))) updateLocation({ run: latestRun(runs)?.temporalWorkflowId });
+  }, [runs, selectedWorkflowId, view]);
 
-  useEffect(() => {
-    if (targetDocumentId) {
-      void loadDocumentContent(targetDocumentId);
-      void loadFactCandidates(targetDocumentId).catch(() => setFactCandidates([]));
+  const metrics = useMemo(() => {
+    const manual = runs.filter((run) => run.status === "manual-review-required").length;
+    const failed = runs.filter((run) => FAILED_STATUSES.has(run.status)).length;
+    const active = runs.filter((run) => ACTIVE_STATUSES.has(run.status)).length;
+    const blocking = project?.documents.reduce((sum, document) => sum + (document.blockingIssueCount ?? 0), 0) ?? 0;
+    return { manual, failed, active, blocking, priority: manual + failed + blocking };
+  }, [project?.documents, runs]);
+  const productionMetrics = useMemo(() => {
+    const manual = chapterRuns.filter((run) => run.status === "manual-review-required").length;
+    const failed = chapterRuns.filter((run) => FAILED_STATUSES.has(run.status)).length;
+    const blocking = project?.documents.reduce((sum, document) => sum + (document.blockingIssueCount ?? 0), 0) ?? 0;
+    return { priority: manual + failed + blocking };
+  }, [chapterRuns, project?.documents]);
+  const arcRiskCount = useMemo(() => runs.filter((run) => run.workflowType === "story-arc-planning" && FAILED_STATUSES.has(run.status)).length, [runs]);
+
+  const filteredDocuments = useMemo(() => {
+    const keyword = chapterQuery.trim().toLowerCase();
+    return (project?.documents ?? []).filter((document) => {
+      const matchesKeyword = !keyword || `${document.title} ${document.narrativeOrder} ${document.povCharacterId ?? ""}`.toLowerCase().includes(keyword);
+      return matchesKeyword && (!chapterStatus || document.status === chapterStatus);
+    });
+  }, [chapterQuery, chapterStatus, project?.documents]);
+
+  const priorityItems = useMemo(() => {
+    const items: Array<{ key: string; tone: "danger" | "warning" | "active"; title: string; detail: string; documentId?: string; workflowId?: string }> = [];
+    for (const run of runs) {
+      if (run.status === "manual-review-required") items.push({ key: run.id, tone: "warning", title: "等待作者审批", detail: `${workflowTypeMeta(run.workflowType).label} · ${relativeTime(run.updatedAt)}`, workflowId: run.temporalWorkflowId, documentId: typeof run.payload.documentId === "string" ? run.payload.documentId : undefined });
+      else if (FAILED_STATUSES.has(run.status)) items.push({ key: run.id, tone: "danger", title: "运行异常", detail: `${workflowTypeMeta(run.workflowType).label} · ${statusMeta(run.status).label}`, workflowId: run.temporalWorkflowId, documentId: typeof run.payload.documentId === "string" ? run.payload.documentId : undefined });
+      else if (ACTIVE_STATUSES.has(run.status)) items.push({ key: run.id, tone: "active", title: "工作流执行中", detail: `${workflowTypeMeta(run.workflowType).label} · ${relativeTime(run.updatedAt)}`, workflowId: run.temporalWorkflowId, documentId: typeof run.payload.documentId === "string" ? run.payload.documentId : undefined });
+    }
+    for (const document of project?.documents ?? []) {
+      if ((document.blockingIssueCount ?? 0) > 0) items.push({ key: `doc-${document.id}`, tone: "danger", title: `${document.title} 存在阻塞问题`, detail: `${document.blockingIssueCount} 项需要处理`, documentId: document.id });
+    }
+    const rank = { warning: 0, danger: 1, active: 2 };
+    return items.sort((a, b) => rank[a.tone] - rank[b.tone]);
+  }, [project?.documents, runs]);
+
+  async function refreshAll() {
+    await Promise.all([projectQ.refetch(), runsQ.refetch(), selectedRunQ.refetch(), eventsQ.refetch(), artifactsQ.refetch(), factsQ.refetch()]);
+  }
+
+  async function saveChapter(values: NovelDocumentInput) {
+    const normalized = { ...values, narrativeOrder: values.narrativeOrder === undefined ? undefined : Number(values.narrativeOrder) };
+    if (chapterModal === "edit" && selectedDocument) {
+      await updateDocument.mutateAsync({ ...normalized, documentId: selectedDocument.id, povCharacterId: normalized.povCharacterId || null });
+      message.success("章节已更新");
     } else {
-      setDocumentContent(undefined);
-      setFactCandidates([]);
+      const result = await createDocument.mutateAsync(normalized);
+      updateLocation({ document: result.document.id, view: "production" });
+      message.success("章节目标已创建");
     }
-  }, [projectId, targetDocumentId]);
+    setChapterModal(null);
+    chapterForm.resetFields();
+  }
 
-  async function decideFactCandidate(claimId: string, decision: "approve" | "reject") {
-    if (!targetDocumentId) return;
-    await readJson(`/v2/projects/${encodeURIComponent(projectId)}/fact-candidates/${encodeURIComponent(claimId)}/decision`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ decision, actorId: "web-author" }),
+  async function startIntent(values: { objective: string; documentId?: string; manualFactApproval: boolean }) {
+    const result = await submitIntent.mutateAsync({ objective: values.objective, documentId: values.documentId, factApprovalMode: values.manualFactApproval ? "manual" : "auto" });
+    updateLocation({ view: "production", document: values.documentId, run: result.workflowId });
+    setIntentOpen(false);
+    intentForm.resetFields();
+    message.success("创作任务已提交");
+  }
+
+  function confirmDeleteChapter(document: NonNullable<typeof selectedDocument>) {
+    Modal.confirm({
+      title: `删除“${document.title}”？`,
+      content: "将删除章节目标及关联的项目记录，此操作不可撤销。",
+      okText: "删除章节",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        await deleteDocument.mutateAsync(document.id);
+        updateLocation({ document: undefined, run: undefined, stage: undefined });
+        message.success("章节已删除");
+      },
     });
-    await loadFactCandidates(targetDocumentId);
-    message.success(decision === "approve" ? "事实已批准" : "事实已拒绝");
   }
 
-  async function startChapterReview(proposedText?: string) {
-    if (!targetDocumentId) return;
-    const body = await readJson<{ workflowId: string; runId?: string }>(`/v2/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(targetDocumentId)}/review`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ instruction: reviewInstruction, proposedText, idempotencyKey: `${projectId}:${targetDocumentId}:review:${Date.now()}` }),
-    });
-    setReviewOpen(false);
-    setAuthorEditOpen(false);
-    setRun({ workflowId: body.workflowId, status: "accepted", runId: body.runId });
-    await loadRuns();
-    message.success("章节重审工作流已启动");
+  async function decideRun(decision: "approve" | "reject") {
+    const artifactId = typeof selectedRun?.record?.payload.artifactId === "string" ? selectedRun.record.payload.artifactId : undefined;
+    if (!artifactId) return message.error("运行记录缺少待审批产物");
+    await signalDecision.mutateAsync({ artifactId, decision });
+    message.success(decision === "approve" ? "已批准，Runtime 将继续执行" : "已退回该稿件");
   }
 
-  async function createDocument(values: { title: string; narrativeOrder?: number | string; povCharacterId?: string; status?: string }) {
-    const body = await readJson<{ document: DocumentSummary }>(`/v2/projects/${encodeURIComponent(projectId)}/documents`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...values, narrativeOrder: values.narrativeOrder === undefined || values.narrativeOrder === "" ? undefined : Number(values.narrativeOrder) }),
-    });
-    setDocumentOpen(false);
-    form.resetFields();
-    await loadProject();
-    setTargetDocumentId(body.document.id);
-    message.success("章节目标已创建");
-  }
+  const viewTitle = VIEW_ITEMS.find((item) => item.key === view)?.label ?? "总览";
+  const latestStatus = statusMeta(latestRun(runs)?.status);
+  const projectTitle = project?.title?.trim() || "未命名作品";
 
-  async function updateDocument(values: { title: string; narrativeOrder?: number | string; povCharacterId?: string; status?: string }) {
-    if (!editingDocument) return;
-    await readJson<{ document: DocumentSummary }>(`/v2/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(editingDocument.id)}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...values, narrativeOrder: values.narrativeOrder === undefined || values.narrativeOrder === "" ? undefined : Number(values.narrativeOrder), povCharacterId: values.povCharacterId?.trim() || null }),
-    });
-    setEditingDocument(undefined);
-    await loadProject();
-    message.success("章节已更新");
-  }
-
-  async function deleteDocument(document: DocumentSummary) {
-    await readJson(`/v2/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(document.id)}`, { method: "DELETE" });
-    if (targetDocumentId === document.id) setTargetDocumentId(undefined);
-    await loadProject();
-    message.success("章节已删除");
-  }
-
-  async function submit() {
-    setError(undefined);
-    const target = targetDocumentId ? { kind: "chapter", id: targetDocumentId } : undefined;
-    try {
-      const body = await readJson<{ workflowId: string; runId?: string }>("/v2/intents", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ projectId, objective, idempotencyKey: `${projectId}:${Date.now()}`, source: "web", requestedStage: target ? "drafting" : "planning", target, factApprovalMode: manualFactApproval ? "manual" : "auto" }),
-      });
-      setRun({ workflowId: body.workflowId, status: "received", runId: body.runId });
-      setObjective("");
-      await loadRuns();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+  useGSAP(() => {
+    if (view !== "production") {
+      gsap.fromTo(
+        ".nwc-inspector-body > *",
+        { opacity: 0, y: 12, scale: 0.985 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.32, stagger: 0.035, ease: "power2.out" },
+      );
     }
-  }
-
-  async function refresh(targetRun = run) {
-    if (!targetRun) return;
-    const [state, eventData, artifactData] = await Promise.all([
-      readJson<Run>(`/v2/runs/${encodeURIComponent(targetRun.workflowId)}`),
-      readJson<{ events: EventSummary[] }>(`/v2/runs/${encodeURIComponent(targetRun.workflowId)}/events`),
-      readJson<{ artifacts: ArtifactSummary[] }>(`/v2/runs/${encodeURIComponent(targetRun.workflowId)}/artifacts`),
-    ]);
-    setRun(state);
-    setEvents(eventData.events ?? []);
-    setArtifacts(artifactData.artifacts ?? []);
-    await Promise.all([loadProject(), loadRuns()]);
-  }
-
-  async function decideManualRun(decision: "approve" | "reject") {
-    if (!run) return;
-    const artifactId = typeof run.record?.payload.artifactId === "string" ? run.record.payload.artifactId : undefined;
-    if (!artifactId) throw new Error("运行记录缺少待审批 artifactId");
-    await readJson(`/v2/workflows/${encodeURIComponent(run.workflowId)}/tasks/${encodeURIComponent(artifactId)}/signal`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ signal: "humanSignal", payload: { decision, authorId: "web-author" } }),
+    gsap.to(".nwc-priority-row.is-active .nwc-priority-signal", {
+      scale: 1.35,
+      opacity: 0.65,
+      duration: 0.8,
+      repeat: -1,
+      yoyo: true,
+      ease: "sine.inOut",
     });
-    message.success(decision === "approve" ? "已提交作者批准，Runtime 将继续提交与角色富化" : "已拒绝该稿件");
-    await refresh(run);
+  }, { scope: pageRef, dependencies: [selectedDocumentId, selectedWorkflowId, view], revertOnUpdate: true });
+
+  function renderMainView() {
+    if (view === "production") {
+      return <Suspense fallback={<PanelFallback />}><NovelProductionWorkspace
+          embedded
+          projectId={projectId}
+          documentId={selectedDocumentId}
+          workflowId={selectedWorkflowId}
+          stage={selectedStage}
+          onSelectionChange={(selection) => updateLocation({ document: selection.documentId, run: selection.workflowId, stage: selection.stage })}
+          onStartCreation={(document) => { setIntentOpen(true); intentForm.setFieldsValue({ documentId: document.id, manualFactApproval: false }); }}
+          onEditChapter={(document) => { setChapterModal("edit"); chapterForm.setFieldsValue(document); }}
+          onDeleteChapter={confirmDeleteChapter}
+          onOpenKnowledge={() => updateLocation({ view: "knowledge", run: undefined, stage: undefined })}
+        /></Suspense>;
+    }
+    if (view === "plan") return <Suspense fallback={<PanelFallback />}><ProjectPlanPanel projectId={projectId} /></Suspense>;
+    if (view === "arcs") return <Suspense fallback={<PanelFallback />}><StoryArcPanel projectId={projectId} onApplied={() => void projectQ.refetch()} /></Suspense>;
+    if (view === "knowledge") return <Suspense fallback={<PanelFallback />}><KnowledgeWorkbenchPanel projectId={projectId} /></Suspense>;
+    if (view === "evaluation") return <Suspense fallback={<PanelFallback />}><EvaluationPanel projectId={projectId} /></Suspense>;
+    if (view === "creative") return <Suspense fallback={<PanelFallback />}><CreativeRunPanel projectId={projectId} /></Suspense>;
+    if (view === "mcp") return <Suspense fallback={<PanelFallback />}><McpToolGatewayPanel /></Suspense>;
+    return (
+      <div className="nwc-overview">
+        <section className="nwc-priority" aria-label="优先处理队列">
+          <header className="nwc-section-head">
+            <div><span className="nwc-kicker">优先队列</span><h2>先处理会阻塞创作的事项</h2></div>
+            <span className="nwc-count">{priorityItems.length}</span>
+          </header>
+          <div className="nwc-priority-list">
+            {priorityItems.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有阻塞或待审批事项" />}
+            {priorityItems.map((item) => (
+              <button key={item.key} type="button" className={`nwc-priority-row is-${item.tone}`} onClick={() => updateLocation({ view: "production", document: item.documentId ?? selectedDocumentId, run: item.workflowId ?? selectedWorkflowId })}>
+                <span className="nwc-priority-signal" />
+                <span className="nwc-priority-copy"><strong>{item.title}</strong><small>{item.detail}</small></span>
+                <span className="nwc-row-action">查看</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="nwc-health" aria-label="运行态势">
+          <header className="nwc-section-head"><div><span className="nwc-kicker">运行态势</span><h2>当前工作负载</h2></div></header>
+          <div className="nwc-metric-grid">
+            <div><strong>{metrics.manual}</strong><span>待审批</span></div>
+            <div><strong>{metrics.failed}</strong><span>异常</span></div>
+            <div><strong>{metrics.active}</strong><span>运行中</span></div>
+            <div><strong>{metrics.blocking}</strong><span>质量阻塞</span></div>
+          </div>
+        </section>
+
+        <section className="nwc-recent" aria-label="章节查询">
+          <header className="nwc-section-head">
+            <div><span className="nwc-kicker">章节索引</span><h2>查询与进入章节</h2></div>
+            <Button type="primary" icon={<FileAddOutlined />} onClick={() => { setChapterModal("create"); chapterForm.setFieldsValue({ status: "planned" }); }}>新增章节</Button>
+          </header>
+          <div className="nwc-filters">
+            <Input allowClear prefix={<SearchOutlined />} value={chapterQuery} onChange={(event) => setChapterQuery(event.target.value)} placeholder="搜索章节标题、序号或 POV" />
+            <Select allowClear value={chapterStatus} onChange={setChapterStatus} placeholder="全部状态" options={DOCUMENT_STATUSES} />
+          </div>
+          <div className="nwc-chapter-table">
+            {filteredDocuments.map((document) => (
+              <button key={document.id} type="button" onClick={() => updateLocation({ view: "production", document: document.id })}>
+                <span className="nwc-chapter-order">{String(document.narrativeOrder).padStart(2, "0")}</span>
+                <span className="nwc-chapter-title"><strong>{document.title}</strong><small>{document.arcTitle ?? "未归属故事弧"}</small></span>
+                <span className="nwc-chapter-words">{document.wordCount ? `${document.wordCount.toLocaleString()} 字` : "未定稿"}</span>
+                <span className={documentStatusMeta(document.status).pill}>{documentStatusMeta(document.status).label}</span>
+              </button>
+            ))}
+            {filteredDocuments.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的章节" />}
+          </div>
+        </section>
+      </div>
+    );
   }
-
-  useEffect(() => {
-    if (!run) return;
-    const timer = window.setInterval(() => void refresh(), 3000);
-    return () => window.clearInterval(timer);
-  }, [run?.workflowId]);
-
-  const selectedDocument = useMemo(() => project?.documents.find((document) => document.id === targetDocumentId), [project?.documents, targetDocumentId]);
-  const documentOptions = project?.documents.map((document) => ({ value: document.id, label: `第 ${document.narrativeOrder} 章 · ${document.title}` })) ?? [];
 
   return (
-    <div className="novel-v2-page novel-v2-studio-page">
-      {/* ===== TOPBAR ===== */}
-      <motion.header
-        className="novel-topbar"
-        initial={{ opacity: 0, y: 14 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
-      >
-        <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate("/novels")}>
-          作品列表
-        </Button>
-        <div className="novel-topbar-body" style={{ minWidth: 0 }}>
-          <span className="novel-eyebrow">章节工作室</span>
-          <h2 className="novel-display-h2" style={{ marginTop: 2 }}>
-            {project?.title ?? projectId}
-          </h2>
-        </div>
-        <div className="novel-topbar-actions">
-          <span className="novel-status-pill novel-status-pill-done">
-            revision {project?.currentRevision ?? 0}
-          </span>
-          <Button
-            type="primary"
-            icon={<NodeIndexOutlined />}
-            onClick={() => navigate(`/novels/${encodeURIComponent(projectId)}/pipeline`)}
-          >
-            流水线指挥中心
-          </Button>
-          <Button
-            type="primary"
-            ghost
-            icon={<EyeOutlined />}
-            onClick={() => navigate(`/novels/${encodeURIComponent(projectId)}/showcase`)}
-          >
-            工作流全景
-          </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => Promise.all([loadProject(), loadRuns()]).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))}>
-            刷新
-          </Button>
-        </div>
-      </motion.header>
+    <div ref={pageRef} className="nwc-page">
+      <motion.div className="nwc-command-header" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+        <nav className="nwc-workspace-tabs" aria-label="作品工作区">
+          <button type="button" onClick={() => navigate("/novels")}><ArrowLeftOutlined /><span>作品工作区</span></button>
+          <button type="button" className="is-active" aria-current="page"><BookOutlined /><span>{projectTitle}</span></button>
+        </nav>
 
-      {error && <Alert type="error" showIcon message={error} className="novel-v2-alert" closable onClose={() => setError(undefined)} />}
+        <header className="nwc-topbar">
+          <div className="nwc-project-title"><span>小说创作指挥台</span><h1>{projectTitle}</h1></div>
+          <div className="nwc-topbar-state">
+            <span className="nwc-revision">修订 {project?.currentRevision ?? 0}</span>
+            <span className={latestStatus.pill}>{latestStatus.icon}{latestStatus.label}</span>
+          </div>
+          <div className="nwc-topbar-actions">
+            <Button type="primary" icon={<SendOutlined />} onClick={() => { setIntentOpen(true); intentForm.setFieldsValue({ documentId: selectedDocumentId, manualFactApproval: false }); }}>发起创作</Button>
+            <Tooltip title="刷新全部数据"><Button aria-label="刷新全部数据" icon={<ReloadOutlined />} loading={projectQ.isFetching || runsQ.isFetching} onClick={() => void refreshAll()} /></Tooltip>
+          </div>
+        </header>
 
-      <Tabs
-        defaultActiveKey="plan"
-        className="novel-studio-tabs"
-        items={[
-          {
-            key: "plan",
-            label: STUDIO_TABS[0].label,
-            children: <Suspense fallback={<div className="novel-empty"><Spin /></div>}><ProjectPlanPanel projectId={projectId} /></Suspense>,
-          },
-          {
-            key: "arcs",
-            label: STUDIO_TABS[1].label,
-            children: <Suspense fallback={<div className="novel-empty"><Spin /></div>}><StoryArcPanel projectId={projectId} onApplied={() => void loadProject()} /></Suspense>,
-          },
-          {
-            key: "studio",
-            label: STUDIO_TABS[2].label,
-            children: (
-              <section className="novel-studio-grid">
-                {/* ===== 章节轨（左栏）===== */}
-                <motion.aside
-                  className="novel-chapter-rail"
-                  initial={{ opacity: 0, x: -14 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                >
-                  <div className="novel-chapter-rail-head">
-                    <div className="novel-chapter-rail-head-body">
-                      <strong>章节目标</strong>
-                      <span>{project?.documents.length ?? 0} 章</span>
-                    </div>
-                  </div>
-                  <div className="novel-chapter-list">
-                    {(project?.documents ?? []).map((document, index, documents) => (
-                      <div key={document.id} className="novel-chapter-group-item">
-                      {(index === 0 || documents[index - 1]?.arcId !== document.arcId) && <div className="novel-chapter-group-label"><span>{document.arcTitle ?? "未归属故事弧"}</span>{document.arcPlanningStatus && <Tag>{document.arcPlanningStatus === "approved" ? "蓝图有效" : document.arcPlanningStatus}</Tag>}</div>}
-                      <motion.button
-                        key={document.id}
-                        className={`novel-chapter-card ${targetDocumentId === document.id ? "is-active" : ""}`}
-                        onClick={() => setTargetDocumentId(document.id)}
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.35, delay: Math.min(index * 0.04, 0.24), ease: [0.16, 1, 0.3, 1] }}
-                      >
-                        <span className="novel-chapter-num">{String(document.narrativeOrder).padStart(2, "0")}</span>
-                        <span className="novel-chapter-card-body">
-                          <span className="novel-chapter-card-title">{document.title}</span>
-                          <span className="novel-chapter-card-meta">
-                            <Tag>{documentStatusMeta(document.status).label}</Tag>
-                            {document.latestRevision !== undefined && <Tag>r{document.latestRevision}</Tag>}
-                          </span>
-                        </span>
-                      </motion.button></div>
-                    ))}
-                    {!project?.documents.length && (
-                      <div className="novel-empty" style={{ padding: "32px 12px" }}>
-                        <div className="novel-empty-mark" style={{ width: 44, height: 44, fontSize: 18 }}>
-                          <FileAddOutlined />
-                        </div>
-                        <div className="novel-empty-desc" style={{ fontSize: 12.5 }}>
-                          请先在故事弧页批准整弧蓝图
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </motion.aside>
+        <nav className="nwc-view-tabs" aria-label="创作领域">
+          {VIEW_ITEMS.map((item) => {
+            const badge = item.key === "overview" ? metrics.priority : item.key === "production" ? productionMetrics.priority : item.key === "arcs" ? arcRiskCount : item.key === "knowledge" ? factsQ.data?.length ?? 0 : 0;
+            return <button key={item.key} type="button" className={view === item.key ? "is-active" : ""} aria-current={view === item.key ? "page" : undefined} onClick={() => updateLocation({ view: item.key })}>
+              <span className="nwc-nav-icon">{item.icon}</span><span>{item.label}</span>{badge > 0 && <span className="nwc-nav-badge">{badge}</span>}
+            </button>;
+          })}
+        </nav>
+      </motion.div>
 
-                {/* ===== 焦点命令栏（中栏）===== */}
-                <motion.section
-                  className="novel-focal-panel"
-                  initial={{ opacity: 0, y: 14 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.55, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
-                >
-                  {/* 提交 Intent —— 焦点卡 */}
-                  <div className="novel-focal-card">
-                    <div className="novel-focal-card-head">
-                      <h3>提交创作 Intent</h3>
-                      <span className="novel-status-pill novel-status-pill-done">Web 交互 · Runtime 持久化</span>
-                    </div>
-                    <div className="novel-focal-card-body">
-                      <Select
-                        allowClear
-                        placeholder="选择已批准故事弧中的章节"
-                        value={targetDocumentId}
-                        options={documentOptions}
-                        onChange={setTargetDocumentId}
-                        style={{ width: "100%" }}
-                      />
-                      <Input.TextArea
-                        value={objective}
-                        onChange={(event) => setObjective(event.target.value)}
-                        placeholder="例如：根据当前记忆和 Skill 创作下一章，并保持已知事实一致"
-                        autoSize={{ minRows: 4, maxRows: 8 }}
-                      />
-                      <Checkbox checked={manualFactApproval} onChange={(event) => setManualFactApproval(event.target.checked)}>
-                        提交定稿前人工审批事实候选
-                      </Checkbox>
-                      {selectedDocument?.arcPlanningStatus && selectedDocument.arcPlanningStatus !== "approved" && <Alert type="warning" showIcon message="故事弧蓝图已失效，请先重基线并重新批准。" />}
-                      <Button type="primary" size="large" icon={<SendOutlined />} disabled={!objective.trim() || !selectedDocument || selectedDocument.arcPlanningStatus !== "approved"} onClick={() => void submit()} block>
-                        提交到 Temporal Runtime
-                      </Button>
-                    </div>
-                  </div>
+      {(projectQ.isError || runsQ.isError) && <Alert type="error" showIcon message="无法加载作品指挥台" description={(projectQ.error ?? runsQ.error) instanceof Error ? (projectQ.error ?? runsQ.error as Error).message : undefined} />}
 
-                  {/* 当前章节 —— 支撑卡 */}
-                  <div className="novel-card-support">
-                    <div className="novel-card-head">
-                      <h3 className="novel-display-h3">当前章节</h3>
-                      {selectedDocument && (
-                        <Space className="novel-v2-document-actions" style={{ marginTop: 0 }}>
-                          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditingDocument(selectedDocument); editForm.setFieldsValue(selectedDocument); }}>
-                            编辑
-                          </Button>
-                          <Popconfirm title="删除章节目标" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => deleteDocument(selectedDocument)}>
-                            <Button size="small" danger icon={<DeleteOutlined />}>
-                              删除
-                            </Button>
-                          </Popconfirm>
-                        </Space>
-                      )}
-                    </div>
-                    {selectedDocument ? (
-                      <>
-                        <Descriptions column={2} size="small">
-                          <Descriptions.Item label="标题">{selectedDocument.title}</Descriptions.Item>
-                          <Descriptions.Item label="状态"><Tag>{documentStatusMeta(selectedDocument.status).label}</Tag></Descriptions.Item>
-                          <Descriptions.Item label="序号">{selectedDocument.narrativeOrder}</Descriptions.Item>
-                          <Descriptions.Item label="POV">{selectedDocument.povCharacterId ?? "未设置"}</Descriptions.Item>
-                          <Descriptions.Item label="估算字数">{selectedDocument.wordCount ?? 0}</Descriptions.Item>
-                          <Descriptions.Item label="阻塞问题">{selectedDocument.blockingIssueCount ?? 0}</Descriptions.Item>
-                        </Descriptions>
-                        <div className="novel-manuscript-preview">
-                          <div className="novel-card-head">
-                            <strong>定稿正文</strong>
-                            <Space>
-                              {documentContent && <Tag>r{documentContent.revision}</Tag>}
-                              {documentContent && <Button size="small" icon={<EditOutlined />} onClick={() => { setAuthorText(documentContent.plainText); setAuthorEditOpen(true); }}>编辑正文</Button>}
-                              {factCandidates.length > 0 && <Button size="small" icon={<AuditOutlined />} onClick={() => setFactApprovalOpen(true)}>事实候选 {factCandidates.length}</Button>}
-                              {selectedDocument.status === "final" && <Button size="small" type="primary" icon={<AuditOutlined />} onClick={() => setReviewOpen(true)}>重审优化</Button>}
-                            </Space>
-                          </div>
-                          {contentLoading ? <Spin size="small" /> : documentContent
-                            ? <div className="novel-manuscript-text novel-manuscript-scroll">{documentContent.plainText}</div>
-                            : <div className="novel-empty-desc">尚无定稿正文</div>}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="novel-empty" style={{ padding: "24px 12px", textAlign: "center" }}>
-                        <div className="novel-empty-desc">请选择章节目标</div>
-                      </div>
-                    )}
-                  </div>
+      <div className={`nwc-shell ${inspectorCollapsed ? "is-inspector-collapsed" : ""} ${view === "production" ? "is-production" : ""}`}>
+        <main className="nwc-main">
+          <header className="nwc-view-head">
+            <div><span className="nwc-kicker">{view === "overview" ? "作品态势" : "当前领域"}</span><h2>{viewTitle}</h2></div>
+            {view === "overview" && <div className="nwc-view-summary"><span>{project?.documents.length ?? 0} 章</span><span>{runs.length} 条运行</span></div>}
+            {view === "production" && <div className="nwc-production-actions">
+              <Button icon={<FileAddOutlined />} onClick={() => { setChapterModal("create"); chapterForm.setFieldsValue({ status: "planned" }); }}>新增章节</Button>
+            </div>}
+          </header>
+          {renderMainView()}
+        </main>
 
-                  {/* 最近运行 —— 支撑卡 */}
-                  <div className="novel-card-support">
-                    <div className="novel-card-head">
-                      <h3 className="novel-display-h3">最近运行</h3>
-                      <span className="novel-card-mini-hint">{runs.length} 条记录</span>
-                    </div>
-                    {runs.length ? (
-                      <div className="novel-run-list">
-                        {runs.map((item) => {
-                          const wfMeta = workflowTypeMeta(item.workflowType);
-                          const stMeta = statusMeta(item.status);
-                          return (
-                            <div
-                              key={item.id}
-                              className="novel-run-item"
-                              onClick={() => {
-                                const next = { workflowId: item.temporalWorkflowId, status: item.status, record: item };
-                                setRun(next);
-                                void refresh(next);
-                              }}
-                            >
-                              <div className="novel-run-item-left">
-                                <div className="novel-run-item-header">
-                                  <Space size={6} align="center">
-                                    <span className="novel-run-item-icon">{wfMeta.icon}</span>
-                                    <span className="novel-run-item-title">{wfMeta.label}</span>
-                                    <span className={stMeta.pill}>{stMeta.label}</span>
-                                  </Space>
-                                </div>
-                                <div className="novel-run-item-meta">
-                                  <code>{shortId(item.temporalWorkflowId)}</code>
-                                  <span className="novel-run-item-time">{relativeTime(item.updatedAt)}</span>
-                                </div>
-                              </div>
-                              <Button
-                                type="link"
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const next = { workflowId: item.temporalWorkflowId, status: item.status, record: item };
-                                  setRun(next);
-                                  void refresh(next);
-                                }}
-                              >
-                                查看
-                              </Button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="novel-empty" style={{ padding: "24px 12px", textAlign: "center" }}>
-                        <div className="novel-empty-desc">暂无运行记录</div>
-                      </div>
-                    )}
-                  </div>
-                </motion.section>
+        {view !== "production" && <aside className="nwc-inspector">
+          <header><div><span className="nwc-kicker">上下文审阅</span><h2>{selectedDocument?.title ?? "当前运行"}</h2></div><Tooltip title={inspectorCollapsed ? "展开审阅台" : "折叠审阅台"}><Button type="text" icon={inspectorCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={() => setInspectorCollapsed((value) => !value)} /></Tooltip></header>
+          <div className="nwc-inspector-body">
+            {selectedRun ? <>
+              <div className="nwc-inspector-status"><span className={statusMeta(selectedRun.status).pill}>{statusMeta(selectedRun.status).icon}{statusMeta(selectedRun.status).label}</span><small>{selectedWorkflowId ? relativeTime(selectedRun.record?.updatedAt) : ""}</small></div>
+              {selectedRun.status === "manual-review-required" && <div className="nwc-gate-actions"><Button type="primary" icon={<CheckOutlined />} loading={signalDecision.isPending} onClick={() => void decideRun("approve")}>批准并继续</Button><Button danger icon={<CloseOutlined />} loading={signalDecision.isPending} onClick={() => void decideRun("reject")}>退回</Button></div>}
+              <div className="nwc-inspector-block"><span>工作流产物</span><strong>{artifactsQ.data?.length ?? 0}</strong></div>
+              <div className="nwc-inspector-block"><span>事件</span><strong>{eventsQ.data?.length ?? 0}</strong></div>
+            </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行上下文" />}
+            <section className="nwc-facts-mini"><h3>待审批事实 <span>{factsQ.data?.length ?? 0}</span></h3>{factsQ.data?.slice(0, 4).map((fact) => <article key={fact.id}><strong>{fact.title}</strong><p>{fact.content}</p><div><Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => void factDecision.mutateAsync({ claimId: fact.id, decision: "approve" })}>批准</Button><Button size="small" danger icon={<CloseOutlined />} onClick={() => void factDecision.mutateAsync({ claimId: fact.id, decision: "reject" })}>拒绝</Button></div></article>)}</section>
+            <section className="nwc-events-mini"><h3>最近事件</h3>{eventsQ.data?.slice(-6).reverse().map((event, index) => <div key={event.id ?? index}><span /><p>{typeof event.event_type === "string" ? event.event_type : event.eventType ?? "系统事件"}<small>{relativeTime(event.created_at ?? event.createdAt)}</small></p></div>)}</section>
+          </div>
+        </aside>}
+      </div>
 
-                {/* ===== 观察者栏（右栏）===== */}
-                <motion.aside
-                  className="novel-observer-panel"
-                  initial={{ opacity: 0, x: 14 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.5, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
-                >
-                  <div className="novel-observer-head">
-                    <div className="novel-observer-head-body">
-                      <strong>运行观察</strong>
-                      {run ? <code>{shortId(run.workflowId)}</code> : <code>未选择运行</code>}
-                    </div>
-                    {run && (
-                      <Button size="small" icon={<ReloadOutlined />} onClick={() => void refresh()} />
-                    )}
-                  </div>
-
-                  {run ? (
-                    <>
-                      <div>
-                        <div className="novel-section-label" style={{ margin: "0 0 8px" }}>
-                          状态
-                        </div>
-                        {(() => {
-                          const stMeta = statusMeta(run.status);
-                          return (
-                            <div className="novel-observer-status-block">
-                              <span className={stMeta.pill}>
-                                {stMeta.icon}
-                                <span style={{ marginLeft: 4 }}>{stMeta.label}</span>
-                              </span>
-                              <code className="novel-observer-wf-id">{shortId(run.workflowId, 12)}</code>
-                            </div>
-                          );
-                        })()}
-                        {run.status === "manual-review-required" && (
-                          <Space wrap style={{ marginTop: 12 }}>
-                            <Popconfirm title="批准当前稿件并继续正式提交？" okText="批准" onConfirm={() => decideManualRun("approve").catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))}>
-                              <Button type="primary" icon={<AuditOutlined />}>批准定稿</Button>
-                            </Popconfirm>
-                            <Popconfirm title="拒绝当前稿件并结束工作流？" okText="拒绝" okButtonProps={{ danger: true }} onConfirm={() => decideManualRun("reject").catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))}>
-                              <Button danger>拒绝</Button>
-                            </Popconfirm>
-                          </Space>
-                        )}
-                      </div>
-
-                      <div>
-                        <div className="novel-section-label">事件流</div>
-                        {events.length ? (
-                          <div className="novel-event-timeline">
-                            {events.slice(0, 12).map((event, idx) => {
-                              const key = String(event.id ?? idx);
-                              const desc = describeEvent(event.event_type ?? event.eventType, event.payload);
-                              const isExpanded = expandedEvents.has(key);
-                              const hasPayload = event.payload !== undefined && event.payload !== null;
-                              const hasFields = desc.fields && desc.fields.length > 0;
-                              return (
-                                <div className="novel-event-item" key={key}>
-                                  <div className="novel-event-item-header">
-                                    <Space size={6} align="center" wrap={false}>
-                                      <span className="novel-event-item-icon">{desc.icon}</span>
-                                      <span className="novel-event-item-title">{desc.label}</span>
-                                      <Tag className="novel-event-item-cat">{desc.category}</Tag>
-                                    </Space>
-                                    <div className="novel-event-item-time">
-                                      {eventTime(event) ? relativeTime(eventTime(event)) : ""}
-                                    </div>
-                                  </div>
-                                  <div className="novel-event-item-summary">{desc.summary}</div>
-                                  {hasFields && (
-                                    <div className="novel-event-item-fields">
-                                      {desc.fields!.map((field, fieldIdx) => (
-                                        <div className="novel-event-item-field" key={fieldIdx}>
-                                          <span className="novel-event-item-field-label">{field.label}</span>
-                                          <code className={field.mono ? "novel-event-item-field-value-mono" : "novel-event-item-field-value"}>{field.value}</code>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                  {hasPayload && (
-                                    <div
-                                      className="novel-event-item-raw-toggle"
-                                      onClick={() => setExpandedEvents((prev) => {
-                                        const next = new Set(prev);
-                                        if (next.has(key)) next.delete(key);
-                                        else next.add(key);
-                                        return next;
-                                      })}
-                                    >
-                                      <DownOutlined className={`novel-event-item-toggle ${isExpanded ? "is-open" : ""}`} />
-                                      <span>{isExpanded ? "收起原始数据" : "原始数据"}</span>
-                                    </div>
-                                  )}
-                                  {isExpanded && hasPayload && (
-                                    <pre className="novel-event-item-payload">{JSON.stringify(event.payload, null, 2)}</pre>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="novel-empty" style={{ padding: "16px 8px", textAlign: "center" }}>
-                            <div className="novel-empty-desc" style={{ fontSize: 12 }}>
-                              暂无事件
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div>
-                        <div className="novel-section-label">产物</div>
-                        {artifacts.length ? (
-                          <div className="novel-artifact-list">
-                            {artifacts.map((artifact) => (
-                              <ArtifactCard
-                                key={artifact.id}
-                                artifact={artifact}
-                                onView={(item) => setViewingArtifact(item)}
-                              />
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="novel-empty" style={{ padding: "16px 8px", textAlign: "center" }}>
-                            <div className="novel-empty-desc" style={{ fontSize: 12 }}>
-                              暂无产物
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="novel-empty" style={{ padding: "40px 16px", textAlign: "center" }}>
-                      <div className="novel-empty-mark">
-                        <ThunderboltOutlined />
-                      </div>
-                      <div className="novel-empty-title" style={{ marginTop: 12 }}>
-                        等待运行
-                      </div>
-                      <div className="novel-empty-desc">提交或选择运行后查看事件、产物与审核结果。</div>
-                    </div>
-                  )}
-                </motion.aside>
-              </section>
-            ),
-          },
-          {
-            key: "evaluation",
-            label: STUDIO_TABS[4].label,
-            children: (
-              <Suspense
-                fallback={
-                  <div className="novel-empty">
-                    <Spin />
-                  </div>
-                }
-              >
-                <EvaluationPanel projectId={projectId} />
-              </Suspense>
-            ),
-          },
-          {
-            key: "creative",
-            label: STUDIO_TABS[5].label,
-            children: (
-              <Suspense
-                fallback={
-                  <div className="novel-empty">
-                    <Spin />
-                  </div>
-                }
-              >
-                <CreativeRunPanel projectId={projectId} />
-              </Suspense>
-            ),
-          },
-          {
-            key: "mcp",
-            label: STUDIO_TABS[6].label,
-            children: (
-              <Suspense
-                fallback={
-                  <div className="novel-empty">
-                    <Spin />
-                  </div>
-                }
-              >
-                <McpToolGatewayPanel />
-              </Suspense>
-            ),
-          },
-          {
-            key: "knowledge",
-            label: STUDIO_TABS[3].label,
-            children: (
-              <Suspense fallback={<div className="novel-empty"><Spin /></div>}>
-                <KnowledgeWorkbenchPanel projectId={projectId} />
-              </Suspense>
-            ),
-          },
-        ]}
-      />
-
-      <Modal title="严苛审校并优化定稿" open={reviewOpen} onCancel={() => setReviewOpen(false)} onOk={() => startChapterReview().catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))} okText="启动重审">
-        <Typography.Paragraph type="secondary">复用正式章节的审核、局部修订、事实提取、提交、角色富化与 learning 闭环。</Typography.Paragraph>
-        <Input.TextArea value={reviewInstruction} onChange={(event) => setReviewInstruction(event.target.value)} autoSize={{ minRows: 4, maxRows: 8 }} />
-      </Modal>
-
-      <Modal width={960} title="编辑正文并提交审校" open={authorEditOpen} onCancel={() => setAuthorEditOpen(false)} onOk={() => startChapterReview(authorText).catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))} okText="提交审校" okButtonProps={{ disabled: !authorText.trim() }}>
-        <Typography.Paragraph type="secondary">作者修改先保存为不可变 proposal，再复用正式审核、修订、事实提取与提交闭环；不会直接覆盖定稿。</Typography.Paragraph>
-        <Segmented
-          value={authorEditMode}
-          onChange={(value) => setAuthorEditMode(value as "edit" | "diff")}
-          options={[
-            { value: "edit", label: "编辑正文" },
-            { value: "diff", label: "对比修改" },
-          ]}
-          style={{ marginBottom: 12 }}
-        />
-        {authorEditMode === "edit" ? (
-          <ManuscriptEditor key={documentContent?.contentHash ?? "author-edit"} value={authorText} onChange={setAuthorText} minHeight={440} autofocus={false} />
-        ) : (
-          <TextDiff baseText={documentContent?.plainText ?? ""} newText={authorText} baseLabel="当前定稿" newLabel="我的修改" emptyText="尚未做任何修改" />
-        )}
-      </Modal>
-
-      <Modal width={720} title="事实候选审批" open={factApprovalOpen} onCancel={() => setFactApprovalOpen(false)} footer={null}>
-        <Typography.Paragraph type="secondary">仅批准正文明确支持的事实。未决与已拒绝事实不会进入后续创作检索。</Typography.Paragraph>
-        <div className="novel-fact-candidate-list">
-          {factCandidates.length ? factCandidates.map((candidate) => (
-            <div className="novel-fact-candidate" key={candidate.id}>
-              <div className="novel-fact-candidate-body">
-                <strong>{candidate.title}</strong>
-                <Typography.Paragraph>{candidate.content}</Typography.Paragraph>
-                <Space size={6} wrap>
-                  <Tag>置信度 {Math.round(candidate.confidence * 100)}%</Tag>
-                  {candidate.subjectRefs.map((subject) => <Tag key={subject}>{subject}</Tag>)}
-                </Space>
-              </div>
-              <Space>
-                <Popconfirm title="拒绝该事实候选？" okText="拒绝" okButtonProps={{ danger: true }} onConfirm={() => decideFactCandidate(candidate.id, "reject").catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))}>
-                  <Button danger icon={<CloseOutlined />}>拒绝</Button>
-                </Popconfirm>
-                <Button type="primary" icon={<CheckOutlined />} onClick={() => decideFactCandidate(candidate.id, "approve").catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))}>批准</Button>
-              </Space>
-            </div>
-          )) : <div className="novel-empty-desc">当前章节没有待审批事实</div>}
-        </div>
-      </Modal>
-
-      <Modal title="新增章节目标" open={documentOpen} onCancel={() => setDocumentOpen(false)} footer={null} destroyOnHidden>
-        <Form form={form} layout="vertical" onFinish={(values) => createDocument(values).catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))}>
-          <Form.Item name="title" label="章节标题" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="narrativeOrder" label="章节序号">
-            <Input type="number" />
-          </Form.Item>
-          <Form.Item name="povCharacterId" label="POV 角色 ID">
-            <Input />
-          </Form.Item>
-          <Form.Item name="status" label="状态" initialValue="planned">
-            <Select options={statusOptions} />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block>
-            创建章节目标
-          </Button>
+      <Modal title={chapterModal === "edit" ? "编辑章节" : "新增章节目标"} open={Boolean(chapterModal)} onCancel={() => { setChapterModal(null); chapterForm.resetFields(); }} footer={null} destroyOnHidden>
+        <Form form={chapterForm} layout="vertical" onFinish={(values) => void saveChapter(values)}>
+          <Form.Item name="title" label="章节标题" rules={[{ required: true, message: "请输入章节标题" }]}><Input /></Form.Item>
+          <Form.Item name="narrativeOrder" label="章节序号"><Input type="number" /></Form.Item>
+          <Form.Item name="povCharacterId" label="POV 角色 ID"><Input /></Form.Item>
+          <Form.Item name="status" label="状态" initialValue="planned"><Select options={DOCUMENT_STATUSES} /></Form.Item>
+          <Button type="primary" htmlType="submit" block loading={createDocument.isPending || updateDocument.isPending}>保存章节</Button>
         </Form>
       </Modal>
 
-      <Modal title="编辑章节" open={Boolean(editingDocument)} onCancel={() => setEditingDocument(undefined)} footer={null} destroyOnHidden>
-        <Form form={editForm} layout="vertical" onFinish={(values) => updateDocument(values).catch((err: unknown) => message.error(err instanceof Error ? err.message : String(err)))}>
-          <Form.Item name="title" label="章节标题" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="narrativeOrder" label="章节序号">
-            <Input type="number" />
-          </Form.Item>
-          <Form.Item name="povCharacterId" label="POV 角色 ID">
-            <Input />
-          </Form.Item>
-          <Form.Item name="status" label="状态">
-            <Select options={statusOptions} />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block>
-            保存章节
-          </Button>
+      <Modal title="发起创作任务" open={intentOpen} onCancel={() => setIntentOpen(false)} footer={null} destroyOnHidden>
+        <Form form={intentForm} layout="vertical" initialValues={{ manualFactApproval: false }} onFinish={(values) => void startIntent(values)}>
+          <Form.Item name="documentId" label="目标章节"><Select allowClear showSearch optionFilterProp="label" options={(project?.documents ?? []).map((document) => ({ value: document.id, label: `第 ${document.narrativeOrder} 章 · ${document.title}` }))} placeholder="不选则发起规划任务" /></Form.Item>
+          <Form.Item name="objective" label="创作目标" rules={[{ required: true, message: "请输入创作目标" }]}><Input.TextArea autoSize={{ minRows: 4, maxRows: 8 }} placeholder="说明本次创作要完成的内容与重点" /></Form.Item>
+          <Form.Item name="manualFactApproval" valuePropName="checked"><Checkbox>提交定稿前人工审批事实候选</Checkbox></Form.Item>
+          <Button type="primary" htmlType="submit" block icon={<SendOutlined />} loading={submitIntent.isPending}>提交到 Runtime</Button>
         </Form>
       </Modal>
-
-      <ArtifactContentModal
-        artifact={viewingArtifact}
-        open={viewingArtifact !== null}
-        onClose={() => setViewingArtifact(null)}
-      />
     </div>
   );
 }

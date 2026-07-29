@@ -8,6 +8,7 @@ import {
   REQUIRED_APPROVED_PLAN_TASK_KEYS,
   foundationTaskKey,
   transitivePlanDependents,
+  approvedProjectBookTitle,
   type ProjectPlanSection,
   type ProjectPlanStatus,
   type ProjectPlanTaskKey,
@@ -41,7 +42,9 @@ import type {
 } from "./protocol";
 import type { ModelInvocationAudit } from "./model-gateway";
 import type { ModelRoutingConfig, ModelRoutingSnapshot, ModelTaskRecord, ModelWorkPackage } from "./model-routing";
+import type { ObjectStoreIdentity } from "./object-store";
 import { planningContextFingerprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type NarrativeArcPlan, type StoryArcBundle, type StoryArcRecord } from "./application/story-arc";
+import { aggregateChapterReviews, type ChapterReviewIssueStatus } from "./chapter-review-snapshot";
 
 export interface NovelProjectSnapshot {
   projectId: string;
@@ -584,8 +587,79 @@ export class NovelPostgresRepository {
     // issues 是 JS 对象数组，直接传给 jsonb 列会导致 "invalid input syntax for type json" 错误。
     // 修复：显式 JSON.stringify，让 pg 以字符串参数发送，PostgreSQL 再解析为 jsonb。
     // modelProvenance 是对象，pg 本身会正确序列化为 JSON，但显式 stringify 保持一致性。
-    await this.pool.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,model_provenance,score,role) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO NOTHING", [review.id, review.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.modelProvenance ? JSON.stringify(review.modelProvenance) : null, review.score ?? null, review.role ?? null]);
+    await this.pool.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,model_provenance,score,role,dimension_scores) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO NOTHING", [review.id, review.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.modelProvenance ? JSON.stringify(review.modelProvenance) : null, review.score ?? null, review.role ?? null, JSON.stringify(review.dimensionScores ?? {})]);
+    await this.refreshChapterReviewSnapshot(review.artifactId);
     return review;
+  }
+
+  async refreshChapterReviewSnapshot(artifactId: string, revisionId?: string): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const refreshed = await this.refreshChapterReviewSnapshotTx(client, artifactId, revisionId);
+      await client.query("COMMIT");
+      return refreshed;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async refreshChapterReviewSnapshotTx(client: PoolClient, artifactId: string, revisionId?: string): Promise<boolean> {
+    const subject = await client.query<{
+      project_id: string; content_hash: string; fingerprint: string; workflow_id: string | null; document_id: string | null;
+    }>(`
+      SELECT a.project_id,a.content_hash,a.fingerprint,
+        COALESCE(a.payload->>'workflowId',a.payload->>'runId') AS workflow_id,
+        COALESCE(w.payload->>'documentId',w.payload#>>'{intent,target,id}') AS document_id
+      FROM artifacts a
+      LEFT JOIN workflow_runs w ON w.temporal_workflow_id=COALESCE(a.payload->>'workflowId',a.payload->>'runId')
+      WHERE a.id=$1
+    `, [artifactId]);
+    const target = subject.rows[0];
+    if (!target?.document_id) return false;
+
+    const rows = await client.query<{
+      id: string; project_id: string; artifact_id: string; reviewer_id: string; identity: Review["identity"];
+      verdict: Review["verdict"]; issues: Review["issues"]; score: number | null; role: string | null;
+      dimension_scores: Review["dimensionScores"]; artifact_fingerprint: string; created_at: Date | string;
+    }>(`
+      SELECT id,project_id,artifact_id,reviewer_id,identity,verdict,issues,score,role,dimension_scores,artifact_fingerprint,created_at
+      FROM reviews WHERE artifact_id=$1 ORDER BY created_at,id
+    `, [artifactId]);
+    const reviews: Review[] = rows.rows.map((row) => ({
+      id: row.id, projectId: row.project_id, artifactId: row.artifact_id, reviewerId: row.reviewer_id,
+      identity: row.identity, verdict: row.verdict, issues: row.issues ?? [], score: row.score === null ? undefined : Number(row.score),
+      role: row.role ?? undefined, dimensionScores: row.dimension_scores ?? {}, artifactFingerprint: row.artifact_fingerprint,
+      createdAt: new Date(row.created_at).getTime(),
+    }));
+    const existing = await client.query<{ id: string }>("SELECT id FROM chapter_review_snapshots WHERE document_id=$1 FOR UPDATE", [target.document_id]);
+    const snapshotId = existing.rows[0]?.id ?? randomUUID();
+    const prior = existing.rowCount
+      ? await client.query<{ issue_fingerprint: string; status: ChapterReviewIssueStatus }>("SELECT issue_fingerprint,status FROM chapter_review_snapshot_issues WHERE snapshot_id=$1", [snapshotId])
+      : { rows: [] };
+    const snapshot = aggregateChapterReviews(reviews, new Map(prior.rows.map((row) => [row.issue_fingerprint, row.status])));
+    if (!snapshot.complete) return false;
+    const reviewedAt = new Date(Math.max(...reviews.map((review) => review.createdAt)));
+    await client.query(`
+      INSERT INTO chapter_review_snapshots(id,document_id,project_id,revision_id,reviewed_content_hash,artifact_fingerprint,source_workflow_id,verdict,complete,overall_score,dimension_scores,reviewer_roles,reviewed_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12)
+      ON CONFLICT(document_id) DO UPDATE SET
+        revision_id=COALESCE(EXCLUDED.revision_id,chapter_review_snapshots.revision_id),reviewed_content_hash=EXCLUDED.reviewed_content_hash,
+        artifact_fingerprint=EXCLUDED.artifact_fingerprint,source_workflow_id=EXCLUDED.source_workflow_id,verdict=EXCLUDED.verdict,
+        complete=TRUE,overall_score=EXCLUDED.overall_score,dimension_scores=EXCLUDED.dimension_scores,reviewer_roles=EXCLUDED.reviewer_roles,
+        reviewed_at=EXCLUDED.reviewed_at,updated_at=now()
+    `, [snapshotId, target.document_id, target.project_id, revisionId ?? null, target.content_hash, target.fingerprint, target.workflow_id, snapshot.verdict, snapshot.overallScore ?? null, JSON.stringify(snapshot.dimensionScores), snapshot.reviewerRoles, reviewedAt]);
+    await client.query("DELETE FROM chapter_review_snapshot_issues WHERE snapshot_id=$1", [snapshotId]);
+    for (const issue of snapshot.issues) {
+      await client.query(`
+        INSERT INTO chapter_review_snapshot_issues(id,snapshot_id,issue_fingerprint,dimension,severity,title,description,evidence_quote,paragraph,revision_ranges,rule,suggestion,source_roles,status)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      `, [issue.id, snapshotId, issue.fingerprint, issue.dimension ?? null, issue.severity, issue.title, issue.description ?? null, issue.evidenceQuote, issue.paragraph ?? null, JSON.stringify(issue.revisionRanges), issue.rule ?? null, issue.suggestion ?? null, issue.sourceRoles, issue.status]);
+    }
+    return true;
   }
 
   async listSkills(_projectId: string): Promise<SkillDescriptor[]> {
@@ -924,6 +998,16 @@ export class NovelPostgresRepository {
         "UPDATE project_plan_sections SET status='approved',approved_at=now(),updated_at=now() WHERE project_id=$1 AND task_key=$2",
         [projectId, taskKey],
       );
+      if (taskKey === "project-positioning") {
+        const bookTitle = approvedProjectBookTitle(current.rows[0].payload);
+        if (bookTitle) {
+          await client.query("UPDATE novel_projects SET title=$2,updated_at=now() WHERE id=$1", [projectId, bookTitle]);
+          await client.query(
+            "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'project.title.adopted','novel-project',$1,$3)",
+            [projectId, actor, { title: bookTitle, sourceArtifactId: artifactId, taskKey }],
+          );
+        }
+      }
       for (const stage of PROJECT_PLAN_STAGES) {
         if (!stage.dependsOn.includes(taskKey as never)) continue;
         const dependencyResult = await client.query<{ task_key: string; status: ProjectPlanStatus }>(
@@ -1364,6 +1448,88 @@ export class NovelPostgresRepository {
     return result.rows.map(artifactFromRow);
   }
 
+  async assertRuntimeObjectStoreIdentity(identity: ObjectStoreIdentity): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('ymcp-novel-v2-object-store'))");
+      const result = await client.query<{ value: ObjectStoreIdentity }>("SELECT value FROM runtime_configuration WHERE key='object-store' FOR UPDATE");
+      const recorded = result.rows[0]?.value;
+      if (recorded && recorded.fingerprint !== identity.fingerprint) {
+        throw new Error(`对象存储配置与数据库绑定不一致：数据库=${recorded.backend}:${recorded.location}，当前=${identity.backend}:${identity.location}`);
+      }
+      if (!recorded) {
+        await client.query("INSERT INTO runtime_configuration(key,value) VALUES('object-store',$1)", [identity]);
+      } else {
+        await client.query("UPDATE runtime_configuration SET updated_at=now() WHERE key='object-store'");
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listCurrentDocumentObjectKeys(): Promise<Array<{ documentId: string; title: string; objectKey: string }>> {
+    const result = await this.pool.query<{ document_id: string; title: string; object_key: string }>(
+      `SELECT d.id AS document_id,d.title,cb.object_key
+       FROM manuscript_documents d
+       JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+       JOIN content_blobs cb ON cb.content_hash=mr.content_hash
+       WHERE d.status='final'`,
+    );
+    return result.rows.map((row) => ({ documentId: row.document_id, title: row.title, objectKey: row.object_key }));
+  }
+
+  async listRunReviews(temporalWorkflowId: string) {
+    const run = await this.getWorkflowRunByTemporalId(temporalWorkflowId);
+    if (!run) return [];
+    const result = await this.pool.query<{
+      id: string; artifact_id: string; reviewer_id: string;
+      identity: "internal" | "independent" | "human";
+      verdict: "passed" | "revise" | "blocked";
+      issues: Review["issues"]; score: number | null; role: string | null;
+      created_at: Date | string;
+    }>(`
+      SELECT r.id,r.artifact_id,r.reviewer_id,r.identity,r.verdict,r.issues,r.score,r.role,r.created_at
+      FROM reviews r
+      JOIN artifacts a ON a.id=r.artifact_id
+      WHERE r.project_id=$1 AND (a.payload->>'workflowId'=$2 OR a.payload->>'runId'=$2)
+      ORDER BY r.created_at ASC,r.id ASC
+    `, [run.projectId, temporalWorkflowId]);
+    return result.rows.map((row) => ({
+      id: row.id, artifactId: row.artifact_id, reviewerId: row.reviewer_id,
+      identity: row.identity, verdict: row.verdict, issues: row.issues ?? [],
+      score: row.score === null ? undefined : Number(row.score), role: row.role ?? undefined,
+      createdAt: new Date(row.created_at).getTime(),
+    }));
+  }
+
+  async listRunOutbox(temporalWorkflowId: string, afterId = 0) {
+    const run = await this.getWorkflowRunByTemporalId(temporalWorkflowId);
+    if (!run) return [];
+    const result = await this.pool.query(`
+      WITH run_artifacts AS (
+        SELECT id FROM artifacts
+        WHERE project_id=$1 AND (payload->>'workflowId'=$2 OR payload->>'runId'=$2)
+      )
+      SELECT id,aggregate_type,aggregate_id,event_type,payload,created_at
+      FROM outbox_events
+      WHERE id>$3 AND payload->>'projectId'=$1 AND (
+        (aggregate_type='workflow-run' AND aggregate_id=$2)
+        OR payload->>'workflowId'=$2 OR payload->>'runId'=$2
+        OR payload->'source'->>'workflowId'=$2
+        OR aggregate_id IN (SELECT id FROM run_artifacts)
+        OR payload->>'artifactId' IN (SELECT id FROM run_artifacts)
+        OR payload->>'sourceArtifactId' IN (SELECT id FROM run_artifacts)
+      )
+      ORDER BY id LIMIT 200
+    `, [run.projectId, temporalWorkflowId, afterId]);
+    return result.rows;
+  }
+
   /**
    * 列出项目下所有 foundation artifacts(全书规划产出)。
    *
@@ -1675,12 +1841,12 @@ export class NovelPostgresRepository {
   async recordNarrativeElements(input: {
     projectId: string;
     artifact: Artifact;
+    revisionId: string;
     narrativeElements: NonNullable<FactExtractionOutput["narrativeElements"]>;
     /** 当前章节的叙事顺序（1-based）。用于让未兑现伏笔按叙事顺序过滤，避免剧透未来章节。 */
     narrativeOrder?: number;
   }): Promise<{ foreshadowings: number; promises: number; payoffs: number }> {
-    const { projectId, artifact, narrativeElements, narrativeOrder } = input;
-    const revisionId = artifact.id; // 用 artifact id 作为 revision 占位（fact-extraction 阶段尚未 commit）
+    const { projectId, artifact, revisionId, narrativeElements, narrativeOrder } = input;
     let foreshadowingCount = 0;
     let promiseCount = 0;
     let payoffCount = 0;
@@ -2272,9 +2438,10 @@ export class NovelPostgresRepository {
       // 原因：review.issues 是 ReviewIssue[]，pg 直接传数组到 jsonb 列时，
       // 若元素含 undefined/Date/特殊对象会触发 "invalid input syntax for type json" 错误
       // （如 "Expected ":", but found ",""）。先 JSON.stringify 为字符串，让 PostgreSQL 解析为 jsonb。
-      for (const review of input.reviews) await client.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,score,role,model_provenance) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO NOTHING", [review.id, input.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.score ?? null, review.role ?? null, review.modelProvenance ? JSON.stringify(review.modelProvenance) : null]);
+      for (const review of input.reviews) await client.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,score,role,model_provenance,dimension_scores) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO NOTHING", [review.id, input.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.score ?? null, review.role ?? null, review.modelProvenance ? JSON.stringify(review.modelProvenance) : null, JSON.stringify(review.dimensionScores ?? {})]);
       const revision = input.baseRevision + 1;
       await client.query("INSERT INTO manuscript_revisions(id,project_id,document_id,revision,base_revision,content_hash,artifact_id) VALUES($1,$2,$3,$4,$5,$6,$7)", [input.revisionId, input.projectId, input.documentId, revision, input.baseRevision, input.contentHash, input.artifact.id]);
+      await this.refreshChapterReviewSnapshotTx(client, input.artifact.id, input.revisionId);
       await client.query("UPDATE manuscript_documents SET current_revision_id=$1,status='final',updated_at=now() WHERE id=$2 AND project_id=$3", [input.revisionId, input.documentId, input.projectId]);
       await client.query(
         `UPDATE arcs a SET execution_status='completed',completed_at=now(),updated_at=now()

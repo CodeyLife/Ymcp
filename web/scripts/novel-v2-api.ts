@@ -24,6 +24,7 @@ import type { CreativeCommand, CreativeRunMode, CreativeRunPolicy } from "../src
 import { startNovelBootstrap } from "../src/novel-v2/application/bootstrap";
 import { provisionalTitle } from "../src/novel-v2/application/provisional-title";
 import { ContentObjectStore } from "../src/novel-v2/object-store";
+import { bindRuntimeObjectStore } from "../src/novel-v2/runtime-object-store";
 import { PROJECT_PLAN_STAGES, isProjectPlanTaskKey } from "../src/novel-v2/application/project-plan";
 import { parseStoryArcBundle } from "../src/novel-v2/application/story-arc";
 import { startStoryArcPlanning } from "../src/novel-v2/application/story-arc-workflow";
@@ -38,10 +39,11 @@ const repository = new NovelPostgresRepository();
 await repository.migrate();
 const { configStore: modelConfigStore, gateway: model } = await createRuntimeModelGateway(repository);
 const objectStore = new ContentObjectStore();
+await bindRuntimeObjectStore(repository, objectStore, "api");
 // API 入口的 commitService 也启用 chapter memory 创建（与 worker 保持一致）
 // 设计依据：AGENTS.md「commit-stage 对新 DocumentRevision 创建 chapter memory」契约
-const commitService = new CommitService(repository, undefined, { model });
-const promotionService = createPromotionService(repository);
+const commitService = new CommitService(repository, objectStore, { model });
+const promotionService = createPromotionService(repository, objectStore);
 const connection = await Connection.connect({ address: process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233" });
 const temporal = new Client({ connection, namespace: process.env.TEMPORAL_NAMESPACE ?? "default" });
 const port = Number(process.env.NOVEL_V2_API_PORT ?? 4770);
@@ -431,7 +433,16 @@ const server = createServer(async (request, response) => {
       const documentId = decodeURIComponent(documentContentMatch[2]);
       const content = await repository.getFinalDocumentContentRef(projectId, documentId);
       if (!content?.objectKey) return send(response, 404, { error: "章节尚无定稿正文" });
-      return send(response, 200, { documentId, title: content.title, status: content.status, revision: content.revision, contentHash: content.contentHash, plainText: await objectStore.getText(content.objectKey) });
+      try {
+        const plainText = await objectStore.getText(content.objectKey);
+        return send(response, 200, { documentId, title: content.title, status: content.status, revision: content.revision, contentHash: content.contentHash, plainText });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "NoSuchKey") {
+          return send(response, 503, { code: "CONTENT_OBJECT_MISSING", error: "定稿正文对象暂时不可用，请检查 Runtime 对象存储配置" });
+        }
+        throw error;
+      }
     }
     const bootstrapMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/bootstrap$/);
     if (request.method === "POST" && bootstrapMatch) {
@@ -679,6 +690,8 @@ const server = createServer(async (request, response) => {
     }
     const runArtifactsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/artifacts$/);
     if (request.method === "GET" && runArtifactsMatch) return send(response, 200, { artifacts: await repository.listRunArtifacts(decodeURIComponent(runArtifactsMatch[1])) });
+    const runReviewsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/reviews$/);
+    if (request.method === "GET" && runReviewsMatch) return send(response, 200, { reviews: await repository.listRunReviews(decodeURIComponent(runReviewsMatch[1])) });
     // 产物文本内容：从 object store 读取 draft/revision/summary 等产物的实际文本
     const artifactContentMatch = request.url?.match(/^\/v2\/artifacts\/([^/?]+)\/content$/);
     if (request.method === "GET" && artifactContentMatch) {
@@ -696,8 +709,7 @@ const server = createServer(async (request, response) => {
     const eventsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/events(?:\?after=(\d+))?$/);
     if (request.method === "GET" && eventsMatch) {
       const workflowId = decodeURIComponent(eventsMatch[1]);
-      const run = await repository.getWorkflowRunByTemporalId(workflowId);
-      const events = await repository.listOutbox(run?.projectId, Number(eventsMatch[2] ?? 0));
+      const events = await repository.listRunOutbox(workflowId, Number(eventsMatch[2] ?? 0));
       if (request.headers.accept?.includes("text/event-stream")) {
         response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
         for (const event of events) response.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);

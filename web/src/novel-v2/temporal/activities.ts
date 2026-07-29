@@ -360,35 +360,14 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
 
       try {
         const extractionContext = await deps.repository.getFactExtractionContext(input.projectId);
-        // Phase 3.1: 用 extractFactsWithStats 拿到 narrativeElements，在 recordFactExtraction 后调用 recordNarrativeElements
+        // Phase 3.1: 提取 claims 与正文修订派生数据；派生数据等待 commit 取得真实 revisionId 后落库。
         const result = await extractFactsWithStats({ projectId: input.projectId, artifact: factArtifact, text: input.text, model, existingContentHashes: extractionContext.contentHashes, existingClaimsIndex: extractionContext.claimsIndex, routingSnapshot: input.routingSnapshot, candidateStartIndex: input.candidateStartIndex, workflowRunId: input.workflowId, taskId: `${input.artifact.taskId}:facts:model`, skills: factExtractionSkills });
         const recorded = await deps.repository.recordFactExtraction({ projectId: input.projectId, artifact: factArtifact, claims: result.claims });
         const retrievable = recorded.filter((claim) => claim.authority !== "candidate");
         if (retrievable.length && deps.memoryIndex) await deps.memoryIndex.upsertClaims(input.projectId, retrievable);
-        // Phase 3.1: 写入叙事元素（伏笔/承诺/兑现），失败不阻塞 fact-extraction
-        if (result.narrativeElements) {
-          try {
-            await deps.repository.recordNarrativeElements({ projectId: input.projectId, artifact: factArtifact, narrativeElements: result.narrativeElements, narrativeOrder: input.narrativeOrder });
-          } catch (narrativeError) {
-            console.warn(`[extractFacts] narrativeElements 写入失败（不阻塞 fact-extraction）：${(narrativeError as Error).message}`);
-          }
-        }
-        // Phase 3.2: 写入爽点曲线，失败不阻塞 fact-extraction
-        // 需要 documentId + narrativeOrder（由 workflow 传入），缺失时跳过
-        if (result.payoffMoments?.length && input.documentId && input.narrativeOrder !== undefined) {
-          try {
-            await deps.repository.recordPayoffCurve({
-              projectId: input.projectId,
-              documentId: input.documentId,
-              revisionId: factArtifact.id,
-              narrativeOrder: input.narrativeOrder,
-              payoffMoments: result.payoffMoments,
-            });
-          } catch (payoffError) {
-            console.warn(`[extractFacts] payoffCurve 写入失败（不阻塞 fact-extraction）：${(payoffError as Error).message}`);
-          }
-        }
-        return { kind: "completed", artifact: factArtifact };
+        // 爽点是正文 revision 的派生记录。此阶段尚未创建 manuscript revision，
+        // 只把提取结果随 artifact 返回，统一由 CommitService 在 commit 后落库。
+        return { kind: "completed", artifact: { ...factArtifact, structuredData: { ...factArtifact.structuredData, narrativeElements: result.narrativeElements, payoffMoments: result.payoffMoments ?? [] } } };
       } catch (error) {
         if (!(error instanceof ExternalMcpRequiredError)) throw error;
         const prompt = buildFactExtractionPrompt({ artifact: factArtifact, text: input.text, skills: factExtractionSkills });
@@ -405,29 +384,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const recorded = await deps.repository.recordFactExtraction({ projectId: input.projectId, artifact: input.artifact, claims: projected.claims });
       const retrievable = recorded.filter((claim) => claim.authority !== "candidate");
       if (retrievable.length && deps.memoryIndex) await deps.memoryIndex.upsertClaims(input.projectId, retrievable);
-      // Phase 3.1: 外部 MCP 路径也写入 narrativeElements
-      if (projected.narrativeElements) {
-        try {
-          await deps.repository.recordNarrativeElements({ projectId: input.projectId, artifact: input.artifact, narrativeElements: projected.narrativeElements, narrativeOrder: input.narrativeOrder });
-        } catch (narrativeError) {
-          console.warn(`[materializeExternalFacts] narrativeElements 写入失败：${(narrativeError as Error).message}`);
-        }
-      }
-      // Phase 3.2: 外部 MCP 路径也写入 payoffCurve
-      if (projected.payoffMoments?.length && input.documentId && input.narrativeOrder !== undefined) {
-        try {
-          await deps.repository.recordPayoffCurve({
-            projectId: input.projectId,
-            documentId: input.documentId,
-            revisionId: input.artifact.id,
-            narrativeOrder: input.narrativeOrder,
-            payoffMoments: projected.payoffMoments,
-          });
-        } catch (payoffError) {
-          console.warn(`[materializeExternalFacts] payoffCurve 写入失败：${(payoffError as Error).message}`);
-        }
-      }
-      return input.artifact;
+      return { ...input.artifact, structuredData: { ...input.artifact.structuredData, narrativeElements: projected.narrativeElements, payoffMoments: projected.payoffMoments ?? [] } };
     },
     approveFacts: (input: { workflowId: string; projectId: string; artifact: Artifact }) =>
       deps.repository.recordFactApprovalPolicy({ workflowId: input.workflowId, projectId: input.projectId, artifactId: input.artifact.id }),
@@ -460,8 +417,8 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const assessment = parseRuntimeLearningAssessmentV2(task.result?.value, { id: `learning:${input.artifact.id}`, projectId: input.projectId, source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: input.reviews.map((review) => review.id), fingerprint: input.artifact.fingerprint }, createdAt: Date.now() });
       return recordLearning(assessment);
     },
-    commit: (input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commit(input),
-    commitAuthorApproved: (input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commitAuthorApproved(input),
+    commit: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commit({ ...input, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined }),
+    commitAuthorApproved: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commitAuthorApproved({ ...input, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined }),
     /** P0 #1: 人工事实审批门通过后，批量批准 pending 事实候选（candidate → approved）。
      *  内部同时写回 Qdrant 向量索引，与 recordFactExtraction 模式一致；
      *  Qdrant 失败不阻塞（PostgreSQL 真源已保留），只警告。 */

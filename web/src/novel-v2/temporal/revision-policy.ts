@@ -1,5 +1,13 @@
 import type { Review } from "../protocol";
 
+export const REQUIRED_CHAPTER_REVIEWERS = [
+  { role: "plot-reviewer", identity: "internal" },
+  { role: "continuity-reviewer", identity: "internal" },
+  { role: "style-reviewer", identity: "independent" },
+  { role: "character-reviewer", identity: "independent" },
+  { role: "reader-reviewer", identity: "independent" },
+] as const;
+
 /**
  * V2 修订决策模块。
  *
@@ -68,12 +76,18 @@ export function allReviewsPassed(reviews: Review[]): boolean {
 
 export function evaluateCommitGate(reviews: Review[], artifactFingerprint: string) {
   const currentReviews = reviews.filter((review) => review.artifactFingerprint === artifactFingerprint);
+  const requiredReviews = REQUIRED_CHAPTER_REVIEWERS.map(({ role, identity }) =>
+    currentReviews.find((review) => review.role === role && review.identity === identity),
+  );
+  const missingRoles = REQUIRED_CHAPTER_REVIEWERS
+    .filter((_, index) => !requiredReviews[index])
+    .map(({ role }) => role);
   return {
-    passed: allReviewsPassed(currentReviews)
-      && currentReviews.some((review) => review.identity === "internal")
-      && currentReviews.some((review) => review.identity === "independent"),
+    passed: missingRoles.length === 0
+      && requiredReviews.every((review) => review?.verdict === "passed"),
     reviewIds: currentReviews.map((review) => review.id),
     failedReviewIds: currentReviews.filter((review) => review.verdict !== "passed").map((review) => review.id),
+    missingRoles,
   };
 }
 

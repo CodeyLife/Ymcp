@@ -26,10 +26,13 @@ Required local defaults are already provided by `scripts/dev-v2.mjs` and `docker
 - `DATABASE_URL=postgresql://ymcp:ymcp@127.0.0.1:5432/ymcp`
 - `TEMPORAL_ADDRESS=127.0.0.1:7233`
 - `QDRANT_URL=http://127.0.0.1:6333`
+- `NOVEL_OBJECT_BACKEND=s3`
 - `S3_ENDPOINT=http://127.0.0.1:9000`
 - `S3_BUCKET=ymcp-novel`
 
-If `S3_ENDPOINT` / MinIO credentials are missing, `ContentObjectStore` falls back to local `.data/objects` for developer-only runs. Compose-backed V2 development should use MinIO.
+Runtime object storage is fail-closed. `NOVEL_OBJECT_BACKEND` must be explicitly set to `s3` or `file`; S3 requires a complete endpoint, bucket, and credential set, while file storage requires an absolute `NOVEL_OBJECT_ROOT`. The API and Worker bind the selected storage identity to PostgreSQL and refuse to start if another endpoint, bucket, or file root is later used with the same database. They also verify every current final manuscript object before accepting work.
+
+Use `npm run dev`, `npm run novel:v2:api`, or `npm run novel:v2:worker` so both services receive the same local MinIO defaults. Invoking the TypeScript entrypoints directly without an explicit object-store configuration is intentionally rejected.
 
 ## HTTP surface
 

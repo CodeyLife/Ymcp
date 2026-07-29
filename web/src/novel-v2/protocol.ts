@@ -334,6 +334,8 @@ export interface Review {
   issues: ReviewIssue[];
   /** 综合质量分数（0-5），由 revision-policy.scoreReviews 计算。 */
   score?: number;
+  /** 审核模型输出的八维原始分数；章节快照只采纳各 reviewer 的职责维度。 */
+  dimensionScores?: Partial<Record<import("./prompts/schemas").ReviewDimension, number>>;
   /** reviewer 角色（style/character/continuity/plot/reader）。 */
   role?: string;
   createdAt: number;

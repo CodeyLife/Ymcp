@@ -7,6 +7,7 @@ import { createRuntimeModelGateway } from "../src/novel-v2/model-runtime";
 import { QdrantMemoryProvider } from "../src/novel-v2/qdrant-memory";
 import { createFusionMemoryProvider } from "../src/novel-v2/fusion-memory";
 import { ContentObjectStore } from "../src/novel-v2/object-store";
+import { bindRuntimeObjectStore } from "../src/novel-v2/runtime-object-store";
 
 const repository = new NovelPostgresRepository();
 await repository.migrate();
@@ -14,6 +15,7 @@ const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? "http://127.0.0
 const { gateway: modelGateway } = await createRuntimeModelGateway(repository);
 const qdrantMemory = new QdrantMemoryProvider(qdrant, modelGateway);
 const objectStore = new ContentObjectStore();
+await bindRuntimeObjectStore(repository, objectStore, "worker");
 const workflowsPath = fileURLToPath(new URL("../src/novel-v2/temporal/workflows.ts", import.meta.url));
 
 // P2-G2: 三轨加权融合（semantic 0.5 + lexical 0.3 + graph 0.2）

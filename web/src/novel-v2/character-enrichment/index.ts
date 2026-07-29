@@ -224,8 +224,35 @@ export async function persistCharacterEnrichment(input: { projectId: string; doc
     // 3c. UPSERT relations（关系变化）
     // P1-D3: subject_id/object_id 使用 entityId 格式（与 entities.id 对齐），
     // 让 GraphMemoryProvider 的 BFS/DFS 能正确串联 entities 和 relations。
+    //
+    // P1-D4: relations.object_id 有 FK 约束引用 entities.id（010_fk_cascade.sql）。
+    // relationDeltas 的 targetCharacterId 通常是本章"被提及但未作为富化主体"的角色
+    // （如配角、首次出场角色），其 entity 可能尚未创建。原实现只对 subject 创建 entity，
+    // 导致 relations INSERT 触发 FK 违反（observed: 江南男子/苏晚意 不在 entities 表），
+    // 进而让 enrichCharacters activity 重试 3 次后失败、整个章节 workflow 终止。
+    //
+    // 根因（AGENTS.md「root-cause analysis」）：relations 要求两端 entity 都存在，
+    // 这是数据模型层的引用完整性约束，而非单点 bug——任何"关系指向未富化角色"的章节
+    // 都会触发同一类失败。修复在最低共享层（persistCharacterEnrichment 回写逻辑）：
+    // 插入 relation 前对 object entity 做幂等 UPSERT（ON CONFLICT DO NOTHING）。
+    // 已存在的 entity 不覆盖（保留历史富化数据），新 entity 写入 stub 标记
+    // （payload.pendingEnrichment=true），待后续章节把它作为主体富化时补全
+    // voiceAnchor/motivation。本修复题材无关，覆盖所有"关系指向未富化角色"的输入类。
+    // 回归风险：无——ON CONFLICT DO NOTHING 对已存在 entity 无副作用；新 stub entity
+    // 仅满足 FK + 图遍历可达性，不影响 character-reviewer（它按 subject 富化数据审校）。
     for (const relation of delta.relationDeltas) {
       const objectEntityId = `entity:${input.projectId}:character:${relation.targetCharacterId}`;
+      await deps.repository.pool.query(
+        `INSERT INTO entities(id, project_id, kind, name, payload)
+         VALUES($1, $2, 'character', $3, $4)
+         ON CONFLICT(id) DO NOTHING`,
+        [
+          objectEntityId,
+          input.projectId,
+          relation.targetCharacterId,
+          { autoCreated: true, autoCreatedFrom: "relation", sourceRevisionId: input.revisionId, narrativeOrder: input.narrativeOrder, pendingEnrichment: true },
+        ],
+      );
       const relationId = `relation:${input.projectId}:${subjectEntityId}:${relation.predicate}:${objectEntityId}:${input.revisionId}`;
       await deps.repository.pool.query(
         `INSERT INTO relations(id, project_id, subject_id, predicate, object_id, valid_from, source_revision_id)

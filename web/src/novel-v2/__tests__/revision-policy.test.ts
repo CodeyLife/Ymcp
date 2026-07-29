@@ -97,16 +97,32 @@ describe("revision-policy classification helpers", () => {
       passed: false,
       reviewIds: ["internal", "independent"],
       failedReviewIds: ["internal"],
+      missingRoles: ["plot-reviewer", "continuity-reviewer", "character-reviewer", "reader-reviewer"],
     });
   });
 
-  it("allows formal commit only when both reviewer identities pass the current artifact", () => {
+  it("rejects two passing identities when three reviewer roles never returned", () => {
     const reviews = [
-      makeReview({ id: "internal", identity: "internal" }),
-      makeReview({ id: "independent", identity: "independent" }),
+      makeReview({ id: "internal", role: "plot-reviewer", identity: "internal" }),
+      makeReview({ id: "independent", role: "style-reviewer", identity: "independent" }),
     ];
 
-    expect(evaluateCommitGate(reviews, artifact.fingerprint).passed).toBe(true);
+    expect(evaluateCommitGate(reviews, artifact.fingerprint)).toMatchObject({
+      passed: false,
+      missingRoles: ["continuity-reviewer", "character-reviewer", "reader-reviewer"],
+    });
+  });
+
+  it("allows formal commit only when all five assigned reviewer roles pass", () => {
+    const reviews = [
+      makeReview({ id: "plot", role: "plot-reviewer", identity: "internal" }),
+      makeReview({ id: "continuity", role: "continuity-reviewer", identity: "internal" }),
+      makeReview({ id: "style", role: "style-reviewer", identity: "independent" }),
+      makeReview({ id: "character", role: "character-reviewer", identity: "independent" }),
+      makeReview({ id: "reader", role: "reader-reviewer", identity: "independent" }),
+    ];
+
+    expect(evaluateCommitGate(reviews, artifact.fingerprint)).toMatchObject({ passed: true, missingRoles: [] });
   });
 });
 

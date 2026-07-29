@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 const env = {
   ...process.env,
+  NOVEL_OBJECT_BACKEND: process.env.NOVEL_OBJECT_BACKEND ?? "s3",
   POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD ?? "ymcp",
   MINIO_ROOT_USER: process.env.MINIO_ROOT_USER ?? "ymcp",
   MINIO_ROOT_PASSWORD: process.env.MINIO_ROOT_PASSWORD ?? "ymcp-minio-local",

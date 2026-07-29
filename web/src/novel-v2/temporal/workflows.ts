@@ -80,8 +80,8 @@ export interface NovelWorkflowActivities {
   approveFactClaims(input: { projectId: string; ids: string[] }): Promise<MemoryClaim[]>;
   assessLearning(input: { projectId: string; workflowId: string; assessmentKey: string; artifact: Artifact; reviews: Review[]; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; assessment: RuntimeLearningAssessmentV2 } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalLearning(input: { modelTaskId: string; projectId: string; workflowId: string; artifact: Artifact; reviews: Review[] }): Promise<RuntimeLearningAssessmentV2>;
-  commit(input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }): Promise<CommitResult>;
-  commitAuthorApproved(input: { projectId: string; documentId: string; artifact: Artifact; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }): Promise<CommitResult>;
+  commit(input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }): Promise<CommitResult>;
+  commitAuthorApproved(input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }): Promise<CommitResult>;
   // 角色富化 activity（C-2.5）：commit 之后执行，回写角色档案
   // 设计依据：AGENTS.md「commitStageHandler → characterEnrichmentStageHandler」契约
   enrichCharacters(input: { workflowId: string; projectId: string; documentId: string; revisionId: string; narrativeOrder: number; artifact: Artifact; text: string; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; result: { entityUpdates: number; knowledgeClaims: number; relationRecords: number } } | { kind: "external"; task: ModelTaskRecord }>;
@@ -142,10 +142,10 @@ const INDEPENDENT_REVIEWERS: ReviewerRole[] = ["style-reviewer", "character-revi
  * 运行所有 5 种 reviewer 并返回 Review 列表。
  *
  * 容错策略：使用 Promise.allSettled 而非 Promise.all，单个 reviewer 失败（如 LLM empty-response）
- * 不阻塞其他 reviewer。失败的 reviewer 被跳过，只返回成功的 review。
+ * 不阻塞其他 reviewer 提供修订反馈。失败的 reviewer 不生成伪回执，最终 commit gate
+ * 会因缺失角色而进入人工队列，绝不会把部分审核当成完整五审。
  * 如果全部 reviewer 都失败，抛出最后一个错误（无法在 0 条 review 下做 revision 决策）。
- * 设计依据：AGENTS.md「root-cause analysis」——单个 reviewer 的 LLM 调用失败不应
- * 阻塞整个章节生成流程；revision 可以基于部分 review 完成。
+ * 设计依据：单个调用失败不应丢失其他 reviewer 的反馈，但正式提交必须完整五审。
  */
 async function runAllReviewers(params: { workflowId: string; blueprintId: string; runReview: (role: ReviewerRole, identity: "internal" | "independent") => Promise<Review> }): Promise<Review[]> {
   const { workflowId, blueprintId } = params;
@@ -412,7 +412,7 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
       assessLearning: runLearning,
       extractFacts: runFactExtraction,
       approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: intent.projectId, artifact: factArtifact }),
-      commit: (current, reviewList) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, text: current.text, reviews: reviewList, baseRevision: blueprint.baseRevision, idempotencyKey: intent.idempotencyKey }),
+      commit: (current, reviewList, factArtifact) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, baseRevision: blueprint.baseRevision, idempotencyKey: intent.idempotencyKey }),
       enrich: (current, commitResult) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder),
       progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
       beforeRevision: (revisionIteration) => activities.updateTaskAttempt({ id: `${blueprint.id}:revise:attempt-${revisionIteration}`, workflowRunId: workflowId, taskId: `${blueprint.id}:revise`, status: "running", payload: { taskKind: "revise", iteration: revisionIteration } }).then(() => undefined),
@@ -436,17 +436,18 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
         projectId: intent.projectId,
         draft: lifecycle.draft,
         reviews: lifecycle.reviews,
-        commit: (current, reviewList) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, text: current.text, reviews: reviewList, baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:fact-approved` }),
+        commit: (current, reviewList, factArtifact) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:fact-approved` }),
         enrich: (current, commitResult) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder),
         assessLearning: runLearning,
         progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
+        factArtifact: lifecycle.factApprovalBlocked.factArtifact,
       });
       await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, finalScore: lifecycle.finalScore, factApproved: true, authorId: humanDecision!.authorId, enrichmentError: finalized.enrichmentError } });
       return blueprint;
     }
 
     if (!lifecycle.commitResult) {
-      await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { blueprintId: blueprint.id, signalCount: signals.length, iterations: lifecycle.iteration, finalScore: lifecycle.finalScore, artifactId: lifecycle.draft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds, reasonCode: lifecycle.commitBlocked?.reasonCode ?? "quality-gate-not-passed", ...lifecycle.commitBlocked } });
+      await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { blueprintId: blueprint.id, signalCount: signals.length, iterations: lifecycle.iteration, finalScore: lifecycle.finalScore, artifactId: lifecycle.draft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds, missingReviewerRoles: lifecycle.commitGate.missingRoles, reasonCode: lifecycle.commitBlocked?.reasonCode ?? "quality-gate-not-passed", ...lifecycle.commitBlocked } });
       await condition(() => humanDecision !== undefined);
       if (humanDecision!.decision === "reject") {
         await activities.updateWorkflowStatus({ workflowId, status: "rejected", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, authorId: humanDecision!.authorId, feedback: humanDecision!.feedback } });
@@ -455,7 +456,7 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
       const factArtifact = await runFactExtraction(lifecycle.draft);
       await activities.approveFacts({ workflowId, projectId: intent.projectId, artifact: factArtifact });
       const authorReview: Review = { id: `author-approval:${workflowId}`, projectId: intent.projectId, artifactId: lifecycle.draft.artifact.id, reviewerId: humanDecision!.authorId, identity: "human", verdict: "passed", issues: [], artifactFingerprint: lifecycle.draft.artifact.fingerprint, createdAt: Date.now() };
-      const authorCommit = await activities.commitAuthorApproved({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: lifecycle.draft.artifact, text: lifecycle.draft.text, reviews: [...lifecycle.reviews, authorReview], baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:author-approved` });
+      const authorCommit = await activities.commitAuthorApproved({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: lifecycle.draft.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: lifecycle.draft.text, reviews: [...lifecycle.reviews, authorReview], baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:author-approved` });
       await runEnrichCharacters(lifecycle.draft, authorCommit.revisionId, snapshot.targetDocumentOrder);
       await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, finalScore: lifecycle.finalScore, authorApproved: true, authorId: humanDecision!.authorId } });
       return blueprint;
@@ -1059,7 +1060,7 @@ export async function chapterReviewWorkflow(params: {
       assessLearning: runLearning,
       extractFacts: runFactExtraction,
       approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: params.projectId, artifact: factArtifact }),
-      commit: (current, reviewList) => activities.commit({ projectId: params.projectId, documentId: params.documentId, artifact: current.artifact, text: current.text, reviews: reviewList, baseRevision: documentState.baseRevision, idempotencyKey: workflowId }),
+      commit: (current, reviewList, factArtifact) => activities.commit({ projectId: params.projectId, documentId: params.documentId, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, baseRevision: documentState.baseRevision, idempotencyKey: workflowId }),
       enrich: (current, commitResult) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder),
       progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
     });
@@ -1068,7 +1069,7 @@ export async function chapterReviewWorkflow(params: {
     finalScore = lifecycle.finalScore;
 
     if (!lifecycle.commitResult) {
-      await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { documentId: params.documentId, iteration, finalScore, artifactId: currentDraft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds, reasonCode: "quality-gate-not-passed" } });
+      await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { documentId: params.documentId, iteration, finalScore, artifactId: currentDraft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds, missingReviewerRoles: lifecycle.commitGate.missingRoles, reasonCode: "quality-gate-not-passed" } });
       await condition(() => humanDecision !== undefined);
       if (humanDecision!.decision === "reject") {
         await activities.updateWorkflowStatus({ workflowId, status: "rejected", payload: { documentId: params.documentId, artifactId: currentDraft.artifact.id, authorId: humanDecision!.authorId, feedback: humanDecision!.feedback } });
@@ -1077,7 +1078,7 @@ export async function chapterReviewWorkflow(params: {
       const factArtifact = await runFactExtraction(currentDraft);
       await activities.approveFacts({ workflowId, projectId: params.projectId, artifact: factArtifact });
       const authorReview: Review = { id: `author-approval:${workflowId}`, projectId: params.projectId, artifactId: currentDraft.artifact.id, reviewerId: humanDecision!.authorId, identity: "human", verdict: "passed", issues: [], artifactFingerprint: currentDraft.artifact.fingerprint, createdAt: Date.now() };
-      const authorCommit = await activities.commitAuthorApproved({ projectId: params.projectId, documentId: params.documentId, artifact: currentDraft.artifact, text: currentDraft.text, reviews: [...lifecycle.reviews, authorReview], baseRevision: documentState.baseRevision, idempotencyKey: `${workflowId}:author-approved` });
+      const authorCommit = await activities.commitAuthorApproved({ projectId: params.projectId, documentId: params.documentId, artifact: currentDraft.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: currentDraft.text, reviews: [...lifecycle.reviews, authorReview], baseRevision: documentState.baseRevision, idempotencyKey: `${workflowId}:author-approved` });
       await runEnrichCharacters(currentDraft, authorCommit.revisionId, snapshot.targetDocumentOrder);
       await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { documentId: params.documentId, iteration, finalScore, authorApproved: true, authorId: humanDecision!.authorId } });
       return;

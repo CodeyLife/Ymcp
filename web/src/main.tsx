@@ -2,6 +2,7 @@ import "@/lib/migrateLegacy";
 import "@ant-design/v5-patch-for-react-19";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
+import "@fontsource-variable/outfit";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
@@ -30,7 +31,7 @@ createRoot(document.getElementById("root")!).render(
             colorTextSecondary: "#a1a1aa",
             borderRadius: 8,
             fontFamily:
-              '"Geist", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif',
+              '"Geist Variable", "Geist", system-ui, -apple-system, "Segoe UI", sans-serif',
           },
           components: {
             Layout: {

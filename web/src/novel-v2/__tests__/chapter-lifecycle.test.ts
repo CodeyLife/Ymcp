@@ -15,19 +15,30 @@ const artifact: Artifact = {
   createdAt: 1,
 };
 
-function review(id: string, identity: Review["identity"], verdict: Review["verdict"], warning = false): Review {
+function review(id: string, identity: Review["identity"], verdict: Review["verdict"], warning = false, role?: string): Review {
   return {
     id,
     projectId: artifact.projectId,
     artifactId: artifact.id,
     reviewerId: id,
     identity,
+    role,
     verdict,
     issues: warning ? [{ severity: "warning", title: "可微调", evidence: "段落 1" }] : [],
     score: verdict === "passed" ? 5 : 4,
     artifactFingerprint: artifact.fingerprint,
     createdAt: 2,
   };
+}
+
+function fivePassedReviews(): Review[] {
+  return [
+    review("plot", "internal", "passed", false, "plot-reviewer"),
+    review("continuity", "internal", "passed", false, "continuity-reviewer"),
+    review("style", "independent", "passed", false, "style-reviewer"),
+    review("character", "independent", "passed", false, "character-reviewer"),
+    review("reader", "independent", "passed", false, "reader-reviewer"),
+  ];
 }
 
 function baseParams(reviews: Review[], events: string[]) {
@@ -76,10 +87,7 @@ describe("runChapterLifecycle", () => {
 
   it("commits and enriches only after current-artifact internal and independent reviews pass", async () => {
     const events: string[] = [];
-    const params = baseParams([
-      review("internal", "internal", "passed"),
-      review("independent", "independent", "passed"),
-    ], events);
+    const params = baseParams(fivePassedReviews(), events);
 
     const result = await runChapterLifecycle(params);
 
@@ -90,10 +98,7 @@ describe("runChapterLifecycle", () => {
 
   it("returns factApprovalBlocked without committing when manual mode has pending facts", async () => {
     const events: string[] = [];
-    const params = baseParams([
-      review("internal", "internal", "passed"),
-      review("independent", "independent", "passed"),
-    ], events);
+    const params = baseParams(fivePassedReviews(), events);
     // manual 模式 + pending>0：应提前返回 factApprovalBlocked，不进入 commit/enrich
     params.approveFacts = vi.fn(async (): Promise<FactApprovalSummary> => {
       events.push("fact-approval");
@@ -103,7 +108,7 @@ describe("runChapterLifecycle", () => {
 
     const result = await runChapterLifecycle(params);
 
-    expect(result.factApprovalBlocked).toEqual({ pendingIds: ["claim-pending-1"] });
+    expect(result.factApprovalBlocked).toEqual({ pendingIds: ["claim-pending-1"], factArtifact: artifact });
     expect(result.commitResult).toBeUndefined();
     expect(params.commit).not.toHaveBeenCalled();
     expect(params.enrich).not.toHaveBeenCalled();
@@ -113,10 +118,7 @@ describe("runChapterLifecycle", () => {
 
   it("commits normally in manual mode when no pending facts exist", async () => {
     const events: string[] = [];
-    const params = baseParams([
-      review("internal", "internal", "passed"),
-      review("independent", "independent", "passed"),
-    ], events);
+    const params = baseParams(fivePassedReviews(), events);
     // manual 模式但 pending=0：应正常走 commit/enrich，与默认模式行为一致
     params.requireManualFactApproval = true;
 
@@ -130,10 +132,7 @@ describe("runChapterLifecycle", () => {
 
   it("runs post-commit learning when a manually approved fact gate resumes", async () => {
     const events: string[] = [];
-    const params = baseParams([
-      review("internal", "internal", "passed"),
-      review("independent", "independent", "passed"),
-    ], events);
+    const params = baseParams(fivePassedReviews(), events);
 
     const result = await finalizeChapterLifecycle({
       projectId: params.projectId,

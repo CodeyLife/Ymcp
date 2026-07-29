@@ -1,5 +1,5 @@
 import type { Artifact, CommitResult, FactApprovalSummary, Review, RuntimeLearningAssessmentV2 } from "../protocol";
-import { DEFAULT_MAX_AUTO_REVISIONS, decideRevision, evaluateCommitGate } from "../temporal/revision-policy";
+import { DEFAULT_MAX_AUTO_REVISIONS, decideRevision, evaluateCommitGate, hasBlocker, scoreReviews } from "../temporal/revision-policy";
 
 export type ChapterDraftState = { artifact: Artifact; text: string };
 
@@ -13,7 +13,7 @@ export interface ChapterLifecycleResult {
   enrichmentError?: string;
   commitBlocked?: Record<string, unknown>;
   /** P0 #1：opt-in 人工事实审批门触发时返回（factApprovalMode="manual" 且存在 pending 事实）。 */
-  factApprovalBlocked?: { pendingIds: string[] };
+  factApprovalBlocked?: { pendingIds: string[]; factArtifact: Artifact };
 }
 
 function failureMessage(error: unknown): string {
@@ -24,12 +24,13 @@ export async function finalizeChapterLifecycle(params: {
   projectId: string;
   draft: ChapterDraftState;
   reviews: Review[];
-  commit(current: ChapterDraftState, reviews: Review[]): Promise<CommitResult>;
+  commit(current: ChapterDraftState, reviews: Review[], factArtifact?: Artifact): Promise<CommitResult>;
   enrich(current: ChapterDraftState, commitResult: CommitResult): Promise<void>;
   assessLearning(current: ChapterDraftState, reviews: Review[]): Promise<RuntimeLearningAssessmentV2>;
   progress(payload: Record<string, unknown>): Promise<unknown>;
+  factArtifact?: Artifact;
 }): Promise<{ commitResult: CommitResult; enrichmentError?: string }> {
-  const commitResult = await params.commit(params.draft, params.reviews);
+  const commitResult = await params.commit(params.draft, params.reviews, params.factArtifact);
   let enrichmentError: string | undefined;
   try {
     await params.enrich(params.draft, commitResult);
@@ -66,7 +67,7 @@ export async function runChapterLifecycle(params: {
   assessLearning(current: ChapterDraftState, reviews: Review[]): Promise<RuntimeLearningAssessmentV2>;
   extractFacts(current: ChapterDraftState): Promise<Artifact>;
   approveFacts(factArtifact: Artifact, current: ChapterDraftState): Promise<FactApprovalSummary>;
-  commit(current: ChapterDraftState, reviews: Review[]): Promise<CommitResult>;
+  commit(current: ChapterDraftState, reviews: Review[], factArtifact: Artifact): Promise<CommitResult>;
   enrich(current: ChapterDraftState, commitResult: CommitResult): Promise<void>;
   progress(payload: Record<string, unknown>): Promise<unknown>;
   beforeRevision?(iteration: number): Promise<void>;
@@ -79,6 +80,18 @@ export async function runChapterLifecycle(params: {
   let reviews = await params.review(draft);
   let previousScore: number | undefined;
   let iteration = 0;
+  // Best-draft tracking: auto-revision can degrade quality (observed: 4.9 → 4.0,
+  // improvement -0.90). The revision loop correctly stops on degradation, but
+  // previously kept the degraded draft. Tracking the best version across all
+  // iterations ensures commit/fact-extraction/learning always use the best draft.
+  //
+  // "Better" is defined as: no-blocker always beats has-blocker; within the same
+  // blocker status, higher score wins. This prevents reverting to a blocker draft
+  // when the revision removed the blocker but lowered the overall score.
+  let bestDraft = draft;
+  let bestReviews = reviews;
+  let bestScore = scoreReviews(reviews);
+  let bestHasBlocker = hasBlocker(reviews);
 
   while (true) {
     const decision = decideRevision({ reviews, iteration, maxIterations: DEFAULT_MAX_AUTO_REVISIONS, previousScore });
@@ -91,6 +104,25 @@ export async function runChapterLifecycle(params: {
     previousScore = decision.currentScore;
     iteration += 1;
     reviews = await params.review(draft);
+
+    // Update best-draft tracking if this revision is strictly better.
+    const revisedScore = scoreReviews(reviews);
+    const revisedHasBlocker = hasBlocker(reviews);
+    const isBetter = (!revisedHasBlocker && bestHasBlocker)
+      || (revisedHasBlocker === bestHasBlocker && revisedScore > bestScore);
+    if (isBetter) {
+      bestScore = revisedScore;
+      bestHasBlocker = revisedHasBlocker;
+      bestDraft = draft;
+      bestReviews = reviews;
+    }
+  }
+
+  // If auto-revision degraded quality, revert to the best-scoring draft.
+  if (bestDraft !== draft) {
+    await params.progress({ stage: "revision-reverted", iteration, reason: `修订降低质量，回退至最佳版本 score=${bestScore.toFixed(2)} blocker=${bestHasBlocker}` });
+    draft = bestDraft;
+    reviews = bestReviews;
   }
 
   await params.assessLearning(draft, reviews);
@@ -105,7 +137,7 @@ export async function runChapterLifecycle(params: {
   const factApproval = await params.approveFacts(factArtifact, draft);
   // P0 #1: opt-in 人工事实审批门。存在 pending 事实时提前返回，交由工作流等待作者确认。
   if (params.requireManualFactApproval && factApproval.pending > 0) {
-    return { draft, reviews, iteration, finalScore: finalDecision.currentScore, commitGate, factApprovalBlocked: { pendingIds: factApproval.pendingIds } };
+    return { draft, reviews, iteration, finalScore: finalDecision.currentScore, commitGate, factApprovalBlocked: { pendingIds: factApproval.pendingIds, factArtifact } };
   }
   const { commitResult, enrichmentError } = await finalizeChapterLifecycle({
     projectId: params.projectId,
@@ -115,6 +147,7 @@ export async function runChapterLifecycle(params: {
     enrich: params.enrich,
     assessLearning: params.assessLearning,
     progress: params.progress,
+    factArtifact,
   });
   return { draft, reviews, iteration, finalScore: finalDecision.currentScore, commitGate, commitResult, enrichmentError };
 }

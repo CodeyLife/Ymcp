@@ -18,12 +18,22 @@ function memory(facets: Array<"fact" | "entity" | "thread" | "foreshadowing" | "
 }
 
 describe("V2 memory coverage gate", () => {
-  it("blocks revision when fact or prior chapter memory is unavailable", () => {
-    expect(() => compileExecutionBlueprint(intent, plan, memory(["entity"]), skills, { projectId: "p1", currentRevision: 2, targetDocumentOrder: 10 })).toThrow(/缺少记忆维度/);
+  it("routes missing critical memory to manual review instead of allowing automatic commit", () => {
+    const blueprint = compileExecutionBlueprint(intent, plan, memory(["entity"]), skills, { projectId: "p1", currentRevision: 2, targetDocumentOrder: 10 });
+    expect(blueprint.memoryGate).toEqual({
+      status: "manual-review",
+      missingFacets: ["fact", "thread", "foreshadowing", "chapter-memory"],
+      manualReviewFacets: ["fact", "thread", "foreshadowing", "chapter-memory"],
+    });
   });
 
   it("routes incomplete secondary context to manual review instead of silent degradation", () => {
     const blueprint = compileExecutionBlueprint(intent, plan, memory(["fact", "chapter-memory"]), skills, { projectId: "p1", currentRevision: 2, targetDocumentOrder: 10 });
     expect(blueprint.memoryGate).toEqual({ status: "manual-review", missingFacets: ["entity", "thread", "foreshadowing"], manualReviewFacets: ["entity", "thread", "foreshadowing"] });
+  });
+
+  it("passes the memory gate when every requested facet is available", () => {
+    const blueprint = compileExecutionBlueprint(intent, plan, memory(["fact", "entity", "thread", "foreshadowing", "chapter-memory"]), skills, { projectId: "p1", currentRevision: 2, targetDocumentOrder: 10 });
+    expect(blueprint.memoryGate).toEqual({ status: "passed", missingFacets: [], manualReviewFacets: [] });
   });
 });

@@ -52,10 +52,14 @@ describe("V2 cognition compiler", () => {
     expect(blueprint.factApprovalMode).toBe("manual");
   });
 
-  it("rejects high-risk execution when required memory is missing", async () => {
+  it("marks high-risk execution for manual review when required memory is missing", async () => {
     const plan = createPreflightPlan(intent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12, povCharacterId: "hero" });
     const memory = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [] } });
     const skills = await resolveSkillBundle(plan, memory, { projectId: "p1", provider: { list: async () => [] } satisfies SkillProvider });
-    expect(() => compileExecutionBlueprint(intent, plan, memory, skills, { projectId: "p1", currentRevision: 7 })).toThrow(/缺少记忆维度/);
+    const blueprint = compileExecutionBlueprint(intent, plan, memory, skills, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 });
+    expect(blueprint.memoryGate).toMatchObject({
+      status: "manual-review",
+      manualReviewFacets: expect.arrayContaining(["fact", "chapter-memory"]),
+    });
   });
 });

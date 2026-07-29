@@ -6,6 +6,14 @@ import type { ModelGateway } from "./model-gateway";
 import type { ModelRoutingSnapshot } from "./model-routing";
 import type { MemoryIndex } from "./qdrant-memory";
 import { createChapterMemoryFromRevision } from "./chapter-memory";
+import { evaluateCommitGate } from "./temporal/revision-policy";
+import type { FactExtractionOutput } from "./prompts/schemas";
+
+type CommitDerivedData = {
+  payoffMoments?: FactExtractionOutput["payoffMoments"];
+  narrativeElements?: FactExtractionOutput["narrativeElements"];
+  narrativeOrder?: number;
+};
 
 /**
  * V2 Commit Service：负责章节定稿提交 + chapter memory 创建。
@@ -13,7 +21,7 @@ import { createChapterMemoryFromRevision } from "./chapter-memory";
  * 设计依据：AGENTS.md「commit-stage 对新 DocumentRevision 创建 chapter memory」契约。
  *
  * 流程：
- * 1. 双门审核（internal + independent）：必须同时具备当前 artifact 的内部门和独立门证据
+ * 1. 五角色审核：必须具备当前 artifact 的全部角色通过证据
  * 2. 写入 objectStore（正文落盘）
  * 3. commitRevision：写入 manuscript_revisions + 推进 current_revision + 写 idempotency_keys
  * 4. createChapterMemoryFromRevision：从定稿正文提取章节记忆（summary/keyEvents/...）
@@ -42,15 +50,14 @@ export class CommitService {
     private readonly chapterMemoryDeps?: ChapterMemoryDeps,
   ) {}
 
-  async commit(input: CommitRequest & { text: string }): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
-    const independent = input.reviews.some((review) => review.identity === "independent" && review.verdict === "passed" && review.artifactFingerprint === input.artifact.fingerprint);
-    const internal = input.reviews.some((review) => review.identity === "internal" && review.verdict === "passed" && review.artifactFingerprint === input.artifact.fingerprint);
-    if (!independent || !internal) throw new Error("正式提交必须同时具备当前 artifact 的内部门和独立门证据");
+  async commit(input: CommitRequest & { text: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
+    const gate = evaluateCommitGate(input.reviews, input.artifact.fingerprint);
+    if (!gate.passed) throw new Error(`正式提交必须具备当前 artifact 的完整五角色通过证据；缺失角色：${gate.missingRoles.join("、") || "无"}`);
     return this.persistApprovedRevision(input);
   }
 
   /** Commit a manuscript only after an explicit durable author approval signal. */
-  async commitAuthorApproved(input: CommitRequest & { text: string }): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
+  async commitAuthorApproved(input: CommitRequest & { text: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
     const authorApproval = input.reviews.some((review) =>
       review.identity === "human"
       && review.verdict === "passed"
@@ -60,9 +67,37 @@ export class CommitService {
     return this.persistApprovedRevision(input);
   }
 
-  private async persistApprovedRevision(input: CommitRequest & { text: string }): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
+  private async persistApprovedRevision(input: CommitRequest & { text: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
     const object = await this.objects.putText(input.text);
     const result = await this.repository.commitRevision({ ...input, contentHash: object.hash, objectKey: object.key, revisionId: randomUUID() });
+
+    if (input.narrativeElements) {
+      try {
+        await this.repository.recordNarrativeElements({
+          projectId: input.projectId,
+          artifact: input.artifact,
+          revisionId: result.revisionId,
+          narrativeOrder: input.narrativeOrder,
+          narrativeElements: input.narrativeElements,
+        });
+      } catch (error) {
+        console.warn(`[commit-service] 叙事元素写入失败（正文 revision 已提交）：${(error as Error).message}`);
+      }
+    }
+
+    if (input.payoffMoments?.length && input.narrativeOrder !== undefined) {
+      try {
+        await this.repository.recordPayoffCurve({
+          projectId: input.projectId,
+          documentId: input.documentId,
+          revisionId: result.revisionId,
+          narrativeOrder: input.narrativeOrder,
+          payoffMoments: input.payoffMoments,
+        });
+      } catch (error) {
+        console.warn(`[commit-service] 爽点曲线写入失败（正文 revision 已提交）：${(error as Error).message}`);
+      }
+    }
 
     // chapter memory 创建：失败不阻塞 commit（revision 已落库），记录到 learning 闭环
     // 设计依据：AGENTS.md「不阻塞 commit」契约 + Phase 1.2 chapter memory 闭环

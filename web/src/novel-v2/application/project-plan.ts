@@ -76,3 +76,19 @@ export function foundationTaskKey(artifact: Artifact): ProjectPlanTaskKey | unde
   if (typeof value === "string" && isProjectPlanTaskKey(value)) return value;
   return undefined;
 }
+
+/**
+ * 从已通过人工/运行时审批的项目定位中读取正式中文书名。
+ * 书名必须由 positioning 明确产出，不从摘要、题材或项目 ID 猜测。
+ */
+export function approvedProjectBookTitle(payload: Record<string, unknown>): string | undefined {
+  const structuredData = payload.structuredData;
+  if (!structuredData || typeof structuredData !== "object" || Array.isArray(structuredData)) return undefined;
+  const positioning = (structuredData as Record<string, unknown>).positioning;
+  if (!positioning || typeof positioning !== "object" || Array.isArray(positioning)) return undefined;
+  const raw = (positioning as Record<string, unknown>).bookTitle;
+  if (typeof raw !== "string") return undefined;
+  const title = raw.trim().replace(/^《|》$/gu, "").trim();
+  if (!title || title.length > 40 || !/\p{Script=Han}/u.test(title)) return undefined;
+  return title;
+}
