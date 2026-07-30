@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import Ajv from "ajv";
 import type { Artifact, ContextManifest, CreativeRun, CreativeWorkItem, ExecutionBlueprint, MemoryBundle, MemoryClaim, MemoryHit, MemoryProvider, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, ReviewIssue, RuntimeLearningAssessmentV2, SkillBundle, SkillProvider, TaskAttemptRecord } from "../protocol";
-import { buildContextManifest, buildMemoryBundle, compileExecutionBlueprint, computeTokenBudget, createPreflightPlan, resolveSkillBundle } from "../cognition";
+import { buildContextManifest, buildMemoryBundle, compileExecutionBlueprint, computeTokenBudget, createPreflightPlan, matchedFacetsOf, resolveSkillBundle } from "../cognition";
 import { canonicalSha256 } from "../canonical-json";
 import { NovelPostgresRepository } from "../postgres-repository";
 import type { ModelGateway } from "../model-gateway";
@@ -14,7 +14,7 @@ import { CommitService } from "../commit-service";
 import type { MemoryIndex } from "../qdrant-memory";
 import { assessRuntimeLearningWithModel, blockingReviewIssues, buildRuntimeLearningPrompt, parseRuntimeLearningAssessmentV2, runtimeLearningAssessmentSchema } from "../learning-assessment";
 import { buildChapterDraftPrompt } from "../prompts/chapter-draft";
-import { buildChapterReviewPrompt, toReview, type ReviewerRole } from "../prompts/chapter-review";
+import { buildChapterReviewPrompt, getReviewFocus, toReview, type ReviewerRole } from "../prompts/chapter-review";
 import { buildChapterReflectionPrompt } from "../prompts/chapter-reflection";
 import { applyRevisionWindows, applyTargetedRevisionReplacements, buildFullChapterRevisionPrompt, buildRevisionWindowPrompt, buildTargetedRevisionBatchPrompt, planRevisionWindows, revisionWindowsCoverAllIssues, splitChapterParagraphs, targetedRevisionBatchSchema, type TargetedRevisionReplacement } from "../prompts/chapter-revision";
 import { factExtractionSchema, foundationSchema, reflectionSchema, reviewerSchema, type FactExtractionOutput, type FoundationOutput, type ReflectionOutput, type ReviewerOutput } from "../prompts/schemas";
@@ -276,7 +276,13 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         }
       }
       const prompt = buildChapterReviewPrompt({ role: input.role, artifact: input.artifact, text: input.text, blueprint: input.blueprint, memory: input.memory, skills: input.skills, payoffStats, planningContext: input.planningContext });
-      const system = `你是${input.identity === "independent" ? "独立" : "内置"}审核 Worker（${input.role}）。`;
+      // P1-2: system prompt 注入完整 reviewer 职责（默认 + 题材/项目特化补充）。
+      // 设计依据：AGENTS.md「reusable contracts over case-specific rules」——原 system 极简
+      // (`你是${identity}审核 Worker(${role})。`)，职责定义只在 user prompt 中，导致 system/user
+      // 角色割裂；且职责硬编码无法题材特化。现改为：system 承载完整角色定义（含 craft rule
+      // 沉淀的题材特化补充），user 只保留维度边界与正文数据。
+      const reviewFocus = getReviewFocus(input.role, input.skills);
+      const system = `你是${input.identity === "independent" ? "独立" : "内置"}审核 Worker（${input.role}）。\n\n## 审核职责\n${reviewFocus}`;
       try {
         const generated = await model.generateStructured<ReviewerOutput>({
             purpose: reviewerPurpose(input.role),
@@ -720,11 +726,37 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         const start = claim.narrativeRange?.start;
         return start === undefined || start <= narrativeCutoff;
       });
-      if (filteredClaims.length === bundle.claims.length) return bundle;
+
+      // P1-5: 对已兑现伏笔/承诺标记 resolved，而非删除。
+      // 设计依据：AGENTS.md「root-cause analysis」——原实现未过滤 narrativeRange.end，
+      // 已兑现伏笔仍以"未兑现"形态注入（reason 含 "injection"），reviewer 误报"伏笔未兑现"。
+      // 根因：foreshadowing claim 的 narrativeRange.end 表示兑现章节，end <= narrativeCutoff
+      // 意味着该伏笔在当前章节之前已兑现，不再是"未兑现"状态。
+      // 修复：不删除已兑现伏笔（reviewer 仍需知道伏笔存在过以判断兑现质量），而是在 reason
+      // 字段追加 `[resolved-at:${end}]` 标记，让渲染层（buildContextMarkdown/buildReviewerContext）
+      // 识别并加"【已兑现于第 X 章】"前缀，与未兑现伏笔区分。
+      // 题材无关，覆盖所有 matchedFacets 含 foreshadowing 且 end <= narrativeCutoff 的 claim。
+      let hasResolvedMarker = false;
+      const markedClaims = filteredClaims.map((claim) => {
+        const end = claim.narrativeRange?.end;
+        const isForeshadowing = matchedFacetsOf(claim).includes("foreshadowing");
+        if (isForeshadowing && typeof end === "number" && end <= narrativeCutoff) {
+          const resolvedMarker = `[resolved-at:${end}]`;
+          const originalReason = claim.reason ?? "";
+          // 避免重复标记（多次 retrieve 不会累加）
+          if (originalReason.includes(resolvedMarker)) return claim;
+          hasResolvedMarker = true;
+          return { ...claim, reason: `${resolvedMarker}${originalReason}` };
+        }
+        return claim;
+      });
+
+      // 若无 start 过滤也无 resolved 标记，直接返回原 bundle（避免无谓的对象重建）
+      if (filteredClaims.length === bundle.claims.length && !hasResolvedMarker) return bundle;
       return {
         ...bundle,
-        claims: filteredClaims,
-        sourceRevisionIds: [...new Set(filteredClaims.flatMap((claim) => claim.sourceRevisionIds))],
+        claims: markedClaims,
+        sourceRevisionIds: [...new Set(markedClaims.flatMap((claim) => claim.sourceRevisionIds))],
       };
     },
 

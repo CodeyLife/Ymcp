@@ -2,6 +2,7 @@ import { defineSignal, proxyActivities, setHandler, condition, patched } from "@
 import type { Artifact, CommitResult, ContextManifest, CreativeRun, CreativeReviewGate, CreativeWorkItem, ExecutionBlueprint, FactApprovalSummary, MemoryBundle, MemoryClaim, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, ReviewIssue, RuntimeLearningAssessmentV2, SkillBundle, TaskAttemptRecord } from "../protocol";
 import type { ChapterPlanningContext, StoryArcBundle } from "../application/story-arc";
 import type { StoryArcReviewOutput } from "../prompts/story-arc";
+import type { ReflectionOutput } from "../prompts/schemas";
 import type { ReviewerRole } from "../prompts/chapter-review";
 import type { ModelRoutingSnapshot, ModelTaskRecord } from "../model-routing";
 import { finalizeChapterLifecycle, runChapterLifecycle } from "../application/chapter-lifecycle";
@@ -111,8 +112,8 @@ export interface NovelWorkflowActivities {
   // 章节反思（reflection）activities（Phase 2.4）
   // 设计依据：AGENTS.md「root-cause analysis」+ Phase 2.4 reflection 机制。
   // 在 draft 之后、runAllReviewers 之前执行，不产生 commit 证据，只优化 draft。
-  reflectOnDraft(input: { workflowId: string; artifact: Artifact; text: string; blueprint: ExecutionBlueprint; memory: MemoryBundle; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; planningContext?: ChapterPlanningContext }): Promise<{ kind: "completed"; critique: { overallImpression: string; issues: Array<{ severity: "blocker" | "major" | "warning"; title: string; description: string; excerpt?: string; suggestion: string }> }; artifact: Artifact } | { kind: "external"; task: ModelTaskRecord }>;
-  materializeExternalReflection(input: { modelTaskId: string; artifact: Artifact; workflowId: string }): Promise<{ critique: { overallImpression: string; issues: Array<{ severity: "blocker" | "major" | "warning"; title: string; description: string; excerpt?: string; suggestion: string }> }; artifact: Artifact }>;
+  reflectOnDraft(input: { workflowId: string; artifact: Artifact; text: string; blueprint: ExecutionBlueprint; memory: MemoryBundle; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; planningContext?: ChapterPlanningContext }): Promise<{ kind: "completed"; critique: ReflectionOutput["critique"]; artifact: Artifact } | { kind: "external"; task: ModelTaskRecord }>;
+  materializeExternalReflection(input: { modelTaskId: string; artifact: Artifact; workflowId: string }): Promise<{ critique: ReflectionOutput["critique"]; artifact: Artifact }>;
 }
 
 export const claimSignal = defineSignal<[unknown]>("claim");
@@ -364,7 +365,7 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
      *
      * 返回 ReflectionCritique（overallImpression + issues[]）。
      */
-    const runReflection = async (current: { artifact: Artifact; text: string }): Promise<{ critique: { overallImpression: string; issues: Array<{ severity: "blocker" | "major" | "warning"; title: string; description: string; excerpt?: string; suggestion: string }> }; artifact: Artifact } | null> => {
+    const runReflection = async (current: { artifact: Artifact; text: string }): Promise<{ critique: ReflectionOutput["critique"]; artifact: Artifact } | null> => {
       let candidateStartIndex = 0;
       while (true) {
         const generated = await activities.reflectOnDraft({ workflowId, artifact: current.artifact, text: current.text, blueprint, memory, routingSnapshot, candidateStartIndex, planningContext });
@@ -380,23 +381,48 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
      *
      * reflection 不产生 commit 证据，所以不写入 reviews 表；
      * 但复用 runRevision 的修订逻辑，需要构造 Review 形态的输入。
+     *
+     * 设计依据：AGENTS.md「root-cause analysis」——原实现用 suggestion 顶替 rewriteExample、
+     * rule 固定为 "reflection-critique"，导致 revise 阶段"按 issue.rule 命中 skill"机制失效
+     * （所有 reflection issue 都命中同一固定 rule，无法触发题材/维度特化的修订技能）。
+     * P0-2 已对齐 reflectionSchema 与 reviewerSchema 字段集，此处改为 1:1 透传 reflection
+     * issue 的 dimension/rule/revisionRanges/rewriteExample，让 revise 阶段能按真实 rule 命中 skill。
+     *
+     * 防御性兜底：reflectionSchema 已强制 rewriteExample minLength=1，但 materializeExternalReflection
+     * 走外部 MCP 路径时可能绕过 schema 校验。此处对缺 rewriteExample 的 issue 记录 warning 并跳过，
+     * 避免空 rewriteExample 污染 revise 阶段（revise 依赖 rewriteExample 作为修订示范）。
      */
-    const critiqueToReview = (critique: { overallImpression: string; issues: Array<{ severity: "blocker" | "major" | "warning"; title: string; description: string; excerpt?: string; suggestion: string }> }, sourceArtifact: Artifact): Review => ({
+    const critiqueToReview = (
+      critique: ReflectionOutput["critique"],
+      sourceArtifact: Artifact,
+    ): Review => ({
       id: `reflection:${sourceArtifact.id}`,
       projectId: intent.projectId,
       artifactId: sourceArtifact.id,
       reviewerId: "reflection-worker",
       identity: "independent",
       verdict: critique.issues.some((issue) => issue.severity === "blocker") ? "blocked" : "revise",
-      issues: critique.issues.map((issue) => ({
-        severity: issue.severity,
-        title: issue.title,
-        description: issue.description,
-        evidence: issue.excerpt ?? issue.description,
-        suggestion: issue.suggestion,
-        rewriteExample: issue.suggestion,
-        rule: "reflection-critique",
-      })),
+      issues: critique.issues
+        .filter((issue) => {
+          if (!issue.rewriteExample || !issue.rewriteExample.trim()) {
+            console.warn(`[reflection] issue "${issue.title}" 缺 rewriteExample，已跳过（不喂给 revise 阶段）`);
+            return false;
+          }
+          return true;
+        })
+        .map((issue) => ({
+          severity: issue.severity,
+          title: issue.title,
+          description: issue.description,
+          evidence: issue.excerpt ?? issue.description,
+          dimension: issue.dimension,
+          excerpt: issue.excerpt,
+          paragraph: issue.paragraph,
+          revisionRanges: issue.revisionRanges,
+          rule: issue.rule,
+          suggestion: issue.suggestion,
+          rewriteExample: issue.rewriteExample,
+        })),
       createdAt: Date.now(),
       artifactFingerprint: sourceArtifact.fingerprint,
     });

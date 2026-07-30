@@ -482,16 +482,39 @@ export interface CharacterEnrichmentOutput {
 }
 
 /**
+ * 章节反思维度枚举：8 维度，与 reviewerSchema 的 REVIEW_DIMENSIONS 区分。
+ *
+ * reflection 关注「读者体验层面的直觉批评」，维度是读者感受维度（节奏/情感/悬念/...），
+ * 而非 reviewer 的技术维度（plot/characterVoice/...）。两者互补：reflection 做前置自检，
+ * reviewer 做正式审核。
+ */
+export const REFLECTION_DIMENSIONS = [
+  "pace",
+  "emotion",
+  "suspense",
+  "dialogue",
+  "density",
+  "trope",
+  "language",
+  "blueprint",
+] as const;
+
+export type ReflectionDimension = (typeof REFLECTION_DIMENSIONS)[number];
+
+/**
  * V2 章节反思（reflection）schema。
  *
- * 设计依据：AGENTS.md「root-cause analysis」契约 + Phase 2.4 reflection 机制。
- * 用于 reflectOnDraft activity，让 LLM 扮演「严苛读者」对自己的草稿做批评，
- * 输出 ReflectionCritique（issues + 优先级 + 改写建议）。
+ * 设计依据：AGENTS.md「root-cause analysis」契约 + Phase 2.4 reflection 机制 +
+ * 「Fix the problem at the lowest shared layer」——reflection issue schema 此前与
+ * reviewerSchema 不一致（缺 dimension/rule/revisionRanges/rewriteExample），导致
+ * reflection→revision 复用链用 suggestion 顶替 rewriteExample、rule 固定
+ * "reflection-critique"，revise 阶段"按 issue.rule 命中 skill"机制失效。
+ * 现对齐 reviewerSchema 字段集，但保留 reflection 特有的 8 维度枚举。
  *
  * 与 reviewerSchema 的区别：
- * - reviewerSchema 用于正式 5 reviewer 审核（产生 commit 证据）
- * - reflectionSchema 用于 draft 后的前置自我反思（不产生 commit 证据，只优化 draft）
- * - reflection 关注「读者体验层面的直觉批评」，不强制按 REVIEW_DIMENSIONS 维度切分
+ * - reviewerSchema 用于正式 5 reviewer 审核（产生 commit 证据），dimension 用 REVIEW_DIMENSIONS
+ * - reflectionSchema 用于 draft 后的前置自我反思（不产生 commit 证据，只优化 draft），dimension 用 REFLECTION_DIMENSIONS
+ * - reflection 的 rewriteExample 是必填（minLength=1），与 reviewerSchema 一致
  */
 export const reflectionSchema = {
   type: "object",
@@ -513,13 +536,29 @@ export const reflectionSchema = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["severity", "title", "description", "suggestion"],
+            required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion", "rewriteExample"],
             properties: {
+              dimension: { enum: REFLECTION_DIMENSIONS },
               severity: { enum: ["blocker", "major", "warning"] },
               title: { type: "string", minLength: 1 },
               description: { type: "string", minLength: 1 },
               excerpt: { type: "string", description: "草稿中对应的原文片段（可选）" },
+              paragraph: { type: "integer", minimum: 1 },
+              revisionRanges: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["start", "end"],
+                  properties: {
+                    start: { type: "integer", minimum: 1 },
+                    end: { type: "integer", minimum: 1 },
+                  },
+                },
+              },
+              rule: { type: "string", minLength: 1, description: "问题对应的规则短标识（如 reflection.pace-drag）" },
               suggestion: { type: "string", minLength: 1, description: "改写建议（具体到段落或句子）" },
+              rewriteExample: { type: "string", minLength: 1, description: "具体改写示例，格式：【原文】...【改写】..." },
             },
           },
         },
@@ -535,11 +574,16 @@ export interface ReflectionOutput {
   critique: {
     overallImpression: string;
     issues: Array<{
+      dimension: ReflectionDimension;
       severity: "blocker" | "major" | "warning";
       title: string;
       description: string;
       excerpt?: string;
+      paragraph?: number;
+      revisionRanges: Array<{ start: number; end: number }>;
+      rule: string;
       suggestion: string;
+      rewriteExample: string;
     }>;
   };
 }

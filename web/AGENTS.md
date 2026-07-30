@@ -16,8 +16,8 @@
 
 已定稿但内容不完美的章节需要"严苛读者视角审视 + 文案内容优化"能力。该能力必须复用正式章节生成的审核+优化闭环，不允许另起一套独立的离线修订逻辑。
 
-- 入口：`startChapterReviewWorkflow`（workflow.ts），从 `review` 阶段半截启动 WorkflowRun。
-- 复用范围：`reviewStageHandler` → `revisionStageHandler` → `manuscriptApprovalHandler` → `factExtractionStageHandler` → `factApprovalHandler` → `commitStageHandler` → `characterEnrichmentStageHandler`，禁止重写或绕过这些 handler。
+- 入口：`chapterReviewWorkflow`（`src/novel-v2/temporal/workflows.ts`），从 `review` 阶段半截启动 Temporal durable execution。
+- 复用范围：`review` → `revise` → `manuscriptApproval` → `extractFacts` → `approveFacts` → `commit` → `enrichCharacters` activity（均在 `src/novel-v2/temporal/activities.ts`），禁止重写或绕过这些 activity。
 - 产物回填契约：把 `document.plainText` 包装为 draft artifact、复用历史 blueprint artifact 的 `structuredData`（保留 beats/title/startingState 等 `ChapterBlueprint` 不存储的字段），使 review-stage 能拿到 draft+blueprint+contextPacket 三件套。
 - 前置条件：`document.status === "final"`（只对已定稿章节开放重审）、无活跃工作流、存在历史 blueprint artifact。
 - 不跳过 fact-extraction/commit：让 fact-extraction 用 `novelty` 字段去重，commit-stage 更新 `document.plainText/contentHtml` 并对新 `DocumentRevision` 创建 chapter memory，保持与正式生成一致。

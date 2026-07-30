@@ -2,6 +2,7 @@ import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent, SkillBund
 import { matchedFacetsOf } from "../cognition";
 import type { ChapterPlanningContext } from "../application/story-arc";
 import { renderChapterPlanningContext } from "./chapter-planning-context";
+import { buildBlueprintSummary } from "./chapter-review";
 import {
   WRITER_DIALOGUE_AND_DETAIL,
   WRITER_FINAL_CHECK,
@@ -258,30 +259,6 @@ function renderFoundationFields(taskKey: string, structured: Record<string, unkn
 }
 
 /**
- * 把 ExecutionBlueprint + SkillBundle 转换为蓝图 markdown。
- *
- * v2 的 ExecutionBlueprint.tasks 是任务列表，需要从 taskId/kind/role 中重建
- * 节拍、必须发生、禁止事项等字段。v2 数据结构里没有 v1 的 mustHappen/forbidden
- * 数组，所以从 task description 中提取（task.role 包含目标说明，task.kind 区分 draft/revise）。
- */
-function buildBlueprintMarkdown(blueprint: ExecutionBlueprint): string {
-  const draftTasks = blueprint.tasks.filter((task) => task.kind === "draft" || task.kind === "revise");
-  const beats = draftTasks.map((task) => ({
-    action: task.role,
-    emotion: "服从本章蓝图规定的视角人物情绪",
-    outcome: "完成本节拍规定的叙事功能",
-  }));
-  const beatsSection = beats.length
-    ? beats.map((beat, index) => `${index + 1}. 行动：${beat.action}\n   情绪：${beat.emotion}\n   结果：${beat.outcome}`).join("\n")
-    : "按完整蓝图写作。";
-  return [
-    `# 章节目标\n${blueprint.id}`,
-    `## 基础修订号\n${blueprint.baseRevision}`,
-    `## 节拍\n${beatsSection}`,
-  ].join("\n\n");
-}
-
-/**
  * 把 MemoryBundle 转换为冻结上下文 markdown。
  *
  * claims 按 authority 排序：approved > author > derived > candidate。
@@ -289,14 +266,38 @@ function buildBlueprintMarkdown(blueprint: ExecutionBlueprint): string {
  *
  * Phase 3.1: 未兑现伏笔/承诺（matchedFacet=foreshadowing 且 reason 含 injection）
  * 单独高亮在顶部，提醒 LLM 本章是否应兑现。
+ *
+ * P1-5: 已兑现伏笔（reason 含 `[resolved-at:N]` 标记，由 retrieveMemoryForReview 注入）
+ * 单独渲染为"已兑现伏笔"段，加"【已兑现于第 N 章】"前缀，让 writer 知道该伏笔已回收，
+ * 不再当作未兑现线索处理。
  */
 function buildContextMarkdown(memory: MemoryBundle): string {
   if (!memory.claims.length) return "- 暂无冻结记忆。本章节为项目首批创作。";
   const authorityOrder: Record<string, number> = { approved: 0, author: 1, derived: 2, candidate: 3 };
 
-  // Phase 3.1: 分离未兑现伏笔/承诺（由 retrieveMemory activity 注入）
-  const openNarratives = memory.claims.filter((claim) => matchedFacetsOf(claim).includes("foreshadowing") && claim.reason?.includes("injection"));
-  const otherClaims = memory.claims.filter((claim) => !(matchedFacetsOf(claim).includes("foreshadowing") && claim.reason?.includes("injection")));
+  // P1-5: 识别已兑现伏笔（reason 含 [resolved-at:N] 标记）
+  const resolvedMarkerRegex = /\[resolved-at:(\d+)\]/u;
+  const isResolved = (reason: string | undefined): boolean => !!reason && resolvedMarkerRegex.test(reason);
+  const extractResolvedAt = (reason: string | undefined): number | null => {
+    const match = reason?.match(resolvedMarkerRegex);
+    return match ? Number(match[1]) : null;
+  };
+
+  // Phase 3.1: 分离未兑现伏笔/承诺（由 retrieveMemory activity 注入，且未标记 resolved）
+  const openNarratives = memory.claims.filter((claim) =>
+    matchedFacetsOf(claim).includes("foreshadowing")
+    && claim.reason?.includes("injection")
+    && !isResolved(claim.reason),
+  );
+  // P1-5: 分离已兑现伏笔
+  const resolvedNarratives = memory.claims.filter((claim) =>
+    matchedFacetsOf(claim).includes("foreshadowing")
+    && isResolved(claim.reason),
+  );
+  const otherClaims = memory.claims.filter((claim) =>
+    !(matchedFacetsOf(claim).includes("foreshadowing") && claim.reason?.includes("injection"))
+    && !isResolved(claim.reason),
+  );
 
   const sections: string[] = [];
 
@@ -308,6 +309,19 @@ function buildContextMarkdown(memory: MemoryBundle): string {
       return `- [${claim.authority}/${claim.kind}] ${subjects} ${claim.title}：${claim.content}`;
     });
     sections.push(narrativeLines.join("\n"));
+    sections.push(""); // 空行分隔
+  }
+
+  // P1-5: 已兑现伏笔段（让 writer 知道这些伏笔已回收，不再当作未兑现线索）
+  if (resolvedNarratives.length) {
+    sections.push("### 已兑现伏笔（参考，不要再兑现）");
+    const resolvedLines = resolvedNarratives.map((claim) => {
+      const subjects = claim.subjectRefs.length ? `[${claim.subjectRefs.join(",")}]` : "[未绑定主体]";
+      const resolvedAt = extractResolvedAt(claim.reason);
+      const prefix = resolvedAt !== null ? `【已兑现于第 ${resolvedAt} 章】` : "【已兑现】";
+      return `- ${prefix} [${claim.authority}/${claim.kind}] ${subjects} ${claim.title}：${claim.content}`;
+    });
+    sections.push(resolvedLines.join("\n"));
     sections.push(""); // 空行分隔
   }
 
@@ -337,20 +351,34 @@ function extractMustHappenAndForbidden(intent: NovelIntent): { mustHappen: strin
 }
 
 /**
- * P0-B2: 构建前章爽点干旱提示 markdown。
+ * P1-4: 构建前章爽点干旱提示 markdown（相对信号 + 软提示）。
  *
- * 设计依据：AGENTS.md「Fix the problem at the lowest shared layer」——drought 预防应在
- * drafting 层，不只靠 reader-reviewer 事后检测。把结构化统计给 writer，让其结合本章功能
- * 判断是否应安排爽点。铺陈/相处/余波章允许无爽点，不强制机械出现；行动/转折/阶段闭合章
- * 若连续多章无爽点，应主动安排正向反馈。
+ * 设计依据：AGENTS.md「Do not tune thresholds solely until one known sample passes」+
+ * 「root-cause analysis」——原实现用硬阈值"连续 3 章无爽点""干旱不宜超过 5 章"，是 case-specific
+ * rule：不同题材节奏下（仙侠慢热 vs 都市快节奏）同一阈值意义不同，且阈值本身无理论依据，
+ * 只是调到某个失败样本通过。
+ *
+ * 根因：爽点干旱的严重性是相对信号，取决于该书历史爽点节奏，而非绝对章数。改为：
+ *   1. 从 recentChapters 计算平均爽点间隔 M（有爽点章数 / 总章数的倒数）
+ *   2. 用 consecutiveNoPayoff 作为当前连续无爽点章数 N
+ *   3. 仅当 N > M 时注入"干旱提示"（相对信号，N ≤ M 时不注入，避免噪音）
+ *   4. 提示文案是软提示（"若本章功能允许，考虑安排"），不是硬指令
+ *
+ * 平均间隔 M 的计算：
+ * - recentChapters 中 payoffCount > 0 的章数 = 有爽点章数 P
+ * - recentChapters 总章数 = W（通常 5）
+ * - 平均间隔 M = W / P（每 P 章有一个爽点 → 间隔约 W/P 章）
+ * - 若 P = 0（窗口内全无爽点），M = Infinity（极端干旱，必注入提示）
+ *
+ * 不内置任何题材阈值——"3 章/5 章"由该书自己的历史节奏决定。
  */
 function buildPayoffDroughtMarkdown(stats: NonNullable<DraftPromptInput["payoffStats"]>): string {
   if (!stats.recentChapters.length && stats.consecutiveNoPayoff === 0) {
     return "- 暂无前章爽点数据（首章或前 5 章无记录），无需考虑干旱。";
   }
   const lines: string[] = [];
-  lines.push(`- 最近 5 章爽点总数：${stats.totalPayoffs}`);
-  lines.push(`- 连续无爽点章数：${stats.consecutiveNoPayoff}`);
+  lines.push(`- 最近 ${stats.recentChapters.length} 章爽点总数：${stats.totalPayoffs}`);
+  lines.push(`- 当前连续无爽点章数：${stats.consecutiveNoPayoff}`);
   if (stats.recentChapters.length) {
     lines.push("- 前章爽点分布：");
     for (const ch of stats.recentChapters) {
@@ -360,11 +388,27 @@ function buildPayoffDroughtMarkdown(stats: NonNullable<DraftPromptInput["payoffS
   const allTypes = ["achievement", "recognition", "reversal", "emotional", "mystery"];
   const missing = allTypes.filter((t) => !stats.byType[t]);
   if (missing.length && stats.totalPayoffs > 0) {
-    lines.push(`- 最近 5 章未出现的爽点类型：${missing.join("、")}（仅供参考，不要求每章机械出现）`);
+    lines.push(`- 最近 ${stats.recentChapters.length} 章未出现的爽点类型：${missing.join("、")}（仅供参考，不要求每章机械出现）`);
   }
-  // 干旱提示（非硬规则，由 writer 结合本章功能判断）
-  if (stats.consecutiveNoPayoff >= 3) {
-    lines.push(`- ⚠️ 已连续 ${stats.consecutiveNoPayoff} 章无爽点。若本章是行动/转折/阶段闭合/兑现章，建议安排至少一个爽点（任意类型均可，关键是读者获得正向反馈）。铺陈/相处/余波章仍可无爽点，但干旱不宜超过 5 章。`);
+
+  // P1-4: 相对信号计算——平均爽点间隔 M vs 当前连续无爽点章数 N
+  const windowSize = stats.recentChapters.length;
+  const paidChapters = stats.recentChapters.filter((ch) => ch.payoffCount > 0).length;
+  // 平均间隔 M：每有爽点章数对应多少章。P=0 时 M=Infinity（窗口内全无爽点，极端干旱）。
+  const avgInterval = paidChapters > 0 ? windowSize / paidChapters : Infinity;
+  const N = stats.consecutiveNoPayoff;
+
+  // 仅当 N > M 时注入干旱提示（相对信号，避免在正常节奏下产生噪音）
+  // 特例：M=Infinity（窗口内全无爽点）且 N >= 2 时也注入（说明该书近期完全无爽点反馈）
+  const isExtremeDrought = !Number.isFinite(avgInterval);
+  const shouldSignalDrought = N > avgInterval || (isExtremeDrought && N >= 2);
+  if (shouldSignalDrought) {
+    const intervalDesc = isExtremeDrought
+      ? `最近 ${windowSize} 章完全无爽点记录`
+      : `最近 ${windowSize} 章的平均爽点间隔约 ${avgInterval.toFixed(1)} 章`;
+    lines.push(
+      `- ⚠️ 当前已连续 ${N} 章未出现爽点（${intervalDesc}）。这是相对信号，非绝对阈值——若本章蓝图功能不要求爽点（如铺陈/相处/余波章），可忽略此信号；若本章功能允许（如行动/转折/阶段闭合/兑现章），考虑安排一次小体量爽点以维持读者追更动力。爽点可以是任意类型（成就/认可/反转/情感/悬疑），关键是读者是否获得正向反馈。`,
+    );
   }
   return lines.join("\n");
 }
@@ -374,7 +418,9 @@ function buildPayoffDroughtMarkdown(stats: NonNullable<DraftPromptInput["payoffS
  */
 export function buildChapterDraftPrompt(input: DraftPromptInput): string {
   const { intent, blueprint, memory, skills, payoffStats, povCharacterId, foundationArtifacts, planningContext } = input;
-  const blueprintMarkdown = buildBlueprintMarkdown(blueprint);
+  // P1-6: 使用公共 buildBlueprintSummary，与 review/reflection 对齐字段集
+  // （含章节功能、章尾驱动力、情绪走向），让 writer 看到与 reviewer 相同的蓝图上下文。
+  const blueprintMarkdown = buildBlueprintSummary(blueprint, planningContext);
   const contextMarkdown = buildContextMarkdown(memory);
   const { mustHappen, forbidden } = extractMustHappenAndForbidden(intent);
   const skillSections = skills.skills.length

@@ -28,15 +28,43 @@ export const REVIEWER_DIMENSIONS: Record<ReviewerRole, ReadonlyArray<keyof Revie
 };
 
 /**
- * Reviewer 职责焦点：与 v1 [prose-prompts.ts] REVIEW_FOCUS 等价。
+ * Reviewer 职责焦点（默认）：与 v1 [prose-prompts.ts] REVIEW_FOCUS 等价。
+ *
+ * 设计依据：AGENTS.md「reusable contracts over case-specific rules」——默认职责题材无关，
+ * 题材特化覆盖通过 `getReviewFocus(role, skills)` 注入（skill.promptSections.review 段）。
+ * craft rule 通过 learning 闭环沉淀后，会以 skill 形式注入，覆盖/补充默认职责。
  */
-const REVIEW_FOCUS: Record<ReviewerRole, string> = {
+const DEFAULT_REVIEW_FOCUS: Record<ReviewerRole, string> = {
   "style-reviewer": "重点检查解释性心理总结、意象替人物说理、可替换的通用细节、段落碎片化、匀速句段和模板化表达。核对语言是否符合项目文风、时代和叙述距离；不要因为全文保持同一种语体就自动降分。环境可以承担氛围、情绪余波、信息或行动功能，只在重复且没有深化体验时报告问题。关键情绪和转折应有足够具体的现场承载，但不要要求固定的动作公式或句式配比。",
   "character-reviewer": "重点检查人物是否有符合本章功能的欲望、注意力、选择或情感变化；对白和行为是否符合冻结上下文中的年龄、职业、关系距离、知识边界与既有声音。配角可以承担陪伴、见证、阻力或日常质地，不强制每人拥有独立抉择。重要器物若被蓝图赋予意义，应参与行动、关系或记忆；普通场景物件无需强行象征化。不要套用固定身份声部，也不要要求蓝图未安排的角色亲自到场或开口。",
   "continuity-reviewer": "重点检查事实、时间、位置、物品、人物知识边界与选择后果是否连续；不要把审美偏好误报为事实矛盾。检查 POV 越界——叙述是否替视角人物总结他人心理意图（如'各自守着一处不肯越过的距离''谁也不肯先开口''都带着各自的盘算'），这类句子表面是观察，实质是作者借视角人物之口宣告对他人内在状态的判断——若把描述他人状态的句子改写为'视角人物能看到/听到的具体动作'后信息丢失，则该句子越界，标为 major。",
   "plot-reviewer": "重点检查正文是否尊重目标章功能、状态变化预算、连续性约束与故事弧边界，是否把大纲压缩成当章任务清单，是否提前完成后续秘密、关系跃迁、重大转折或伏笔回收。可选节拍允许调整、合并或省略，不得逐项核对；只有章节功能或蓝图明确规定的结果整体缺失，才报告 chapter.incomplete-blueprint。铺陈、相处、内省和余波章不要求不可逆结果。章尾按目标章的 closingForce 判断，不得强制添加危险、反转或行动命令。",
   "reader-reviewer": "你是严苛的追更读者，不是编辑。先识别本章承担的是悬疑、行动、关系、生活流、铺陈、余波还是阶段闭合功能，再判断正文是否持续兑现作品承诺，不做文风或事实的技术分析。检查开篇是否建立与本章功能相称的注意力中心，中段是否通过新信息、关系温度、人物认识、状态变化或行动后果深化体验，信息是否在读者需要时抵达，以及正文是否出现真实的跳读区。章尾驱动力不等于强钩子：悬疑与行动章可以依靠未解压力，关系、生活流、余波或阶段闭合章也可以停在未尽交流、状态变化或有功能的情感与意象余韵。不得仅因没有问号、突发事件、强制选择或立即翻页冲动就判为 major；只有章尾没有完成本章功能、重复已知信息、切断既有长线动力或用空泛意象代替实际变化时才报告。项目卖点只在合适兑现窗口检查，不要求每章机械出现。每个问题必须引用正文证据，并说明它如何损害当前章节功能和后续阅读，而不是套用固定字数、钩子密度或章尾公式。",
 };
+
+/**
+ * 获取 reviewer 职责焦点，支持题材/项目特化覆盖。
+ *
+ * 设计依据：AGENTS.md「reusable contracts over case-specific rules」——默认职责题材无关，
+ * 题材特化通过 skill.promptSections.review 注入（craft rule 沉淀后以 skill 形式激活）。
+ * 多个 skill 的 review 段按顺序拼接为"题材/项目特化补充"，追加在默认职责之后。
+ *
+ * 注入位置：调用方应把返回值注入 system prompt（角色定义层），避免 system/user 角色割裂。
+ * user prompt 中只保留维度约束（"你只能把 X 维度的问题写入 issues"），不再重复职责定义。
+ *
+ * 返回值结构：
+ * - 默认：返回 DEFAULT_REVIEW_FOCUS[role]
+ * - 含 skills：返回 `${默认职责}\n\n## 题材/项目特化补充\n${review 段拼接}`
+ */
+export function getReviewFocus(role: ReviewerRole, skills?: SkillBundle): string {
+  const base = DEFAULT_REVIEW_FOCUS[role];
+  if (!skills?.skills.length) return base;
+  const reviewSections = skills.skills
+    .map((skill) => skill.promptSections.review)
+    .filter((section): section is string => typeof section === "string" && section.trim().length > 0);
+  if (!reviewSections.length) return base;
+  return `${base}\n\n## 题材/项目特化补充\n${reviewSections.join("\n\n")}`;
+}
 
 export interface ReviewPromptInput {
   role: ReviewerRole;
@@ -69,19 +97,43 @@ function buildNumberedDraft(text: string): string {
 
 function buildReviewerContext(memory: MemoryBundle): string {
   if (!memory.claims.length) return "- 暂无冻结事实。";
-  const lines = memory.claims.map((claim) => `- [${claim.authority}/${claim.kind}] ${claim.subjectRefs.join(",")}: ${claim.title} — ${claim.content}`);
+  // P1-5: 识别已兑现伏笔（reason 含 [resolved-at:N] 标记，由 retrieveMemoryForReview 注入）
+  const resolvedMarkerRegex = /\[resolved-at:(\d+)\]/u;
+  const lines = memory.claims.map((claim) => {
+    const subjects = claim.subjectRefs.length ? claim.subjectRefs.join(",") : "未绑定主体";
+    const match = claim.reason?.match(resolvedMarkerRegex);
+    const prefix = match ? `【已兑现于第 ${match[1]} 章】` : "";
+    return `- ${prefix}[${claim.authority}/${claim.kind}] ${subjects}: ${claim.title} — ${claim.content}`;
+  });
   return lines.join("\n");
 }
 
-function buildBlueprintSummary(blueprint: ExecutionBlueprint): string {
+/**
+ * 构建蓝图摘要 markdown（公共函数，供 draft/review/revise/reflection 复用）。
+ *
+ * 设计依据：AGENTS.md「Fix the problem at the lowest shared layer」——三处 stage 此前各自
+ * 构建摘要且字段缺失（review 只列 kind/role/queue、draft 只列 beats、reflection 只列 role），
+ * 导致 reviewer/reflection 看不到章节功能与章尾驱动力，无法判断"章功能是否完成"。
+ * 统一在此渲染：blueprint 元信息 + 章节功能 + 章尾驱动力 + 任务清单。
+ *
+ * mustHappen/forbidden 来自 intent.constraints，仅 chapter-draft 能拿到，由调用方额外拼接。
+ */
+export function buildBlueprintSummary(blueprint: ExecutionBlueprint, planningContext?: ChapterPlanningContext): string {
   const tasks = blueprint.tasks.map((task) => `- [${task.kind}] ${task.role} (queue: ${task.queue})`).join("\n");
-  return [
+  const chapter = planningContext?.chapter;
+  const lines: string[] = [
     `Blueprint ID: ${blueprint.id}`,
     `Base revision: ${blueprint.baseRevision}`,
     `Commit policy: ${blueprint.commitPolicy}`,
-    `Tasks:`,
-    tasks,
-  ].join("\n");
+  ];
+  if (chapter) {
+    lines.push(`章节功能: ${chapter.chapterPurpose || "（未指定）"}`);
+    lines.push(`章尾驱动力: ${chapter.closingForce || "（未指定）"}`);
+    if (chapter.emotionalMovement) lines.push(`情绪走向: ${chapter.emotionalMovement}`);
+  }
+  lines.push(`Tasks:`);
+  lines.push(tasks || "（无任务）");
+  return lines.join("\n");
 }
 
 /**
@@ -130,7 +182,7 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
   const { role, artifact, text, blueprint, memory, skills, payoffStats, planningContext } = input;
   const numberedDraft = buildNumberedDraft(text);
   const reviewerContext = buildReviewerContext(memory);
-  const blueprintMarkdown = buildBlueprintSummary(blueprint);
+  const blueprintMarkdown = buildBlueprintSummary(blueprint, planningContext);
   const isReaderReviewer = role === "reader-reviewer";
   const payoffMarkdown = isReaderReviewer && payoffStats ? buildPayoffStatsMarkdown(payoffStats) : "";
 
@@ -152,7 +204,7 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
     `先判断本章是在铺陈、相处、蓄势、行动、余波还是兑现。背景展开、人物内省、情感抒发、文学意象和日常过程可以是章节主体，不得因为主线没有明显前进而降分。反过来，若正文过早揭示秘密、完成关系转变、回收伏笔，或把多个后续大纲节点压入本章，应报告为 major。不要建议用突发危险、强行选择或新钩子修复安静章节。`,
     "",
     `## 当前职责`,
-    REVIEW_FOCUS[role],
+    `你的完整职责定义见 system prompt（默认职责 + 题材/项目特化补充）。下面仅强调维度边界。`,
     `你只能把 ${REVIEWER_DIMENSIONS[role].join("、")} 维度的问题写入 issues；其他维度即使有改进空间，也交给对应 reviewer，不得重复报告。scores 仍需填写全部维度，但当前 verdict 只由你的职责维度决定。`,
     "",
     "## 已激活审校技能",

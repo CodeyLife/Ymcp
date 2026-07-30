@@ -10,6 +10,16 @@ import { characterEnrichmentSchema, type CharacterEnrichmentOutput } from "../pr
 import { buildCharacterEnrichmentPrompt } from "./prompt";
 
 /**
+ * 识别 motivationDelta 的"无变化"占位标记。
+ *
+ * 设计依据：AGENTS.md「root-cause analysis」——原下游用精确字符串匹配
+ * `=== "本章无明显动机变化"`，但 LLM 常填变体（如"动机未变化""该角色无动机变化"），
+ * 导致占位文本被当作真实动机写入 entities.payload，污染角色档案。
+ * 改用正则覆盖所有"无 + 变化"语义变体，prompt 侧同步标准化为"无变化"三字。
+ */
+const NO_MOTIVATION_CHANGE_REGEX = /^\s*(无变化|.*无(明显)?(动机)?变化.*|.*动机未(发生)?变化.*)\s*$/u;
+
+/**
  * V2 角色富化（character enrichment）模块。
  *
  * 设计依据：AGENTS.md「commitStageHandler → characterEnrichmentStageHandler」契约。
@@ -174,7 +184,7 @@ export async function persistCharacterEnrichment(input: { projectId: string; doc
     const mergedPayload = {
       ...existingPayload,
       voiceAnchor: mergeVoiceAnchor(existingPayload.voiceAnchor, delta.voiceAnchor),
-      motivation: delta.motivationDelta === "本章无明显动机变化"
+      motivation: NO_MOTIVATION_CHANGE_REGEX.test(delta.motivationDelta.trim())
         ? existingPayload.motivation ?? undefined
         : delta.motivationDelta,
     };

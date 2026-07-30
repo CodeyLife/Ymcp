@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildChapterDraftPrompt } from "../prompts/chapter-draft";
-import { buildChapterReviewPrompt, toReview, type ReviewerRole } from "../prompts/chapter-review";
+import { buildChapterReviewPrompt, getReviewFocus, toReview, type ReviewerRole } from "../prompts/chapter-review";
 import { REVIEW_DIMENSIONS, type ReviewerOutput } from "../prompts/schemas";
 import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent } from "../protocol";
 
@@ -170,14 +170,18 @@ describe("prompts buildChapterReviewPrompt", () => {
   });
 
   it("uses role-specific focus text for each reviewer", () => {
+    // P1-2: 职责定义移到 system prompt（通过 getReviewFocus），user prompt 只保留维度边界。
+    // 测试验证 getReviewFocus 返回值包含职责文案，且 user prompt 不再重复职责定义。
+    const styleFocus = getReviewFocus("style-reviewer");
+    expect(styleFocus).toContain("解释性心理总结");
     const stylePrompt = buildChapterReviewPrompt({ role: "style-reviewer", artifact, text: "x", blueprint: makeBlueprint(), memory: makeMemory() });
-    expect(stylePrompt).toContain("解释性心理总结");
+    expect(stylePrompt).toContain("sceneEmbodiment、specificity"); // 维度边界仍在 user prompt
 
-    const continuityPrompt = buildChapterReviewPrompt({ role: "continuity-reviewer", artifact, text: "x", blueprint: makeBlueprint(), memory: makeMemory() });
-    expect(continuityPrompt).toContain("POV 越界");
+    const continuityFocus = getReviewFocus("continuity-reviewer");
+    expect(continuityFocus).toContain("POV 越界");
 
-    const plotPrompt = buildChapterReviewPrompt({ role: "plot-reviewer", artifact, text: "x", blueprint: makeBlueprint(), memory: makeMemory() });
-    expect(plotPrompt).toContain("chapter.incomplete-blueprint");
+    const plotFocus = getReviewFocus("plot-reviewer");
+    expect(plotFocus).toContain("chapter.incomplete-blueprint");
   });
 
   it("renders reviewer context with authority/kind/subject/title", () => {

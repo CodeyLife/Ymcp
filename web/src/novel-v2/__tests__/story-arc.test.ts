@@ -48,7 +48,7 @@ describe("story arc planning contract", () => {
 
   it("reviews quiet chapters by function instead of mandatory main-plot movement", () => {
     const prompt = buildStoryArcReviewPrompt(bundle, "都市悬疑上下文");
-    expect(prompt).toContain("不得因为安静章、铺陈章、关系章没有明显推进主线而判错");
+    expect(prompt).toContain("不要因安静章、铺陈章、关系章没有明显推进主线而判错");
     expect(prompt).toContain("关系沉淀");
   });
 

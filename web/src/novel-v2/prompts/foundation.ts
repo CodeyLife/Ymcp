@@ -24,7 +24,7 @@
  *
  * AGENTS.md 合规：guidance 描述通用维度，不识别特定题材/作品/角色。
  */
-const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; structuredDataHint: string }> = {
+const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; structuredDataHint: string; priority: { required: string[]; optional: string[] }; lengthHint: string }> = {
   "project-positioning": {
     dimension: "确立全书的题材定位、目标读者与核心卖点，为后续所有架构决策提供基线。",
     focus: [
@@ -36,6 +36,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "核心冲突预设：贯穿全书的核心矛盾（不展开具体事件）",
     ],
     structuredDataHint: "positioning: { bookTitle: string, namingRationale: string, sellingPoints: string[], targetReader: {...}, tone: string, differentiation: string[], coreConflict: string }",
+    priority: { required: ["bookTitle", "sellingPoints", "targetReader", "coreConflict"], optional: ["namingRationale", "tone", "differentiation"] },
+    lengthHint: "summary 200-400 字；sellingPoints 不超过 3 条；targetReader 一段话概括",
   },
   architecture: {
     dimension: "设计全书的叙事结构与章节布局，确定故事的骨架。",
@@ -47,6 +49,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "时间跨度：故事覆盖的时间长度（如三年、十年、一生）",
     ],
     structuredDataHint: "architecture: { structure: string, volumes: [{name, theme, function, chapterCount}], povStrategy: string, timeSpan: string }",
+    priority: { required: ["structure", "volumes", "povStrategy", "timeSpan"], optional: ["chapterCount 细分"] },
+    lengthHint: "summary 300-600 字；每卷 theme+function 50-100 字",
   },
   characters: {
     dimension: "设计主要人物档案，每个人物需有清晰的动机、秘密与成长弧。",
@@ -58,6 +62,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "人物网络：谁与谁有羁绊、谁与谁有冲突（为 relations task 预留）",
     ],
     structuredDataHint: "characters: [{id, name, alias, role, faction, motivation, secret, voiceAnchor: {...}, arc: {start, end}}]",
+    priority: { required: ["id", "name", "role", "motivation", "arc"], optional: ["alias", "faction", "secret", "voiceAnchor"] },
+    lengthHint: "主角档案 250-400 字；重要配角 100-200 字/人；反派 150-300 字",
   },
   relations: {
     dimension: "构建人物关系图谱，明确每对关系的性质、强度与演变方向。",
@@ -69,6 +75,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "关系网络中心：哪些人物是关系网络的枢纽",
     ],
     structuredDataHint: "relations: [{from, to, type, strength, evolution: {from, to, trigger}}]",
+    priority: { required: ["from", "to", "type", "strength"], optional: ["evolution"] },
+    lengthHint: "summary 200-400 字；每对关系 30-60 字",
   },
   worldview: {
     dimension: "构建世界观与设定规则，为故事提供可信的背景框架。",
@@ -80,6 +88,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "外忧内患：外部威胁与内部矛盾的具体形态",
     ],
     structuredDataHint: "worldview: { geography: {...}, politics: {...}, factions: [{name, interest, relation}], rules: [...], threats: {external: [...], internal: [...]} }",
+    priority: { required: ["geography", "politics", "factions", "rules"], optional: ["threats"] },
+    lengthHint: "summary 300-600 字；每势力 50-100 字；rules 3-7 条",
   },
   "plot-threads": {
     dimension: "设计主线与支线剧情，确保多线交织但不混乱。",
@@ -91,6 +101,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "线交织规则：支线如何切入主线、何时回收，避免支线失控",
     ],
     structuredDataHint: "plotThreads: { main: {summary, threeAct: {...}}, subplots: [{id, theme, intersection, value}], emotionalLines: [...], powerLines: [...] }",
+    priority: { required: ["main", "subplots"], optional: ["emotionalLines", "powerLines"] },
+    lengthHint: "summary 300-500 字；主线 threeAct 三段各 50-100 字；每支线 50-100 字",
   },
   foreshadowing: {
     dimension: "埋设伏笔与回收节点，保证长篇叙事的因果连贯性。",
@@ -102,6 +114,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "回收节点：每个伏笔预期在哪个卷/章兑现",
     ],
     structuredDataHint: "foreshadowings: [{id, description, triggerKeywords: [...], expectedPayoffWindow, lineType: 'long'|'mid'|'short'}]",
+    priority: { required: ["id", "description", "expectedPayoffWindow"], optional: ["triggerKeywords", "lineType"] },
+    lengthHint: "summary 200-400 字；每伏笔 description 30-80 字；长线 3-5 个、中线 5-8 个",
   },
   timeline: {
     dimension: "构建时间线与事件顺序，确保叙事时序清晰。",
@@ -113,6 +127,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "时间跨度与节奏：不同阶段的时间密度（如开篇慢、中段快）",
     ],
     structuredDataHint: "timeline: { history: [...], storyEvents: [{time, event, significance}], narrativeOrder: [...], keyNodes: [...] }",
+    priority: { required: ["storyEvents"], optional: ["history", "narrativeOrder", "keyNodes"] },
+    lengthHint: "summary 200-400 字；storyEvents 10-20 条；每事件 30-60 字",
   },
   "story-control": {
     dimension: "梳理叙事节奏与控制点，保证阅读体验的张弛有度。",
@@ -124,6 +140,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "控制点：作者显性介入的节点（如卷首引言、章末点题）",
     ],
     structuredDataHint: "storyControl: { paceCurve: [...], suspenseHooks: [...], payoffDistribution: [...], controlPoints: [...] }",
+    priority: { required: ["paceCurve", "payoffDistribution"], optional: ["suspenseHooks", "controlPoints"] },
+    lengthHint: "summary 200-400 字；paceCurve 标注 5-10 个高低调点；payoffDistribution 按卷分布",
   },
   "plot-design": {
     dimension: "完成 plot 设计与章节规划，将架构落实到具体章节。",
@@ -135,6 +153,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "结局设计：结局类型（开放/封闭/半开放）、收束方式",
     ],
     structuredDataHint: "plotDesign: { opening: {...}, development: [...], turningPoints: [...], climax: {...}, ending: {...} }",
+    priority: { required: ["opening", "climax", "ending"], optional: ["development", "turningPoints"] },
+    lengthHint: "summary 300-500 字；opening/climax/ending 各 80-150 字",
   },
   "chapter-plan": {
     dimension: "生成前十章的章节计划（标题与摘要），作为章节生成的蓝图。",
@@ -146,6 +166,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "视角与场景：该章的视角人物与主要场景",
     ],
     structuredDataHint: "chapters: [{index, title, summary, function, hook, pov, scenes: [...]}]",
+    priority: { required: ["index", "title", "summary", "function"], optional: ["hook", "pov", "scenes"] },
+    lengthHint: "summary 200-400 字；每章 summary 100-200 字；共 10 章",
   },
 };
 
@@ -207,6 +229,12 @@ export function buildFoundationPrompt(input: {
       lines.push("```");
       lines.push("");
     }
+    lines.push("**字段优先级**（structuredData 必须覆盖 required 字段；optional 字段在无内容时省略，不要填空字符串占位）：");
+    lines.push(`- 必填（required）：${guidance.priority.required.join("、")}`);
+    lines.push(`- 可选（optional）：${guidance.priority.optional.join("、") || "无"}`);
+    lines.push("");
+    lines.push(`**长度建议**：${guidance.lengthHint}`);
+    lines.push("");
   }
 
   // Skill 注入(对齐 chapter-draft.ts 的 skillSections 写法)
@@ -246,13 +274,40 @@ export function buildFoundationPrompt(input: {
 
   lines.push("## 输出要求");
   lines.push("- 严格遵循 foundationSchema 的 JSON 结构");
+  lines.push("- 只输出符合 schema 的 JSON，不使用 Markdown 代码块，不输出解释性前言，不输出 JSON 前后的任何字符");
   lines.push("- title：本次产出的标题（如「主要人物档案」「世界观设定」）");
   lines.push("- summary：200-800字摘要，概括核心决策与设计意图");
   lines.push("- sections：人类可读的分节内容，每节含 heading + content + 可选 items");
-  lines.push("- structuredData：可机读的结构化数据，便于后续 task 引用");
+  lines.push("- structuredData：可机读的结构化数据，便于后续 task 引用；必须覆盖当前 taskKey 的 required 字段，optional 字段在无内容时省略而非填空字符串占位");
   lines.push("- 所有决策需有内在逻辑一致性，与前序产出不冲突");
-  lines.push("- 不输出任何解释性前言，直接输出 JSON");
   lines.push("");
+
+  // characters taskKey 的完整 structuredData 正例（跨题材通用：主角档案骨架）
+  // 设计依据：AGENTS.md「Prompt examples are illustrative, not normative」——
+  // 正例是通用骨架，不嵌入特定题材/角色名，避免成为隐式产品契约。
+  if (input.taskKey === "characters") {
+    lines.push("## structuredData 正例（characters taskKey，通用主角档案骨架）");
+    lines.push("以下是一个符合 schema 的 structuredData.characters[0] 正例，展示 required 字段如何覆盖、optional 字段如何按需省略：");
+    lines.push("");
+    lines.push("```json");
+    lines.push(JSON.stringify({
+      characters: [
+        {
+          id: "protagonist-1",
+          name: "（角色名，正文中可指认）",
+          role: "protagonist",
+          motivation: "（核心动机：一句话概括角色最深的欲求，驱动全书行动）",
+          arc: { start: "（起点状态：角色开篇的认知/处境/情感）", end: "（终点状态：角色最终的转变）" },
+          alias: "（可选：别名/称号，无则省略该字段）",
+          voiceAnchor: { sentenceLength: "（句长特征）", vocabulary: "（词汇特征）", directness: "（直率度）", avoidance: "（回避方式）" },
+        },
+      ],
+    }, null, 2));
+    lines.push("```");
+    lines.push("");
+    lines.push("注意：voiceAnchor 是 optional 字段，若该角色本章无声部表现可省略；但 id/name/role/motivation/arc 是 required，必须覆盖。");
+    lines.push("");
+  }
 
   return lines.join("\n");
 }

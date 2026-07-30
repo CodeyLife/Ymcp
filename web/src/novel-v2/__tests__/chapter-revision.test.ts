@@ -73,7 +73,7 @@ describe("chapter revision windows", () => {
     });
 
     expect(prompt).toContain("作者补充修改要求");
-    expect(prompt).toContain("保留克制语气，并通过门轴阻滞表现人物犹豫。");
+    expect(prompt).toContain("保留克制语气，并通过门轴阻滞表现人物犹豫");
     expect(prompt).toContain("不得借反馈越过目标段落或新增未建立事实");
   });
 
@@ -100,12 +100,48 @@ describe("chapter revision windows", () => {
     expect(prompt).toContain("逐项落实作者策略和审核问题");
   });
 
-  it("translates dialogue complaints into scene-level revision strategy instead of string bans", () => {
+  it("passes author feedback through as-is and provides genre-agnostic intent contract (no keyword matching)", () => {
+    // P1-3: 旧实现用正则匹配 5 类关键词，作者用新词（如"散文化""太干巴巴"）会被静默忽略。
+    // 新实现：原文透传 + 6 类意图契约，让 LLM 自识别任意自然语言反馈。
     const brief = buildAuthorRevisionBrief("对白设计太烂了，女主高冷一点，不要强调道和理，只引发读者好奇。");
 
-    expect(brief).toContain("对白策略");
-    expect(brief).toContain("少回应、少解释");
-    expect(brief).toContain("避免把体系规则和抽象判断直接说出口");
-    expect(brief).toContain("第一印象和好奇心");
+    // 1. 作者原文必须透传，不做关键词过滤
+    expect(brief).toContain("对白设计太烂了");
+    expect(brief).toContain("女主高冷一点");
+    expect(brief).toContain("不要强调道和理");
+    expect(brief).toContain("只引发读者好奇");
+
+    // 2. 6 类意图契约必须全部存在（覆盖作者反馈的完整空间）
+    expect(brief).toContain("叙事节奏");
+    expect(brief).toContain("对白风格");
+    expect(brief).toContain("情感基调");
+    expect(brief).toContain("信息密度");
+    expect(brief).toContain("视角处理");
+    expect(brief).toContain("场景策略");
+
+    // 3. 意图识别契约必须明确告知 LLM "不限于示例词"
+    expect(brief).toContain("不限于下方列举的示例词");
+
+    // 4. 跨题材正例必须存在（让 LLM 看到如何从模糊反馈提取意图）
+    expect(brief).toContain("跨题材正例");
+    expect(brief).toContain("太干巴巴");
+  });
+
+  it("handles genre-agnostic feedback words that original regex missed (散文化/节奏慢/太干巴巴)", () => {
+    // P1-3 回归测试：这些词在原正则中均不命中，反馈会被静默丢弃。
+    // 新实现：原文透传 + 意图契约，LLM 能从任意词识别意图。
+    const brief = buildAuthorRevisionBrief("这段太干巴巴，散文化一点，节奏太慢。");
+
+    expect(brief).toContain("这段太干巴巴");
+    expect(brief).toContain("散文化一点");
+    expect(brief).toContain("节奏太慢");
+    // 意图契约仍存在（不因反馈词未命中正则而丢失）
+    expect(brief).toContain("叙事节奏");
+    expect(brief).toContain("信息密度");
+  });
+
+  it("returns default brief when no author instruction provided", () => {
+    const brief = buildAuthorRevisionBrief(undefined);
+    expect(brief).toContain("无作者补充取舍");
   });
 });
