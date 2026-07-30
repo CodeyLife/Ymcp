@@ -8,6 +8,7 @@ import type { ContentObjectStore } from "../object-store";
 import type { MemoryIndex } from "../qdrant-memory";
 import { characterEnrichmentSchema, type CharacterEnrichmentOutput } from "../prompts/schemas";
 import { buildCharacterEnrichmentPrompt } from "./prompt";
+import { compileStageContext } from "../stage-context";
 
 /**
  * 识别 motivationDelta 的"无变化"占位标记。
@@ -118,17 +119,20 @@ export async function enrichCharactersFromChapter(input: EnrichCharactersInput, 
     text: input.text,
     existingCharactersDigest,
   });
+  const system = "你是角色富化提取 Worker。只输出符合 JSON Schema 的 JSON。只提取正文实际呈现的内容，不提取读者推断或作者意图。";
+  const promptPackage = compileStageContext({ projectId: input.projectId, workflowId: input.workflowRunId ?? input.artifact.taskId, purpose: "facts.extract", stage: "fact-extraction", system, schema: characterEnrichmentSchema as unknown as Record<string, unknown>, maxInputTokens: 128_000, reservedOutputTokens: 4_096, sections: [{ id: "character-enrichment-fallback", kind: "manuscript", title: "角色变化回退提取", text: prompt, priority: "critical", provenanceRefs: [input.artifact.id, input.revisionId] }] });
 
   const generated = await input.model.generateStructured<CharacterEnrichmentOutput>({
     purpose: "facts.extract",
-    system: "你是角色富化提取 Worker。只输出符合 JSON Schema 的 JSON。只提取正文实际呈现的内容，不提取读者推断或作者意图。",
-    prompt,
+    system,
+    prompt: promptPackage.instruction,
     schema: characterEnrichmentSchema as unknown as Record<string, unknown>,
     schemaName: "character-enrichment",
     routingSnapshot: input.routingSnapshot,
     candidateStartIndex: input.candidateStartIndex,
     workflowRunId: input.workflowRunId,
     taskId: input.taskId,
+    promptContext: promptPackage.manifest,
   });
 
   const output = generated.value;

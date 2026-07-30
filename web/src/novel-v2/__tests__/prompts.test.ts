@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildChapterDraftPrompt } from "../prompts/chapter-draft";
-import { buildChapterReviewPrompt, getReviewFocus, toReview, type ReviewerRole } from "../prompts/chapter-review";
+import { buildChapterDraftPrompt, buildChapterDraftPromptPackage } from "../prompts/chapter-draft";
+import { buildChapterReviewPrompt, buildChapterReviewPromptPackage, getReviewFocus, toReview, type ReviewerRole } from "../prompts/chapter-review";
 import { REVIEW_DIMENSIONS, type ReviewerOutput } from "../prompts/schemas";
 import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent } from "../protocol";
 
@@ -147,6 +147,19 @@ describe("prompts buildChapterDraftPrompt", () => {
     expect(prompt).toContain("longform-continuity@1.0.0");
     expect(prompt).toContain("gates=continuity");
   });
+
+  it("compiles draft sources into independently budgeted manifest sections", () => {
+    const packageResult = buildChapterDraftPromptPackage({
+      workflowId: "wf-draft",
+      system: "writer",
+      intent: makeIntent(),
+      blueprint: makeBlueprint({ budget: { maxInputTokens: 20_000, maxOutputTokens: 4_000 } }),
+      memory: makeMemory({ claims: [{ id: "claim-1", projectId: "p1", kind: "canonical", title: "钥匙", content: "主角持有旧钥匙", subjectRefs: ["hero"], knowledgeScope: "author", authority: "approved", confidence: 1, sourceRevisionIds: [], contentHash: "claim-hash", supersedes: [], score: 1, matchedFacet: "fact", reason: "test" }] }),
+      skills: makeSkills({ skills: [{ skillId: "dialogue", version: "1.0.0", qualityGates: ["dialogue"], promptSections: { drafting: "对白以行动和停顿承载潜台词。" } }] }),
+    });
+    expect(packageResult.manifest.sections.map((section) => section.id)).toEqual(expect.arrayContaining(["draft-instruction", "execution-blueprint", "memory:claim-1", "skill:dialogue"]));
+    expect(packageResult.instruction.match(/对白以行动和停顿承载潜台词。/g)).toHaveLength(1);
+  });
 });
 
 describe("prompts buildChapterReviewPrompt", () => {
@@ -199,6 +212,22 @@ describe("prompts buildChapterReviewPrompt", () => {
     expect(prompt).toContain("[approved/canonical]");
     expect(prompt).toContain("hero");
     expect(prompt).toContain("事实一");
+  });
+
+  it("injects dynamic reviewer skills only once in the compiled package", () => {
+    const packageResult = buildChapterReviewPromptPackage({
+      workflowId: "wf-review",
+      system: "reader reviewer",
+      role: "reader-reviewer",
+      artifact,
+      text: "第一段。",
+      blueprint: makeBlueprint({ budget: { maxInputTokens: 20_000, maxOutputTokens: 4_000 } }),
+      memory: makeMemory(),
+      skills: makeSkills({ skills: [{ skillId: "reader-specific", version: "1.0.0", qualityGates: [], promptSections: { review: "唯一审校规则：关注隐含冲突。" } }] }),
+      payoffStats: { recentChapters: [], consecutiveNoPayoff: 2, totalPayoffs: 0, byType: {} },
+    });
+    expect(packageResult.instruction.match(/唯一审校规则：关注隐含冲突。/g)).toHaveLength(1);
+    expect(packageResult.manifest.sections.filter((section) => section.id === "payoff-stats")).toHaveLength(1);
   });
 });
 

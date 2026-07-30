@@ -53,8 +53,10 @@ import {
   useNovelRunArtifacts,
   useNovelRunEvents,
   useNovelRunReviews,
+  useNovelRunPromptExecutions,
   useCancelNovelRun,
   useCreateChapterReviewIssue,
+  useReplacePendingArtifact,
   useSignalHumanDecision,
   useSaveNovelDocumentContent,
   useSubmitChapterReview,
@@ -67,6 +69,7 @@ import {
   type NovelChapterWorkspace,
   type NovelChapterReviewIssue,
   type NovelReviewSummary,
+  type NovelPromptExecution,
   type NovelRunEvent,
   type NovelRunState,
   type NovelWorkflowRunRecord,
@@ -538,8 +541,8 @@ function RunStatusPanel({ run, document, superseded }: { run?: NovelRunState; do
   return <Alert type="info" showIcon message={`运行${statusMeta(run.status).label}`} description={stage ? `当前正在执行“${STAGE_META.find((item) => item.stage === stage)?.label ?? stage}”，完成后会自动刷新。` : "Runtime 已受理任务，正在准备执行上下文。"} />;
 }
 
-/** 章节正文工作台：纯文本是唯一事实源，保存与重新审校是两个显式动作。 */
-function ManuscriptWorkbench({ projectId, documentId, workspace, loading, error, onRefresh, activeParagraph, onDirtyChange }: { projectId: string; documentId?: string; workspace?: NovelChapterWorkspace; loading?: boolean; error?: boolean; onRefresh?: () => void; activeParagraph?: number; onDirtyChange?: (dirty: boolean) => void }) {
+/** 章节正文工作台：纯文本是唯一事实源，保存、重审、从蓝图重写是三个显式动作。 */
+function ManuscriptWorkbench({ projectId, documentId, workspace, loading, error, onRefresh, activeParagraph, onDirtyChange, onRegenerateFromBlueprint }: { projectId: string; documentId?: string; workspace?: NovelChapterWorkspace; loading?: boolean; error?: boolean; onRefresh?: () => void; activeParagraph?: number; onDirtyChange?: (dirty: boolean) => void; onRegenerateFromBlueprint?: () => void }) {
   const [mode, setMode] = useState<"read" | "edit" | "diff">("read");
   const [edited, setEdited] = useState("");
   const save = useSaveNovelDocumentContent(projectId, documentId);
@@ -604,6 +607,20 @@ function ManuscriptWorkbench({ projectId, documentId, workspace, loading, error,
           )}
           {mode === "edit" && dirty && <Button size="small" icon={<SaveOutlined />} loading={save.isPending} onClick={() => void handleSave()}>保存</Button>}
           {content && <Button size="small" type="primary" loading={submit.isPending || save.isPending} onClick={() => void handleSubmit()}>{dirty ? "保存并重新审校" : "重新审校"}</Button>}
+          {content && onRegenerateFromBlueprint && (
+            <Popconfirm
+              title="从蓝图重新生成本章？"
+              description="会重新进入章节蓝图/草稿/审核/事实/提交流水线，当前定稿会保留到你批准新候选稿之后。"
+              okText="从蓝图重写"
+              cancelText="取消"
+              onConfirm={onRegenerateFromBlueprint}
+              disabled={dirty}
+            >
+              <Tooltip title={dirty ? "正文有未保存修改，请先保存或放弃编辑" : "不是基于审核意见局部修复，而是从章节蓝图重新生成整章候选"}>
+                <span><Button size="small" icon={<ReloadOutlined />} disabled={dirty}>从蓝图重写</Button></span>
+              </Tooltip>
+            </Popconfirm>
+          )}
         </span>
       </header>
       {loading && <div className="pb-loading"><LoadingOutlined /> 加载正文…</div>}
@@ -763,17 +780,43 @@ function RunningWorkspace({ run, artifacts, reviews, events, onCancel, cancellin
   </section>;
 }
 
-function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssueCount = 0, loading, quality, onApprove, onAbandon, onReviseAgain, onRevisePrevious, deciding, revisingAgain = false }: { text: string; baseText?: string; targeted?: boolean; targetIssueCount?: number; loading: boolean; quality: QualityData; onApprove: () => void; onAbandon: () => void; onReviseAgain?: (feedback?: string) => void; onRevisePrevious?: (feedback?: string) => void; deciding: boolean; revisingAgain?: boolean }) {
+function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssueCount = 0, goal, alignment, loading, quality, onApprove, onAbandon, onReviseAgain, onRevisePrevious, onSaveReplacement, saving = false, deciding, revisingAgain = false }: { text: string; baseText?: string; targeted?: boolean; targetIssueCount?: number; goal?: { authorInstruction?: string; acceptanceCriteria?: string[] }; alignment?: { satisfied?: boolean; summary?: string; unmetRequirements?: string[] }; loading: boolean; quality: QualityData; onApprove: () => void; onAbandon: () => void; onReviseAgain?: (feedback?: string) => void; onRevisePrevious?: (feedback?: string) => void; onSaveReplacement: (plainText: string) => Promise<void>; saving?: boolean; deciding: boolean; revisingAgain?: boolean }) {
   const [activeIssue, setActiveIssue] = useState<number>();
   const [feedback, setFeedback] = useState("");
-  const [view, setView] = useState<"diff" | "text">(targeted ? "diff" : "text");
+  const [view, setView] = useState<"diff" | "text" | "edit">(targeted ? "diff" : "text");
+  const [editedText, setEditedText] = useState(text);
   const paragraphRefs = useRef<Array<HTMLParagraphElement | null>>([]);
+  useEffect(() => { setEditedText(text); }, [text]);
+  useEffect(() => { if (!targeted && view === "diff" && baseText === undefined) setView("text"); }, [baseText, targeted, view]);
+  const editDirty = editedText !== text;
   const paragraphs = useMemo(() => text.split(/\n\s*\n/u).map((item) => item.trim()).filter(Boolean), [text]);
   const issueParagraphs = useMemo(() => quality.issues.map((issue) => {
     const needle = (issue.excerpt ?? "").replace(/\s+/gu, "").slice(0, 60);
     return needle ? paragraphs.findIndex((paragraph) => paragraph.replace(/\s+/gu, "").includes(needle)) : -1;
   }), [paragraphs, quality.issues]);
   const hasSeriousIssue = quality.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major");
+
+  function requireSavedEdits(action: () => void) {
+    if (editDirty) {
+      message.warning("候选正文有未保存修改，请先保存或放弃编辑后再继续");
+      setView("edit");
+      return;
+    }
+    action();
+  }
+
+  async function saveReplacement() {
+    if (!editedText.trim()) {
+      message.error("候选正文不能为空");
+      return;
+    }
+    if (!editDirty) {
+      message.info("候选正文没有变化");
+      return;
+    }
+    await onSaveReplacement(editedText);
+    setView(targeted && baseText !== undefined ? "diff" : "text");
+  }
 
   function focusIssue(index: number) {
     setActiveIssue(index);
@@ -783,11 +826,17 @@ function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssu
 
   return <div className="pb-review-workspace">
     <section className="pb-review-manuscript">
-      <header><div><span className="pb-eyebrow">候选正文</span><h3>审阅当前修订稿</h3></div><div className="pb-review-head-actions">{targeted && <Tag color="cyan">定向修复 {targetIssueCount} 条</Tag>}<Segmented size="small" value={view} onChange={(value) => setView(value as "diff" | "text")} options={[{ value: "diff", label: "差异" }, { value: "text", label: "正文" }]} />{quality.overall != null && <strong className="pb-review-score">{quality.overall.toFixed(1)}<small>/5</small></strong>}</div></header>
-      {loading ? <div className="pb-loading"><LoadingOutlined /> 加载候选正文…</div> : view === "diff" && baseText !== undefined ? <TextDiff baseText={baseText} newText={text} baseLabel="当前定稿" newLabel="AI 定向修订" emptyText="候选稿没有产生正文变化" /> : paragraphs.length ? <div className="pb-review-text">{paragraphs.map((paragraph, index) => <p key={index} ref={(node) => { paragraphRefs.current[index] = node; }} className={activeIssue !== undefined && issueParagraphs[activeIssue] === index ? "is-highlighted" : ""}>{paragraph}</p>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="候选正文尚未就绪" />}
+      <header><div><span className="pb-eyebrow">候选正文</span><h3>审阅当前修订稿</h3></div><div className="pb-review-head-actions">{targeted && <Tag color="cyan">定向修复 {targetIssueCount} 条</Tag>}{editDirty && <Tag color="gold">未保存修改</Tag>}<Segmented size="small" value={view} onChange={(value) => setView(value as "diff" | "text" | "edit")} options={[{ value: "diff", label: "差异", disabled: baseText === undefined }, { value: "text", label: "正文" }, { value: "edit", label: "编辑" }]} />{view === "edit" && <Button size="small" icon={<SaveOutlined />} loading={saving} disabled={!editDirty || loading} onClick={() => void saveReplacement()}>保存为本轮产物</Button>}{quality.overall != null && <strong className="pb-review-score">{quality.overall.toFixed(1)}<small>/5</small></strong>}</div></header>
+      {loading ? <div className="pb-loading"><LoadingOutlined /> 加载候选正文…</div> : view === "edit" ? <ManuscriptEditor key={`candidate-edit-${text.length}-${text.slice(0, 24)}`} value={editedText} onChange={setEditedText} minHeight={620} /> : view === "diff" && baseText !== undefined ? <TextDiff baseText={baseText} newText={text} baseLabel="当前定稿" newLabel={targeted ? "AI 定向修订 / 作者保存稿" : "候选稿 / 作者保存稿"} emptyText="候选稿没有产生正文变化" /> : paragraphs.length ? <div className="pb-review-text">{paragraphs.map((paragraph, index) => <p key={index} ref={(node) => { paragraphRefs.current[index] = node; }} className={activeIssue !== undefined && issueParagraphs[activeIssue] === index ? "is-highlighted" : ""}>{paragraph}</p>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="候选正文尚未就绪" />}
     </section>
     <aside className="pb-review-issues">
       <header><div><span className="pb-eyebrow">审校意见</span><h3>{quality.issues.length} 个问题需要判断</h3></div></header>
+      {(goal?.authorInstruction || goal?.acceptanceCriteria?.length) && <section className="pb-review-goal">
+        <div><strong>本轮修订目标</strong>{alignment?.satisfied === false ? <Tag color="red">仍有未满足项</Tag> : alignment?.satisfied ? <Tag color="green">语义检查通过</Tag> : <Tag>待核对</Tag>}</div>
+        {goal.authorInstruction && <p>{goal.authorInstruction}</p>}
+        {alignment?.unmetRequirements?.length ? <ul>{alignment.unmetRequirements.map((item) => <li key={item}>{item}</li>)}</ul> : goal.acceptanceCriteria?.length ? <ul>{goal.acceptanceCriteria.map((item) => <li key={item}>{item}</li>)}</ul> : null}
+        {alignment?.summary && <small>{alignment.summary}</small>}
+      </section>}
       {quality.issues.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有结构化问题记录" />}
       <div className="pb-review-issue-list">{quality.issues.map((issue, index) => <button type="button" key={`${issue.title ?? issue.rule}-${index}`} className={`pb-review-issue is-${issue.severity} ${activeIssue === index ? "is-active" : ""}`} onClick={() => focusIssue(index)}>
         <span>{issue.severity === "blocker" ? "阻断" : issue.severity === "major" ? "严重" : "提示"}</span><strong>{issue.title ?? issue.rule ?? "审校问题"}</strong>{issue.suggestion && <small>{issue.suggestion}</small>}
@@ -797,10 +846,10 @@ function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssu
     <footer className="pb-review-actions">
       <span>{targeted ? "可继续修订当前候选、退回上一版重做，或放弃整个工作流并保留开始时正文。" : "批准会接受当前候选稿并继续事实提取与正式提交。"}</span>
       <div>
-        {targeted && onRevisePrevious && <Button icon={<HistoryOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => onRevisePrevious(feedback.trim() || undefined)}>退回上一版继续修订</Button>}
-        {targeted && onReviseAgain && <Button icon={<RobotOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => onReviseAgain(feedback.trim() || undefined)}>按当前稿继续修订</Button>}
-        <Popconfirm title="放弃整个工作流？" description="候选稿会保留为历史产物，章节正文仍是本次工作流开始时的正式版本。" okText="确认放弃" cancelText="继续审阅" onConfirm={onAbandon}><Button danger icon={<CloseOutlined />} loading={deciding}>放弃本次工作流</Button></Popconfirm>
-        {hasSeriousIssue ? <Popconfirm title="仍有严重审校问题" description="确认以作者判断接受当前稿并继续定稿？" okText="仍然接受" cancelText="继续审阅" onConfirm={onApprove}><Button type="primary" icon={<CheckOutlined />} loading={deciding}>接受当前稿并定稿</Button></Popconfirm> : <Button type="primary" icon={<CheckOutlined />} loading={deciding} onClick={onApprove}>接受当前稿并定稿</Button>}
+        {targeted && onRevisePrevious && <Button icon={<HistoryOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => requireSavedEdits(() => onRevisePrevious(feedback.trim() || undefined))}>退回上一版继续修订</Button>}
+        {targeted && onReviseAgain && <Button icon={<RobotOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => requireSavedEdits(() => onReviseAgain(feedback.trim() || undefined))}>按当前稿继续修订</Button>}
+        <Popconfirm title="放弃整个工作流？" description="候选稿会保留为历史产物，章节正文仍是本次工作流开始时的正式版本。" okText="确认放弃" cancelText="继续审阅" onConfirm={() => requireSavedEdits(onAbandon)}><Button danger icon={<CloseOutlined />} loading={deciding}>放弃本次工作流</Button></Popconfirm>
+        {hasSeriousIssue ? <Popconfirm title="仍有严重审校问题" description="确认以作者判断接受当前稿并继续定稿？" okText="仍然接受" cancelText="继续审阅" onConfirm={() => requireSavedEdits(onApprove)}><Button type="primary" icon={<CheckOutlined />} loading={deciding}>接受当前稿并定稿</Button></Popconfirm> : <Button type="primary" icon={<CheckOutlined />} loading={deciding} onClick={() => requireSavedEdits(onApprove)}>接受当前稿并定稿</Button>}
       </div>
     </footer>
   </div>;
@@ -819,8 +868,8 @@ function FactReviewWorkspace({ candidates, loading, deciding, onDecide, onContin
   </section>;
 }
 
-function FinalWorkspace({ projectId, documentId, workspace, loading, error, onRefresh, activeParagraph, onDirtyChange }: { projectId: string; documentId?: string; workspace?: NovelChapterWorkspace; loading: boolean; error: boolean; onRefresh: () => void; activeParagraph?: number; onDirtyChange?: (dirty: boolean) => void }) {
-  return <ManuscriptWorkbench projectId={projectId} documentId={documentId} workspace={workspace} loading={loading} error={error} onRefresh={onRefresh} activeParagraph={activeParagraph} onDirtyChange={onDirtyChange} />;
+function FinalWorkspace({ projectId, documentId, workspace, loading, error, onRefresh, activeParagraph, onDirtyChange, onRegenerateFromBlueprint }: { projectId: string; documentId?: string; workspace?: NovelChapterWorkspace; loading: boolean; error: boolean; onRefresh: () => void; activeParagraph?: number; onDirtyChange?: (dirty: boolean) => void; onRegenerateFromBlueprint?: () => void }) {
+  return <ManuscriptWorkbench projectId={projectId} documentId={documentId} workspace={workspace} loading={loading} error={error} onRefresh={onRefresh} activeParagraph={activeParagraph} onDirtyChange={onDirtyChange} onRegenerateFromBlueprint={onRegenerateFromBlueprint} />;
 }
 
 function InterruptedReviewBanner({ run, retrying, onRetry, onOpenReview, onDismiss }: { run: NovelWorkflowRunRecord; retrying: boolean; onRetry: (instruction?: string) => void; onOpenReview: () => void; onDismiss: () => void }) {
@@ -940,6 +989,7 @@ function WorkflowInspector({
   artifacts,
   reviews,
   events,
+  promptExecutions,
   selectedStage,
   latestWorkflowId,
   onSelectWorkflow,
@@ -953,6 +1003,7 @@ function WorkflowInspector({
   artifacts: NovelArtifactSummary[];
   reviews: NovelReviewSummary[];
   events: NovelRunEvent[];
+  promptExecutions: NovelPromptExecution[];
   selectedStage: string | null;
   latestWorkflowId?: string;
   onSelectWorkflow: (workflowId: string) => void;
@@ -1032,6 +1083,27 @@ function WorkflowInspector({
       {latestReviewsByRole.map((review) => <article key={review.id}><strong>{review.role ?? review.reviewerId}</strong><span>{review.verdict}</span><b>{review.score?.toFixed(1) ?? "—"}<small>/5</small></b></article>)}
     </section>}
 
+    {promptExecutions.length > 0 && <details className="pb-workflow-prompts">
+      <summary><span><DatabaseOutlined /> 模型调用与上下文</span><b>{promptExecutions.length}</b></summary>
+      <div className="pb-prompt-call-list">{promptExecutions.slice(-12).reverse().map((execution) => {
+        const manifest = execution.contextManifest;
+        const sectionReceipts = manifest?.sections ?? [];
+        const included = sectionReceipts.filter((section) => section.status === "included").length;
+        const excluded = sectionReceipts.filter((section) => section.status !== "included").length;
+        return <details key={execution.id} className={`pb-prompt-call is-${execution.status}`}>
+          <summary><div><strong>{execution.purpose}</strong><small>{relativeTime(execution.createdAt)} · candidate {execution.candidateIndex + 1}</small></div><span>{manifest?.estimatedInputTokens?.toLocaleString() ?? "—"}<small> tokens</small></span></summary>
+          <div className="pb-prompt-call-meta">
+            {manifest?.goalId && <Tag color="cyan">目标 {manifest.goalId.slice(-8)}</Tag>}
+            {manifest?.maxInputTokens && <Tag>预算 {manifest.maxInputTokens.toLocaleString()}</Tag>}
+            {sectionReceipts.length > 0 && <Tag color="green">纳入 {included}</Tag>}
+            {excluded > 0 && <Tag color="gold">裁剪 {excluded}</Tag>}
+            {execution.errorCategory && <Tag color="red">{execution.errorCategory}</Tag>}
+          </div>
+          {sectionReceipts.length > 0 && <div className="pb-prompt-sections">{sectionReceipts.map((section) => <div key={`${execution.id}:${section.id}`} className={`is-${section.status}`}><span>{section.title}</span><small>{section.estimatedTokens} t · {section.reason}</small></div>)}</div>}
+        </details>;
+      })}</div>
+    </details>}
+
     {selectedWorkflowId && <details className="pb-workflow-activity">
       <summary>最近活动 <span>{events.length}</span></summary>
       <EventTimeline events={events.slice(-6)} />
@@ -1090,7 +1162,7 @@ export interface NovelProductionWorkspaceProps {
   workflowId?: string;
   stage?: string;
   onSelectionChange?: (selection: { documentId?: string; workflowId?: string; stage?: string }) => void;
-  onStartCreation?: (document: NovelDocumentSummary) => void;
+  onStartCreation?: (document: NovelDocumentSummary) => void | Promise<void>;
   onEditChapter?: (document: NovelDocumentSummary) => void;
   onDeleteChapter?: (document: NovelDocumentSummary) => void;
   onOpenKnowledge?: () => void;
@@ -1173,6 +1245,7 @@ export default function NovelProductionWorkspace({
   const diagnosticEventsQ = useNovelRunEvents(effectiveDiagnosticWfId, diagnosticActive);
   const diagnosticArtifactsQ = useNovelRunArtifacts(effectiveDiagnosticWfId, diagnosticActive);
   const diagnosticReviewsQ = useNovelRunReviews(effectiveDiagnosticWfId, diagnosticActive);
+  const diagnosticPromptsQ = useNovelRunPromptExecutions(effectiveDiagnosticWfId, diagnosticActive);
 
   useEffect(() => {
     if (selectedDocId) return;
@@ -1191,6 +1264,7 @@ export default function NovelProductionWorkspace({
   const quality = useMemo(() => deriveQuality(run, artifacts, reviews), [run, artifacts, reviews]);
   const diagnosticArtifacts = diagnosticArtifactsQ.data ?? [];
   const signal = useSignalHumanDecision(projectId, mainWorkflowId);
+  const replacePendingArtifact = useReplacePendingArtifact(projectId, mainWorkflowId);
   const gateDecisionRef = useRef<string | undefined>(undefined);
   const cancelRun = useCancelNovelRun(projectId, mainWorkflowId);
   const retryTargetedReview = useStartTargetedChapterRepair(projectId, selectedDocId);
@@ -1246,11 +1320,32 @@ export default function NovelProductionWorkspace({
     }
   }
 
+  async function handleSaveCandidateReplacement(plainText: string) {
+    if (!pendingArtifactId) {
+      message.error("运行记录缺少待审批 artifactId");
+      return;
+    }
+    try {
+      const result = await replacePendingArtifact.mutateAsync({ artifactId: pendingArtifactId, plainText });
+      gateDecisionRef.current = undefined;
+      message.success(`已保存为本轮候选产物（${result.wordCount.toLocaleString()} 字）`);
+      void runQ.refetch();
+      void artifactsQ.refetch();
+      void reviewsQ.refetch();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
   const renderGateWorkspace = () => {
     const gatePayload = run?.record?.payload ?? workspaceState.latestRun?.payload ?? {};
     if (liveWorkspaceMode === "manuscript-review") {
       const targeted = gatePayload.mode === "targeted" || liveReasonCode === "targeted-manuscript-approval";
       const targetIssueIds = Array.isArray(gatePayload.targetIssueIds) ? gatePayload.targetIssueIds.filter((value): value is string => typeof value === "string") : [];
+      const candidateArtifact = artifacts.find((artifact) => artifact.id === pendingArtifactId);
+      const goal = candidateArtifact?.structuredData?.stageGoal as { authorInstruction?: string; acceptanceCriteria?: string[] } | undefined;
+      const alignment = candidateArtifact?.structuredData?.authorAlignment as { satisfied?: boolean; summary?: string; unmetRequirements?: string[] } | undefined;
       const reviseAgain = async (feedback?: string) => {
         if (!targetIssueIds.length) {
           message.error("本次审批记录缺少可继续修复的审核意见");
@@ -1258,7 +1353,7 @@ export default function NovelProductionWorkspace({
         }
         await handleGateDecision("revise", feedback);
       };
-      return <CandidateReviewWorkspace text={candidateTextQ.data?.text ?? ""} baseText={workspaceQ.data?.content?.plainText} targeted={targeted} targetIssueCount={targetIssueIds.length} loading={candidateTextQ.isLoading} quality={quality} deciding={signal.isPending} revisingAgain={signal.isPending} onApprove={() => void handleGateDecision("approve")} onAbandon={() => void handleGateDecision("abandon", "作者放弃本次章节审校工作流")} onReviseAgain={targeted ? (feedback) => void reviseAgain(feedback) : undefined} onRevisePrevious={targeted ? (feedback) => void handleGateDecision("revise", feedback, "previous") : undefined} />;
+      return <CandidateReviewWorkspace text={candidateTextQ.data?.text ?? ""} baseText={workspaceQ.data?.content?.plainText} targeted={targeted} targetIssueCount={targetIssueIds.length} goal={goal} alignment={alignment} loading={candidateTextQ.isLoading} quality={quality} deciding={signal.isPending} revisingAgain={signal.isPending} saving={replacePendingArtifact.isPending} onSaveReplacement={handleSaveCandidateReplacement} onApprove={() => void handleGateDecision("approve")} onAbandon={() => void handleGateDecision("abandon", "作者放弃本次章节审校工作流")} onReviseAgain={targeted ? (feedback) => void reviseAgain(feedback) : undefined} onRevisePrevious={targeted ? (feedback) => void handleGateDecision("revise", feedback, "previous") : undefined} />;
     }
     if (liveWorkspaceMode === "fact-review") return <FactReviewWorkspace candidates={factsQ.data ?? []} loading={factsQ.isLoading} deciding={signal.isPending || factDecision.isPending} onDecide={(claimId, decision) => factDecision.mutate({ claimId, decision })} onContinue={() => void handleGateDecision("approve")} onAbort={() => void handleGateDecision("abandon", "作者放弃本次事实提交")} />;
     return null;
@@ -1291,7 +1386,7 @@ export default function NovelProductionWorkspace({
     if (liveWorkspaceMode === "manuscript-review" || liveWorkspaceMode === "fact-review") return renderGateWorkspace();
     if (workspaceState.mode === "final") return <>
       {interruptedReviewRun && interruptedReviewRun.temporalWorkflowId !== dismissedReviewRunId && <InterruptedReviewBanner run={interruptedReviewRun} retrying={retryTargetedReview.isPending} onRetry={(instruction) => void handleRetryTargetedReview(instruction)} onOpenReview={() => setContextTab("review")} onDismiss={() => { rememberDismissedReviewRun(projectId, interruptedReviewRun.temporalWorkflowId); setDismissedReviewRunId(interruptedReviewRun.temporalWorkflowId); }} />}
-      <FinalWorkspace projectId={projectId} documentId={selectedDocId} workspace={workspaceQ.data} loading={workspaceQ.isLoading} error={workspaceQ.isError} onRefresh={() => void workspaceQ.refetch()} activeParagraph={activeParagraph} onDirtyChange={setManuscriptDirty} />
+      <FinalWorkspace projectId={projectId} documentId={selectedDocId} workspace={workspaceQ.data} loading={workspaceQ.isLoading} error={workspaceQ.isError} onRefresh={() => void workspaceQ.refetch()} activeParagraph={activeParagraph} onDirtyChange={setManuscriptDirty} onRegenerateFromBlueprint={() => { void onStartCreation?.(selectedDocument); }} />
     </>;
     return <AttentionWorkspace mode={workspaceState.mode === "failed" ? "failed" : "stalled"} run={workspaceState.latestRun} onRetry={() => onStartCreation?.(selectedDocument)} onKnowledge={onOpenKnowledge} />;
   }
@@ -1344,6 +1439,7 @@ export default function NovelProductionWorkspace({
                 artifacts: diagnosticArtifacts,
                 reviews: diagnosticReviewsQ.data ?? [],
                 events: diagnosticEventsQ.data ?? [],
+                promptExecutions: diagnosticPromptsQ.data ?? [],
                 selectedStage,
                 latestWorkflowId: mainWorkflowId,
                 onSelectWorkflow: selectDiagnosticWorkflow,

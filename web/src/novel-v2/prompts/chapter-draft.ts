@@ -1,4 +1,4 @@
-import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent, SkillBundle } from "../protocol";
+import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent, SkillBundle, StagePromptPackage } from "../protocol";
 import { matchedFacetsOf } from "../cognition";
 import type { ChapterPlanningContext } from "../application/story-arc";
 import { renderChapterPlanningContext } from "./chapter-planning-context";
@@ -13,6 +13,7 @@ import {
   WRITER_PACING_AND_LONGFORM_RESERVE,
   WRITER_SCENE_AND_CHARACTER,
 } from "./writer-rules";
+import { compileStageContext } from "../stage-context";
 
 /**
  * 章尾形态：与 WRITER_CHAPTER_ENDING_HOOKS 等价但精简为单一段落。
@@ -70,6 +71,8 @@ export interface DraftPromptInput {
    */
   foundationArtifacts?: Artifact[];
   planningContext?: ChapterPlanningContext;
+  /** Build only the stable writing contract; dynamic sources are compiled as separate sections. */
+  instructionsOnly?: boolean;
 }
 
 function bulletList(items: string[], empty: string): string {
@@ -461,6 +464,17 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
     "",
   );
 
+  if (input.instructionsOnly) {
+    sections.push(
+      `## 本章意图\n- 目标：${intent.objective}\n- 来源：${intent.source}\n- 时间戳：${new Date(intent.createdAt).toISOString()}`,
+      "",
+      WRITER_GENERATION_SELF_CHECK,
+      "",
+      WRITER_FINAL_CHECK,
+    );
+    return sections.join("\n");
+  }
+
   // P0-B2: 注入前章爽点干旱提示，事前预防干旱
   if (payoffStats) {
     sections.push(
@@ -498,4 +512,38 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
   );
 
   return sections.join("\n");
+}
+
+export function dedupeDraftMemory(input: DraftPromptInput): MemoryBundle {
+  const directArtifactIds = new Set((input.foundationArtifacts ?? []).map((artifact) => artifact.id));
+  if (!directArtifactIds.size) return input.memory;
+  return {
+    ...input.memory,
+    id: `${input.memory.id}:without-direct-foundation`,
+    claims: input.memory.claims.filter((claim) => !claim.sourceArtifactId || !directArtifactIds.has(claim.sourceArtifactId)),
+  };
+}
+
+export function buildChapterDraftPromptPackage(input: DraftPromptInput & { workflowId: string; system: string }): StagePromptPackage {
+  const memory = dedupeDraftMemory(input);
+  const instruction = buildChapterDraftPrompt({ ...input, memory, foundationArtifacts: undefined, planningContext: undefined, payoffStats: undefined, instructionsOnly: true });
+  const memoryPriority = (authority: MemoryBundle["claims"][number]["authority"]) => authority === "author" || authority === "approved" ? "required" as const : authority === "derived" ? "normal" as const : "soft" as const;
+  return compileStageContext({
+    projectId: input.intent.projectId,
+    workflowId: input.workflowId,
+    purpose: "writing.draft",
+    stage: "drafting",
+    system: input.system,
+    maxInputTokens: input.blueprint.budget.maxInputTokens,
+    reservedOutputTokens: input.blueprint.budget.maxOutputTokens,
+    sections: [
+      { id: "draft-instruction", kind: "goal", title: "章节创作目标与写作契约", text: instruction, priority: "critical", provenanceRefs: [input.intent.id] },
+      ...((input.foundationArtifacts ?? []).map((artifact) => ({ id: `foundation:${artifact.id}`, kind: "planning" as const, title: `全书规划：${extractTaskKey(artifact)}`, text: buildFoundationContextMarkdown([artifact]), priority: "required" as const, provenanceRefs: [artifact.id], sourceArtifactId: artifact.id }))),
+      ...(input.planningContext ? [{ id: "planning-context", kind: "planning" as const, title: "冻结章节规划上下文", text: renderChapterPlanningContext(input.planningContext), priority: "required" as const, provenanceRefs: [input.blueprint.id] }] : []),
+      { id: "execution-blueprint", kind: "blueprint", title: "工作流执行编排", text: buildBlueprintSummary(input.blueprint, input.planningContext), priority: "required", provenanceRefs: [input.blueprint.id] },
+      ...memory.claims.map((claim) => ({ id: `memory:${claim.id}`, kind: "fact" as const, title: `冻结事实：${claim.title}`, text: claim.content, priority: memoryPriority(claim.authority), provenanceRefs: [claim.id, ...(claim.sourceArtifactId ? [claim.sourceArtifactId] : []), ...claim.sourceRevisionIds] })),
+      ...input.skills.skills.map((skill) => ({ id: `skill:${skill.skillId}`, kind: "skill" as const, title: `写作技能 ${skill.skillId}@${skill.version}`, text: [`gates=${skill.qualityGates.join(",")}`, skill.promptSections.drafting ?? ""].filter(Boolean).join("\n"), priority: "normal" as const, provenanceRefs: [`${skill.skillId}@${skill.version}`] })),
+      ...(input.payoffStats ? [{ id: "payoff-stats", kind: "background" as const, title: "前章爽点统计", text: buildPayoffDroughtMarkdown(input.payoffStats), priority: "normal" as const, provenanceRefs: [input.intent.projectId] }] : []),
+    ],
+  });
 }

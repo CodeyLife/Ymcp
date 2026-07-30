@@ -80,12 +80,51 @@ export const reviewerSchema = {
   },
 } as const;
 
+export function reviewerSchemaForDimensions(dimensions: readonly ReviewDimension[]): Record<string, unknown> {
+  const allowed = [...new Set(dimensions)];
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["verdict", "scores", "issues"],
+    properties: {
+      verdict: { enum: ["passed", "revise", "blocked"] },
+      scores: {
+        type: "object",
+        additionalProperties: false,
+        required: allowed,
+        properties: Object.fromEntries(allowed.map((dimension) => [dimension, { type: "number", minimum: 0, maximum: 5 }])),
+      },
+      issues: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion", "rewriteExample"],
+          properties: {
+            dimension: { enum: allowed },
+            severity: { enum: ["blocker", "major", "warning"] },
+            title: { type: "string", minLength: 1 },
+            description: { type: "string", minLength: 1 },
+            excerpt: { type: "string" },
+            paragraph: { type: "integer", minimum: 1 },
+            revisionRanges: { type: "array", items: { type: "object", additionalProperties: false, required: ["start", "end"], properties: { start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 } } } },
+            rule: { type: "string", minLength: 1 },
+            sourceId: { type: "string" },
+            suggestion: { type: "string", minLength: 1 },
+            rewriteExample: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+  };
+}
+
 /**
  * V2 reviewer 输出类型（由 reviewerSchema 推断）。
  */
 export interface ReviewerOutput {
   verdict: "passed" | "revise" | "blocked";
-  scores: Record<ReviewDimension, number>;
+  scores: Partial<Record<ReviewDimension, number>>;
   issues: Array<{
     dimension: ReviewDimension;
     severity: "blocker" | "major" | "warning";
@@ -480,6 +519,25 @@ export interface CharacterEnrichmentOutput {
     relationDeltas: Array<{ targetCharacterId: string; predicate: string; delta: string }>;
   }>;
 }
+
+/**
+ * A single extraction result consumed by facts, commit, chapter-memory and
+ * character-enrichment handlers. Optional derived fields preserve the
+ * per-handler fallback path for older runs and incomplete model output.
+ */
+export interface ChapterStateDelta extends FactExtractionOutput {
+  chapterMemory?: ChapterMemoryOutput;
+  characterDeltas?: CharacterEnrichmentOutput["characters"];
+}
+
+export const chapterStateDeltaSchema = {
+  ...factExtractionSchema,
+  properties: {
+    ...factExtractionSchema.properties,
+    chapterMemory: chapterMemorySchema,
+    characterDeltas: characterEnrichmentSchema.properties.characters,
+  },
+} as const;
 
 /**
  * 章节反思维度枚举：8 维度，与 reviewerSchema 的 REVIEW_DIMENSIONS 区分。

@@ -11,6 +11,7 @@ import {
   resolveProfileSecret,
   resolveRoute,
 } from "./model-routing";
+import type { PromptContextManifest } from "./protocol";
 
 export interface ModelUsage {
   model: string;
@@ -43,6 +44,7 @@ interface BaseModelInput {
   candidateStartIndex?: number;
   workflowRunId?: string;
   taskId?: string;
+  promptContext?: PromptContextManifest;
 }
 
 export interface GenerateTextInput extends BaseModelInput { prompt: string }
@@ -87,6 +89,30 @@ export interface ModelInvocationAudit {
 }
 
 export type ModelInvocationRecorder = (audit: ModelInvocationAudit) => Promise<void>;
+
+export interface ModelPromptExecution {
+  workflowRunId?: string;
+  taskId?: string;
+  purpose: ModelPurpose;
+  candidateIndex: number;
+  status: "completed" | "failed";
+  system?: string;
+  prompt: string;
+  response?: string;
+  promptFingerprint: string;
+  contextManifest?: PromptContextManifest;
+  errorCategory?: string;
+}
+
+export type ModelPromptExecutionRecorder = (execution: ModelPromptExecution) => Promise<void>;
+
+export class ModelContextBudgetError extends Error {
+  readonly category = "context-budget-exceeded";
+  constructor(readonly estimatedInputTokens: number, readonly maxInputTokens: number, readonly purpose: ModelPurpose) {
+    super(`context-budget-exceeded: ${purpose} 实际输入约 ${estimatedInputTokens} tokens，超过有效预算 ${maxInputTokens}`);
+    this.name = "ModelContextBudgetError";
+  }
+}
 
 interface TransportResponse {
   text: string;
@@ -362,14 +388,20 @@ export function normalizeStructuredContent<T>(content: string, validate: Validat
   return undefined;
 }
 
-function repairPrompt(schema: Record<string, unknown>, content: string, errors: string, attempt: number): string {
-  return [
+function repairPrompt(schema: Record<string, unknown>, originalTask: string, content: string, errors: string, attempt: number, maxInputTokens: number, system?: string): string {
+  const prefix = [
     attempt ? "上一次修复仍未通过。重新生成完整 JSON。" : "修复下面输出，使其严格符合 JSON Schema。",
-    "只输出 JSON，不得新增原输出没有的故事事实。",
+    "只输出 JSON。必须继续完成原始任务，不得只追求通过 Schema；不得新增原输出和原始任务依据中都不存在的故事事实。",
+    `原始任务与语义约束：\n${originalTask}`,
     `Schema:\n${JSON.stringify(schema)}`,
     `校验错误：${errors}`,
-    `原输出：\n${content}`,
   ].join("\n\n");
+  const maxCharacters = Number.isFinite(maxInputTokens) ? Math.max(0, maxInputTokens * 2 - (system?.length ?? 0) - prefix.length - 128) : content.length;
+  const retained = content.slice(0, maxCharacters);
+  const outputSection = retained
+    ? `${retained.length < content.length ? "原输出（因上下文预算仅保留开头，必要时按原始任务重新生成）" : "原输出"}：\n${retained}`
+    : "原输出因上下文预算未重复注入；请依据原始任务、Schema 和校验错误重新生成。";
+  return `${prefix}\n\n${outputSection}`;
 }
 
 function retryDelay(attempt: number): number { return [500, 1_000, 2_000][attempt] ?? 2_000; }
@@ -381,7 +413,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export class RoutedModelGateway implements ModelGateway {
-  constructor(readonly configStore: ModelConfigStore, private readonly recordInvocation?: ModelInvocationRecorder) {}
+  constructor(readonly configStore: ModelConfigStore, private readonly recordInvocation?: ModelInvocationRecorder, private readonly recordPromptExecution?: ModelPromptExecutionRecorder) {}
 
   getRoutingSnapshot(): ModelRoutingSnapshot { return this.configStore.getSnapshot(); }
 
@@ -405,16 +437,40 @@ export class RoutedModelGateway implements ModelGateway {
     if (this.recordInvocation) await this.recordInvocation(audit);
   }
 
+  private async recordPrompt(input: ModelPromptExecution): Promise<void> {
+    if (!this.recordPromptExecution) return;
+    try { await this.recordPromptExecution(input); }
+    catch (error) { console.warn(`[model-gateway] 提示词诊断留痕失败：${error instanceof Error ? error.message : String(error)}`); }
+  }
+
   private async invokeCandidate(input: BaseModelInput & { prompt: string; schema?: Record<string, unknown>; schemaName?: string }, snapshot: ModelRoutingSnapshot, route: ModelRoute, candidateIndex: number): Promise<{ response: TransportResponse; profile: ModelProviderProfile; model: string; provenance: ModelExecutionProvenance; latencyMs: number }> {
     const candidate = route.candidates[candidateIndex];
     const fingerprint = promptFingerprint(input.system, input.prompt);
     if (!candidate) throw new Error(`模型候选索引越界：${candidateIndex}`);
     if (candidate.executor === "external-mcp") {
+      const effectiveInputLimit = Math.min(route.maxInputTokens ?? Number.MAX_SAFE_INTEGER, input.promptContext?.maxInputTokens ?? Number.MAX_SAFE_INTEGER);
+      const estimatedInputTokens = Math.ceil(`${input.system ?? ""}\n${input.prompt}`.length / 2);
+      if (estimatedInputTokens > effectiveInputLimit) {
+        const error = new ModelContextBudgetError(estimatedInputTokens, effectiveInputLimit, input.purpose);
+        await this.recordPrompt({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, candidateIndex, status: "failed", system: input.system, prompt: input.prompt, promptFingerprint: fingerprint, contextManifest: input.promptContext, errorCategory: error.category });
+        await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex, executor: "external-mcp", model: "external-mcp", status: "failed", inputTokens: estimatedInputTokens, outputTokens: 0, estimatedInputTokens, estimatedOutputTokens: 0, usageSource: "estimated", latencyMs: 0, promptFingerprint: fingerprint, errorCategory: error.category });
+        throw error;
+      }
       await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex, executor: "external-mcp", model: "external-mcp", status: "waiting-external", inputTokens: 0, outputTokens: 0, latencyMs: 0, promptFingerprint: fingerprint });
       throw new ExternalMcpRequiredError(input.purpose, snapshot.id, candidateIndex);
     }
     const profile = this.resolveProfile(snapshot, candidate.profileId);
     const model = candidate.model ?? profile.model;
+    const outputReserve = Math.max(1, Math.min(input.maxTokens ?? route.maxOutputTokens ?? 4_096, route.maxOutputTokens ?? Number.MAX_SAFE_INTEGER));
+    const profileInputLimit = profile.contextWindow ? Math.max(0, profile.contextWindow - outputReserve) : Number.MAX_SAFE_INTEGER;
+    const effectiveInputLimit = Math.min(route.maxInputTokens ?? Number.MAX_SAFE_INTEGER, input.promptContext?.maxInputTokens ?? Number.MAX_SAFE_INTEGER, profileInputLimit);
+    const estimatedInputTokens = Math.ceil(`${input.system ?? ""}\n${input.prompt}`.length / 2);
+    if (estimatedInputTokens > effectiveInputLimit) {
+      const error = new ModelContextBudgetError(estimatedInputTokens, effectiveInputLimit, input.purpose);
+      await this.recordPrompt({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, candidateIndex, status: "failed", system: input.system, prompt: input.prompt, promptFingerprint: fingerprint, contextManifest: input.promptContext, errorCategory: error.category });
+      await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex, executor: "api", profileId: profile.id, protocol: profile.protocol, model, status: "failed", inputTokens: estimatedInputTokens, outputTokens: 0, estimatedInputTokens, estimatedOutputTokens: 0, usageSource: "estimated", latencyMs: 0, promptFingerprint: fingerprint, errorCategory: error.category });
+      throw error;
+    }
     const started = Date.now();
     let attempt = 0;
     let previousResponseId = route.conversationPolicy === "task-chain" && input.previousProfileId === profile.id
@@ -427,6 +483,7 @@ export class RoutedModelGateway implements ModelGateway {
         if (!response.text.trim()) throw new ModelTransportError("模型返回空内容", true, "empty-response");
         const latencyMs = Date.now() - started;
         const provenance: ModelExecutionProvenance = { routeSnapshotId: snapshot.id, purpose: input.purpose, candidateIndex, executor: "api", profileId: profile.id, protocol: profile.protocol, model, responseId: response.responseId, promptFingerprint: fingerprint };
+        await this.recordPrompt({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, candidateIndex, status: "completed", system: input.system, prompt: input.prompt, response: response.text, promptFingerprint: fingerprint, contextManifest: input.promptContext });
         return { response, profile, model, provenance, latencyMs };
       } catch (error) {
         if (previousResponseId && !continuationFallbackUsed && error instanceof ModelTransportError && error.status === 400) {
@@ -439,7 +496,9 @@ export class RoutedModelGateway implements ModelGateway {
           continue;
         }
         const latencyMs = Date.now() - started;
-        await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex, executor: "api", profileId: profile.id, protocol: profile.protocol, model, status: "failed", inputTokens: 0, outputTokens: 0, latencyMs, promptFingerprint: fingerprint, errorCategory: error instanceof ModelTransportError ? error.category : "protocol" });
+        const errorCategory = error instanceof ModelTransportError ? error.category : error instanceof ModelContextBudgetError ? error.category : "protocol";
+        await this.recordPrompt({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, candidateIndex, status: "failed", system: input.system, prompt: input.prompt, promptFingerprint: fingerprint, contextManifest: input.promptContext, errorCategory });
+        await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex, executor: "api", profileId: profile.id, protocol: profile.protocol, model, status: "failed", inputTokens: 0, outputTokens: 0, latencyMs, promptFingerprint: fingerprint, errorCategory });
         throw error;
       }
     }
@@ -478,12 +537,13 @@ export class RoutedModelGateway implements ModelGateway {
         // Some OpenAI-compatible providers accept response_format but do not
         // enforce it. Keep the schema in the same coherent user payload so the
         // output contract remains explicit even on compatibility transports.
-        let currentPrompt = [
+        const originalPrompt = [
           input.prompt,
           "## 结构化输出契约",
           "只输出一个严格符合下列 JSON Schema 的 JSON 值，不使用 Markdown，不在 JSON 前后添加说明。",
           JSON.stringify(input.schema),
         ].join("\n\n");
+        let currentPrompt = originalPrompt;
         let currentSystem = input.system;
         let totalInput = 0;
         let totalOutput = 0;
@@ -521,8 +581,16 @@ export class RoutedModelGateway implements ModelGateway {
             await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: latest.profile.id, protocol: latest.profile.protocol, model: latest.model, status: "failed", inputTokens: totalInput, outputTokens: totalOutput, providerInputTokens: providerInputSeen ? providerInputTotal : undefined, providerOutputTokens: providerOutputSeen ? providerOutputTotal : undefined, estimatedInputTokens: estimatedInputTotal, estimatedOutputTokens: estimatedOutputTotal, usageSource: providerInputComplete && providerOutputComplete ? "provider" : providerInputSeen || providerOutputSeen ? "mixed" : "estimated", latencyMs: latest.latencyMs, promptFingerprint: latest.provenance.promptFingerprint, responseId: latest.response.responseId, errorCategory: "schema-validation" });
             throw new ModelTransportError(`结构化输出校验失败：${errors}`, false, "schema-validation");
           }
-          currentPrompt = repairPrompt(input.schema, latest.response.text, errors, repair);
-          currentSystem = "只输出严格符合 JSON Schema 的 JSON，不使用 Markdown。";
+          const repairSystem = [input.system, "修复结构化输出时仍须遵守原始角色、任务目标和事实边界。只输出严格符合 JSON Schema 的 JSON，不使用 Markdown。"].filter(Boolean).join("\n\n");
+          const candidate = route.candidates[index];
+          let repairInputLimit = Math.min(route.maxInputTokens ?? Number.MAX_SAFE_INTEGER, input.promptContext?.maxInputTokens ?? Number.MAX_SAFE_INTEGER);
+          if (candidate?.executor === "api") {
+            const profile = this.resolveProfile(snapshot, candidate.profileId);
+            const outputReserve = Math.max(1, Math.min(input.maxTokens ?? route.maxOutputTokens ?? 4_096, route.maxOutputTokens ?? Number.MAX_SAFE_INTEGER));
+            if (profile.contextWindow) repairInputLimit = Math.min(repairInputLimit, Math.max(0, profile.contextWindow - outputReserve));
+          }
+          currentSystem = repairSystem;
+          currentPrompt = repairPrompt(input.schema, input.prompt, latest.response.text, errors, repair, repairInputLimit, repairSystem);
         }
       } catch (error) {
         if (error instanceof ExternalMcpRequiredError) throw error;

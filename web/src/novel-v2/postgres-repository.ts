@@ -42,7 +42,7 @@ import type {
   TaskAttemptRecord,
   WorkflowRunRecord,
 } from "./protocol";
-import type { ModelInvocationAudit } from "./model-gateway";
+import type { ModelInvocationAudit, ModelPromptExecution } from "./model-gateway";
 import type { ModelRoutingConfig, ModelRoutingSnapshot, ModelTaskRecord, ModelWorkPackage } from "./model-routing";
 import type { ObjectStoreAdapter } from "./object-store";
 import { countNovelCharacters } from "./word-count";
@@ -675,6 +675,78 @@ export class NovelPostgresRepository {
     return this.getProjectDetail(input.projectId);
   }
 
+  async recordPromptExecution(input: ModelPromptExecution, objects: ObjectStoreAdapter): Promise<void> {
+    if (!input.workflowRunId || !input.taskId) return;
+    const promptObject = await objects.putText(JSON.stringify({ system: input.system, prompt: input.prompt }));
+    const responseObject = input.response === undefined ? undefined : await objects.putText(input.response);
+    const retentionDays = Math.max(1, Number(process.env.NOVEL_PROMPT_RETENTION_DAYS ?? 30));
+    const id = `prompt:${randomUUID()}`;
+    await this.pool.query(
+      `INSERT INTO prompt_executions(id,workflow_run_id,task_id,purpose,candidate_index,status,prompt_fingerprint,response_fingerprint,prompt_object_key,response_object_key,context_manifest,error_category,expires_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()+($13::text || ' days')::interval)`,
+      [id, input.workflowRunId, input.taskId, input.purpose, input.candidateIndex, input.status, input.promptFingerprint, responseObject?.hash ?? null, promptObject.key, responseObject?.key ?? null, input.contextManifest ?? null, input.errorCategory ?? null, retentionDays],
+    );
+  }
+
+  async listPromptExecutions(workflowId: string) {
+    const result = await this.pool.query<{
+      id: string; workflow_run_id: string; task_id: string; purpose: string; candidate_index: number; status: string;
+      prompt_fingerprint: string; response_fingerprint: string | null; prompt_object_key: string | null; response_object_key: string | null;
+      context_manifest: Record<string, unknown> | null; error_category: string | null; expires_at: Date | string; created_at: Date | string;
+    }>(`SELECT * FROM prompt_executions WHERE workflow_run_id=$1 ORDER BY created_at,id`, [workflowId]);
+    return result.rows.map((row) => ({
+      id: row.id,
+      workflowId: row.workflow_run_id,
+      taskId: row.task_id,
+      purpose: row.purpose,
+      candidateIndex: row.candidate_index,
+      status: row.status,
+      promptFingerprint: row.prompt_fingerprint,
+      responseFingerprint: row.response_fingerprint ?? undefined,
+      contextManifest: row.context_manifest ?? undefined,
+      errorCategory: row.error_category ?? undefined,
+      expiresAt: iso(row.expires_at),
+      createdAt: iso(row.created_at),
+      snapshotAvailable: Boolean(row.prompt_object_key) && new Date(row.expires_at).getTime() > Date.now(),
+    }));
+  }
+
+  async getPromptExecutionSnapshot(id: string, objects: ObjectStoreAdapter) {
+    const result = await this.pool.query<{ prompt_object_key: string | null; response_object_key: string | null }>("SELECT prompt_object_key,response_object_key FROM prompt_executions WHERE id=$1 AND expires_at>now()", [id]);
+    const row = result.rows[0];
+    if (!row?.prompt_object_key) return undefined;
+    return {
+      prompt: await objects.getText(row.prompt_object_key),
+      response: row.response_object_key ? await objects.getText(row.response_object_key) : undefined,
+    };
+  }
+
+  async cleanupExpiredPromptExecutions(): Promise<{ deleted: number; orphanedObjectKeys: string[] }> {
+    const expired = await this.pool.query<{ prompt_object_key: string | null; response_object_key: string | null }>(`
+      WITH snapshots AS (
+        SELECT id,prompt_object_key,response_object_key FROM prompt_executions
+        WHERE expires_at<=now() AND (prompt_object_key IS NOT NULL OR response_object_key IS NOT NULL)
+        FOR UPDATE
+      ), cleared AS (
+        UPDATE prompt_executions AS execution
+        SET prompt_object_key=NULL,response_object_key=NULL
+        FROM snapshots WHERE execution.id=snapshots.id
+        RETURNING snapshots.prompt_object_key,snapshots.response_object_key
+      )
+      SELECT * FROM cleared
+    `);
+    const keys = [...new Set(expired.rows.flatMap((row) => [row.prompt_object_key, row.response_object_key]).filter((key): key is string => Boolean(key)))];
+    if (!keys.length) return { deleted: 0, orphanedObjectKeys: [] };
+    const referenced = await this.pool.query<{ object_key: string }>(`
+      SELECT prompt_object_key AS object_key FROM prompt_executions WHERE prompt_object_key=ANY($1)
+      UNION SELECT response_object_key FROM prompt_executions WHERE response_object_key=ANY($1)
+      UNION SELECT object_key FROM content_blobs WHERE object_key=ANY($1)
+      UNION SELECT object_key FROM artifacts WHERE object_key=ANY($1)
+    `, [keys]);
+    const retained = new Set(referenced.rows.map((row) => row.object_key));
+    return { deleted: expired.rowCount ?? 0, orphanedObjectKeys: keys.filter((key) => !retained.has(key)) };
+  }
+
   async saveBookSynopsisIfCurrent(input: { projectId: string; sourceFingerprint: string; synopsis: BookSynopsisRecord }): Promise<boolean> {
     const client = await this.pool.connect();
     try {
@@ -863,6 +935,30 @@ export class NovelPostgresRepository {
     await this.pool.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,model_provenance,score,role,dimension_scores) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO NOTHING", [review.id, review.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.modelProvenance ? JSON.stringify(review.modelProvenance) : null, review.score ?? null, review.role ?? null, JSON.stringify(review.dimensionScores ?? {})]);
     if (options.refreshChapterSnapshot !== false) await this.refreshChapterReviewSnapshot(review.artifactId);
     return review;
+  }
+
+  async getReviewsByIds(ids: string[]): Promise<Review[]> {
+    if (!ids.length) return [];
+    const result = await this.pool.query<any>("SELECT * FROM reviews WHERE id=ANY($1::text[])", [ids]);
+    const byId = new Map<string, Review>(result.rows.map((row) => [row.id, {
+      id: row.id,
+      projectId: row.project_id,
+      artifactId: row.artifact_id,
+      reviewerId: row.reviewer_id,
+      identity: row.identity,
+      verdict: row.verdict,
+      artifactFingerprint: row.artifact_fingerprint,
+      issues: row.issues ?? [],
+      score: row.score === null ? undefined : Number(row.score),
+      role: row.role ?? undefined,
+      dimensionScores: row.dimension_scores ?? {},
+      modelProvenance: row.model_provenance ?? undefined,
+      createdAt: new Date(row.created_at).getTime(),
+    }]));
+    return ids.flatMap((id) => {
+      const review = byId.get(id);
+      return review ? [review] : [];
+    });
   }
 
   async expireModelTask(taskId: string, reason: string): Promise<void> {
@@ -1460,6 +1556,75 @@ export class NovelPostgresRepository {
       [workflowId, artifactId],
     );
     return result.rows[0] ? workflowFromRow(result.rows[0]) : undefined;
+  }
+
+  async replacePendingHumanArtifact(input: { workflowId: string; currentArtifactId: string; replacement: Artifact; authorId: string }) {
+    const editedAt = new Date().toISOString();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const locked = await client.query<WorkflowRunRow>(
+        `SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at
+         FROM workflow_runs
+         WHERE temporal_workflow_id=$1
+           AND project_id=$2
+           AND status='manual-review-required'
+           AND payload->>'artifactId'=$3
+           AND payload->'pendingHumanDecision' IS NULL
+         FOR UPDATE`,
+        [input.workflowId, input.replacement.projectId, input.currentArtifactId],
+      );
+      if (!locked.rowCount) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query(
+        "INSERT INTO artifacts(id,project_id,task_id,attempt_id,kind,content_hash,object_key,base_revision,fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO NOTHING",
+        [
+          input.replacement.id,
+          input.replacement.projectId,
+          input.replacement.taskId,
+          input.replacement.attemptId,
+          input.replacement.kind,
+          input.replacement.contentHash,
+          input.replacement.objectKey ?? "",
+          input.replacement.baseRevision,
+          input.replacement.fingerprint,
+          input.replacement.structuredData ?? {},
+        ],
+      );
+      const result = await client.query<WorkflowRunRow>(
+        `UPDATE workflow_runs
+         SET payload=payload || jsonb_build_object(
+             'artifactId', $4::text,
+             'replacedArtifactId', $3::text,
+             'authorEditedAt', $5::text,
+             'authorEditedBy', $6::text
+           ),
+           updated_at=now()
+         WHERE temporal_workflow_id=$1
+           AND project_id=$2
+           AND status='manual-review-required'
+           AND payload->>'artifactId'=$3
+           AND payload->'pendingHumanDecision' IS NULL
+         RETURNING id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at`,
+        [input.workflowId, input.replacement.projectId, input.currentArtifactId, input.replacement.id, editedAt, input.authorId],
+      );
+      if (!result.rowCount) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const row = workflowFromRow(result.rows[0]);
+      await this.appendOutboxTx(client, "artifact", input.replacement.id, `artifact.${input.replacement.kind}.ready`, { projectId: input.replacement.projectId, artifactId: input.replacement.id, taskId: input.replacement.taskId, fingerprint: input.replacement.fingerprint, replacesArtifactId: input.currentArtifactId });
+      await this.appendOutboxTx(client, "workflow-run", row.temporalWorkflowId, "workflow.artifact-replaced", { projectId: row.projectId, workflowId: row.temporalWorkflowId, runId: row.id, artifactId: input.replacement.id, replacedArtifactId: input.currentArtifactId, authorEditedAt: editedAt });
+      await client.query("COMMIT");
+      return { run: row, artifact: input.replacement };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getWorkflowRunByTemporalId(temporalWorkflowId: string) {

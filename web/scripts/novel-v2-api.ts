@@ -50,11 +50,11 @@ type ReviewIssueShape = ReviewSubmitInput["issues"][number];
 
 const repository = new NovelPostgresRepository();
 await repository.migrate();
-const { configStore: modelConfigStore, gateway: model } = await createRuntimeModelGateway(repository);
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? "http://127.0.0.1:6333" });
-const qdrantMemory = new QdrantMemoryProvider(qdrant, model, process.env.QDRANT_COLLECTION ?? "novel-memory-current", Number(process.env.NOVEL_EMBEDDING_DIM ?? 1024));
 const objectStore = new ContentObjectStore();
 await bindRuntimeObjectStore(repository, objectStore, "api");
+const { configStore: modelConfigStore, gateway: model } = await createRuntimeModelGateway(repository, objectStore);
+const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? "http://127.0.0.1:6333" });
+const qdrantMemory = new QdrantMemoryProvider(qdrant, model, process.env.QDRANT_COLLECTION ?? "novel-memory-current", Number(process.env.NOVEL_EMBEDDING_DIM ?? 1024));
 const wordCountBackfill = await repository.backfillMissingContentWordCounts(objectStore);
 if (wordCountBackfill.updated || wordCountBackfill.failed) console.log("[word-count] content blob backfill", wordCountBackfill);
 // API 入口的 commitService 也启用 chapter memory 创建（与 worker 保持一致）
@@ -72,6 +72,16 @@ function chapterTargetId(target: unknown): string | undefined {
   return record?.kind === "chapter" ? asString(record.id) : undefined;
 }
 
+function modelTaskDiagnosticPrompt(task: ModelTaskRecord): string {
+  if (!task.workPackage.schema) return task.workPackage.instruction;
+  return [
+    task.workPackage.instruction,
+    "## 结构化输出契约",
+    "只输出一个严格符合下列 JSON Schema 的 JSON 值，不使用 Markdown，不在 JSON 前后添加说明。",
+    JSON.stringify(task.workPackage.schema),
+  ].join("\n\n");
+}
+
 function runChapterTargetId(run: { payload: Record<string, unknown> }): string | undefined {
   const direct = asString(run.payload.documentId);
   if (direct) return direct;
@@ -82,8 +92,10 @@ function runChapterTargetId(run: { payload: Record<string, unknown> }): string |
 async function runRetentionCleanup() {
   const result = await repository.cleanupExpiredChapterData();
   for (const orphan of result.orphanedObjects) await objectStore.delete(orphan.objectKey);
-  if (result.runsCompacted || result.orphanedObjects.length) console.log("[retention] chapter workflow cleanup", result);
-  return result;
+  const prompts = await repository.cleanupExpiredPromptExecutions();
+  for (const objectKey of prompts.orphanedObjectKeys) await objectStore.delete(objectKey);
+  if (result.runsCompacted || result.orphanedObjects.length || prompts.deleted) console.log("[retention] workflow cleanup", { ...result, prompts });
+  return { ...result, prompts };
 }
 
 async function readJson(request: import("node:http").IncomingMessage) {
@@ -400,7 +412,28 @@ const server = createServer(async (request, response) => {
         const inputFingerprint = asString(input.inputFingerprint);
         const result = asRecord(input.result) as ModelTaskRecord["result"] | undefined;
         if (!inputFingerprint || !result) return send(response, 400, { error: "inputFingerprint、result 必填" });
+        const previousTask = await repository.getModelTask(taskId);
         const task = await repository.submitModelTask({ taskId, attemptId, leaseOwner, inputFingerprint, result });
+        if (previousTask?.status !== "submitted") {
+          try {
+            const responseText = typeof task.result?.text === "string" ? task.result.text : JSON.stringify(task.result?.value);
+            const effectivePrompt = modelTaskDiagnosticPrompt(task);
+            await repository.recordPromptExecution({
+              workflowRunId: task.workflowRunId,
+              taskId: task.taskId,
+              purpose: task.purpose,
+              candidateIndex: task.candidateIndex,
+              status: "completed",
+              system: task.workPackage.system,
+              prompt: effectivePrompt,
+              response: responseText,
+              promptFingerprint: createHash("sha256").update(`${task.workPackage.system ?? ""}\n${effectivePrompt}`).digest("hex"),
+              contextManifest: task.workPackage.promptContext,
+            }, objectStore);
+          } catch (diagnosticError) {
+            console.warn(`[prompt-diagnostics] 外部任务 ${task.id} 留痕失败，不阻塞工作流：${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);
+          }
+        }
         await temporal.workflow.getHandle(task.workflowRunId).signal("artifact", { taskId, modelTaskId: task.id, attemptId, inputFingerprint, result: task.result });
         return send(response, 200, { task });
       }
@@ -930,6 +963,13 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && runArtifactsMatch) return send(response, 200, { artifacts: await repository.listRunArtifacts(decodeURIComponent(runArtifactsMatch[1])) });
     const runReviewsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/reviews$/);
     if (request.method === "GET" && runReviewsMatch) return send(response, 200, { reviews: await repository.listRunReviews(decodeURIComponent(runReviewsMatch[1])) });
+    const promptExecutionsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/prompt-executions$/);
+    if (request.method === "GET" && promptExecutionsMatch) return send(response, 200, { executions: await repository.listPromptExecutions(decodeURIComponent(promptExecutionsMatch[1])) });
+    const promptSnapshotMatch = request.url?.match(/^\/v2\/prompt-executions\/([^/?]+)\/snapshot$/);
+    if (request.method === "GET" && promptSnapshotMatch) {
+      const snapshot = await repository.getPromptExecutionSnapshot(decodeURIComponent(promptSnapshotMatch[1]), objectStore);
+      return snapshot ? send(response, 200, snapshot) : send(response, 404, { error: "提示词快照不存在或已过期" });
+    }
     // 产物文本内容：从 object store 读取 draft/revision/summary 等产物的实际文本
     const artifactContentMatch = request.url?.match(/^\/v2\/artifacts\/([^/?]+)\/content$/);
     if (request.method === "GET" && artifactContentMatch) {
@@ -943,6 +983,52 @@ const server = createServer(async (request, response) => {
       } catch {
         return send(response, 404, { error: "产物内容读取失败（object store 中不存在）" });
       }
+    }
+    const workflowTaskReplacementMatch = request.url?.match(/^\/v2\/workflows\/([^/]+)\/tasks\/([^/]+)\/replacement$/);
+    if (request.method === "POST" && workflowTaskReplacementMatch) {
+      const input = await readJson(request);
+      const workflowId = decodeURIComponent(workflowTaskReplacementMatch[1]);
+      const currentArtifactId = decodeURIComponent(workflowTaskReplacementMatch[2]);
+      const plainText = typeof input.plainText === "string" ? input.plainText : "";
+      const authorId = asString(input.authorId) ?? "web-author";
+      if (!plainText.trim()) return send(response, 400, { error: "保存的候选正文不能为空" });
+
+      const source = await repository.getArtifact(currentArtifactId);
+      if (!source) return send(response, 404, { error: "待替换产物不存在" });
+      if (!source.objectKey) return send(response, 400, { error: "待替换产物没有可读取正文" });
+      try {
+        await objectStore.getText(source.objectKey);
+      } catch {
+        return send(response, 404, { error: "待替换产物内容读取失败（object store 中不存在）" });
+      }
+      if (source.kind !== "draft" && source.kind !== "revision") return send(response, 400, { error: "只有正文候选产物可以编辑替换" });
+
+      const object = await objectStore.putText(plainText);
+      const taskId = `${source.taskId}:author-edit`;
+      const replacement: Artifact = {
+        id: randomUUID(),
+        projectId: source.projectId,
+        taskId,
+        attemptId: randomUUID(),
+        kind: source.kind,
+        contentHash: object.hash,
+        objectKey: object.key,
+        baseRevision: source.baseRevision,
+        fingerprint: createHash("sha256").update(`${object.hash}:${taskId}`).digest("hex"),
+        structuredData: {
+          ...(source.structuredData ?? {}),
+          origin: "author-edit",
+          authorId,
+          workflowId,
+          replacesArtifactId: source.id,
+          sourceArtifactId: source.id,
+          editedAt: new Date().toISOString(),
+        },
+        createdAt: Date.now(),
+      };
+      const replaced = await repository.replacePendingHumanArtifact({ workflowId, currentArtifactId, replacement, authorId });
+      if (!replaced) return send(response, 409, { error: "当前候选稿已变更、已提交审批，或运行已离开待审阶段" });
+      return send(response, 200, { artifact: replacement, run: replaced.run, text: plainText, wordCount: countNovelCharacters(plainText) });
     }
     const eventsMatch = request.url?.match(/^\/v2\/runs\/([^/?]+)\/events(?:\?after=(\d+))?$/);
     if (request.method === "GET" && eventsMatch) {

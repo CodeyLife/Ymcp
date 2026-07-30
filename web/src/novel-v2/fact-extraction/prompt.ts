@@ -1,5 +1,5 @@
 import type { Artifact } from "../protocol";
-import { factExtractionSchema, type FactExtractionOutput } from "../prompts/schemas";
+import { chapterStateDeltaSchema, type ChapterStateDelta } from "../prompts/schemas";
 
 /**
  * V2 事实提取 prompt 构造器。
@@ -114,6 +114,12 @@ export function buildFactExtractionPrompt(input: FactExtractionPromptInput): str
     `3. 伏笔、承诺、兑现、未解之谜（影响长篇追读）。`,
     `4. 角色认知变化（谁知道了什么、何时知道）。`,
     "",
+    `## 章节状态增量`,
+    `在同一次阅读中，同时形成 chapterMemory 与 characterDeltas。它们是上述事实的章节级和角色级投影，不要重新解释或扩写正文。`,
+    `- chapterMemory：概括关键事件、角色章末状态、未解决线索与情绪弧光。`,
+    `- characterDeltas：只记录本章有正文证据的声部、动机、知识与关系变化；没有变化的角色可以不列。`,
+    `- 无法可靠提取某一投影时可省略该字段，后续 handler 会独立回退提取。`,
+    "",
     `## 不提取`,
     `- 修辞、隐喻、意象（如"她的心像落叶"）。`,
     `- 读者推断（如"作者暗示她会后悔"）。`,
@@ -140,4 +146,4 @@ function buildNumberedText(text: string): string {
   return paragraphs.map((paragraph, index) => `### 段落 ${index + 1}\n${paragraph}`).join("\n\n");
 }
 
-export { factExtractionSchema, type FactExtractionOutput };
+export { chapterStateDeltaSchema, type ChapterStateDelta };

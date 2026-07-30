@@ -32,6 +32,7 @@ import type {
 } from "../protocol";
 import type { ModelGateway } from "../model-gateway";
 import type { NovelPostgresRepository } from "../postgres-repository";
+import { compileStageContext } from "../stage-context";
 import {
   cancelCreativeRun,
   getCreativeRun,
@@ -223,8 +224,8 @@ export async function defaultReviewer(
   workItemId: string,
   model: ModelGateway,
 ): Promise<CreativeReviewInput> {
-  const workResult = await repository.pool.query<{ artifact_refs: string[] | null }>(
-    "SELECT artifact_refs FROM creative_work_items WHERE id = $1",
+  const workResult = await repository.pool.query<{ artifact_refs: string[] | null; run_id: string }>(
+    "SELECT artifact_refs, run_id FROM creative_work_items WHERE id = $1",
     [workItemId],
   );
   if (!workResult.rowCount) throw new Error(`Work item 不存在：${workItemId}`);
@@ -296,14 +297,31 @@ export async function defaultReviewer(
 }
 
 章节内容：
-${draftText.slice(0, 8000)}`;
+${draftText}`;
   }
 
   try {
+    const system = "你是严苛的内部 reader-reviewer，只依据提供的正文和冻结上下文给出结构化审核。";
+    const workflowId = workResult.rows[0].run_id;
+    const promptPackage = compileStageContext({
+      projectId: artifactRow.project_id,
+      workflowId,
+      purpose: "review.reader",
+      stage: "review",
+      system,
+      schema: reviewerSchema as unknown as Record<string, unknown>,
+      maxInputTokens: 128_000,
+      reservedOutputTokens: 4_096,
+      sections: [{ id: "creative-default-review", kind: "review", title: "默认读者审校任务与正文", text: reviewPrompt, priority: "critical", provenanceRefs: [latestArtifactId, workItemId], sourceArtifactId: latestArtifactId }],
+    });
     const result = await model.generateStructured<ReviewerOutput>({
       purpose: "review.reader",
       schema: reviewerSchema,
-      prompt: reviewPrompt,
+      system,
+      prompt: promptPackage.instruction,
+      workflowRunId: workflowId,
+      taskId: `${workItemId}:default-reviewer`,
+      promptContext: promptPackage.manifest,
     });
     return reviewerOutputToCreativeInput(result.value, latestArtifactId);
   } catch (error) {

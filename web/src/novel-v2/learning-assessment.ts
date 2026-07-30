@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Artifact, Review, RuntimeLearningAssessmentV2 } from "./protocol";
 import type { ModelGateway, ModelUsage } from "./model-gateway";
 import { ExternalMcpRequiredError, type ModelRoutingSnapshot } from "./model-routing";
+import { compileStageContext } from "./stage-context";
 
 type LearningSource = RuntimeLearningAssessmentV2["source"];
 
@@ -248,15 +249,18 @@ export async function assessRuntimeLearningWithModel(input: {
   if (issues.length === 0) return { assessment: fallback() };
   try {
     if (!input.model) throw new Error("模型网关未配置");
+    const system = "你是长篇小说 Runtime 的学习闭环审计员，只在能说明底层机制和影响输入类时提出可复用规则改进。";
+    const promptPackage = compileStageContext({ projectId: input.projectId, workflowId: input.workflowId, purpose: "learning.assess", stage: "review", system, schema: runtimeLearningAssessmentSchema, maxInputTokens: 128_000, reservedOutputTokens: 4_096, sections: [{ id: "learning-evidence", kind: "review", title: "学习评估证据与规则", text: buildRuntimeLearningPrompt({ artifact: input.artifact, reviews: input.reviews, availableSkills: input.availableSkills }), priority: "required", provenanceRefs: [input.artifact.id, ...input.reviews.map((review) => review.id)] }] });
     const result = await input.model.generateStructured<Record<string, unknown>>({
       purpose: "learning.assess",
-      system: "你是长篇小说 Runtime 的学习闭环审计员，只在能说明底层机制和影响输入类时提出可复用规则改进。",
-      prompt: buildRuntimeLearningPrompt({ artifact: input.artifact, reviews: input.reviews, availableSkills: input.availableSkills }),
+      system,
+      prompt: promptPackage.instruction,
       schema: runtimeLearningAssessmentSchema,
       routingSnapshot: input.routingSnapshot,
       candidateStartIndex: input.candidateStartIndex,
       workflowRunId: input.workflowId,
       taskId: `${input.artifact.taskId}:learning`,
+      promptContext: promptPackage.manifest,
     });
     return {
       assessment: parseRuntimeLearningAssessmentV2(result.value, {

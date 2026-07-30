@@ -163,6 +163,53 @@ describe("targeted chapter review issues", () => {
     });
   });
 
+  it("replaces the pending human artifact and makes the old artifact stale", async () => {
+    if (!available) return;
+    const workflowId = `artifact-replacement-${suffix}`;
+    const sourceArtifactId = `candidate-source-${suffix}`;
+    const replacementArtifactId = `candidate-edited-${suffix}`;
+    const sourceArtifact: Artifact = {
+      id: sourceArtifactId,
+      projectId,
+      taskId: `review-draft-${suffix}`,
+      attemptId: `attempt-source-${suffix}`,
+      kind: "revision",
+      contentHash: `source-hash-${suffix}`,
+      objectKey: `test/source-${suffix}`,
+      structuredData: { workflowId },
+      baseRevision: 1,
+      createdAt: Date.now(),
+      fingerprint: `source-fingerprint-${suffix}`,
+    };
+    const replacement: Artifact = {
+      ...sourceArtifact,
+      id: replacementArtifactId,
+      attemptId: `attempt-edited-${suffix}`,
+      contentHash: `edited-hash-${suffix}`,
+      objectKey: `test/edited-${suffix}`,
+      fingerprint: `edited-fingerprint-${suffix}`,
+      structuredData: { ...sourceArtifact.structuredData, origin: "author-edit", replacesArtifactId: sourceArtifactId },
+    };
+    await repository.recordArtifact(sourceArtifact);
+    await repository.putWorkflowRun({
+      id: workflowId,
+      workflowType: "chapter-review",
+      projectId,
+      temporalWorkflowId: workflowId,
+      status: "manual-review-required",
+      payload: { documentId, artifactId: sourceArtifactId, reasonCode: "targeted-manuscript-approval" },
+    });
+
+    await expect(repository.replacePendingHumanArtifact({ workflowId, currentArtifactId: sourceArtifactId, replacement, authorId: "author-1" })).resolves.toMatchObject({
+      artifact: { id: replacementArtifactId },
+      run: { payload: { artifactId: replacementArtifactId, replacedArtifactId: sourceArtifactId, authorEditedBy: "author-1" } },
+    });
+    await expect(repository.claimHumanDecision({ workflowId, artifactId: sourceArtifactId, decision: "approve", authorId: "author-1" })).resolves.toBeUndefined();
+    await expect(repository.claimHumanDecision({ workflowId, artifactId: replacementArtifactId, decision: "approve", authorId: "author-1" })).resolves.toMatchObject({
+      payload: { pendingHumanDecision: { artifactId: replacementArtifactId, decision: "approve", authorId: "author-1" } },
+    });
+  });
+
   it("rejects a snapshot after the current manuscript hash changes", async () => {
     if (!available) return;
     const nextHash = `next-${contentHash}`;

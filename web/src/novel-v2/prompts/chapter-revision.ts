@@ -1,6 +1,7 @@
-import type { MemoryBundle, ReviewIssue, SkillBundle } from "../protocol";
+import type { MemoryBundle, ReviewIssue, SkillBundle, StageGoalContract, StagePromptPackage } from "../protocol";
 import type { ChapterPlanningContext } from "../application/story-arc";
 import { renderChapterPlanningContext } from "./chapter-planning-context";
+import { compileStageContext } from "../stage-context";
 
 export interface RevisionWindow {
   start: number;
@@ -58,6 +59,10 @@ export function revisionWindowsCoverAllIssues(windows: RevisionWindow[], issues:
   return issues.every((issue) => covered.has(issue));
 }
 
+export function shouldUseRevisionWindows(input: { requiresFullRevision: boolean; authorInstruction?: string }): boolean {
+  return !input.requiresFullRevision && !input.authorInstruction?.trim();
+}
+
 function formatIssues(issues: ReviewIssue[]): string {
   return issues.map((issue, index) => [
     `${index + 1}. [${issue.severity}] ${issue.title}`,
@@ -68,85 +73,136 @@ function formatIssues(issues: ReviewIssue[]): string {
   ].join("\n")).join("\n\n");
 }
 
-/**
- * 构建作者反馈的结构化 brief，作为本轮修订的场景策略指引。
- *
- * 设计依据：AGENTS.md「reusable contracts over case-specific rules」+「root-cause analysis」——
- * 原实现用正则匹配 5 类关键词（对白/高冷/道理/好奇/重新考量）生成场景策略 notes，是 case-specific
- * rule：作者用任何新词（如"散文化""节奏慢""太压抑""太干巴巴"）都无法触发任何 note，反馈被静默丢弃。
- *
- * 根因：作者反馈是自然语言意图表达，关键词集合不可枚举。把"意图识别"放在 prompt 拼装层（用正则）
- * 是错误的层次——应交给 LLM 在修订时自识别，prompt 层只提供：
- *   1. 作者原文（透传，无关键词过滤）
- *   2. 通用意图分类契约（6 类意图，覆盖所有可能的作者反馈）
- *   3. 意图→修订方向的映射规则（让 LLM 主动识别并响应）
- *   4. 一个跨题材正例（让 LLM 看到如何从模糊反馈中提取意图）
- *
- * 不内置任何题材词（如"灵气""符纹""女主"），意图分类题材无关。
- *
- * 6 类意图（覆盖作者反馈的完整空间，互不重叠）：
- * - 叙事节奏：反馈涉及"快/慢/拖/赶/散文化/流水账/跳读"等
- * - 对白风格：反馈涉及"对白/对话/尬聊/话多话少/口语/书面"等
- * - 情感基调：反馈涉及"压抑/清淡/浓烈/冷/暖/高冷/克制/疏离"等
- * - 信息密度：反馈涉及"干巴巴/堆砌/信息量/解释/说明/留白"等
- * - 视角处理：反馈涉及"POV/视角/代入感/距离/上帝视角"等
- * - 场景策略：反馈涉及"重新考量/不合适/方向错/太烂/推倒重来"等（场景选择本身不成立）
- */
+function renderRevisionSkills(skills: SkillBundle | undefined, authorInstruction?: string): string {
+  if (!skills?.skills.length) return "（无）";
+  if (authorInstruction?.trim()) {
+    return `（本轮由作者明确指定修订方向，不重复注入全量技能正文。已激活技能仅作为不冲突时的背景参考：${skills.skills.map((skill) => `${skill.skillId}@${skill.version}`).join("、")}。）`;
+  }
+  return skills.skills
+    .map((skill) => [`### ${skill.skillId}@${skill.version}`, skill.promptSections.revision ?? ""].filter(Boolean).join("\n"))
+    .join("\n\n");
+}
+
+function renderAuthorDirectedMemory(memory: MemoryBundle): string {
+  const factual = memory.claims.filter((claim) => claim.authority === "approved" || claim.kind === "episodic");
+  const background = memory.claims.filter((claim) => !factual.includes(claim));
+  return [
+    "### 必须保持的已发生事实",
+    factual.map((claim) => `- [${claim.authority}/${claim.kind}] ${claim.title}: ${claim.content}`).join("\n") || "- 无额外事实约束",
+    "### 宏观背景索引（软参考）",
+    background.map((claim) => `- ${claim.title}`).join("\n") || "- 无",
+    "宏观背景只用于避免方向冲突，不要求保留原文的具体表达、对白、场景组织或修辞。",
+  ].join("\n");
+}
+
+function renderAuthorDirectedPlanningContext(context: ChapterPlanningContext): string {
+  const chapter = context.chapter;
+  const scenes = chapter.scenes.map((scene) => [
+    `- ${scene.title}：${scene.summary}`,
+    `  目标：${scene.goal || "未限定"}；结果：${scene.outcome || "未限定"}`,
+  ].join("\n")).join("\n") || "- 未预设场景";
+  return [
+    "## 当前章修订边界",
+    `- 故事弧：${context.arc.title}`,
+    `- 目标章：第 ${chapter.globalOrder} 章《${chapter.title}》`,
+    `- 章节功能：${chapter.chapterPurpose}`,
+    `- 摘要：${chapter.summary}`,
+    `- POV：${chapter.povCharacterId || "未限定"}`,
+    `- 状态变化预算：${chapter.stateDeltaBudget}`,
+    `- 章尾驱动力：${chapter.closingForce}`,
+    "### 连续性硬约束",
+    chapter.continuityConstraints.map((item) => `- ${item}`).join("\n") || "- 无",
+    "### 场景功能",
+    scenes,
+    "其他宏观规划和可选节拍是软参考；本轮不要求复述或保留其具体措辞。",
+  ].join("\n");
+}
+
+function renderRevisionMemory(memory: MemoryBundle, authorInstruction?: string): string {
+  if (authorInstruction?.trim()) return renderAuthorDirectedMemory(memory);
+  return memory.claims.map((claim) => `- [${claim.authority}/${claim.kind}] ${claim.title}: ${claim.content}`).join("\n") || "（无）";
+}
+
+function renderRevisionPlanningContext(context: ChapterPlanningContext | undefined, authorInstruction?: string): string {
+  if (!context) return "## 冻结章节规划上下文\n（历史章节无规划快照。）";
+  return authorInstruction?.trim() ? renderAuthorDirectedPlanningContext(context) : renderChapterPlanningContext(context);
+}
+
+export interface AuthorRevisionAlignment {
+  satisfied: boolean;
+  summary: string;
+  unmetRequirements: string[];
+  evidence: string[];
+}
+
+export const authorRevisionAlignmentSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["satisfied", "summary", "unmetRequirements", "evidence"],
+  properties: {
+    satisfied: { type: "boolean" },
+    summary: { type: "string", minLength: 1 },
+    unmetRequirements: { type: "array", items: { type: "string", minLength: 1 } },
+    evidence: { type: "array", items: { type: "string", minLength: 1 } },
+  },
+} as const;
+
+export function buildAuthorRevisionAlignmentPrompt(input: { original: string; candidate: string; authorInstruction: string }): string {
+  return [
+    "判断候选正文是否实质响应了作者本轮修改要求。作者要求是自然语言目标，需要结合原文和候选的实际阅读效果判断，不做关键词匹配，也不把意见机械解释成绝对禁令。",
+    "只有候选在相关叙事选择、人物呈现或表达效果上出现可感知变化，才可判定 satisfied=true；仅修复无关审校问题、删除一处重复或做同义替换不算完成。",
+    "若未满足，unmetRequirements 要说明仍未落实的目标及其在候选中的具体表现；evidence 引用或概括可核对的文本证据。",
+    "## 作者要求",
+    input.authorInstruction.trim(),
+    "## 修订前正文",
+    input.original,
+    "## 候选正文",
+    input.candidate,
+  ].join("\n\n");
+}
+
+export function buildAuthorRevisionRepairPrompt(input: {
+  original: string;
+  candidate: string;
+  authorInstruction: string;
+  alignment: AuthorRevisionAlignment;
+  memory: MemoryBundle;
+  planningContext?: ChapterPlanningContext;
+}): string {
+  return [
+    "候选正文未充分响应作者要求。根据独立对齐检查继续修订，输出必须且只能是完整修订后正文。不要解释过程。",
+    "## 作者要求",
+    input.authorInstruction.trim(),
+    "## 未满足项",
+    input.alignment.unmetRequirements.map((item, index) => `${index + 1}. ${item}`).join("\n") || input.alignment.summary,
+    "## 检查证据",
+    input.alignment.evidence.map((item) => `- ${item}`).join("\n") || "- 参照作者要求重新比较原文与候选",
+    "## 原始正文（用于确认本轮需要发生的变化）",
+    input.original,
+    "## 当前候选（在此基础上继续修订）",
+    input.candidate,
+    "## 事实边界",
+    renderAuthorDirectedMemory(input.memory),
+    renderRevisionPlanningContext(input.planningContext, input.authorInstruction),
+    "完成后自行重新核对作者要求；不要用修复其他问题代替本轮目标。",
+  ].join("\n\n");
+}
+
+/** Preserve author feedback as natural-language intent; interpretation belongs to the revision model. */
 export function buildAuthorRevisionBrief(authorInstruction?: string): string {
   const instruction = authorInstruction?.trim();
   if (!instruction) return "（无作者补充取舍；按审核问题逐项修订即可。）";
 
-  // 作者原文透传：不做任何关键词过滤，让 LLM 看到完整反馈。
-  // 反馈可能是一句话或多句，按句号/换行拆分为条目，便于 LLM 逐条识别意图。
-  const feedbackLines = splitAuthorFeedback(instruction);
-
   return [
-    "先把作者意见视为本轮场景策略，而不是附加润色建议；审核问题负责指出局部缺陷，作者意见负责决定改写方向。",
+    "## 作者原话（最高优先级）",
+    instruction,
     "",
-    "## 作者反馈（原文透传，按句拆分）",
-    ...feedbackLines.map((line, index) => `${index + 1}. ${line}`),
-    "",
-    "## 意图识别契约（修订 Worker 必须主动识别并响应）",
-    "作者反馈可能使用任何自然语言词汇，不限于下方列举的示例词。修订 Worker 必须从反馈中识别以下 6 类意图之一或多个，并在 rewriteExample 与实际改写中体现对该意图的响应：",
-    "",
-    "1. **叙事节奏**（示例词：快/慢/拖/赶/散文化/流水账/跳读/冗长/仓促）",
-    "   响应方向：调整段落长度配比、信息抵达节奏、场景切换密度；增删铺垫与延展。",
-    "2. **对白风格**（示例词：对白/对话/尬聊/话多话少/口语/书面/只留一句）",
-    "   响应方向：重新分配信息承载方式（对白↔动作↔物象↔环境反应↔主角观察）；删减解释性/寒暄性对白，保留能改变关系、制造悬念或推动行动的关键句。",
-    "3. **情感基调**（示例词：压抑/清淡/浓烈/冷/暖/高冷/克制/疏离/温情/虐心）",
-    "   响应方向：用行为制造距离感或亲近感（少回应/少解释/停顿/离开/收拾物件），而非用语气词讲道理；神秘感/疏离感应来自信息缺口而非直接宣告规则。",
-    "4. **信息密度**（示例词：干巴巴/堆砌/信息量/解释/说明/留白/直白/暗示）",
-    "   响应方向：把抽象判断和体系规则改为可见事实、物件异状、主角误解与迟疑来暗示；让读者先感到不寻常再逐步理解，避免直接说出口。",
-    "5. **视角处理**（示例词：POV/视角/代入感/距离/上帝视角/越界）",
-    "   响应方向：删除替视角人物总结他人心理的句子；把「观察+判断」改为「视角人物能看到/听到的具体动作」。",
-    "6. **场景策略**（示例词：重新考量/不合适/方向错/太烂/推倒重来）",
-    "   响应方向：这类反馈表示当前场景选择本身不成立，允许重排信息顺序、对白数量、人物反应，而非只替换形容词；未被作者意见影响的核心事件仍需保留。",
-    "",
-    "## 跨题材正例（模糊反馈→意图识别→响应）",
-    "作者反馈：「这段太干巴巴。」",
-    "意图识别：信息密度过高（「干巴巴」= 缺乏感官与情绪承载）+ 情感基调过冷（缺情绪内化）。",
-    "响应：在 rewriteExample 中补充感官细节（光影/温度/物件触感）与角色情绪内化（不直接命名情绪，用动作/观察承载），但不新增冻结事实之外的信息。",
-    "",
-    "## 反例（应避免）",
-    "- 仅因反馈未命中某关键词就忽略作者意见（原实现的 bug）。",
-    "- 把作者反馈机械拆成「删除所有对白」等绝对规则——意图是方向，不是禁令。",
-    "- 借作者反馈越过目标段落或新增未建立事实。",
+    "## 执行决策",
+    "1. 先理解作者想改变的阅读效果、叙事选择和保留边界，不要用关键词表替作者归类，也不要把意见机械改写成绝对禁令。",
+    "2. 将作者要求与审校证据合并判断：审校意见指出已知缺陷，作者要求决定本轮方向；两者冲突时以作者明确取舍为准。",
+    "3. 自行判断受影响范围。若达到作者目标需要联动多个段落，可以调整所有必要段落，但必须保持冻结事实、章节规划、人物关系、POV 和既定因果。",
+    "4. 生成前先形成内部修改计划，生成后逐项核对作者原话；正文必须出现可感知的实质变化，不能只做同义替换。不要输出分析、计划或核对过程。",
   ].join("\n");
-}
-
-/**
- * 把作者反馈按句号/换行拆分为条目。
- *
- * 拆分目的：作者反馈常是多句话混合（如"对白太烂。女主高冷点。别讲道理。"），
- * 按句拆分让 LLM 逐句识别意图，避免整段反馈被笼统归为某一类。
- *
- * 不做任何语义过滤——拆分是纯结构化操作，意图识别交给 LLM。
- */
-function splitAuthorFeedback(instruction: string): string[] {
-  return instruction
-    .split(/[。！？\n]+/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
 }
 
 export function buildFullChapterRevisionPrompt(input: {
@@ -157,7 +213,7 @@ export function buildFullChapterRevisionPrompt(input: {
   planningContext?: ChapterPlanningContext;
   authorInstruction?: string;
 }): string {
-  const skills = input.skills?.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, skill.promptSections.revision ?? ""].filter(Boolean).join("\n")).join("\n\n") || "（无）";
+  const skills = renderRevisionSkills(input.skills, input.authorInstruction);
   return [
     "修订下面整章正文，修复所有列出的审核问题，并按作者反馈重定本轮场景取舍。输出必须且只能是完整修订后正文，不使用 Markdown，不解释过程。",
     "## 作者反馈转译为本轮修订策略（最高优先级）",
@@ -167,19 +223,66 @@ export function buildFullChapterRevisionPrompt(input: {
     input.text,
     "## 审核问题",
     formatIssues(input.issues) || "（无结构化审核问题）",
-    "## 冻结记忆",
-    input.memory.claims.map((claim) => `- [${claim.authority}/${claim.kind}] ${claim.title}: ${claim.content}`).join("\n") || "（无）",
-    input.planningContext ? renderChapterPlanningContext(input.planningContext) : "## 冻结章节规划上下文\n（历史章节无规划快照。）",
+    "## 事实与背景边界",
+    renderRevisionMemory(input.memory, input.authorInstruction),
+    renderRevisionPlanningContext(input.planningContext, input.authorInstruction),
     "## 已激活修订技能",
     skills,
     "## 整章修订契约",
     [
       "1. 逐项落实作者策略和审核问题，不得仅做近义改写或只处理其中一类意见。",
-      "2. 保留原章事件、关键信息、POV 和因果；信息可以从对白转移到动作、物象、环境反应或主角观察中。",
+      "2. 保留原章事件、关键信息、POV 和因果；根据作者要求重新选择承载信息与情绪的表达方式。",
       "3. 不得新增冻结事实和原文都未建立的人物、关系、线索或事件。",
-      "4. 用可观察动作、感官和必要对白承载体验；当作者指出对白或解释有问题时，优先用非对白方式完成同一叙事功能。",
+      "4. 修改幅度由作者目标决定；既不能用局部同义替换敷衍结构性要求，也不能无依据重写与目标无关的内容。",
     ].join("\n"),
+    ...(input.authorInstruction?.trim() ? [
+      "## 输出前最后核对",
+      `再次逐字核对作者原话：${input.authorInstruction.trim()}`,
+      "如果当前候选还只是完成审校问题、但没有让作者要求产生可感知的正文变化，继续在内部修订；最终只输出完成后的正文。",
+    ] : []),
   ].join("\n\n");
+}
+
+export function buildFullChapterRevisionPromptPackage(input: {
+  projectId: string;
+  workflowId: string;
+  system: string;
+  sourceArtifactId: string;
+  maxInputTokens: number;
+  maxOutputTokens: number;
+  goal?: StageGoalContract;
+  text: string;
+  issues: ReviewIssue[];
+  memory: MemoryBundle;
+  skills?: SkillBundle;
+  planningContext?: ChapterPlanningContext;
+  authorInstruction?: string;
+}): StagePromptPackage {
+  const contract = [
+    "修订下面整章正文，输出必须且只能是完整修订后正文，不使用 Markdown，不解释过程。",
+    "逐项落实作者目标和审核问题；根据目标决定必要改动范围，不得用无关润色或同义替换冒充完成。",
+    "保留未被目标触及的已发生事实、人物关系、POV、章节功能与既定因果，不新增冻结来源没有依据的事实。",
+    "输出前按实际阅读效果核对目标；不要输出分析、计划或核对过程。",
+  ].join("\n");
+  return compileStageContext({
+    projectId: input.projectId,
+    workflowId: input.workflowId,
+    purpose: "writing.revision",
+    stage: "revision",
+    system: input.system,
+    goal: input.goal,
+    maxInputTokens: input.maxInputTokens,
+    reservedOutputTokens: input.maxOutputTokens,
+    sections: [
+      { id: "revision-contract", kind: "goal", title: "整章修订契约", text: contract, priority: "critical", provenanceRefs: [input.goal?.id ?? input.sourceArtifactId] },
+      ...(input.authorInstruction?.trim() ? [{ id: "author-instruction", kind: "goal" as const, title: "作者原始修改要求", text: input.authorInstruction.trim(), priority: "critical" as const, provenanceRefs: [input.goal?.id ?? input.sourceArtifactId] }] : []),
+      { id: "source-manuscript", kind: "manuscript", title: "修订前正文", text: input.text, priority: "critical", provenanceRefs: [input.sourceArtifactId], sourceArtifactId: input.sourceArtifactId },
+      { id: "review-issues", kind: "review", title: "本轮审核问题", text: formatIssues(input.issues) || "（无结构化审核问题）", priority: input.issues.length ? "required" : "soft", provenanceRefs: input.issues.map((_, index) => `issue:${index}`) },
+      { id: "revision-facts", kind: "fact", title: "事实与背景边界", text: renderRevisionMemory(input.memory, input.authorInstruction), priority: "required", provenanceRefs: [input.memory.id] },
+      ...(input.planningContext ? [{ id: "revision-planning", kind: "planning" as const, title: "冻结章节规划边界", text: renderRevisionPlanningContext(input.planningContext, input.authorInstruction), priority: "required" as const, provenanceRefs: [input.planningContext.fingerprint] }] : []),
+      { id: "revision-skills", kind: "skill", title: "已激活修订技能", text: renderRevisionSkills(input.skills, input.authorInstruction), priority: "normal", provenanceRefs: [input.skills?.id ?? "no-skills"] },
+    ],
+  });
 }
 
 export function buildRevisionWindowPrompt(input: {
@@ -195,7 +298,7 @@ export function buildRevisionWindowPrompt(input: {
   const before = input.window.start > 0 ? paragraphs[input.window.start - 1] : "（无）";
   const after = input.window.end + 1 < paragraphs.length ? paragraphs[input.window.end + 1] : "（无）";
   const memory = input.memory.claims.map((claim) => `- [${claim.authority}/${claim.kind}] ${claim.title}: ${claim.content}`).join("\n") || "（无冻结事实）";
-  const skills = input.skills?.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, skill.promptSections.revision ?? ""].filter(Boolean).join("\n")).join("\n\n") || "（无额外修订技能）";
+  const skills = renderRevisionSkills(input.skills, input.authorInstruction);
   return [
     `只修订原章第 ${input.window.start + 1}-${input.window.end + 1} 段。输出必须且只能是替换这些目标段落的连续小说正文。`,
     "## 必须处理的问题",

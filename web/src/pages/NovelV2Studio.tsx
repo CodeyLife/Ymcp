@@ -232,9 +232,13 @@ export default function NovelV2Studio() {
   }
 
   async function startChapterCreation(document: NonNullable<typeof selectedDocument>) {
-    const result = await submitIntent.mutateAsync({ objective: `完成第 ${document.narrativeOrder} 章《${document.title}》的正式创作，遵循已批准的章节规格与故事弧约束。`, documentId: document.id, factApprovalMode: "auto" });
+    const rewritingFinalChapter = document.status === "final";
+    const objective = rewritingFinalChapter
+      ? `从已批准章节蓝图重新生成第 ${document.narrativeOrder} 章《${document.title}》的完整正文，作为整章重写候选；不要基于当前正文做审校式局部修补，必须重新经历蓝图、草稿、审核、事实提取与提交闭环。`
+      : `完成第 ${document.narrativeOrder} 章《${document.title}》的正式创作，遵循已批准的章节规格与故事弧约束。`;
+    const result = await submitIntent.mutateAsync({ objective, documentId: document.id, factApprovalMode: "auto" });
     updateLocation({ view: "production", document: document.id, run: result.workflowId });
-    message.success("章节创作已开始");
+    message.success(rewritingFinalChapter ? "已从蓝图重新发起整章重写" : "章节创作已开始");
   }
 
   async function startChapterTitleGeneration() {

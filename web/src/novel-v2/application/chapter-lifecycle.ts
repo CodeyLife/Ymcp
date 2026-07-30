@@ -25,19 +25,20 @@ export async function finalizeChapterLifecycle(params: {
   draft: ChapterDraftState;
   reviews: Review[];
   commit(current: ChapterDraftState, reviews: Review[], factArtifact?: Artifact): Promise<CommitResult>;
-  enrich(current: ChapterDraftState, commitResult: CommitResult): Promise<void>;
+  enrich(current: ChapterDraftState, commitResult: CommitResult, factArtifact?: Artifact): Promise<void>;
   assessLearning(current: ChapterDraftState, reviews: Review[]): Promise<RuntimeLearningAssessmentV2>;
   progress(payload: Record<string, unknown>): Promise<unknown>;
   factArtifact?: Artifact;
+  assessPostCommitLearning?: boolean;
 }): Promise<{ commitResult: CommitResult; enrichmentError?: string }> {
   const commitResult = await params.commit(params.draft, params.reviews, params.factArtifact);
   let enrichmentError: string | undefined;
   try {
-    await params.enrich(params.draft, commitResult);
+    await params.enrich(params.draft, commitResult, params.factArtifact);
   } catch (error) {
     enrichmentError = failureMessage(error);
   }
-  try {
+  if (params.assessPostCommitLearning !== false) try {
     const postCommitReviews = enrichmentError
       ? [...params.reviews, {
           id: `enrichment-error:${commitResult.revisionId}`,
@@ -68,12 +69,13 @@ export async function runChapterLifecycle(params: {
   extractFacts(current: ChapterDraftState): Promise<Artifact>;
   approveFacts(factArtifact: Artifact, current: ChapterDraftState): Promise<FactApprovalSummary>;
   commit(current: ChapterDraftState, reviews: Review[], factArtifact: Artifact): Promise<CommitResult>;
-  enrich(current: ChapterDraftState, commitResult: CommitResult): Promise<void>;
+  enrich(current: ChapterDraftState, commitResult: CommitResult, factArtifact?: Artifact): Promise<void>;
   progress(payload: Record<string, unknown>): Promise<unknown>;
   beforeRevision?(iteration: number): Promise<void>;
   afterRevision?(draft: ChapterDraftState, iteration: number): Promise<void>;
   commitBlocked?: Record<string, unknown>;
   directedRevision?: { issues: ReviewIssue[]; requireManuscriptApproval: true };
+  learningMode?: "legacy-each-stage" | "terminal-candidate";
   /** Temporal patch compatibility for targeted runs started before revision-first ordering. */
   reviewBeforeDirectedRevision?: boolean;
   /** P0 #1：为 true 时，若 approveFacts 返回 pending>0，则在 commit 前返回 factApprovalBlocked 交由工作流走人工审批。 */
@@ -87,7 +89,7 @@ export async function runChapterLifecycle(params: {
     if (params.reviewBeforeDirectedRevision) {
       let reviews = await params.review(draft);
       await params.progress({ stage: "revision-decision", iteration: 0, decision: "directed-revision", targetIssueCount: params.directedRevision.issues.length });
-      await params.assessLearning(draft, reviews);
+      if (params.learningMode !== "terminal-candidate") await params.assessLearning(draft, reviews);
       await params.beforeRevision?.(1);
       draft = await params.revise(draft, reviews, 1, params.directedRevision.issues);
       await params.afterRevision?.(draft, 1);
@@ -116,7 +118,7 @@ export async function runChapterLifecycle(params: {
       createdAt: 0,
     }];
     await params.progress({ stage: "revision", iteration: 0, decision: "directed-revision", targetIssueCount: params.directedRevision.issues.length });
-    await params.assessLearning(draft, directedReviews);
+    if (params.learningMode !== "terminal-candidate") await params.assessLearning(draft, directedReviews);
     await params.beforeRevision?.(1);
     draft = await params.revise(draft, directedReviews, 1, params.directedRevision.issues);
     await params.afterRevision?.(draft, 1);
@@ -156,7 +158,7 @@ export async function runChapterLifecycle(params: {
     const decision = decideRevision({ reviews, iteration, maxIterations: DEFAULT_MAX_AUTO_REVISIONS, previousScore });
     await params.progress({ stage: "revision-decision", iteration, decision: decision.reason, currentScore: decision.currentScore });
     if (!decision.shouldRevise) break;
-    await params.assessLearning(draft, reviews);
+    if (params.learningMode !== "terminal-candidate") await params.assessLearning(draft, reviews);
     await params.beforeRevision?.(iteration + 1);
     draft = await params.revise(draft, reviews, iteration + 1);
     await params.afterRevision?.(draft, iteration + 1);
@@ -207,6 +209,7 @@ export async function runChapterLifecycle(params: {
     assessLearning: params.assessLearning,
     progress: params.progress,
     factArtifact,
+    assessPostCommitLearning: params.learningMode !== "terminal-candidate",
   });
   return { draft, reviews, iteration, finalScore: finalDecision.currentScore, commitGate, commitResult, enrichmentError };
 }

@@ -8,6 +8,7 @@ import type { ObjectStoreAdapter } from "../object-store";
 import type { MemoryIndex } from "../qdrant-memory";
 import { chapterMemorySchema, type ChapterMemoryOutput } from "../prompts/schemas";
 import { buildChapterMemoryPrompt } from "./prompt";
+import { compileStageContext } from "../stage-context";
 
 /**
  * V2 章节记忆（chapter memory）创建模块。
@@ -84,20 +85,34 @@ export async function createChapterMemoryFromRevision(input: CreateChapterMemory
     text: input.text,
     priorChapterDigest,
   });
+  const system = "你是章节记忆提取 Worker。只输出符合 JSON Schema 的 JSON。只提取正文实际呈现的内容，不提取隐喻、修辞或读者推断。";
+  const promptPackage = compileStageContext({ projectId: input.projectId, workflowId: input.workflowRunId ?? input.artifact.taskId, purpose: "facts.extract", stage: "fact-extraction", system, schema: chapterMemorySchema as unknown as Record<string, unknown>, maxInputTokens: 128_000, reservedOutputTokens: 4_096, sections: [{ id: "chapter-memory-fallback", kind: "manuscript", title: "章节记忆回退提取", text: prompt, priority: "critical", provenanceRefs: [input.artifact.id, input.revisionId] }] });
 
   const generated = await input.model.generateStructured<ChapterMemoryOutput>({
     purpose: "facts.extract",
-    system: "你是章节记忆提取 Worker。只输出符合 JSON Schema 的 JSON。只提取正文实际呈现的内容，不提取隐喻、修辞或读者推断。",
-    prompt,
+    system,
+    prompt: promptPackage.instruction,
     schema: chapterMemorySchema as unknown as Record<string, unknown>,
     schemaName: "chapter-memory",
     routingSnapshot: input.routingSnapshot,
     candidateStartIndex: input.candidateStartIndex,
     workflowRunId: input.workflowRunId,
     taskId: input.taskId,
+    promptContext: promptPackage.manifest,
   });
 
   const output = generated.value;
+  validateChapterMemoryOutput(output);
+
+  return persistChapterMemoryOutput(input, deps, output);
+}
+
+/** Persist a chapter-memory projection already produced by ChapterStateDelta. */
+export async function persistChapterMemoryOutput(
+  input: Omit<CreateChapterMemoryInput, "model" | "routingSnapshot" | "candidateStartIndex" | "workflowRunId" | "taskId">,
+  deps: CreateChapterMemoryDeps,
+  output: ChapterMemoryOutput,
+): Promise<ChapterMemory> {
   validateChapterMemoryOutput(output);
 
   // 3. 构造 ChapterMemory

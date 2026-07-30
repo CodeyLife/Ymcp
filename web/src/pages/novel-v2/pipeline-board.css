@@ -318,6 +318,11 @@
 .pb-review-issue small { color: #71717a; font-size: 10px; line-height: 1.5; }
 .pb-review-feedback { padding: 12px; border-top: 1px solid #27272a; }
 .pb-review-feedback label { display: block; margin-bottom: 7px; color: #a1a1aa; font-size: 10.5px; }
+.pb-review-goal { margin: 12px; border: 1px solid #31514a; background: #10221f; padding: 12px; }
+.pb-review-goal > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pb-review-goal p { margin: 8px 0; color: #e5efec; white-space: pre-wrap; }
+.pb-review-goal ul { margin: 8px 0; padding-left: 18px; color: #b8cbc6; }
+.pb-review-goal small { color: #8fa59f; }
 .pb-review-actions { position: sticky; z-index: 2; bottom: 0; display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 14px; border-top: 1px solid #3f3f46; background: rgba(14, 14, 17, .98); }
 .pb-review-actions > span { color: #71717a; font-size: 10.5px; }
 .pb-review-actions > div { display: flex; gap: 8px; }
@@ -457,6 +462,24 @@
 .pb-workflow-reviews article > span { color: #71717a; }
 .pb-workflow-reviews article > b { color: #6ee7b7; font: 650 12px/1 "Geist Mono", monospace; }
 .pb-workflow-reviews article > b small { color: #52525b; font-size: 8px; }
+.pb-workflow-prompts { border-top: 1px solid #27272a; padding-top: 8px; }
+.pb-workflow-prompts > summary { display: flex; align-items: center; justify-content: space-between; color: #a1a1aa; font-size: 10.5px; cursor: pointer; }
+.pb-workflow-prompts > summary span { display: flex; align-items: center; gap: 6px; }
+.pb-workflow-prompts > summary b { color: #52525b; font: 500 9px/1 "Geist Mono", monospace; }
+.pb-prompt-call-list { display: flex; margin-top: 8px; flex-direction: column; gap: 5px; }
+.pb-prompt-call { border: 1px solid #27272a; border-left: 2px solid #10b981; border-radius: 4px; background: #161619; }
+.pb-prompt-call.is-failed { border-left-color: #ef4444; }
+.pb-prompt-call > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; cursor: pointer; }
+.pb-prompt-call > summary > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.pb-prompt-call > summary strong { overflow: hidden; color: #d4d4d8; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.pb-prompt-call > summary small { color: #52525b; font-size: 8px; }
+.pb-prompt-call > summary > span { color: #a1a1aa; font: 500 9px/1 "Geist Mono", monospace; }
+.pb-prompt-call-meta { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px 7px; }
+.pb-prompt-call-meta .ant-tag { margin: 0; font-size: 8px; }
+.pb-prompt-sections { display: flex; max-height: 180px; overflow: auto; flex-direction: column; border-top: 1px solid #27272a; }
+.pb-prompt-sections > div { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-top: 1px solid #202024; color: #a1a1aa; font-size: 8.5px; }
+.pb-prompt-sections > div.is-excluded, .pb-prompt-sections > div.is-truncated { color: #71717a; }
+.pb-prompt-sections small { color: #52525b; font: 500 8px/1 "Geist Mono", monospace; white-space: nowrap; }
 .pb-workflow-activity { border-top: 1px solid #27272a; padding-top: 8px; }
 .pb-workflow-activity summary { display: flex; align-items: center; justify-content: space-between; color: #a1a1aa; font-size: 10.5px; cursor: pointer; }
 .pb-workflow-activity summary span { color: #52525b; }

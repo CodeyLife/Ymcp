@@ -2,7 +2,7 @@
  * V2 protocol shared by Web, MCP, CLI and durable workflow adapters.
  * This module intentionally has no database or provider dependency.
  */
-import type { ModelExecutionProvenance } from "./model-routing";
+import type { ModelExecutionProvenance, ModelPurpose } from "./model-routing";
 
 export const NOVEL_V2_PROTOCOL_VERSION = "2.0" as const;
 
@@ -168,6 +168,85 @@ export interface ContextManifest {
   createdAt: number;
 }
 
+export type StageContextPriority = "critical" | "required" | "normal" | "soft";
+
+export interface StageGoalContract {
+  id: string;
+  projectId: string;
+  workflowId: string;
+  stage: NovelStage;
+  targetArtifactId?: string;
+  authorInstruction?: string;
+  reviewIssueFingerprints: string[];
+  acceptanceCriteria: string[];
+  allowedChangeScope: "local" | "chapter" | "planning-artifact";
+  fingerprint: string;
+  createdAt: number;
+}
+
+export interface StageContextSection {
+  id: string;
+  kind: "goal" | "manuscript" | "fact" | "planning" | "blueprint" | "skill" | "review" | "background" | "schema";
+  title: string;
+  text: string;
+  priority: StageContextPriority;
+  provenanceRefs: string[];
+  sourceArtifactId?: string;
+  fingerprint?: string;
+}
+
+export interface PromptContextSectionReceipt {
+  id: string;
+  kind: StageContextSection["kind"];
+  title: string;
+  priority: StageContextPriority;
+  provenanceRefs: string[];
+  sourceArtifactId?: string;
+  fingerprint: string;
+  estimatedTokens: number;
+  status: "included" | "excluded" | "truncated";
+  reason: "required" | "ranked-fill" | "duplicate-source" | "duplicate-content" | "budget" | "empty";
+}
+
+export interface PromptContextManifest {
+  id: string;
+  projectId: string;
+  workflowId: string;
+  purpose: ModelPurpose;
+  stage: NovelStage;
+  goalId?: string;
+  maxInputTokens: number;
+  reservedOutputTokens: number;
+  estimatedSystemTokens: number;
+  estimatedSchemaTokens: number;
+  estimatedInputTokens: number;
+  sections: PromptContextSectionReceipt[];
+  fingerprint: string;
+  createdAt: number;
+}
+
+export interface StageContextRequest {
+  projectId: string;
+  workflowId: string;
+  purpose: ModelPurpose;
+  stage: NovelStage;
+  system?: string;
+  schema?: Record<string, unknown>;
+  maxInputTokens: number;
+  reservedOutputTokens: number;
+  goal?: StageGoalContract;
+  sections: StageContextSection[];
+}
+
+export interface StagePromptPackage {
+  system?: string;
+  instruction: string;
+  schema?: Record<string, unknown>;
+  goal?: StageGoalContract;
+  sections: StageContextSection[];
+  manifest: PromptContextManifest;
+}
+
 /**
  * 章节记忆：定稿章节的结构化摘要，用于长篇跨章节一致性。
  *
@@ -225,7 +304,7 @@ export interface SkillBundle {
   id: string;
   projectId: string;
   preflightId: string;
-  skills: Array<Pick<SkillDescriptor, "skillId" | "version" | "qualityGates" | "promptSections">>;
+  skills: Array<Pick<SkillDescriptor, "skillId" | "version" | "qualityGates" | "promptSections"> & Partial<Pick<SkillDescriptor, "capabilities" | "applicableTasks" | "requiredMemoryKinds">>>;
   conflicts: Array<{ skillId: string; conflictsWith: string }>;
   missingCapabilities: string[];
   fingerprint: string;

@@ -108,6 +108,37 @@ export interface NovelReviewSummary {
   createdAt: number;
 }
 
+export interface NovelPromptContextSectionReceipt {
+  id: string;
+  kind: string;
+  title: string;
+  priority: "critical" | "required" | "normal" | "soft";
+  estimatedTokens: number;
+  status: "included" | "excluded" | "truncated";
+  reason: string;
+}
+
+export interface NovelPromptExecution {
+  id: string;
+  workflowId: string;
+  taskId: string;
+  purpose: string;
+  candidateIndex: number;
+  status: "completed" | "failed";
+  promptFingerprint: string;
+  responseFingerprint?: string;
+  errorCategory?: string;
+  expiresAt: string;
+  createdAt: string;
+  snapshotAvailable: boolean;
+  contextManifest?: {
+    goalId?: string;
+    estimatedInputTokens?: number;
+    maxInputTokens?: number;
+    sections?: NovelPromptContextSectionReceipt[];
+  };
+}
+
 export function novelRunDocumentId(run: NovelWorkflowRunRecord | undefined): string | undefined {
   if (!run) return undefined;
   if (typeof run.payload.documentId === "string") return run.payload.documentId;
@@ -200,6 +231,7 @@ export const novelKeys = {
   runEvents: (wfId: string) => ["novel", "run", wfId, "events"] as const,
   runArtifacts: (wfId: string) => ["novel", "run", wfId, "artifacts"] as const,
   runReviews: (wfId: string) => ["novel", "run", wfId, "reviews"] as const,
+  runPromptExecutions: (wfId: string) => ["novel", "run", wfId, "prompt-executions"] as const,
   docContent: (id: string, docId: string) => ["novel", "doc", id, docId, "content"] as const,
   chapterWorkspace: (id: string, docId: string) => ["novel", "doc", id, docId, "workspace"] as const,
   factCandidates: (id: string, docId: string) => ["novel", "facts", id, docId] as const,
@@ -332,6 +364,15 @@ export function useNovelRunReviews(workflowId: string | undefined, active = fals
   return useQuery({
     queryKey: novelKeys.runReviews(workflowId ?? "none"),
     queryFn: async () => (await novelFetch<{ reviews: NovelReviewSummary[] }>(`/v2/runs/${enc(workflowId!)}/reviews`)).reviews ?? [],
+    enabled: Boolean(workflowId),
+    refetchInterval: active ? 3000 : false,
+  });
+}
+
+export function useNovelRunPromptExecutions(workflowId: string | undefined, active = false) {
+  return useQuery({
+    queryKey: novelKeys.runPromptExecutions(workflowId ?? "none"),
+    queryFn: async () => (await novelFetch<{ executions: NovelPromptExecution[] }>(`/v2/runs/${enc(workflowId!)}/prompt-executions`)).executions ?? [],
     enabled: Boolean(workflowId),
     refetchInterval: active ? 3000 : false,
   });
@@ -527,7 +568,7 @@ export function useSignalHumanDecision(projectId: string, workflowId: string | u
       await novelFetch(`/v2/workflows/${enc(workflowId!)}/tasks/${enc(input.artifactId)}/signal`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ signal: "humanSignal", payload: { decision: input.decision, authorId: input.authorId ?? "web-author", feedback: input.feedback, revisionBase: input.revisionBase } }),
+        body: JSON.stringify({ signal: "humanSignal", payload: { decision: input.decision, authorId: input.authorId ?? "web-author", feedback: input.feedback, revisionBase: input.revisionBase, approvedArtifactId: input.artifactId } }),
       });
     },
     onSuccess: (_data, input) => {
@@ -546,6 +587,33 @@ export function useSignalHumanDecision(projectId: string, workflowId: string | u
       void qc.invalidateQueries({ queryKey: novelKeys.runEvents(workflowId) });
       void qc.invalidateQueries({ queryKey: novelKeys.runArtifacts(workflowId) });
       void qc.invalidateQueries({ queryKey: novelKeys.runReviews(workflowId) });
+    },
+  });
+}
+
+export function useReplacePendingArtifact(projectId: string, workflowId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { artifactId: string; plainText: string; authorId?: string }) =>
+      novelFetch<{ artifact: NovelArtifactSummary; run: NovelWorkflowRunRecord; text: string; wordCount: number }>(`/v2/workflows/${enc(workflowId!)}/tasks/${enc(input.artifactId)}/replacement`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ plainText: input.plainText, authorId: input.authorId ?? "web-author" }),
+      }),
+    onSuccess: (data, input) => {
+      if (!workflowId) return;
+      qc.setQueryData<NovelRunState>(novelKeys.run(workflowId), (current) => current
+        ? { ...current, status: data.run.status, record: data.run }
+        : current);
+      qc.setQueryData<NovelWorkflowRunRecord[]>(novelKeys.runs(projectId), (current) => current?.map((run) => run.temporalWorkflowId === workflowId ? data.run : run));
+      qc.setQueryData(novelKeys.runArtifacts(workflowId), (current: NovelArtifactSummary[] | undefined) => current ? [data.artifact, ...current.filter((artifact) => artifact.id !== data.artifact.id)] : current);
+      qc.setQueryData(["novel", "artifact", data.artifact.id, "text"] as const, { text: data.text, kind: data.artifact.kind, artifactId: data.artifact.id, wordCount: data.wordCount });
+      void qc.invalidateQueries({ queryKey: ["novel", "artifact", input.artifactId, "text"] as const });
+      void qc.invalidateQueries({ queryKey: novelKeys.run(workflowId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.runs(projectId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.runArtifacts(workflowId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.runReviews(workflowId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.project(projectId) });
     },
   });
 }

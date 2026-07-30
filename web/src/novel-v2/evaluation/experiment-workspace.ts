@@ -87,7 +87,7 @@ export const EXPERIMENT_RUNTIME_TABLES = [
   "manuscript_documents", "manuscript_revisions", "memory_bundles", "memory_claims", "memory_gate_states",
   "memory_snapshots", "model_invocations", "model_routes", "model_tasks", "novel_intents",
   "novel_projects", "outbox_events", "payoff_curve", "payoffs", "plot_threads",
-  "preflight_plans", "project_plan_sections", "projection_failures", "promises", "prompt_templates", "provider_configs", "quality_gates",
+  "preflight_plans", "project_plan_sections", "projection_failures", "promises", "prompt_executions", "prompt_templates", "provider_configs", "quality_gates",
   "relations", "retrieval_runs", "reviews", "scenes", "skill_bindings", "skill_bundles",
   "skill_definitions", "skill_versions", "skills", "story_arc_batches", "task_attempts", "timeline_events",
   "usage_ledger", "volumes", "workflow_run_summaries", "workflow_runs",

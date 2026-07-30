@@ -287,7 +287,7 @@ export async function resolveSkillBundle(plan: PreflightPlan, memory: MemoryBund
   const chosen = chosenSource.length ? chosenSource : available.slice(0, 3);
   const ids = new Set(chosen.map((skill) => skill.skillId));
   const conflicts = chosen.flatMap((skill) => skill.conflicts.filter((id) => ids.has(id)).map((id) => ({ skillId: skill.skillId, conflictsWith: id })));
-  const bundle: SkillBundle = { id: `skills:${plan.id}`, projectId: input.projectId, preflightId: plan.id, skills: chosen.map((skill) => ({ skillId: skill.skillId, version: skill.version, qualityGates: skill.qualityGates, promptSections: skill.promptSections })), conflicts, missingCapabilities: [...capabilities].filter((capability) => !chosen.some((skill) => skill.capabilities.includes(capability))), fingerprint: "", createdAt: now };
+  const bundle: SkillBundle = { id: `skills:${plan.id}`, projectId: input.projectId, preflightId: plan.id, skills: chosen.map((skill) => ({ skillId: skill.skillId, version: skill.version, capabilities: skill.capabilities, applicableTasks: skill.applicableTasks, requiredMemoryKinds: skill.requiredMemoryKinds, qualityGates: skill.qualityGates, promptSections: skill.promptSections })), conflicts, missingCapabilities: [...capabilities].filter((capability) => !chosen.some((skill) => skill.capabilities.includes(capability))), fingerprint: "", createdAt: now };
   bundle.fingerprint = canonicalSha256({ ...bundle, fingerprint: undefined, createdAt: undefined });
   return bundle;
 }

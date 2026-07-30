@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import type { Artifact, MemoryClaim } from "../protocol";
 import type { ModelGateway } from "../model-gateway";
 import type { ModelRoutingSnapshot } from "../model-routing";
-import { factExtractionSchema, type FactExtractionOutput } from "../prompts/schemas";
+import { chapterStateDeltaSchema, type ChapterStateDelta, type FactExtractionOutput } from "../prompts/schemas";
 import { buildFactExtractionPrompt } from "./prompt";
 import { dedupeFactCandidates } from "./dedupe";
 import { classifyFactCandidates } from "./classify";
+import { compileStageContext } from "../stage-context";
 
 /**
  * V2 事实提取编排函数。
@@ -64,6 +65,8 @@ export interface ExtractFactsResult {
    * payoff_type 是通用爽感维度（非金手指/系统流特化）。
    */
   payoffMoments?: FactExtractionOutput["payoffMoments"];
+  chapterMemory?: ChapterStateDelta["chapterMemory"];
+  characterDeltas?: ChapterStateDelta["characterDeltas"];
   stats: {
     totalCandidates: number;
     kept: number;
@@ -97,23 +100,26 @@ export async function extractFactsWithStats(input: ExtractFactsInput): Promise<E
     existingClaimsDigest: input.existingClaimsDigest,
     skills: input.skills,
   });
+  const system = "你是事实提取 Worker。只输出符合 JSON Schema 的 JSON。只提取正文实际呈现的事实，不提取隐喻、修辞或读者推断。";
+  const promptPackage = compileStageContext({ projectId: input.projectId, workflowId: input.workflowRunId ?? input.artifact.taskId, purpose: "facts.extract", stage: "fact-extraction", system, schema: chapterStateDeltaSchema as unknown as Record<string, unknown>, maxInputTokens: 128_000, reservedOutputTokens: 8_192, sections: [{ id: "chapter-state-delta", kind: "manuscript", title: "状态提取任务与章节正文", text: prompt, priority: "critical", provenanceRefs: [input.artifact.id] }] });
 
-  const generated = await input.model.generateStructured<FactExtractionOutput>({
+  const generated = await input.model.generateStructured<ChapterStateDelta>({
     purpose: "facts.extract",
-    system: "你是事实提取 Worker。只输出符合 JSON Schema 的 JSON。只提取正文实际呈现的事实，不提取隐喻、修辞或读者推断。",
-    prompt,
-    schema: factExtractionSchema as unknown as Record<string, unknown>,
-    schemaName: "fact-extraction",
+    system,
+    prompt: promptPackage.instruction,
+    schema: chapterStateDeltaSchema as unknown as Record<string, unknown>,
+    schemaName: "chapter-state-delta",
     routingSnapshot: input.routingSnapshot,
     candidateStartIndex: input.candidateStartIndex,
     workflowRunId: input.workflowRunId,
     taskId: input.taskId,
+    promptContext: promptPackage.manifest,
   });
 
   return projectFactExtractionOutput(input, generated.value);
 }
 
-export function projectFactExtractionOutput(input: Omit<ExtractFactsInput, "model">, output: FactExtractionOutput): ExtractFactsResult {
+export function projectFactExtractionOutput(input: Omit<ExtractFactsInput, "model">, output: ChapterStateDelta): ExtractFactsResult {
   const deduped = dedupeFactCandidates({
     candidates: output.facts,
     existingContentHashes: input.existingContentHashes,
@@ -140,6 +146,8 @@ export function projectFactExtractionOutput(input: Omit<ExtractFactsInput, "mode
     narrativeElements: output.narrativeElements,
     // Phase 3.2: 透传 payoffMoments 给 activity 层，由其调用 recordPayoffCurve
     payoffMoments: output.payoffMoments,
+    chapterMemory: output.chapterMemory,
+    characterDeltas: output.characterDeltas,
     stats: {
       totalCandidates: deduped.totalCandidates,
       kept: deduped.kept.length,

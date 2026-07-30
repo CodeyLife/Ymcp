@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { PromptContextManifest } from "./protocol";
 
 export const MODEL_PURPOSES = [
   "planning.foundation",
@@ -95,6 +96,8 @@ export interface ModelWorkPackage {
   baseRevision: number;
   inputFingerprint: string;
   contextRefs: Record<string, string | undefined>;
+  /** Optional for historical tasks; new compiled prompts carry the same manifest as API execution. */
+  promptContext?: PromptContextManifest;
   createdAt: number;
 }
 

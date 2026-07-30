@@ -26,6 +26,7 @@ import type { ModelGateway } from "../model-gateway";
 import type { NovelPostgresRepository } from "../postgres-repository";
 import type { ExperimentWorkspaceHandle } from "./experiment-workspace";
 import { serializePromptSections } from "./prompt-sections";
+import { compileStageContext } from "../stage-context";
 
 // ===== 类型 =====
 
@@ -266,14 +267,30 @@ export async function runSkillIteration(input: {
 
   // 3. 构造 prompt 并调用 LLM
   const prompt = buildIterationPrompt({ skills, reviews, learningAssessment });
+  const system = "你是长篇小说 skill prompt 迭代器，基于审校 issues 和 learning 机制分析修订 skill prompt。";
+  const iterationSchema = schemaForSkills(skills.map((skill) => skill.skillId));
+  const promptPackage = compileStageContext({
+    projectId: workspace.projectId,
+    workflowId: `skill-iteration:${workspace.id}`,
+    purpose: "skill.iterate",
+    stage: "review",
+    system,
+    schema: iterationSchema,
+    maxInputTokens: 128_000,
+    reservedOutputTokens: 8_192,
+    sections: [{ id: "skill-iteration-evidence", kind: "review", title: "技能、审校证据与底层机制", text: prompt, priority: "required", provenanceRefs: [workspace.id, ...reviews.map((review) => review.id), learningAssessment?.id ?? ""] }],
+  });
 
   const result = await model.generateStructured<SkillIterationOutput>({
     purpose: "skill.iterate",
-    system: "你是长篇小说 skill prompt 迭代器，基于审校 issues 和 learning 机制分析修订 skill prompt。",
-    prompt,
-    schema: schemaForSkills(skills.map((skill) => skill.skillId)),
+    system,
+    prompt: promptPackage.instruction,
+    schema: iterationSchema,
     schemaName: "skill-iteration",
     temperature: 0.4,
+    workflowRunId: `skill-iteration:${workspace.id}`,
+    taskId: `${workspace.id}:skill-iteration`,
+    promptContext: promptPackage.manifest,
   });
 
   // 4. 校验每个 iteration

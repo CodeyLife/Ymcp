@@ -5,14 +5,15 @@ import { ContentObjectStore, type ObjectStoreAdapter } from "./object-store";
 import type { ModelGateway } from "./model-gateway";
 import type { ModelRoutingSnapshot } from "./model-routing";
 import type { MemoryIndex } from "./qdrant-memory";
-import { createChapterMemoryFromRevision } from "./chapter-memory";
+import { createChapterMemoryFromRevision, persistChapterMemoryOutput, validateChapterMemoryOutput } from "./chapter-memory";
 import { evaluateCommitGate } from "./temporal/revision-policy";
-import type { FactExtractionOutput } from "./prompts/schemas";
+import type { ChapterStateDelta, FactExtractionOutput } from "./prompts/schemas";
 
 type CommitDerivedData = {
   payoffMoments?: FactExtractionOutput["payoffMoments"];
   narrativeElements?: FactExtractionOutput["narrativeElements"];
   narrativeOrder?: number;
+  chapterMemoryDelta?: ChapterStateDelta["chapterMemory"];
 };
 
 /**
@@ -114,14 +115,27 @@ export class CommitService {
     if (this.chapterMemoryDeps) {
       try {
         const narrativeOrder = this.chapterMemoryDeps.narrativeOrder ?? await this.lookupNarrativeOrder(input.projectId, input.documentId);
-        const chapterMemory = await createChapterMemoryFromRevision(
-          {
+        const memoryInput = {
             projectId: input.projectId,
             documentId: input.documentId,
             revisionId: result.revisionId,
             narrativeOrder,
             text: input.text,
             artifact: input.artifact,
+        };
+        let chapterMemoryDelta = input.chapterMemoryDelta;
+        if (chapterMemoryDelta) {
+          try { validateChapterMemoryOutput(chapterMemoryDelta); }
+          catch (error) {
+            console.warn(`[commit-service] ChapterStateDelta 的章节记忆无效，回退独立提取：${(error as Error).message}`);
+            chapterMemoryDelta = undefined;
+          }
+        }
+        const chapterMemory = chapterMemoryDelta
+          ? await persistChapterMemoryOutput(memoryInput, { repository: this.repository, objects: this.objects, memoryIndex: this.chapterMemoryDeps.memoryIndex }, chapterMemoryDelta)
+          : await createChapterMemoryFromRevision(
+          {
+            ...memoryInput,
             model: this.chapterMemoryDeps.model,
             routingSnapshot: this.chapterMemoryDeps.defaultRoutingSnapshot,
             workflowRunId: this.chapterMemoryDeps.workflowRunId,

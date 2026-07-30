@@ -13,6 +13,7 @@ import type { ModelGateway } from "../model-gateway";
 import type { PromotionReceipt } from "../protocol";
 import type { ModelRoutingSnapshot } from "../model-routing";
 import { createCraftRulePromotionService } from "./promotion-service";
+import { compileStageContext } from "../stage-context";
 
 // ===== 类型定义 =====
 
@@ -354,6 +355,9 @@ interface FoundationEvaluationResult {
 async function runFoundationTaskWithPrompt(params: {
   model: ModelGateway;
   routingSnapshot: ModelRoutingSnapshot;
+  projectId: string;
+  workflowId: string;
+  taskId: string;
   taskKey: "project-positioning" | "architecture" | "story-bible" | "characters" | "relations" | "worldview";
   promptText: string;
   instruction?: string;
@@ -368,13 +372,27 @@ async function runFoundationTaskWithPrompt(params: {
     "",
     "请输出 JSON：qualityScore（0-100）、blockerCount、majorCount、summary、output（基础任务实际产出）。",
   ].join("\n");
+  const promptPackage = compileStageContext({
+    projectId: params.projectId,
+    workflowId: params.workflowId,
+    purpose: "planning.foundation",
+    stage: "foundation",
+    system: systemPrompt,
+    schema: foundationEvaluationSchema,
+    maxInputTokens: 128_000,
+    reservedOutputTokens: 4_096,
+    sections: [{ id: "craft-rule-evaluation", kind: "background", title: "规则回归场景与基础任务", text: userPrompt, priority: "required", provenanceRefs: [params.taskId, params.scenarioClass] }],
+  });
 
   const result = await params.model.generateStructured<FoundationEvaluationResult>({
     purpose: "planning.foundation",
     schema: foundationEvaluationSchema,
     system: systemPrompt,
-    prompt: userPrompt,
+    prompt: promptPackage.instruction,
     routingSnapshot: params.routingSnapshot,
+    workflowRunId: params.workflowId,
+    taskId: params.taskId,
+    promptContext: promptPackage.manifest,
   });
   return result.value;
 }
@@ -398,14 +416,14 @@ export async function evaluateCraftRuleOnFoundation(
 
   // 2. 用 beforeText（旧 skill prompt）作为 system prompt 跑一次 baseline
   const baselineResult = await runFoundationTaskWithPrompt({
-    model, routingSnapshot, taskKey: input.taskKey,
+    model, routingSnapshot, projectId: input.projectId, workflowId: `craft-rule:${input.candidateId}:${input.scenarioClass}`, taskId: `${input.candidateId}:${input.taskKey}:baseline`, taskKey: input.taskKey,
     promptText: candidate.beforeText,
     instruction: input.instruction, scenarioClass: input.scenarioClass,
   });
 
   // 3. 用 afterText（新 skill prompt）作为 system prompt 跑一次 candidate
   const candidateResult = await runFoundationTaskWithPrompt({
-    model, routingSnapshot, taskKey: input.taskKey,
+    model, routingSnapshot, projectId: input.projectId, workflowId: `craft-rule:${input.candidateId}:${input.scenarioClass}`, taskId: `${input.candidateId}:${input.taskKey}:candidate`, taskKey: input.taskKey,
     promptText: candidate.afterText,
     instruction: input.instruction, scenarioClass: input.scenarioClass,
   });
@@ -513,7 +531,7 @@ async function runRegressionVerification(params: {
     const taskKey = evidenceCase.taskKey as "project-positioning" | "architecture" | "story-bible" | "characters" | "relations" | "worldview";
     const candidateScore = evidenceCase.candidateScore as number;
     const result = await runFoundationTaskWithPrompt({
-      model, routingSnapshot, taskKey,
+      model, routingSnapshot, projectId: candidate.projectId, workflowId: `craft-rule:${candidate.id}:regression`, taskId: `${candidate.id}:${taskKey}:regression:${evidenceCase.scenarioClass}`, taskKey,
       promptText: candidate.afterText,
       instruction: `回归验证：重跑 scenarioClass=${evidenceCase.scenarioClass}，对比 candidateScore=${candidateScore}`,
       scenarioClass: evidenceCase.scenarioClass,

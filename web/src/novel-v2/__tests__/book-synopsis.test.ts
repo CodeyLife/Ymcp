@@ -157,7 +157,16 @@ describe("book synopsis planning contract", () => {
 
     const result = await activities.generateBookSynopsis({ workflowId: "workflow-1", projectId: "project-1", sourceFingerprint });
     expect(result.kind).toBe("external");
-    expect(createModelTask).toHaveBeenCalledWith(expect.objectContaining({ schemaName: "book_synopsis", contextRefs: expect.objectContaining({ sourceFingerprint }) }), expect.any(String));
+    expect(createModelTask).toHaveBeenCalledWith(expect.objectContaining({
+      schemaName: "book_synopsis",
+      instruction: expect.stringContaining("长夜归舟"),
+      contextRefs: expect.objectContaining({ sourceFingerprint }),
+      promptContext: expect.objectContaining({
+        purpose: "planning.foundation",
+        stage: "foundation",
+        sections: expect.arrayContaining([expect.objectContaining({ status: "included" })]),
+      }),
+    }), expect.any(String));
   });
 
   it("does not persist a slow result after its title or plan source changes", async () => {

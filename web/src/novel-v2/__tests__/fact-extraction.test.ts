@@ -9,7 +9,7 @@ import {
 import { extractFactsFromText, extractFactsWithStats, computeClaimContentHash } from "../fact-extraction";
 import { InMemoryModelGateway } from "../model-gateway";
 import type { Artifact, MemoryClaim } from "../protocol";
-import type { FactExtractionOutput } from "../prompts/schemas";
+import type { ChapterStateDelta, FactExtractionOutput } from "../prompts/schemas";
 
 const artifact: Artifact = { id: "artifact-1", projectId: "p1", taskId: "task-1", attemptId: "attempt-1", kind: "draft", contentHash: "hash", objectKey: "obj", baseRevision: 7, createdAt: 1, fingerprint: "fp-1" };
 
@@ -187,6 +187,24 @@ describe("fact-extraction classifyFactRisk maps to risk tiers", () => {
 });
 
 describe("fact-extraction extractFactsWithStats orchestration", () => {
+  it("returns chapter memory and character deltas from the same extraction", async () => {
+    const output: ChapterStateDelta = {
+      summary: "统一提取",
+      facts: [fact()],
+      chapterMemory: {
+        summary: "本章围绕一次受阻的会面展开，双方通过选择与行动确认了当前关系边界，并留下下一阶段仍需处理的冲突。".repeat(2),
+        keyEvents: ["双方完成会面"],
+        characterStates: [{ characterId: "hero", stateSnapshot: "决定继续追查" }],
+        unresolvedThreads: ["信物来源"],
+        emotionalArc: "戒备转为有限信任",
+      },
+      characterDeltas: [{ characterId: "hero", voiceAnchor: { sentenceLength: "短句", vocabulary: "克制", directness: "间接", avoidance: "回避承诺" }, motivationDelta: "继续追查信物", newKnowledge: [], relationDeltas: [] }],
+    };
+    const result = await extractFactsWithStats({ projectId: "p1", artifact, text: "正文略。", model: new InMemoryModelGateway(() => output) });
+    expect(result.chapterMemory?.keyEvents).toEqual(["双方完成会面"]);
+    expect(result.characterDeltas?.[0].characterId).toBe("hero");
+  });
+
   it("returns claims and stats end-to-end through the model gateway", async () => {
     const output: FactExtractionOutput = {
       summary: "提取到 2 条事实",

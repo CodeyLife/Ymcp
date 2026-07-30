@@ -94,6 +94,12 @@ export function buildStoryArcPrompt(input: { projectTitle: string; authorIntent?
     "故事弧默认容纳 12–30 章，必须从已经发生的状态出发形成局部完整的小故事；本次 batchIndex=1、startChapterIndex=1，只展开 5–8 章，后续批次将基于新定稿状态滚动生成。",
     "章节蓝图是创作边界，不是待办清单。铺陈、相处、内省、情绪积累、文学意象和日常过程可以成为章节主体；optionalBeats 允许作者在正文中灵活取舍。",
     STORY_ARC_OUTPUT_FORMAT_GUARD,
+    buildStoryArcContext(input),
+  ].join("\n\n");
+}
+
+function buildStoryArcContext(input: Parameters<typeof buildStoryArcPrompt>[0]): string {
+  return [
     `项目：${input.projectTitle}`,
     `作者本次意图：${input.authorIntent || "无额外指定，由当前状态和宏观规划推导"}`,
     "## 当前宏观规划",
@@ -115,7 +121,7 @@ export function buildStoryArcBatchPrompt(input: Parameters<typeof buildStoryArcP
     "## 已批准故事弧边界",
     JSON.stringify(input.arc, null, 2),
     "## 最新运行上下文",
-    buildStoryArcPrompt(input),
+    buildStoryArcContext(input),
   ].join("\n\n");
 }
 

@@ -4,7 +4,7 @@ import { startStoryArcPlanning } from "../application/story-arc-workflow";
 import type { NovelPostgresRepository } from "../postgres-repository";
 import type { Client } from "@temporalio/client";
 import { renderChapterPlanningContext } from "../prompts/chapter-planning-context";
-import { buildStoryArcReviewPrompt } from "../prompts/story-arc";
+import { buildStoryArcBatchPrompt, buildStoryArcReviewPrompt } from "../prompts/story-arc";
 
 const bundle = parseStoryArcBundle({
   arc: { title: "停电夜", objective: "让彼此戒备的两人建立最低限度信任", entryState: "互相怀疑", centralConflict: "证据与求生选择冲突", development: ["被迫同行", "交换一部分事实"], resolution: "共同保住证据", exitState: "愿意短暂合作", plotThreadRefs: ["main"], foreshadowingRefs: ["f-1"], expectedChapterCount: 20, phases: [{ title: "受困", objective: "共同求生", exitCondition: "取得证据" }, { title: "试探", objective: "建立最低信任", exitCondition: "愿意合作" }] },
@@ -13,6 +13,13 @@ const bundle = parseStoryArcBundle({
 });
 
 describe("story arc planning contract", () => {
+  it("does not embed first-batch instructions in a later batch", () => {
+    const prompt = buildStoryArcBatchPrompt({ projectTitle: "Test", macro: [], recentChapters: [], openThreads: [], arc: bundle.arc, batchIndex: 3, startChapterIndex: 14 });
+    expect(prompt).toContain("batchIndex=3、startChapterIndex=14");
+    expect(prompt).not.toContain("batchIndex=1、startChapterIndex=1");
+    expect(prompt).not.toContain("只展开第一批");
+  });
+
   it("normalizes author chapter indices without truncating chapters after five", () => {
     expect(bundle.arc.expectedChapterCount).toBe(20);
     expect(bundle.chapters).toHaveLength(7);

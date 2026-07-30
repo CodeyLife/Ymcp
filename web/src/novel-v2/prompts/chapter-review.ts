@@ -1,8 +1,10 @@
-import type { Artifact, ExecutionBlueprint, MemoryBundle, Review, ReviewIssue, SkillBundle } from "../protocol";
+import type { Artifact, ExecutionBlueprint, MemoryBundle, Review, ReviewIssue, SkillBundle, StageGoalContract, StagePromptPackage } from "../protocol";
 import { WRITER_CHAPTER_ENDING_HOOKS } from "./writer-rules";
 import type { ReviewerOutput } from "./schemas";
 import type { ChapterPlanningContext } from "../application/story-arc";
 import { renderChapterPlanningContext } from "./chapter-planning-context";
+import { compileStageContext } from "../stage-context";
+import { reviewerSchemaForDimensions } from "./schemas";
 
 /**
  * V2 章节 reviewer prompt 构造器。
@@ -88,6 +90,42 @@ export interface ReviewPromptInput {
     byType: Record<string, number>;
   };
   planningContext?: ChapterPlanningContext;
+  stageGoal?: StageGoalContract;
+  instructionsOnly?: boolean;
+}
+
+const REVIEW_ROLE_TERMS: Record<ReviewerRole, string[]> = {
+  "style-reviewer": ["style", "prose", "language", "specificity", "scene", "文体", "文风", "语言", "具体", "场景", "呈现", "叙述", "意象"],
+  "character-reviewer": ["character", "voice", "dialogue", "relation", "romance", "desire", "人物", "角色", "对白", "声音", "关系", "欲望", "动机"],
+  "continuity-reviewer": ["continuity", "fact", "knowledge", "foreshadow", "world", "rule", "连续", "事实", "知识", "伏笔", "世界", "规则", "状态"],
+  "plot-reviewer": ["plot", "blueprint", "causal", "pacing", "tension", "rhythm", "arc", "因果", "情节", "章节", "功能", "节奏", "主线", "支线"],
+  "reader-reviewer": ["reader", "hook", "payoff", "retention", "serial", "tension", "读者", "钩子", "爽点", "追更", "回报", "疲劳", "卖点", "期待"],
+};
+
+export function selectReviewerSkills(skills: SkillBundle | undefined, role: ReviewerRole, limit = 6): SkillBundle | undefined {
+  if (!skills) return undefined;
+  const terms = REVIEW_ROLE_TERMS[role];
+  const ranked = skills.skills.map((skill, index) => {
+    const searchable = [skill.skillId, ...(skill.capabilities ?? []), ...skill.qualityGates, skill.promptSections.review ?? ""].join(" ").toLowerCase();
+    const score = terms.reduce((sum, term) => sum + (searchable.includes(term.toLowerCase()) ? 1 : 0), 0);
+    return { skill, score, index };
+  }).filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, limit)
+    .map((item) => item.skill);
+  return { ...skills, id: `${skills.id}:${role}`, skills: ranked };
+}
+
+export function selectReviewerMemory(memory: MemoryBundle, role: ReviewerRole): MemoryBundle {
+  const claims = memory.claims.filter((claim) => {
+    const facets = new Set([claim.matchedFacet, ...(claim.matchedFacets ?? [])]);
+    if (role === "style-reviewer") return facets.has("style") || facets.has("author-preference") || claim.kind === "author";
+    if (role === "character-reviewer") return facets.has("entity") || facets.has("relation") || facets.has("fact") || claim.subjectRefs.length > 0;
+    if (role === "continuity-reviewer") return facets.has("fact") || facets.has("timeline") || facets.has("foreshadowing") || facets.has("thread") || claim.authority === "approved" || claim.authority === "author";
+    if (role === "plot-reviewer") return facets.has("thread") || facets.has("foreshadowing") || facets.has("chapter-memory") || claim.kind === "hierarchical";
+    return facets.has("chapter-memory") || facets.has("author-preference") || facets.has("style") || claim.kind === "author";
+  });
+  return { ...memory, id: `${memory.id}:${role}`, claims };
 }
 
 function buildNumberedDraft(text: string): string {
@@ -179,7 +217,9 @@ function buildPayoffStatsMarkdown(stats: NonNullable<ReviewPromptInput["payoffSt
  * 构建 V2 章节 reviewer prompt。
  */
 export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
-  const { role, artifact, text, blueprint, memory, skills, payoffStats, planningContext } = input;
+  const { role, artifact, text, blueprint, payoffStats, planningContext, stageGoal } = input;
+  const memory = selectReviewerMemory(input.memory, role);
+  const skills = selectReviewerSkills(input.skills, role);
   const numberedDraft = buildNumberedDraft(text);
   const reviewerContext = buildReviewerContext(memory);
   const blueprintMarkdown = buildBlueprintSummary(blueprint, planningContext);
@@ -205,7 +245,7 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
     "",
     `## 当前职责`,
     `你的完整职责定义见 system prompt（默认职责 + 题材/项目特化补充）。下面仅强调维度边界。`,
-    `你只能把 ${REVIEWER_DIMENSIONS[role].join("、")} 维度的问题写入 issues；其他维度即使有改进空间，也交给对应 reviewer，不得重复报告。scores 仍需填写全部维度，但当前 verdict 只由你的职责维度决定。`,
+    `你只能把 ${REVIEWER_DIMENSIONS[role].join("、")} 维度的问题写入 issues；其他维度即使有改进空间，也交给对应 reviewer，不得重复报告。scores 只填写你的职责维度，当前 verdict 只由这些维度决定。`,
     "",
     "## 已激活审校技能",
     skills?.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, skill.promptSections.review ?? ""].filter(Boolean).join("\n")).join("\n\n") || "（无额外审校技能）",
@@ -226,6 +266,17 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
     `plot-reviewer 必须明确报告章节功能与故事弧边界结论。不得把可选节拍当作验收清单；仅当目标章功能、明确结果或章尾驱动力整体缺失时，返回 blocker "chapter.incomplete-blueprint"，并定位真正需要修改的最小范围。`,
   ];
 
+  if (stageGoal) {
+    sections.push(
+      "",
+      "## 本轮阶段目标",
+      stageGoal.authorInstruction ? `作者原始要求：${stageGoal.authorInstruction}` : "本轮没有额外作者要求。",
+      `语义验收点：${stageGoal.acceptanceCriteria.join("；") || "按本角色职责审核当前候选"}`,
+      `允许变化范围：${stageGoal.allowedChangeScope}`,
+      `只在该目标与 ${REVIEWER_DIMENSIONS[role].join("、")} 的职责有关时判断是否兑现；必须依据正文实际阅读效果，不得用关键词出现与否代替判断。未兑现时使用 rule=author-goal.unmet，并引用正文证据。`,
+    );
+  }
+
   // Phase 3.2: reader-reviewer 爽点曲线检查指引（基于事实，非硬阈值）
   if (isReaderReviewer) {
     sections.push(
@@ -240,6 +291,8 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
       sections.push("", `### 前章爽点统计`, "- 暂无前章爽点数据（首章或前 5 章无记录），无需检查连续无爽点。");
     }
   }
+
+  if (input.instructionsOnly) return sections.join("\n");
 
   sections.push(
     "",
@@ -268,6 +321,41 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
   return sections.join("\n");
 }
 
+export function buildChapterReviewPromptPackage(input: ReviewPromptInput & { workflowId: string; system: string }): StagePromptPackage {
+  const memory = selectReviewerMemory(input.memory, input.role);
+  const skills = selectReviewerSkills(input.skills, input.role);
+  const instruction = buildChapterReviewPrompt({ ...input, memory, skills: undefined, payoffStats: undefined, stageGoal: undefined, instructionsOnly: true });
+  const goalText = input.stageGoal ? [
+    input.stageGoal.authorInstruction ? `作者原始要求：${input.stageGoal.authorInstruction}` : "本轮没有额外作者要求。",
+    `语义验收点：${input.stageGoal.acceptanceCriteria.join("；") || "按本角色职责审核当前候选"}`,
+    `允许变化范围：${input.stageGoal.allowedChangeScope}`,
+    `只在目标与 ${REVIEWER_DIMENSIONS[input.role].join("、")} 职责相关时判断兑现情况；依据实际阅读效果，不做关键词匹配。`,
+  ].join("\n") : "";
+  const sections = [
+    { id: "review-instruction", kind: "review" as const, title: "审校方法与职责边界", text: instruction, priority: "required" as const, provenanceRefs: [`reviewer:${input.role}`] },
+    ...(input.stageGoal ? [{ id: "stage-goal", kind: "goal" as const, title: "本轮阶段目标", text: goalText, priority: "critical" as const, provenanceRefs: [input.stageGoal.id] }] : []),
+    { id: "manuscript", kind: "manuscript" as const, title: "正文（段落编号仅用于定位）", text: buildNumberedDraft(input.text), priority: "critical" as const, provenanceRefs: [input.artifact.id], sourceArtifactId: input.artifact.id },
+    ...(input.planningContext ? [{ id: "planning", kind: "planning" as const, title: "冻结章节规划上下文", text: renderChapterPlanningContext(input.planningContext), priority: input.role === "plot-reviewer" ? "required" as const : "normal" as const, provenanceRefs: [input.blueprint.id] }] : []),
+    { id: "blueprint", kind: "blueprint" as const, title: "工作流执行编排", text: buildBlueprintSummary(input.blueprint, input.planningContext), priority: input.role === "plot-reviewer" ? "required" as const : "soft" as const, provenanceRefs: [input.blueprint.id] },
+    ...memory.claims.map((claim) => ({ id: `memory:${claim.id}`, kind: "fact" as const, title: `相关事实：${claim.title}`, text: claim.content, priority: input.role === "continuity-reviewer" || input.role === "character-reviewer" ? "required" as const : "normal" as const, provenanceRefs: [claim.id, ...(claim.sourceArtifactId ? [claim.sourceArtifactId] : []), ...claim.sourceRevisionIds] })),
+    ...((skills?.skills ?? []).map((skill) => ({ id: `skill:${skill.skillId}`, kind: "skill" as const, title: `审校技能 ${skill.skillId}@${skill.version}`, text: skill.promptSections.review ?? "", priority: "normal" as const, provenanceRefs: [`${skill.skillId}@${skill.version}`] }))),
+    ...(input.role === "reader-reviewer" && input.payoffStats ? [{ id: "payoff-stats", kind: "background" as const, title: "前章爽点统计", text: buildPayoffStatsMarkdown(input.payoffStats), priority: "normal" as const, provenanceRefs: [input.artifact.projectId] }] : []),
+    { id: "artifact-metadata", kind: "background" as const, title: "草稿元数据", text: `artifactId=${input.artifact.id}\nkind=${input.artifact.kind}\nbaseRevision=${input.artifact.baseRevision}\nfingerprint=${input.artifact.fingerprint}`, priority: "soft" as const, provenanceRefs: [input.artifact.id] },
+  ];
+  return compileStageContext({
+    projectId: input.artifact.projectId,
+    workflowId: input.workflowId,
+    purpose: ({ "style-reviewer": "review.style", "character-reviewer": "review.character", "continuity-reviewer": "review.continuity", "plot-reviewer": "review.plot", "reader-reviewer": "review.reader" } as const)[input.role],
+    stage: "review",
+    system: input.system,
+    schema: reviewerSchemaForDimensions(REVIEWER_DIMENSIONS[input.role]),
+    maxInputTokens: input.blueprint.budget.maxInputTokens,
+    reservedOutputTokens: input.blueprint.budget.maxOutputTokens,
+    goal: input.stageGoal,
+    sections,
+  });
+}
+
 /**
  * 把 reviewer 输出转换为 v2 Review 对象。
  *
@@ -289,7 +377,7 @@ export function toReview(params: { artifact: Artifact; identity: "internal" | "i
     suggestion: issue.suggestion,
     rewriteExample: issue.rewriteExample,
   }));
-  const roleScores = REVIEWER_DIMENSIONS[params.role].map((dimension) => params.output.scores[dimension]);
+  const roleScores = REVIEWER_DIMENSIONS[params.role].map((dimension) => params.output.scores[dimension]).filter((score): score is number => typeof score === "number");
   return {
     id: crypto.randomUUID(),
     projectId: params.artifact.projectId,
@@ -299,7 +387,7 @@ export function toReview(params: { artifact: Artifact; identity: "internal" | "i
     role: params.role,
     verdict: params.output.verdict,
     issues,
-    score: roleScores.reduce((sum, score) => sum + score, 0) / roleScores.length,
+    score: roleScores.length ? roleScores.reduce((sum, score) => sum + score, 0) / roleScores.length : undefined,
     dimensionScores: params.output.scores,
     createdAt: Date.now(),
     artifactFingerprint: params.artifact.fingerprint,

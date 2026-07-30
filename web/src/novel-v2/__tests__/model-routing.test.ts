@@ -148,6 +148,86 @@ describe("RoutedModelGateway adapters", () => {
     expect(result.provenance).toMatchObject({ candidateIndex: 1, profileId: "good", model: "good-model" });
   });
 
+  it("counts the final prompt against the effective context budget and records the failure", async () => {
+    const next = config([profile({ contextWindow: 64 })]);
+    next.routes["*"] = { candidates: [{ executor: "api", profileId: "primary" }], maxInputTokens: 40, maxOutputTokens: 16 };
+    const promptRecorder = vi.fn(async () => undefined);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", next), undefined, promptRecorder);
+
+    await expect(gateway.generateStructured({ purpose: "review.reader", prompt: "正文".repeat(100), schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, maxTokens: 16 }))
+      .rejects.toThrow("context-budget-exceeded");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(promptRecorder).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", errorCategory: "context-budget-exceeded" }));
+  });
+
+  it("keeps the original task semantics while repairing invalid structured output", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const content = requestBodies.length === 1
+        ? JSON.stringify({ score: 4 })
+        : JSON.stringify({ name: "保留克制对白", score: 4 });
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", config()));
+
+    const result = await gateway.generateStructured<{ name: string; score: number }>({
+      purpose: "review.reader",
+      system: "你是对白修订目标验收员。",
+      prompt: "检查候选是否减少解释性对白，并保留人物之间的试探感。",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "score"],
+        properties: { name: { type: "string" }, score: { type: "number" } },
+      },
+      maxRepairAttempts: 1,
+    });
+
+    expect(result.value).toEqual({ name: "保留克制对白", score: 4 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const repairMessages = requestBodies[1].messages as Array<{ role: string; content: string }>;
+    expect(repairMessages.find((message) => message.role === "system")?.content).toContain("对白修订目标验收员");
+    expect(repairMessages.find((message) => message.role === "user")?.content).toContain("减少解释性对白，并保留人物之间的试探感");
+  });
+
+  it("bounds invalid output carried into schema repair without dropping the original task", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const next = config();
+    next.routes["*"] = { candidates: [{ executor: "api", profileId: "primary" }], maxInputTokens: 400, maxOutputTokens: 64 };
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const content = requestBodies.length === 1 ? `{"invalid":"${"冗余输出".repeat(500)}"}` : JSON.stringify({ ok: true });
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    }));
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", next));
+
+    await expect(gateway.generateStructured<{ ok: boolean }>({
+      purpose: "review.reader",
+      prompt: "核对人物是否通过行动而非解释性对白表达戒备。",
+      schema: { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { type: "boolean" } } },
+      maxTokens: 64,
+      maxRepairAttempts: 1,
+    })).resolves.toMatchObject({ value: { ok: true } });
+
+    const repairMessages = requestBodies[1].messages as Array<{ role: string; content: string }>;
+    const repairPrompt = repairMessages.find((message) => message.role === "user")?.content ?? "";
+    expect(repairPrompt).toContain("核对人物是否通过行动而非解释性对白表达戒备");
+    expect(repairPrompt).toContain("因上下文预算仅保留开头");
+    expect(repairPrompt.length).toBeLessThan(800);
+  });
+
+  it("applies route context budgets before creating an external MCP task", async () => {
+    const next = config([], [{ executor: "external-mcp" }]);
+    next.routes["*"] = { candidates: [{ executor: "external-mcp" }], maxInputTokens: 10 };
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", next));
+    await expect(gateway.generateText({ purpose: "writing.draft", prompt: "超长正文".repeat(20) }))
+      .rejects.toThrow("context-budget-exceeded");
+  });
+
   it("uses the SiliconFlow embedding contract and restores response index order", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toBe("https://example.test/v1/embeddings");

@@ -116,6 +116,20 @@ function renderReviewedFinalProduction() {
   return renderToStaticMarkup(<QueryClientProvider client={client}><ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm }}><App><MemoryRouter><NovelProductionWorkspace embedded projectId="p1" documentId="d1" /></MemoryRouter></App></ConfigProvider></QueryClientProvider>);
 }
 
+function renderFinalProductionWithCreationAction() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const workspace: NovelChapterWorkspace = {
+    document: project.documents[0],
+    content: { revisionId: "rev-1", revision: 8, contentHash: "hash-1", byteLength: 120, plainText: "第一段。\n\n第二段。" },
+    spec: { chapterGoal: "测试章节", blueprint: { chapterPurpose: "按蓝图重写测试章" }, blueprintFingerprint: "bp" },
+    versions: [],
+  };
+  client.setQueryData(novelKeys.project("p1"), project);
+  client.setQueryData(novelKeys.runs("p1"), []);
+  client.setQueryData(novelKeys.chapterWorkspace("p1", "d1"), workspace);
+  return renderToStaticMarkup(<QueryClientProvider client={client}><ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm }}><App><MemoryRouter><NovelProductionWorkspace embedded projectId="p1" documentId="d1" onStartCreation={() => undefined} /></MemoryRouter></App></ConfigProvider></QueryClientProvider>);
+}
+
 describe("Novel command workspace", () => {
   it("derives author-facing chapter states from the latest related run", () => {
     const planned = { id: "planned", title: "未开始", narrativeOrder: 3, status: "planned" };
@@ -278,5 +292,11 @@ describe("Novel command workspace", () => {
     expect(html).toContain("人物反应太直白");
     expect(html).toContain("一键重新生成");
     expect(html).toContain("待处理 1 条");
+  });
+
+  it("offers whole-chapter rewrite from the blueprint for finalized manuscripts", () => {
+    const html = renderFinalProductionWithCreationAction();
+    expect(html).toContain("从蓝图重写");
+    expect(html).toContain("重新审校");
   });
 });

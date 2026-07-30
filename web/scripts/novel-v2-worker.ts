@@ -13,11 +13,11 @@ import { bindRuntimeObjectStore } from "../src/novel-v2/runtime-object-store";
 
 const repository = new NovelPostgresRepository();
 await repository.migrate();
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? "http://127.0.0.1:6333" });
-const { gateway: modelGateway } = await createRuntimeModelGateway(repository);
-const qdrantMemory = new QdrantMemoryProvider(qdrant, modelGateway, process.env.QDRANT_COLLECTION ?? "novel-memory-current", Number(process.env.NOVEL_EMBEDDING_DIM ?? 1024));
 const objectStore = new ContentObjectStore();
 await bindRuntimeObjectStore(repository, objectStore, "worker");
+const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? "http://127.0.0.1:6333" });
+const { gateway: modelGateway } = await createRuntimeModelGateway(repository, objectStore);
+const qdrantMemory = new QdrantMemoryProvider(qdrant, modelGateway, process.env.QDRANT_COLLECTION ?? "novel-memory-current", Number(process.env.NOVEL_EMBEDDING_DIM ?? 1024));
 const workflowsPath = fileURLToPath(new URL("../src/novel-v2/temporal/workflows.ts", import.meta.url));
 
 // P2-G2: 三轨加权融合（semantic 0.5 + lexical 0.3 + graph 0.2）
