@@ -158,8 +158,8 @@ describe("targeted chapter review issues", () => {
     await expect(repository.claimHumanDecision({ workflowId, artifactId: `${artifactId}-stale`, decision: "reject", authorId: "author-1" })).resolves.toBeUndefined();
 
     await repository.releaseHumanDecisionClaim(workflowId, artifactId);
-    await expect(repository.claimHumanDecision({ workflowId, artifactId, decision: "reject", authorId: "author-2", feedback: "继续修改" })).resolves.toMatchObject({
-      payload: { pendingHumanDecision: { artifactId, decision: "reject", authorId: "author-2", feedback: "继续修改" } },
+    await expect(repository.claimHumanDecision({ workflowId, artifactId, decision: "abandon", authorId: "author-2", feedback: "质量不足，放弃本轮", revisionBase: "previous" })).resolves.toMatchObject({
+      payload: { pendingHumanDecision: { artifactId, decision: "abandon", authorId: "author-2", feedback: "质量不足，放弃本轮", revisionBase: "previous" } },
     });
   });
 

@@ -53,9 +53,10 @@ function renderWorkspace(entry = "/novels/p1?view=overview&document=d1&run=wf-re
 
 function renderProduction() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const targetedReviewRun = { ...runs[2], payload: { ...runs[2].payload, mode: "targeted", targetIssueIds: ["issue-1"] } };
   client.setQueryData(novelKeys.project("p1"), project);
-  client.setQueryData(novelKeys.runs("p1"), runs);
-  client.setQueryData(novelKeys.run("wf-review"), { workflowId: "wf-review", status: "manual-review-required", record: runs[2] });
+  client.setQueryData(novelKeys.runs("p1"), [runs[0], runs[1], targetedReviewRun]);
+  client.setQueryData(novelKeys.run("wf-review"), { workflowId: "wf-review", status: "manual-review-required", record: targetedReviewRun });
   client.setQueryData(novelKeys.runEvents("wf-review"), []);
   client.setQueryData(novelKeys.runArtifacts("wf-review"), []);
   client.setQueryData(novelKeys.factCandidates("p1", "d1"), []);
@@ -173,6 +174,15 @@ describe("Novel command workspace", () => {
       record: { ...approvedRun.record, payload: { documentId: "d1", stage: "author-decision-submitted", pendingHumanDecision: { decision: "revise" } } },
     };
     expect(deriveStageStates(revisingRun, []).revision).toBe("active");
+
+    const abandonedRun = {
+      ...approvedRun,
+      status: "abandoned",
+      record: { ...approvedRun.record, status: "abandoned", payload: { documentId: "d1", stage: "manuscript-approval", reasonCode: "abandoned-by-author" } },
+    };
+    expect(deriveStageStates(abandonedRun, []).review).toBe("done");
+    expect(deriveStageStates(abandonedRun, [])["manuscript-approval"]).toBe("pending");
+    expect(deriveStageStates(abandonedRun, [])["fact-extraction"]).toBe("pending");
   });
 
   it("summarizes the latest running workflow progress without a generic busy state", () => {
@@ -234,6 +244,9 @@ describe("Novel command workspace", () => {
     expect(productionHtml).not.toContain("工作流内审批");
     expect(productionHtml).toContain("接受当前稿并定稿");
     expect(productionHtml).toContain("补充修改意见（可选）");
+    expect(productionHtml).toContain("退回上一版继续修订");
+    expect(productionHtml).toContain("按当前稿继续修订");
+    expect(productionHtml).toContain("放弃本次工作流");
     expect(productionHtml).toContain("查看工作流");
     expect(productionHtml).not.toContain("运行详情");
     expect(productionHtml).not.toContain("11 阶段");

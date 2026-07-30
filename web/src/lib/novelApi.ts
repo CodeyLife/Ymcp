@@ -523,21 +523,21 @@ export function useSubmitNovelIntent(projectId: string) {
 export function useSignalHumanDecision(projectId: string, workflowId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { artifactId: string; decision: "approve" | "reject" | "revise"; authorId?: string; feedback?: string }) => {
+    mutationFn: async (input: { artifactId: string; decision: "approve" | "reject" | "revise" | "abandon"; authorId?: string; feedback?: string; revisionBase?: "current" | "previous" }) => {
       await novelFetch(`/v2/workflows/${enc(workflowId!)}/tasks/${enc(input.artifactId)}/signal`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ signal: "humanSignal", payload: { decision: input.decision, authorId: input.authorId ?? "web-author", feedback: input.feedback } }),
+        body: JSON.stringify({ signal: "humanSignal", payload: { decision: input.decision, authorId: input.authorId ?? "web-author", feedback: input.feedback, revisionBase: input.revisionBase } }),
       });
     },
     onSuccess: (_data, input) => {
       if (!workflowId) return;
       const submittedStage = input.decision === "approve" ? "fact-extraction" : input.decision === "revise" ? "revision" : "manuscript-approval";
       const markRunning = (run: NovelWorkflowRunRecord): NovelWorkflowRunRecord => run.temporalWorkflowId === workflowId
-        ? { ...run, status: "running", payload: { ...run.payload, stage: submittedStage, pendingHumanDecisionSubmitted: true }, updatedAt: new Date().toISOString() }
+        ? { ...run, status: input.decision === "abandon" ? "abandoned" : "running", payload: { ...run.payload, stage: submittedStage, pendingHumanDecisionSubmitted: true, ...(input.decision === "abandon" ? { reasonCode: "abandoned-by-author" } : {}) }, updatedAt: new Date().toISOString() }
         : run;
       qc.setQueryData<NovelRunState>(novelKeys.run(workflowId), (current) => current
-        ? { ...current, status: "running", record: current.record ? markRunning(current.record) : current.record }
+        ? { ...current, status: input.decision === "abandon" ? "abandoned" : "running", record: current.record ? markRunning(current.record) : current.record }
         : current);
       qc.setQueryData<NovelWorkflowRunRecord[]>(novelKeys.runs(projectId), (current) => current?.map(markRunning));
       void qc.invalidateQueries({ queryKey: novelKeys.run(workflowId) });

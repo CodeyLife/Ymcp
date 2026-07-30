@@ -973,16 +973,17 @@ const server = createServer(async (request, response) => {
       const payload: Record<string, unknown> = { ...(typeof input.payload === "object" && input.payload ? input.payload as Record<string, unknown> : {}), taskId };
       let humanDecisionClaimed = false;
       if (signal === "humanSignal") {
-        const decision = payload.decision === "approve" || payload.decision === "reject" || payload.decision === "revise" ? payload.decision : undefined;
+        const decision = payload.decision === "approve" || payload.decision === "reject" || payload.decision === "revise" || payload.decision === "abandon" ? payload.decision : undefined;
         const authorId = asString(payload.authorId);
-        if (!decision || !authorId) return send(response, 400, { error: "humanSignal 的 decision(approve/reject/revise) 和 authorId 必填" });
+        if (!decision || !authorId) return send(response, 400, { error: "humanSignal 的 decision(approve/reject/revise/abandon) 和 authorId 必填" });
         if (decision === "revise") {
           const run = await repository.getWorkflowRunByTemporalId(workflowId);
           if (run?.workflowType !== "chapter-review" || run.payload.mode !== "targeted") {
             return send(response, 400, { error: "revise 仅适用于定向章节修订的人工审批" });
           }
         }
-        const claimed = await repository.claimHumanDecision({ workflowId, artifactId: taskId, decision, authorId, feedback: asString(payload.feedback) });
+        const revisionBase = payload.revisionBase === "previous" ? "previous" : payload.revisionBase === "current" ? "current" : undefined;
+        const claimed = await repository.claimHumanDecision({ workflowId, artifactId: taskId, decision, authorId, feedback: asString(payload.feedback), revisionBase });
         if (!claimed) return send(response, 409, { error: "该候选稿的审批已提交，或运行已离开当前审批阶段" });
         humanDecisionClaimed = true;
       }
@@ -1316,7 +1317,7 @@ const server = createServer(async (request, response) => {
         const expiredModelTasks = await repository.expireWorkflowModelTasks(workflowId, "所属运行已取消");
         return send(response, 200, { workflowId, status: "cancelled", record, expiredModelTasks });
       }
-      if (["completed", "failed", "rejected", "terminated"].includes(record.status)) {
+      if (["completed", "abandoned", "failed", "rejected", "terminated"].includes(record.status)) {
         return send(response, 409, { error: "运行已经结束", status: record.status });
       }
       try {

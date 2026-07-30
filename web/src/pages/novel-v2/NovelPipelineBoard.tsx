@@ -220,6 +220,12 @@ export function deriveStageStates(run: NovelRunState | undefined, artifacts: Nov
     return states;
   }
 
+  if (status === "abandoned") {
+    const stoppedAt = order.indexOf(activeStage ?? "manuscript-approval");
+    order.forEach((s, i) => (states[s] = i < stoppedAt ? "done" : "pending"));
+    return states;
+  }
+
   const artifactDone = new Set<string>();
   for (const a of artifacts) {
     if (a.kind === "draft") artifactDone.add("draft");
@@ -525,6 +531,7 @@ function RunStatusPanel({ run, document, superseded }: { run?: NovelRunState; do
       description={<><strong>{error ?? "运行未提供详细错误信息"}</strong><br />{superseded ? "这是历史失败记录，同一章节已有更新运行，通常无需重复处理。" : "请重新发起本章创作；若仍提示资料或记忆缺失，先到“创作资料”补全对应内容后再试。"}</>}
     />;
   }
+  if (run.status === "abandoned") return <Alert type="info" showIcon message="已放弃本次工作流" description="本次候选稿未写入章节正文；章节保持工作流开始时的正式版本，候选产物仍可在历史记录中查看。" />;
   if (run.status === "completed" || run.status === "succeeded") return <Alert type="success" showIcon message={document?.status === "final" ? "本次运行已完成，章节已经定稿" : "本次运行已完成"} description="流水线中的审批节点是历史执行记录，无需再次点击批准。" />;
   if (run.status === "manual-review-required") return null;
   const stage = normalizeStageKey(typeof payload.stage === "string" ? payload.stage : undefined);
@@ -756,7 +763,7 @@ function RunningWorkspace({ run, artifacts, reviews, events, onCancel, cancellin
   </section>;
 }
 
-function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssueCount = 0, loading, quality, onApprove, onReject, onReviseAgain, deciding, revisingAgain = false }: { text: string; baseText?: string; targeted?: boolean; targetIssueCount?: number; loading: boolean; quality: QualityData; onApprove: () => void; onReject: (feedback: string) => void; onReviseAgain?: (feedback?: string) => void; deciding: boolean; revisingAgain?: boolean }) {
+function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssueCount = 0, loading, quality, onApprove, onAbandon, onReviseAgain, onRevisePrevious, deciding, revisingAgain = false }: { text: string; baseText?: string; targeted?: boolean; targetIssueCount?: number; loading: boolean; quality: QualityData; onApprove: () => void; onAbandon: () => void; onReviseAgain?: (feedback?: string) => void; onRevisePrevious?: (feedback?: string) => void; deciding: boolean; revisingAgain?: boolean }) {
   const [activeIssue, setActiveIssue] = useState<number>();
   const [feedback, setFeedback] = useState("");
   const [view, setView] = useState<"diff" | "text">(targeted ? "diff" : "text");
@@ -788,10 +795,11 @@ function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssu
       <div className="pb-review-feedback"><label htmlFor="pb-review-feedback">补充修改意见（可选）</label><Input.TextArea id="pb-review-feedback" value={feedback} onChange={(event) => setFeedback(event.target.value)} rows={4} placeholder="不填写时按上方审校意见重新生成；填写后会与审校意见合并" /></div>
     </aside>
     <footer className="pb-review-actions">
-      <span>{targeted ? "批准会接受当前候选稿；也可以补充意见后继续重新生成。" : "批准会接受当前候选稿并继续事实提取与正式提交。"}</span>
+      <span>{targeted ? "可继续修订当前候选、退回上一版重做，或放弃整个工作流并保留开始时正文。" : "批准会接受当前候选稿并继续事实提取与正式提交。"}</span>
       <div>
-        <Button danger icon={<CloseOutlined />} disabled={!targeted && !feedback.trim()} loading={deciding} onClick={() => onReject(feedback.trim() || "作者拒绝本次 AI 定向修订")}>{targeted ? "放弃候选稿" : "退回修改"}</Button>
-        {targeted && onReviseAgain && <Button icon={<RobotOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => onReviseAgain(feedback.trim() || undefined)}>按意见继续重新生成</Button>}
+        {targeted && onRevisePrevious && <Button icon={<HistoryOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => onRevisePrevious(feedback.trim() || undefined)}>退回上一版继续修订</Button>}
+        {targeted && onReviseAgain && <Button icon={<RobotOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => onReviseAgain(feedback.trim() || undefined)}>按当前稿继续修订</Button>}
+        <Popconfirm title="放弃整个工作流？" description="候选稿会保留为历史产物，章节正文仍是本次工作流开始时的正式版本。" okText="确认放弃" cancelText="继续审阅" onConfirm={onAbandon}><Button danger icon={<CloseOutlined />} loading={deciding}>放弃本次工作流</Button></Popconfirm>
         {hasSeriousIssue ? <Popconfirm title="仍有严重审校问题" description="确认以作者判断接受当前稿并继续定稿？" okText="仍然接受" cancelText="继续审阅" onConfirm={onApprove}><Button type="primary" icon={<CheckOutlined />} loading={deciding}>接受当前稿并定稿</Button></Popconfirm> : <Button type="primary" icon={<CheckOutlined />} loading={deciding} onClick={onApprove}>接受当前稿并定稿</Button>}
       </div>
     </footer>
@@ -986,7 +994,7 @@ function WorkflowInspector({
 
     <RunStatusPanel run={run} document={document} superseded={Boolean(selectedWorkflowId && selectedWorkflowId !== latestWorkflowId)} />
 
-    {run && !["completed", "succeeded", "failed", "rejected", "cancelled", "terminated"].includes(run.status) && <section className="pb-card pb-current-progress">
+    {run && !["completed", "succeeded", "abandoned", "failed", "rejected", "cancelled", "terminated"].includes(run.status) && <section className="pb-card pb-current-progress">
       <header className="pb-card-head"><span className="pb-card-title"><LoadingOutlined /> 当前进度</span><Tag color="blue">{progressDetail.stageLabel}</Tag></header>
       <p className="pb-stage-desc"><strong>{progressDetail.title}</strong><br />{progressDetail.next}</p>
       <div className="pb-running-details">{progressDetail.facts.map((fact) => <Tag key={fact}>{fact}</Tag>)}{progressDetail.latestEventSummary && <Tag color="cyan">最新：{progressDetail.latestEventSummary}</Tag>}</div>
@@ -1221,7 +1229,7 @@ export default function NovelProductionWorkspace({
     }
   }
 
-  async function handleGateDecision(decision: "approve" | "reject" | "revise", feedback?: string) {
+  async function handleGateDecision(decision: "approve" | "reject" | "revise" | "abandon", feedback?: string, revisionBase?: "current" | "previous") {
     if (!pendingArtifactId) {
       message.error("运行记录缺少待审批 artifactId");
       return;
@@ -1230,8 +1238,8 @@ export default function NovelProductionWorkspace({
     if (gateDecisionRef.current === decisionKey) return;
     gateDecisionRef.current = decisionKey;
     try {
-      await signal.mutateAsync({ artifactId: pendingArtifactId, decision, feedback });
-      message.success(decision === "approve" ? "已批准，Runtime 将继续执行" : decision === "revise" ? "补充意见已提交，Runtime 将继续定向修订" : "已退回该稿件");
+      await signal.mutateAsync({ artifactId: pendingArtifactId, decision, feedback, revisionBase });
+      message.success(decision === "approve" ? "已批准，Runtime 将继续执行" : decision === "revise" ? revisionBase === "previous" ? "已退回上一版，Runtime 将基于上一版继续修订" : "补充意见已提交，Runtime 将继续修订当前候选" : decision === "abandon" ? "已放弃本次工作流，章节正文保持不变" : "已退回该稿件");
     } catch (err) {
       gateDecisionRef.current = undefined;
       message.error(err instanceof Error ? err.message : String(err));
@@ -1250,9 +1258,9 @@ export default function NovelProductionWorkspace({
         }
         await handleGateDecision("revise", feedback);
       };
-      return <CandidateReviewWorkspace text={candidateTextQ.data?.text ?? ""} baseText={workspaceQ.data?.content?.plainText} targeted={targeted} targetIssueCount={targetIssueIds.length} loading={candidateTextQ.isLoading} quality={quality} deciding={signal.isPending} revisingAgain={signal.isPending} onApprove={() => void handleGateDecision("approve")} onReject={(feedback) => void handleGateDecision("reject", feedback)} onReviseAgain={targeted ? (feedback) => void reviseAgain(feedback) : undefined} />;
+      return <CandidateReviewWorkspace text={candidateTextQ.data?.text ?? ""} baseText={workspaceQ.data?.content?.plainText} targeted={targeted} targetIssueCount={targetIssueIds.length} loading={candidateTextQ.isLoading} quality={quality} deciding={signal.isPending} revisingAgain={signal.isPending} onApprove={() => void handleGateDecision("approve")} onAbandon={() => void handleGateDecision("abandon", "作者放弃本次章节审校工作流")} onReviseAgain={targeted ? (feedback) => void reviseAgain(feedback) : undefined} onRevisePrevious={targeted ? (feedback) => void handleGateDecision("revise", feedback, "previous") : undefined} />;
     }
-    if (liveWorkspaceMode === "fact-review") return <FactReviewWorkspace candidates={factsQ.data ?? []} loading={factsQ.isLoading} deciding={signal.isPending || factDecision.isPending} onDecide={(claimId, decision) => factDecision.mutate({ claimId, decision })} onContinue={() => void handleGateDecision("approve")} onAbort={() => void handleGateDecision("reject", "作者放弃本次事实提交")} />;
+    if (liveWorkspaceMode === "fact-review") return <FactReviewWorkspace candidates={factsQ.data ?? []} loading={factsQ.isLoading} deciding={signal.isPending || factDecision.isPending} onDecide={(claimId, decision) => factDecision.mutate({ claimId, decision })} onContinue={() => void handleGateDecision("approve")} onAbort={() => void handleGateDecision("abandon", "作者放弃本次事实提交")} />;
     return null;
   };
 

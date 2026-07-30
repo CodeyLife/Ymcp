@@ -123,16 +123,17 @@ export const failSignal = defineSignal<[unknown]>("fail");
 export const humanSignal = defineSignal<[unknown]>("humanSignal");
 export const storyArcApprovedSignal = defineSignal<[unknown]>("storyArcApproved");
 
-type HumanDecision = { decision: "approve" | "reject" | "revise"; authorId: string; feedback?: string };
+type HumanDecision = { decision: "approve" | "reject" | "revise" | "abandon"; authorId: string; feedback?: string; revisionBase?: "current" | "previous" };
 
 function parseHumanDecision(payload: unknown): HumanDecision | undefined {
   if (!payload || typeof payload !== "object") return undefined;
   const body = payload as Record<string, unknown>;
-  if (body.decision !== "approve" && body.decision !== "reject" && body.decision !== "revise") return undefined;
+  if (body.decision !== "approve" && body.decision !== "reject" && body.decision !== "revise" && body.decision !== "abandon") return undefined;
   return {
     decision: body.decision,
     authorId: typeof body.authorId === "string" && body.authorId.trim() ? body.authorId.trim() : "web-author",
     feedback: typeof body.feedback === "string" && body.feedback.trim() ? body.feedback.trim() : undefined,
+    revisionBase: body.revisionBase === "previous" ? "previous" : "current",
   };
 }
 
@@ -449,6 +450,10 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
     if (lifecycle.factApprovalBlocked) {
       await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { blueprintId: blueprint.id, reasonCode: "fact-approval-pending", pendingIds: lifecycle.factApprovalBlocked.pendingIds, artifactId: lifecycle.draft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds } });
       await condition(() => humanDecision !== undefined);
+      if (humanDecision!.decision === "abandon") {
+        await activities.updateWorkflowStatus({ workflowId, status: "abandoned", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, restoredDocumentId: intent.target!.id!, authorId: humanDecision!.authorId, feedback: humanDecision!.feedback, reasonCode: "abandoned-by-author" } });
+        return blueprint;
+      }
       if (humanDecision!.decision === "reject") {
         await activities.updateWorkflowStatus({ workflowId, status: "rejected", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, authorId: humanDecision!.authorId, feedback: humanDecision!.feedback } });
         return blueprint;
@@ -473,6 +478,10 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
     if (!lifecycle.commitResult) {
       await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { blueprintId: blueprint.id, signalCount: signals.length, iterations: lifecycle.iteration, finalScore: lifecycle.finalScore, artifactId: lifecycle.draft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds, missingReviewerRoles: lifecycle.commitGate.missingRoles, reasonCode: lifecycle.commitBlocked?.reasonCode ?? "quality-gate-not-passed", ...lifecycle.commitBlocked } });
       await condition(() => humanDecision !== undefined);
+      if (humanDecision!.decision === "abandon") {
+        await activities.updateWorkflowStatus({ workflowId, status: "abandoned", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, restoredDocumentId: intent.target!.id!, authorId: humanDecision!.authorId, feedback: humanDecision!.feedback, reasonCode: "abandoned-by-author" } });
+        return blueprint;
+      }
       if (humanDecision!.decision === "reject") {
         await activities.updateWorkflowStatus({ workflowId, status: "rejected", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, authorId: humanDecision!.authorId, feedback: humanDecision!.feedback } });
         return blueprint;
@@ -1298,6 +1307,7 @@ export async function chapterReviewWorkflow(params: {
     let revisionInstruction = params.instruction;
     let replayLegacyDirectedOrder = Boolean(targetedReview && !patched("chapter-targeted-revision-first-v1"));
     while (true) {
+      const cycleStartDraft = currentDraft;
       const lifecycle = await runChapterLifecycle({
         projectId: params.projectId,
         initialDraft: currentDraft,
@@ -1328,8 +1338,8 @@ export async function chapterReviewWorkflow(params: {
       await activities.updateWorkflowStatus({ workflowId, status: "manual-review-required", payload: { documentId: params.documentId, iteration, finalScore, artifactId: currentDraft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds, missingReviewerRoles: lifecycle.commitGate.missingRoles, reasonCode: targetedReview ? "targeted-manuscript-approval" : "quality-gate-not-passed", mode: params.mode ?? "full", targetIssueIds: params.targetIssueIds ?? [] } });
       await condition(() => humanDecision !== undefined);
       const decision = humanDecision!;
-      if (decision.decision === "reject") {
-        await activities.updateWorkflowStatus({ workflowId, status: "rejected", payload: { documentId: params.documentId, artifactId: currentDraft.artifact.id, authorId: decision.authorId, feedback: decision.feedback } });
+      if (decision.decision === "reject" || decision.decision === "abandon") {
+        await activities.updateWorkflowStatus({ workflowId, status: "abandoned", payload: { documentId: params.documentId, artifactId: currentDraft.artifact.id, restoredArtifactId: draftArtifact.id, authorId: decision.authorId, feedback: decision.feedback, reasonCode: "abandoned-by-author" } });
         return;
       }
       if (decision.decision === "revise") {
@@ -1344,11 +1354,12 @@ export async function chapterReviewWorkflow(params: {
         }] : [];
         directedIssues = [...latestReviewIssues, ...authorIssue];
         if (!directedIssues.length) throw new Error("当前候选稿没有审校问题，也未提供补充修改意见");
+        if (decision.revisionBase === "previous") currentDraft = cycleStartDraft;
         revisionInstruction = decision.feedback
           ? [params.instruction, decision.feedback].filter(Boolean).join("\n\n作者补充要求：")
           : params.instruction;
         replayLegacyDirectedOrder = false;
-        await activities.updateWorkflowStatus({ workflowId, status: "running", payload: { stage: "revision", decision: "author-revision-requested", authorId: decision.authorId, targetIssueCount: directedIssues.length } });
+        await activities.updateWorkflowStatus({ workflowId, status: "running", payload: { stage: "revision", decision: "author-revision-requested", revisionBase: decision.revisionBase ?? "current", sourceArtifactId: currentDraft.artifact.id, authorId: decision.authorId, targetIssueCount: directedIssues.length } });
         continue;
       }
 

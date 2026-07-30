@@ -67,6 +67,7 @@ const STATUS_META: Record<string, { label: string; pill: string; icon: ReactNode
   failed: { label: "失败", pill: "novel-status-pill novel-status-pill-failed", icon: <StopFilled /> },
   cancelled: { label: "已取消", pill: "novel-status-pill novel-status-pill-failed", icon: <StopFilled /> },
   rejected: { label: "已拒绝", pill: "novel-status-pill novel-status-pill-failed", icon: <StopFilled /> },
+  abandoned: { label: "已放弃", pill: "novel-status-pill novel-status-pill-idle", icon: <StopFilled /> },
 };
 
 export function statusMeta(status: string | undefined): { label: string; pill: string; icon: ReactNode } {
@@ -209,6 +210,7 @@ export function describeEvent(eventType: string | undefined, payload: unknown): 
       failed: error ? `执行失败：${error}` : "工作流执行过程中失败",
       cancelled: reason ? `已取消：${reason}` : "工作流被手动取消",
       rejected: "工作流被拒绝",
+      abandoned: "作者已放弃本次工作流，正式内容保持不变",
     };
     return {
       label: `运行${meta.label}`,

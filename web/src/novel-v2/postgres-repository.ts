@@ -1427,13 +1427,14 @@ export class NovelPostgresRepository {
     return row;
   }
 
-  async claimHumanDecision(input: { workflowId: string; artifactId: string; decision: "approve" | "reject" | "revise"; authorId: string; feedback?: string }) {
+  async claimHumanDecision(input: { workflowId: string; artifactId: string; decision: "approve" | "reject" | "revise" | "abandon"; authorId: string; feedback?: string; revisionBase?: "current" | "previous" }) {
     const submittedAt = new Date().toISOString();
     const claim = {
       artifactId: input.artifactId,
       decision: input.decision,
       authorId: input.authorId,
       ...(input.feedback ? { feedback: input.feedback } : {}),
+      ...(input.revisionBase ? { revisionBase: input.revisionBase } : {}),
       submittedAt,
     };
     const result = await this.pool.query<WorkflowRunRow>(
