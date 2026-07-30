@@ -1,4 +1,4 @@
-import type { Artifact, CommitResult, FactApprovalSummary, Review, RuntimeLearningAssessmentV2 } from "../protocol";
+import type { Artifact, CommitResult, FactApprovalSummary, Review, ReviewIssue, RuntimeLearningAssessmentV2 } from "../protocol";
 import { DEFAULT_MAX_AUTO_REVISIONS, decideRevision, evaluateCommitGate, hasBlocker, scoreReviews } from "../temporal/revision-policy";
 
 export type ChapterDraftState = { artifact: Artifact; text: string };
@@ -63,7 +63,7 @@ export async function runChapterLifecycle(params: {
   projectId: string;
   initialDraft: ChapterDraftState;
   review(current: ChapterDraftState): Promise<Review[]>;
-  revise(current: ChapterDraftState, reviews: Review[], iteration: number): Promise<ChapterDraftState>;
+  revise(current: ChapterDraftState, reviews: Review[], iteration: number, directedIssues?: ReviewIssue[]): Promise<ChapterDraftState>;
   assessLearning(current: ChapterDraftState, reviews: Review[]): Promise<RuntimeLearningAssessmentV2>;
   extractFacts(current: ChapterDraftState): Promise<Artifact>;
   approveFacts(factArtifact: Artifact, current: ChapterDraftState): Promise<FactApprovalSummary>;
@@ -73,13 +73,72 @@ export async function runChapterLifecycle(params: {
   beforeRevision?(iteration: number): Promise<void>;
   afterRevision?(draft: ChapterDraftState, iteration: number): Promise<void>;
   commitBlocked?: Record<string, unknown>;
+  directedRevision?: { issues: ReviewIssue[]; requireManuscriptApproval: true };
+  /** Temporal patch compatibility for targeted runs started before revision-first ordering. */
+  reviewBeforeDirectedRevision?: boolean;
   /** P0 #1：为 true 时，若 approveFacts 返回 pending>0，则在 commit 前返回 factApprovalBlocked 交由工作流走人工审批。 */
   requireManualFactApproval?: boolean;
 }): Promise<ChapterLifecycleResult> {
   let draft = params.initialDraft;
-  let reviews = await params.review(draft);
   let previousScore: number | undefined;
   let iteration = 0;
+
+  if (params.directedRevision) {
+    if (params.reviewBeforeDirectedRevision) {
+      let reviews = await params.review(draft);
+      await params.progress({ stage: "revision-decision", iteration: 0, decision: "directed-revision", targetIssueCount: params.directedRevision.issues.length });
+      await params.assessLearning(draft, reviews);
+      await params.beforeRevision?.(1);
+      draft = await params.revise(draft, reviews, 1, params.directedRevision.issues);
+      await params.afterRevision?.(draft, 1);
+      reviews = await params.review(draft);
+      await params.progress({ stage: "manuscript-approval", iteration: 1, decision: "targeted-revision-completed", targetIssueCount: params.directedRevision.issues.length });
+      await params.assessLearning(draft, reviews);
+      const finalDecision = decideRevision({ reviews, iteration: 1, maxIterations: 1, previousScore: undefined });
+      return {
+        draft,
+        reviews,
+        iteration: 1,
+        finalScore: finalDecision.currentScore,
+        commitGate: evaluateCommitGate(reviews, draft.artifact.fingerprint),
+        commitBlocked: { reasonCode: "targeted-manuscript-approval", targetIssueCount: params.directedRevision.issues.length },
+      };
+    }
+    const directedReviews: Review[] = [{
+      id: `directed-review:${draft.artifact.id}`,
+      projectId: params.projectId,
+      artifactId: draft.artifact.id,
+      reviewerId: "author-selected-review-issues",
+      identity: "human",
+      verdict: "revise",
+      issues: params.directedRevision.issues,
+      artifactFingerprint: draft.artifact.fingerprint,
+      createdAt: 0,
+    }];
+    await params.progress({ stage: "revision", iteration: 0, decision: "directed-revision", targetIssueCount: params.directedRevision.issues.length });
+    await params.assessLearning(draft, directedReviews);
+    await params.beforeRevision?.(1);
+    draft = await params.revise(draft, directedReviews, 1, params.directedRevision.issues);
+    await params.afterRevision?.(draft, 1);
+    iteration = 1;
+    const reviews = await params.review(draft);
+    await params.progress({ stage: "manuscript-approval", iteration, decision: "targeted-revision-completed", targetIssueCount: params.directedRevision.issues.length });
+    await params.assessLearning(draft, reviews);
+    const finalDecision = decideRevision({ reviews, iteration, maxIterations: 1, previousScore: undefined });
+    const commitGate = evaluateCommitGate(reviews, draft.artifact.fingerprint);
+    return {
+      draft,
+      reviews,
+      iteration,
+      finalScore: finalDecision.currentScore,
+      commitGate,
+      commitBlocked: {
+        reasonCode: "targeted-manuscript-approval",
+        targetIssueCount: params.directedRevision.issues.length,
+      },
+    };
+  }
+  let reviews = await params.review(draft);
   // Best-draft tracking: auto-revision can degrade quality (observed: 4.9 → 4.0,
   // improvement -0.90). The revision loop correctly stops on degradation, but
   // previously kept the degraded draft. Tracking the best version across all

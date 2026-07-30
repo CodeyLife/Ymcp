@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { InMemoryModelGateway, type GenerateStructuredInput, type ModelGateway, type ModelUsage } from "../model-gateway";
+import Ajv from "ajv";
+import { InMemoryModelGateway, normalizeStructuredContent, normalizeUsage, type GenerateStructuredInput, type ModelGateway, type ModelUsage } from "../model-gateway";
 
 const usage: ModelUsage = { model: "test", inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0 };
 
@@ -110,5 +111,37 @@ describe("ModelGateway interface contract", () => {
     expect(u).toMatchObject({ model: "in-memory", inputTokens: expect.any(Number), outputTokens: expect.any(Number), costUsd: expect.any(Number), latencyMs: expect.any(Number) });
     // 静态 usage 用于其他测试套件，避免字段漂移
     expect(usage).toMatchObject({ model: "test", inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0 });
+  });
+});
+
+describe("structured response normalization", () => {
+  const validate = new Ajv({ strict: false }).compile(passthroughSchema);
+
+  it("accepts fenced, explained, encoded, and single-envelope objects when the value itself validates", () => {
+    expect(normalizeStructuredContent('说明如下\n```json\n{"name":"alpha","score":4}\n```', validate)).toEqual({ name: "alpha", score: 4 });
+    expect(normalizeStructuredContent(JSON.stringify(JSON.stringify({ name: "beta", score: 3.5 })), validate)).toEqual({ name: "beta", score: 3.5 });
+    expect(normalizeStructuredContent('{"result":{"name":"gamma","score":5}}', validate)).toEqual({ name: "gamma", score: 5 });
+  });
+
+  it("does not coerce arrays, primitives, or incomplete objects", () => {
+    expect(normalizeStructuredContent('[{"name":"alpha","score":4}]', validate)).toBeUndefined();
+    expect(normalizeStructuredContent('"alpha"', validate)).toBeUndefined();
+    expect(normalizeStructuredContent('{"result":{"name":"alpha"}}', validate)).toBeUndefined();
+  });
+});
+
+describe("provider usage normalization", () => {
+  it("supports both Responses and Chat token field names", () => {
+    expect(normalizeUsage({ input_tokens: 120, output_tokens: 40 }, "input", "output")).toMatchObject({ inputTokens: 120, outputTokens: 40, usageSource: "provider" });
+    expect(normalizeUsage({ prompt_tokens: "90", completion_tokens: "12" }, "input", "output")).toMatchObject({ inputTokens: 90, outputTokens: 12, usageSource: "provider" });
+  });
+
+  it("keeps provider values separate from estimates and estimates missing usage", () => {
+    const provider = normalizeUsage({ input_tokens: 1, output_tokens: 1 }, "这是一段明显超过一个 token 的中文输入", "较长输出");
+    expect(provider.providerInputTokens).toBe(1);
+    expect(provider.estimatedInputTokens).toBeGreaterThan(1);
+    const estimated = normalizeUsage(undefined, "中文输入", "中文输出");
+    expect(estimated.usageSource).toBe("estimated");
+    expect(estimated.inputTokens).toBeGreaterThan(0);
   });
 });

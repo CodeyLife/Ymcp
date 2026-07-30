@@ -75,13 +75,22 @@ export class CommitService {
       try {
         await this.repository.recordNarrativeElements({
           projectId: input.projectId,
+          documentId: input.documentId,
           artifact: input.artifact,
           revisionId: result.revisionId,
           narrativeOrder: input.narrativeOrder,
           narrativeElements: input.narrativeElements,
         });
       } catch (error) {
-        console.warn(`[commit-service] 叙事元素写入失败（正文 revision 已提交）：${(error as Error).message}`);
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[commit-service] 叙事元素写入失败（正文 revision 已提交，可重放）：${message}`);
+        await this.repository.recordProjectionFailure({
+          projectId: input.projectId,
+          projectionType: "narrative-elements",
+          aggregateId: result.revisionId,
+          payload: { documentId: input.documentId, artifactId: input.artifact.id, revisionId: result.revisionId, narrativeOrder: input.narrativeOrder, narrativeElements: input.narrativeElements },
+          error: message,
+        }).catch((recordError) => console.warn(`[commit-service] 投影失败记录写入失败：${(recordError as Error).message}`));
       }
     }
 

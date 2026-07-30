@@ -53,7 +53,7 @@ export async function executeChapterReviewExperiment(input: {
       activities.retrieveMemoryForReview({ projectId: input.projectId, documentId: input.documentId, blueprint: blueprintRecord.blueprint }),
       activities.resolveReviewSkills({ projectId: input.projectId, preflightId: blueprintRecord.blueprint.preflightId }),
     ]);
-    const initialArtifact = await activities.createReviewDraft({ projectId: input.projectId, documentId: input.documentId, workflowId: workflowRunId, sourceArtifactId: documentState.artifactId, blueprint: blueprintRecord.blueprint, text: documentState.plainText, baseRevision: documentState.baseRevision });
+    const initialArtifact = await activities.createReviewDraft({ projectId: input.projectId, documentId: input.documentId, workflowId: workflowRunId, sourceRevisionId: documentState.sourceRevisionId, sourceArtifactId: documentState.artifactId, blueprint: blueprintRecord.blueprint, text: documentState.plainText, baseRevision: snapshot.currentRevision });
 
     const reviewOne = async (current: { artifact: Artifact; text: string }, role: ReviewerRole, identity: "internal" | "independent"): Promise<Review> => {
       const generated = await activities.review({ workflowId: workflowRunId, artifact: current.artifact, text: current.text, blueprint: blueprintRecord.blueprint, memory, skills, role, identity, routingSnapshot, narrativeOrder: snapshot.targetDocumentOrder });
@@ -92,7 +92,7 @@ export async function executeChapterReviewExperiment(input: {
         return generated.artifact;
       },
       approveFacts: (factArtifact) => activities.approveFacts({ workflowId: workflowRunId, projectId: input.projectId, artifact: factArtifact }),
-      commit: (current, reviews) => activities.commit({ projectId: input.projectId, documentId: input.documentId, artifact: current.artifact, text: current.text, reviews, baseRevision: documentState.baseRevision, idempotencyKey: workflowRunId }),
+      commit: (current, reviews) => activities.commit({ projectId: input.projectId, documentId: input.documentId, artifact: current.artifact, text: current.text, reviews, baseRevision: snapshot.currentRevision, idempotencyKey: workflowRunId }),
       enrich: async (current, commitResult) => {
         if (snapshot.targetDocumentOrder === undefined) return;
         const generated = await activities.enrichCharacters({ workflowId: workflowRunId, projectId: input.projectId, documentId: input.documentId, revisionId: commitResult.revisionId, narrativeOrder: snapshot.targetDocumentOrder, artifact: current.artifact, text: current.text, routingSnapshot });

@@ -16,6 +16,11 @@ export interface ModelUsage {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  providerInputTokens?: number;
+  providerOutputTokens?: number;
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
+  usageSource?: "provider" | "estimated" | "mixed";
   costUsd: number;
   latencyMs: number;
 }
@@ -70,6 +75,11 @@ export interface ModelInvocationAudit {
   status: "completed" | "failed" | "waiting-external";
   inputTokens: number;
   outputTokens: number;
+  providerInputTokens?: number;
+  providerOutputTokens?: number;
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
+  usageSource?: "provider" | "estimated" | "mixed";
   latencyMs: number;
   promptFingerprint: string;
   responseId?: string;
@@ -83,6 +93,11 @@ interface TransportResponse {
   responseId?: string;
   inputTokens: number;
   outputTokens: number;
+  providerInputTokens?: number;
+  providerOutputTokens?: number;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  usageSource: "provider" | "estimated" | "mixed";
 }
 
 interface TransportRequest {
@@ -108,6 +123,14 @@ class ModelTransportError extends Error {
   }
 }
 
+function exhaustedRouteError(purpose: ModelPurpose, error: unknown): ModelTransportError {
+  if (error instanceof ModelTransportError) {
+    return new ModelTransportError(error.message, false, error.category, error.status);
+  }
+  const message = error instanceof Error ? error.message : error === undefined ? `模型路由 ${purpose} 没有可执行候选` : String(error);
+  return new ModelTransportError(message, false, "route-exhausted");
+}
+
 function promptFingerprint(system: string | undefined, prompt: string): string {
   return createHash("sha256").update(`${system ?? ""}\n${prompt}`).digest("hex");
 }
@@ -127,28 +150,63 @@ function authorization(profile: ModelProviderProfile): HeadersInit {
   return { "content-type": "application/json", ...(secret ? { authorization: `Bearer ${secret}` } : {}) };
 }
 
-function parseChatJson(data: Record<string, unknown>): TransportResponse {
+function finiteToken(value: unknown): number | undefined {
+  const number = typeof value === "string" && value.trim() ? Number(value) : value;
+  return typeof number === "number" && Number.isFinite(number) && number >= 0 ? Math.floor(number) : undefined;
+}
+
+function tokenEstimate(text: string): number {
+  if (!text.trim()) return 0;
+  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) ?? []).length;
+  const other = Math.max(0, text.length - cjk);
+  return Math.max(1, Math.ceil(cjk * 0.75 + other / 4));
+}
+
+export function normalizeUsage(
+  usageValue: unknown,
+  inputText: string,
+  outputText: string,
+): Pick<TransportResponse, "inputTokens" | "outputTokens" | "providerInputTokens" | "providerOutputTokens" | "estimatedInputTokens" | "estimatedOutputTokens" | "usageSource"> {
+  const usage = usageValue && typeof usageValue === "object" && !Array.isArray(usageValue) ? usageValue as Record<string, unknown> : {};
+  const inputDetails = usage.input_tokens_details && typeof usage.input_tokens_details === "object" ? usage.input_tokens_details as Record<string, unknown> : {};
+  const outputDetails = usage.output_tokens_details && typeof usage.output_tokens_details === "object" ? usage.output_tokens_details as Record<string, unknown> : {};
+  const providerInputTokens = finiteToken(usage.input_tokens ?? usage.prompt_tokens ?? usage.promptTokens ?? inputDetails.total_tokens);
+  const providerOutputTokens = finiteToken(usage.output_tokens ?? usage.completion_tokens ?? usage.completionTokens ?? outputDetails.total_tokens);
+  const estimatedInputTokens = tokenEstimate(inputText);
+  const estimatedOutputTokens = tokenEstimate(outputText);
+  const hasProviderInput = providerInputTokens !== undefined;
+  const hasProviderOutput = providerOutputTokens !== undefined;
+  const usageSource = hasProviderInput && hasProviderOutput ? "provider" : hasProviderInput || hasProviderOutput ? "mixed" : "estimated";
+  return {
+    inputTokens: providerInputTokens ?? estimatedInputTokens,
+    outputTokens: providerOutputTokens ?? estimatedOutputTokens,
+    providerInputTokens,
+    providerOutputTokens,
+    estimatedInputTokens,
+    estimatedOutputTokens,
+    usageSource,
+  };
+}
+
+function parseChatJson(data: Record<string, unknown>, inputText: string): TransportResponse {
   const choices = Array.isArray(data.choices) ? data.choices : [];
   const first = choices[0] as { message?: { content?: unknown } } | undefined;
-  const usage = (data.usage ?? {}) as Record<string, unknown>;
   const text = typeof first?.message?.content === "string" ? first.message.content : "";
   return {
     text,
     responseId: typeof data.id === "string" ? data.id : undefined,
-    inputTokens: Number(usage.prompt_tokens ?? 0),
-    outputTokens: Number(usage.completion_tokens ?? 0),
+    ...normalizeUsage(data.usage, inputText, text),
   };
 }
 
-async function parseChatSse(response: Response): Promise<TransportResponse> {
+async function parseChatSse(response: Response, inputText: string): Promise<TransportResponse> {
   if (!response.body) throw new ModelTransportError("Chat SSE 响应缺少 body", true, "empty-stream");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let text = "";
   let responseId: string | undefined;
-  let inputTokens = 0;
-  let outputTokens = 0;
+  let usageValue: unknown;
   const consume = (line: string) => {
     const raw = line.replace(/^data:\s*/, "").trim();
     if (!raw || raw === "[DONE]") return;
@@ -158,9 +216,7 @@ async function parseChatSse(response: Response): Promise<TransportResponse> {
       const choices = Array.isArray(event.choices) ? event.choices : [];
       const first = choices[0] as { delta?: { content?: unknown } } | undefined;
       if (typeof first?.delta?.content === "string") text += first.delta.content;
-      const usage = (event.usage ?? {}) as Record<string, unknown>;
-      inputTokens = Number(usage.prompt_tokens ?? inputTokens);
-      outputTokens = Number(usage.completion_tokens ?? outputTokens);
+      if (event.usage) usageValue = event.usage;
     } catch { /* Ignore provider keepalive and non-JSON SSE lines. */ }
   };
   while (true) {
@@ -172,7 +228,7 @@ async function parseChatSse(response: Response): Promise<TransportResponse> {
     if (chunk.done) break;
   }
   if (buffer.startsWith("data:")) consume(buffer);
-  return { text, responseId, inputTokens, outputTokens };
+  return { text, responseId, ...normalizeUsage(usageValue, inputText, text) };
 }
 
 async function requestChatCompletions(input: TransportRequest): Promise<TransportResponse> {
@@ -196,10 +252,10 @@ async function requestChatCompletions(input: TransportRequest): Promise<Transpor
     throw new ModelTransportError(error instanceof Error ? error.message : String(error), true, "network");
   }
   if (!response.ok) return readHttpError(response);
-  return stream ? parseChatSse(response) : parseChatJson(await response.json() as Record<string, unknown>);
+  return stream ? parseChatSse(response, input.prompt) : parseChatJson(await response.json() as Record<string, unknown>, input.prompt);
 }
 
-function parseResponsesJson(data: Record<string, unknown>): TransportResponse {
+function parseResponsesJson(data: Record<string, unknown>, inputText: string): TransportResponse {
   let text = typeof data.output_text === "string" ? data.output_text : "";
   if (!text && Array.isArray(data.output)) {
     for (const item of data.output as Array<Record<string, unknown>>) {
@@ -209,12 +265,10 @@ function parseResponsesJson(data: Record<string, unknown>): TransportResponse {
       }
     }
   }
-  const usage = (data.usage ?? {}) as Record<string, unknown>;
   return {
     text,
     responseId: typeof data.id === "string" ? data.id : undefined,
-    inputTokens: Number(usage.input_tokens ?? 0),
-    outputTokens: Number(usage.output_tokens ?? 0),
+    ...normalizeUsage(data.usage, inputText, text),
   };
 }
 
@@ -232,7 +286,7 @@ async function requestResponses(input: TransportRequest): Promise<TransportRespo
     throw new ModelTransportError(error instanceof Error ? error.message : String(error), true, "network");
   }
   if (!response.ok) return readHttpError(response);
-  return parseResponsesJson(await response.json() as Record<string, unknown>);
+  return parseResponsesJson(await response.json() as Record<string, unknown>, input.prompt);
 }
 
 async function requestTransport(input: TransportRequest): Promise<TransportResponse> {
@@ -258,12 +312,54 @@ async function requestTransport(input: TransportRequest): Promise<TransportRespo
   }
 }
 
-function parseJsonContent(content: string): unknown {
-  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  const candidate = fenced ?? (start >= 0 && end >= start ? content.slice(start, end + 1) : content);
-  try { return JSON.parse(candidate.trim()); } catch { return undefined; }
+function parseJsonCandidate(candidate: string): unknown {
+  try {
+    let value: unknown = JSON.parse(candidate.trim());
+    if (typeof value === "string") value = JSON.parse(value.trim());
+    return value;
+  } catch { return undefined; }
+}
+
+function balancedJsonObjects(content: string): string[] {
+  const candidates: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') { quoted = true; continue; }
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+    } else if (char === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) candidates.push(content.slice(start, index + 1));
+    }
+  }
+  return candidates;
+}
+
+export function normalizeStructuredContent<T>(content: string, validate: ValidateFunction<T>): T | undefined {
+  const fenced = [...content.matchAll(/```(?:json)?\s*([\s\S]*?)```/giu)].map((match) => match[1]);
+  const fullValue = parseJsonCandidate(content);
+  const rawCandidates = fullValue === undefined ? [...fenced, ...balancedJsonObjects(content)] : [content];
+  for (const raw of rawCandidates) {
+    const parsed = parseJsonCandidate(raw);
+    const candidates = [parsed];
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const root = parsed as Record<string, unknown>;
+      for (const key of ["data", "result", "output"]) if (key in root) candidates.push(root[key]);
+    }
+    for (const candidate of candidates) if (validate(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 function repairPrompt(schema: Record<string, unknown>, content: string, errors: string, attempt: number): string {
@@ -355,8 +451,8 @@ export class RoutedModelGateway implements ModelGateway {
     for (let index = input.candidateStartIndex ?? 0; index < route.candidates.length; index += 1) {
       try {
         const result = await this.invokeCandidate(input, snapshot, route, index);
-        const usage = { model: result.model, inputTokens: result.response.inputTokens, outputTokens: result.response.outputTokens, costUsd: 0, latencyMs: result.latencyMs };
-        await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: result.profile.id, protocol: result.profile.protocol, model: result.model, status: "completed", inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, latencyMs: usage.latencyMs, promptFingerprint: result.provenance.promptFingerprint, responseId: result.response.responseId });
+        const usage = { model: result.model, inputTokens: result.response.inputTokens, outputTokens: result.response.outputTokens, providerInputTokens: result.response.providerInputTokens, providerOutputTokens: result.response.providerOutputTokens, estimatedInputTokens: result.response.estimatedInputTokens, estimatedOutputTokens: result.response.estimatedOutputTokens, usageSource: result.response.usageSource, costUsd: 0, latencyMs: result.latencyMs };
+        await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: result.profile.id, protocol: result.profile.protocol, model: result.model, status: "completed", inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, providerInputTokens: usage.providerInputTokens, providerOutputTokens: usage.providerOutputTokens, estimatedInputTokens: usage.estimatedInputTokens, estimatedOutputTokens: usage.estimatedOutputTokens, usageSource: usage.usageSource, latencyMs: usage.latencyMs, promptFingerprint: result.provenance.promptFingerprint, responseId: result.response.responseId });
         return { value: result.response.text, text: result.response.text, usage, provenance: result.provenance };
       } catch (error) {
         if (error instanceof ExternalMcpRequiredError) throw error;
@@ -367,7 +463,10 @@ export class RoutedModelGateway implements ModelGateway {
         lastError = error;
       }
     }
-    throw lastError ?? new Error(`模型路由 ${input.purpose} 没有可执行候选`);
+    // Every API candidate already exhausted its transport retries here. Mark
+    // the terminal error non-retryable so Temporal does not repeat the entire
+    // activity and leave the chapter locked in `running` for many minutes.
+    throw exhaustedRouteError(input.purpose, lastError);
   }
 
   async generateStructured<T>(input: GenerateStructuredInput<T>): Promise<ModelResult<T>> {
@@ -388,21 +487,38 @@ export class RoutedModelGateway implements ModelGateway {
         let currentSystem = input.system;
         let totalInput = 0;
         let totalOutput = 0;
+        let providerInputTotal = 0;
+        let providerOutputTotal = 0;
+        let estimatedInputTotal = 0;
+        let estimatedOutputTotal = 0;
+        let providerInputComplete = true;
+        let providerOutputComplete = true;
+        let providerInputSeen = false;
+        let providerOutputSeen = false;
         let latest: Awaited<ReturnType<RoutedModelGateway["invokeCandidate"]>> | undefined;
         const repairs = input.maxRepairAttempts ?? 2;
         for (let repair = 0; repair <= repairs; repair += 1) {
           latest = await this.invokeCandidate({ ...input, system: currentSystem, prompt: currentPrompt }, snapshot, route, index);
           totalInput += latest.response.inputTokens;
           totalOutput += latest.response.outputTokens;
-          const parsed = parseJsonContent(latest.response.text);
-          if (validate(parsed)) {
-            const usage = { model: latest.model, inputTokens: totalInput, outputTokens: totalOutput, costUsd: 0, latencyMs: latest.latencyMs };
-            await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: latest.profile.id, protocol: latest.profile.protocol, model: latest.model, status: "completed", inputTokens: totalInput, outputTokens: totalOutput, latencyMs: latest.latencyMs, promptFingerprint: latest.provenance.promptFingerprint, responseId: latest.response.responseId });
+          estimatedInputTotal += latest.response.estimatedInputTokens;
+          estimatedOutputTotal += latest.response.estimatedOutputTokens;
+          if (latest.response.providerInputTokens === undefined) providerInputComplete = false;
+          else { providerInputSeen = true; providerInputTotal += latest.response.providerInputTokens; }
+          if (latest.response.providerOutputTokens === undefined) providerOutputComplete = false;
+          else { providerOutputSeen = true; providerOutputTotal += latest.response.providerOutputTokens; }
+          const parsed = normalizeStructuredContent(latest.response.text, validate);
+          if (parsed !== undefined) {
+            const providerInputTokens = providerInputSeen ? providerInputTotal : undefined;
+            const providerOutputTokens = providerOutputSeen ? providerOutputTotal : undefined;
+            const usageSource = providerInputComplete && providerOutputComplete ? "provider" as const : providerInputSeen || providerOutputSeen ? "mixed" as const : "estimated" as const;
+            const usage = { model: latest.model, inputTokens: totalInput, outputTokens: totalOutput, providerInputTokens, providerOutputTokens, estimatedInputTokens: estimatedInputTotal, estimatedOutputTokens: estimatedOutputTotal, usageSource, costUsd: 0, latencyMs: latest.latencyMs };
+            await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: latest.profile.id, protocol: latest.profile.protocol, model: latest.model, status: "completed", inputTokens: totalInput, outputTokens: totalOutput, providerInputTokens: usage.providerInputTokens, providerOutputTokens: usage.providerOutputTokens, estimatedInputTokens: usage.estimatedInputTokens, estimatedOutputTokens: usage.estimatedOutputTokens, usageSource: usage.usageSource, latencyMs: latest.latencyMs, promptFingerprint: latest.provenance.promptFingerprint, responseId: latest.response.responseId });
             return { value: parsed, usage, provenance: latest.provenance };
           }
           const errors = validate.errors?.map((item) => `${item.instancePath || "root"} ${item.message ?? ""}`).join("；") ?? "JSON 无法解析";
           if (repair === repairs) {
-            await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: latest.profile.id, protocol: latest.profile.protocol, model: latest.model, status: "failed", inputTokens: totalInput, outputTokens: totalOutput, latencyMs: latest.latencyMs, promptFingerprint: latest.provenance.promptFingerprint, responseId: latest.response.responseId, errorCategory: "schema-validation" });
+            await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: latest.profile.id, protocol: latest.profile.protocol, model: latest.model, status: "failed", inputTokens: totalInput, outputTokens: totalOutput, providerInputTokens: providerInputSeen ? providerInputTotal : undefined, providerOutputTokens: providerOutputSeen ? providerOutputTotal : undefined, estimatedInputTokens: estimatedInputTotal, estimatedOutputTokens: estimatedOutputTotal, usageSource: providerInputComplete && providerOutputComplete ? "provider" : providerInputSeen || providerOutputSeen ? "mixed" : "estimated", latencyMs: latest.latencyMs, promptFingerprint: latest.provenance.promptFingerprint, responseId: latest.response.responseId, errorCategory: "schema-validation" });
             throw new ModelTransportError(`结构化输出校验失败：${errors}`, false, "schema-validation");
           }
           currentPrompt = repairPrompt(input.schema, latest.response.text, errors, repair);
@@ -421,7 +537,7 @@ export class RoutedModelGateway implements ModelGateway {
         lastError = error;
       }
     }
-    throw lastError ?? new Error(`模型路由 ${input.purpose} 没有可执行候选`);
+    throw exhaustedRouteError(input.purpose, lastError);
   }
 
   private async vectorRequest(input: { purpose: "memory.embed" | "memory.rerank"; body: Record<string, unknown>; path: string; signal?: AbortSignal; routingSnapshot?: ModelRoutingSnapshot; workflowRunId?: string; taskId?: string }): Promise<{ data: Record<string, unknown>; provenance: ModelExecutionProvenance; usage: ModelUsage }> {
@@ -438,10 +554,15 @@ export class RoutedModelGateway implements ModelGateway {
         const response = await fetch(endpoint(profile.baseUrl, input.path), { method: "POST", headers: authorization(profile), body: JSON.stringify({ model, ...input.body }), signal: input.signal });
         if (!response.ok) return readHttpError(response);
         const data = await response.json() as Record<string, unknown>;
-        const usageData = (data.usage ?? {}) as Record<string, unknown>;
-        const usage = { model, inputTokens: Number(usageData.prompt_tokens ?? usageData.input_tokens ?? 0), outputTokens: 0, costUsd: 0, latencyMs: Date.now() - started };
+        const meta = data.meta && typeof data.meta === "object" && !Array.isArray(data.meta)
+          ? data.meta as Record<string, unknown>
+          : undefined;
+        // OpenAI-compatible embeddings expose `usage`; SiliconFlow rerank
+        // exposes the same token counters under `meta.tokens`.
+        const normalized = normalizeUsage(data.usage ?? meta?.tokens, JSON.stringify(input.body), "");
+        const usage = { model, ...normalized, costUsd: 0, latencyMs: Date.now() - started };
         const provenance = { routeSnapshotId: snapshot.id, purpose: input.purpose, candidateIndex: index, executor: "api" as const, profileId: profile.id, protocol: profile.protocol, model, promptFingerprint: fingerprint };
-        await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: profile.id, protocol: profile.protocol, model, status: "completed", inputTokens: usage.inputTokens, outputTokens: 0, latencyMs: usage.latencyMs, promptFingerprint: fingerprint });
+        await this.record({ workflowRunId: input.workflowRunId, taskId: input.taskId, purpose: input.purpose, configRevision: snapshot.id, candidateIndex: index, executor: "api", profileId: profile.id, protocol: profile.protocol, model, status: "completed", inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, providerInputTokens: usage.providerInputTokens, providerOutputTokens: usage.providerOutputTokens, estimatedInputTokens: usage.estimatedInputTokens, estimatedOutputTokens: usage.estimatedOutputTokens, usageSource: usage.usageSource, latencyMs: usage.latencyMs, promptFingerprint: fingerprint });
         return { data, provenance, usage };
       } catch (error) { lastError = error; }
     }
@@ -449,16 +570,38 @@ export class RoutedModelGateway implements ModelGateway {
   }
 
   async embed(input: { purpose: "memory.embed"; texts: string[]; signal?: AbortSignal; routingSnapshot?: ModelRoutingSnapshot; workflowRunId?: string; taskId?: string }): Promise<ModelResult<number[][]> & { vectors: number[][] }> {
-    const result = await this.vectorRequest({ ...input, body: { input: input.texts }, path: "embeddings" });
-    const rows = Array.isArray(result.data.data) ? result.data.data as Array<{ embedding?: number[] }> : [];
-    const vectors = rows.map((row) => row.embedding ?? []);
+    const result = await this.vectorRequest({ ...input, body: { input: input.texts, encoding_format: "float" }, path: "embeddings" });
+    const rows = Array.isArray(result.data.data) ? result.data.data as Array<{ embedding?: number[]; index?: number }> : [];
+    const vectors = Array.from({ length: input.texts.length }, () => [] as number[]);
+    rows.forEach((row, responseIndex) => {
+      const inputIndex = Number.isInteger(row.index) ? Number(row.index) : responseIndex;
+      if (inputIndex >= 0 && inputIndex < vectors.length && Array.isArray(row.embedding)) vectors[inputIndex] = row.embedding;
+    });
     return { value: vectors, vectors, usage: result.usage, provenance: result.provenance };
   }
 
   async rerank(input: { purpose: "memory.rerank"; query: string; documents: string[]; signal?: AbortSignal; routingSnapshot?: ModelRoutingSnapshot; workflowRunId?: string; taskId?: string }): Promise<ModelResult<number[]> & { scores: number[] }> {
-    const result = await this.vectorRequest({ ...input, body: { query: input.query, documents: input.documents }, path: "rerank" });
-    const rows = Array.isArray(result.data.results) ? result.data.results as Array<{ relevance_score?: number | string }> : [];
-    const scores = rows.map((row) => Number(row.relevance_score ?? 0));
+    const result = await this.vectorRequest({
+      ...input,
+      body: { query: input.query, documents: input.documents, top_n: input.documents.length, return_documents: false },
+      path: "rerank",
+    });
+    const rows = Array.isArray(result.data.results)
+      ? result.data.results as Array<{ index?: number; relevance_score?: number | string; score?: number | string }>
+      : [];
+    // SiliconFlow returns results sorted by relevance, so map each score back
+    // to its original document index before the retrieval layer consumes it.
+    const scores = Array.from({ length: input.documents.length }, () => 0);
+    const assigned = Array.from({ length: input.documents.length }, () => false);
+    rows.forEach((row, responseIndex) => {
+      const documentIndex = Number.isInteger(row.index) ? Number(row.index) : responseIndex;
+      const score = Number(row.relevance_score ?? row.score);
+      if (documentIndex >= 0 && documentIndex < scores.length && !assigned[documentIndex] && Number.isFinite(score)) {
+        scores[documentIndex] = score;
+        assigned[documentIndex] = true;
+      }
+    });
+    if (assigned.some((value) => !value)) throw new Error(`rerank 返回 ${rows.length} 个有效结果，要求覆盖 ${input.documents.length} 个文档`);
     return { value: scores, scores, usage: result.usage, provenance: result.provenance };
   }
 }

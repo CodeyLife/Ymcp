@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 const env = {
   ...process.env,
   NOVEL_OBJECT_BACKEND: process.env.NOVEL_OBJECT_BACKEND ?? "s3",
+  NOVEL_OBJECT_LEGACY_ROOT: process.env.NOVEL_OBJECT_LEGACY_ROOT ?? resolve(".data", "objects"),
   POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD ?? "ymcp",
   MINIO_ROOT_USER: process.env.MINIO_ROOT_USER ?? "ymcp",
   MINIO_ROOT_PASSWORD: process.env.MINIO_ROOT_PASSWORD ?? "ymcp-minio-local",
@@ -20,6 +21,17 @@ const env = {
 const children = [];
 let stopping = false;
 
+function runOnce(command, args) {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(command, args, { stdio: "inherit", windowsHide: true, env, shell: false });
+    child.once("error", rejectRun);
+    child.once("exit", (code) => {
+      if (code) rejectRun(new Error(`${command} ${args.join(" ")} exited with ${code}`));
+      else resolveRun();
+    });
+  });
+}
+
 function run(command, args) {
   const child = spawn(command, args, { stdio: "inherit", windowsHide: true, env, shell: false });
   children.push(child);
@@ -27,7 +39,10 @@ function run(command, args) {
   return child;
 }
 
-run(process.platform === "win32" ? "docker.exe" : "docker", ["compose", "-f", resolve("docker-compose.v2.yml"), "up", "-d"]);
+await runOnce(process.platform === "win32" ? "docker.exe" : "docker", [
+  "compose", "-f", resolve("docker-compose.v2.yml"), "up", "--wait", "--wait-timeout", "120",
+  "postgres", "temporal", "temporal-ui", "minio", "qdrant",
+]);
 run(process.execPath, ["--import", "tsx", "scripts/novel-v2-worker.ts"]);
 run(process.execPath, ["--import", "tsx", "scripts/novel-v2-api.ts"]);
 run(process.execPath, [resolve("node_modules/vite/bin/vite.js")]);

@@ -78,18 +78,19 @@ type WorkspaceRow = {
 };
 
 export const EXPERIMENT_RUNTIME_TABLES = [
-  "arcs", "artifacts", "audit_records", "books", "chapter_memories", "chapter_planning_contexts", "chapters",
+  "arcs", "artifacts", "audit_records", "books", "chapter_memories", "chapter_planning_contexts", "chapter_production_specs",
+  "chapter_review_snapshot_issues", "chapter_review_snapshots", "chapters",
   "character_knowledge", "commit_records", "content_blobs", "context_manifests",
   "craft_rule_candidates", "creative_reviews", "creative_run_events", "creative_runs",
   "creative_work_items", "entities", "execution_blueprints", "fact_sources", "facts",
   "foreshadowing", "idempotency_keys", "learning_assessments", "manuscript_blocks",
-  "manuscript_documents", "manuscript_revisions", "memory_bundles", "memory_claims",
+  "manuscript_documents", "manuscript_revisions", "memory_bundles", "memory_claims", "memory_gate_states",
   "memory_snapshots", "model_invocations", "model_routes", "model_tasks", "novel_intents",
   "novel_projects", "outbox_events", "payoff_curve", "payoffs", "plot_threads",
-  "preflight_plans", "project_plan_sections", "promises", "prompt_templates", "provider_configs", "quality_gates",
+  "preflight_plans", "project_plan_sections", "projection_failures", "promises", "prompt_templates", "provider_configs", "quality_gates",
   "relations", "retrieval_runs", "reviews", "scenes", "skill_bindings", "skill_bundles",
-  "skill_definitions", "skill_versions", "skills", "task_attempts", "timeline_events",
-  "usage_ledger", "volumes", "workflow_runs",
+  "skill_definitions", "skill_versions", "skills", "story_arc_batches", "task_attempts", "timeline_events",
+  "usage_ledger", "volumes", "workflow_run_summaries", "workflow_runs",
 ] as const;
 
 function mapWorkspaceRow(row: WorkspaceRow): ExperimentWorkspace {
@@ -181,9 +182,9 @@ async function restoreProjectSnapshot(
   // 2. content_blobs: restore the exact immutable object-store references.
   for (const blob of bundle.payload.contentBlobs) {
     await pool.query(
-      `INSERT INTO ${s}.content_blobs(content_hash, object_key, byte_length)
-       VALUES($1, $2, $3) ON CONFLICT(content_hash) DO NOTHING`,
-      [blob.contentHash, blob.objectKey, blob.byteLength],
+      `INSERT INTO ${s}.content_blobs(content_hash, object_key, byte_length, word_count)
+       VALUES($1, $2, $3, $4) ON CONFLICT(content_hash) DO NOTHING`,
+      [blob.contentHash, blob.objectKey, blob.byteLength, blob.wordCount ?? null],
     );
   }
 

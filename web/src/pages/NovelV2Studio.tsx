@@ -4,12 +4,12 @@ import gsap from "gsap";
 import {
   Alert,
   Button,
-  Checkbox,
   Empty,
   Form,
   Input,
   Modal,
   Select,
+  Space,
   Spin,
   Tooltip,
   message,
@@ -24,13 +24,13 @@ import {
   ExperimentOutlined,
   FileAddOutlined,
   FileTextOutlined,
+  HighlightOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ReloadOutlined,
   RobotOutlined,
   RocketOutlined,
   SearchOutlined,
-  SendOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -40,6 +40,7 @@ import {
   useDeleteNovelDocument,
   useDecideFactCandidate,
   useNovelFactCandidates,
+  useGenerateChapterTitle,
   useNovelProject,
   useNovelProjectRuns,
   useNovelRun,
@@ -53,7 +54,7 @@ import {
   type NovelDocumentInput,
   type NovelWorkflowRunRecord,
 } from "@/lib/novelApi";
-import { documentStatusMeta, relativeTime, statusMeta, workflowTypeMeta } from "./novel-v2/presentation";
+import { documentStatusMeta, projectDisplayTitle, relativeTime, statusMeta, workflowTypeMeta } from "./novel-v2/presentation";
 import "./novel-v2.css";
 import "./novel-v2/workspace-command.css";
 
@@ -79,7 +80,7 @@ const VIEW_ITEMS: Array<{ key: NovelWorkspaceView; label: string; icon: React.Re
 ];
 
 const VALID_VIEWS = new Set(VIEW_ITEMS.map((item) => item.key));
-const ACTIVE_STATUSES = new Set(["running", "accepted", "received", "pending", "paused"]);
+const ACTIVE_STATUSES = new Set(["running", "waiting-external", "accepted", "received", "pending", "paused"]);
 const FAILED_STATUSES = new Set(["failed", "rejected", "cancelled", "terminated", "blocked"]);
 const DOCUMENT_STATUSES = ["planned", "draft", "review", "revision", "final", "archived"].map((value) => ({ value, label: documentStatusMeta(value).label }));
 
@@ -97,11 +98,10 @@ export default function NovelV2Studio() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [chapterModal, setChapterModal] = useState<"create" | "edit" | null>(null);
-  const [intentOpen, setIntentOpen] = useState(false);
+  const [chapterTitleWorkflowId, setChapterTitleWorkflowId] = useState<string>();
   const [chapterQuery, setChapterQuery] = useState("");
   const [chapterStatus, setChapterStatus] = useState<string>();
   const [chapterForm] = Form.useForm<NovelDocumentInput>();
-  const [intentForm] = Form.useForm<{ objective: string; documentId?: string; manualFactApproval: boolean }>();
   const pageRef = useRef<HTMLDivElement>(null);
 
   const projectQ = useNovelProject(projectId);
@@ -118,15 +118,17 @@ export default function NovelV2Studio() {
   const selectedDocument = project?.documents.find((document) => document.id === selectedDocumentId);
 
   const selectedRunQ = useNovelRun(selectedWorkflowId);
+  const chapterTitleRunQ = useNovelRun(chapterTitleWorkflowId);
   const selectedRun = selectedRunQ.data;
   const runActive = ACTIVE_STATUSES.has(selectedRun?.status ?? "") || selectedRun?.status === "manual-review-required";
   const eventsQ = useNovelRunEvents(selectedWorkflowId, runActive);
   const artifactsQ = useNovelRunArtifacts(selectedWorkflowId, runActive);
   const factsQ = useNovelFactCandidates(projectId, selectedDocumentId);
   const factDecision = useDecideFactCandidate(projectId, selectedDocumentId);
-  const signalDecision = useSignalHumanDecision(selectedWorkflowId);
+  const signalDecision = useSignalHumanDecision(projectId, selectedWorkflowId);
   const createDocument = useCreateNovelDocument(projectId);
   const updateDocument = useUpdateNovelDocument(projectId);
+  const generateChapterTitle = useGenerateChapterTitle(projectId);
   const deleteDocument = useDeleteNovelDocument(projectId);
   const submitIntent = useSubmitNovelIntent(projectId);
 
@@ -157,6 +159,22 @@ export default function NovelV2Studio() {
     if (view === "production") return;
     if (runs.length && (!selectedWorkflowId || !runs.some((run) => run.temporalWorkflowId === selectedWorkflowId))) updateLocation({ run: latestRun(runs)?.temporalWorkflowId });
   }, [runs, selectedWorkflowId, view]);
+
+  useEffect(() => {
+    const run = chapterTitleRunQ.data;
+    if (!chapterTitleWorkflowId || !run || !["completed", "failed"].includes(run.status)) return;
+    if (run.status === "completed") {
+      const title = typeof run.record?.payload.title === "string" ? run.record.payload.title : undefined;
+      const documentId = typeof run.record?.payload.documentId === "string" ? run.record.payload.documentId : undefined;
+      if (title && chapterModal === "edit" && selectedDocument?.id === documentId) chapterForm.setFieldValue("title", title);
+      void projectQ.refetch();
+      message.success(title ? `章节已更名为“${title}”` : "章节更名已完成");
+    } else {
+      const reason = typeof run.record?.payload.reason === "string" ? run.record.payload.reason : "章节 AI 更名失败";
+      message.error(reason);
+    }
+    setChapterTitleWorkflowId(undefined);
+  }, [chapterTitleRunQ.data?.status, chapterTitleWorkflowId]);
 
   const metrics = useMemo(() => {
     const manual = runs.filter((run) => run.status === "manual-review-required").length;
@@ -213,12 +231,21 @@ export default function NovelV2Studio() {
     chapterForm.resetFields();
   }
 
-  async function startIntent(values: { objective: string; documentId?: string; manualFactApproval: boolean }) {
-    const result = await submitIntent.mutateAsync({ objective: values.objective, documentId: values.documentId, factApprovalMode: values.manualFactApproval ? "manual" : "auto" });
-    updateLocation({ view: "production", document: values.documentId, run: result.workflowId });
-    setIntentOpen(false);
-    intentForm.resetFields();
-    message.success("创作任务已提交");
+  async function startChapterCreation(document: NonNullable<typeof selectedDocument>) {
+    const result = await submitIntent.mutateAsync({ objective: `完成第 ${document.narrativeOrder} 章《${document.title}》的正式创作，遵循已批准的章节规格与故事弧约束。`, documentId: document.id, factApprovalMode: "auto" });
+    updateLocation({ view: "production", document: document.id, run: result.workflowId });
+    message.success("章节创作已开始");
+  }
+
+  async function startChapterTitleGeneration() {
+    if (!selectedDocument) return;
+    try {
+      const result = await generateChapterTitle.mutateAsync(selectedDocument.id);
+      setChapterTitleWorkflowId(result.workflowId);
+      message.success("章节 AI 更名任务已启动");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    }
   }
 
   function confirmDeleteChapter(document: NonNullable<typeof selectedDocument>) {
@@ -245,7 +272,7 @@ export default function NovelV2Studio() {
 
   const viewTitle = VIEW_ITEMS.find((item) => item.key === view)?.label ?? "总览";
   const latestStatus = statusMeta(latestRun(runs)?.status);
-  const projectTitle = project?.title?.trim() || "未命名作品";
+  const projectTitle = projectDisplayTitle(project?.title, projectId);
 
   useGSAP(() => {
     if (view !== "production") {
@@ -274,13 +301,13 @@ export default function NovelV2Studio() {
           workflowId={selectedWorkflowId}
           stage={selectedStage}
           onSelectionChange={(selection) => updateLocation({ document: selection.documentId, run: selection.workflowId, stage: selection.stage })}
-          onStartCreation={(document) => { setIntentOpen(true); intentForm.setFieldsValue({ documentId: document.id, manualFactApproval: false }); }}
+          onStartCreation={(document) => void startChapterCreation(document)}
           onEditChapter={(document) => { setChapterModal("edit"); chapterForm.setFieldsValue(document); }}
           onDeleteChapter={confirmDeleteChapter}
           onOpenKnowledge={() => updateLocation({ view: "knowledge", run: undefined, stage: undefined })}
         /></Suspense>;
     }
-    if (view === "plan") return <Suspense fallback={<PanelFallback />}><ProjectPlanPanel projectId={projectId} /></Suspense>;
+    if (view === "plan") return <Suspense fallback={<PanelFallback />}><ProjectPlanPanel projectId={projectId} onProjectTitleChanged={() => void projectQ.refetch()} /></Suspense>;
     if (view === "arcs") return <Suspense fallback={<PanelFallback />}><StoryArcPanel projectId={projectId} onApplied={() => void projectQ.refetch()} /></Suspense>;
     if (view === "knowledge") return <Suspense fallback={<PanelFallback />}><KnowledgeWorkbenchPanel projectId={projectId} /></Suspense>;
     if (view === "evaluation") return <Suspense fallback={<PanelFallback />}><EvaluationPanel projectId={projectId} /></Suspense>;
@@ -355,7 +382,7 @@ export default function NovelV2Studio() {
             <span className={latestStatus.pill}>{latestStatus.icon}{latestStatus.label}</span>
           </div>
           <div className="nwc-topbar-actions">
-            <Button type="primary" icon={<SendOutlined />} onClick={() => { setIntentOpen(true); intentForm.setFieldsValue({ documentId: selectedDocumentId, manualFactApproval: false }); }}>发起创作</Button>
+            <Button type="primary" icon={<FileAddOutlined />} onClick={() => { setChapterModal("create"); chapterForm.setFieldsValue({ status: "planned" }); }}>新增章节</Button>
             <Tooltip title="刷新全部数据"><Button aria-label="刷新全部数据" icon={<ReloadOutlined />} loading={projectQ.isFetching || runsQ.isFetching} onClick={() => void refreshAll()} /></Tooltip>
           </div>
         </header>
@@ -401,22 +428,20 @@ export default function NovelV2Studio() {
 
       <Modal title={chapterModal === "edit" ? "编辑章节" : "新增章节目标"} open={Boolean(chapterModal)} onCancel={() => { setChapterModal(null); chapterForm.resetFields(); }} footer={null} destroyOnHidden>
         <Form form={chapterForm} layout="vertical" onFinish={(values) => void saveChapter(values)}>
-          <Form.Item name="title" label="章节标题" rules={[{ required: true, message: "请输入章节标题" }]}><Input /></Form.Item>
+          <Form.Item label="章节标题">
+            <Space.Compact block>
+              <Form.Item name="title" noStyle rules={[{ required: true, message: "请输入章节标题" }]}><Input /></Form.Item>
+              <Button type="default" icon={<HighlightOutlined />} loading={generateChapterTitle.isPending || Boolean(chapterTitleWorkflowId)} disabled={chapterModal !== "edit" || !selectedDocument} onClick={() => void startChapterTitleGeneration()}>AI 更名</Button>
+            </Space.Compact>
+          </Form.Item>
           <Form.Item name="narrativeOrder" label="章节序号"><Input type="number" /></Form.Item>
           <Form.Item name="povCharacterId" label="POV 角色 ID"><Input /></Form.Item>
+          <Form.Item name="chapterGoal" label="章节目标"><Input.TextArea autoSize={{ minRows: 3, maxRows: 6 }} placeholder="说明本章承担的叙事功能与预期状态变化" /></Form.Item>
           <Form.Item name="status" label="状态" initialValue="planned"><Select options={DOCUMENT_STATUSES} /></Form.Item>
           <Button type="primary" htmlType="submit" block loading={createDocument.isPending || updateDocument.isPending}>保存章节</Button>
         </Form>
       </Modal>
 
-      <Modal title="发起创作任务" open={intentOpen} onCancel={() => setIntentOpen(false)} footer={null} destroyOnHidden>
-        <Form form={intentForm} layout="vertical" initialValues={{ manualFactApproval: false }} onFinish={(values) => void startIntent(values)}>
-          <Form.Item name="documentId" label="目标章节"><Select allowClear showSearch optionFilterProp="label" options={(project?.documents ?? []).map((document) => ({ value: document.id, label: `第 ${document.narrativeOrder} 章 · ${document.title}` }))} placeholder="不选则发起规划任务" /></Form.Item>
-          <Form.Item name="objective" label="创作目标" rules={[{ required: true, message: "请输入创作目标" }]}><Input.TextArea autoSize={{ minRows: 4, maxRows: 8 }} placeholder="说明本次创作要完成的内容与重点" /></Form.Item>
-          <Form.Item name="manualFactApproval" valuePropName="checked"><Checkbox>提交定稿前人工审批事实候选</Checkbox></Form.Item>
-          <Button type="primary" htmlType="submit" block icon={<SendOutlined />} loading={submitIntent.isPending}>提交到 Runtime</Button>
-        </Form>
-      </Modal>
     </div>
   );
 }

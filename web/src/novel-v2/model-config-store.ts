@@ -12,6 +12,25 @@ import {
 
 export const DEFAULT_MODEL_CONFIG_PATH = join(process.cwd(), "config", "model-providers.local.yaml");
 
+export function applyRuntimeModelOverrides(
+  config: ModelRoutingConfig,
+  overrides: { embeddingBaseUrl?: string } = {},
+): ModelRoutingConfig {
+  const embeddingBaseUrl = overrides.embeddingBaseUrl?.trim().replace(/\/+$/, "");
+  if (!embeddingBaseUrl) return structuredClone(config);
+  const embeddingProfileIds = new Set(
+    (config.routes["memory.embed"]?.candidates ?? [])
+      .filter((candidate) => candidate.executor === "api")
+      .map((candidate) => candidate.profileId),
+  );
+  return {
+    ...structuredClone(config),
+    profiles: config.profiles.map((profile) => embeddingProfileIds.has(profile.id) && profile.capabilities.includes("embedding")
+      ? { ...structuredClone(profile), baseUrl: embeddingBaseUrl }
+      : structuredClone(profile)),
+  };
+}
+
 export function createInitialModelConfig(): ModelRoutingConfig {
   return {
     version: 1,
@@ -34,7 +53,7 @@ export class ModelConfigStore {
     try {
       const parsed = parse(await readFile(this.path, "utf8")) as ModelRoutingConfig;
       validateModelRoutingConfig(parsed);
-      this.current = structuredClone(parsed);
+      this.current = applyRuntimeModelOverrides(parsed, { embeddingBaseUrl: process.env.NOVEL_EMBEDDING_BASE_URL });
       this.snapshot = createRoutingSnapshot(this.current);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;

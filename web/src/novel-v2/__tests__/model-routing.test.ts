@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { ModelConfigStore } from "../model-config-store";
+import { ModelConfigStore, applyRuntimeModelOverrides } from "../model-config-store";
 import { RoutedModelGateway } from "../model-gateway";
 import { NovelPostgresRepository } from "../postgres-repository";
 import { ExternalMcpRequiredError, ModelRoutingConfigError, createRoutingSnapshot, validateModelRoutingConfig, type ModelProviderProfile, type ModelRoutingConfig } from "../model-routing";
@@ -28,6 +28,40 @@ const TEST_DB_URL = process.env.TEST_DATABASE_URL ?? "postgresql://ymcp:ymcp@127
 afterEach(() => vi.unstubAllGlobals());
 
 describe("model routing config", () => {
+  it("overrides only the embedding route profile base URL for the active runtime", () => {
+    const next = config([
+      profile({ id: "writer", capabilities: ["text"] }),
+      profile({ id: "embedding", capabilities: ["embedding"], baseUrl: "http://embedding/v1" }),
+    ]);
+    next.routes["memory.embed"] = { candidates: [{ executor: "api", profileId: "embedding" }] };
+    const overridden = applyRuntimeModelOverrides(next, { embeddingBaseUrl: "http://127.0.0.1:8081/v1/" });
+    expect(overridden.profiles.find((item) => item.id === "embedding")?.baseUrl).toBe("http://127.0.0.1:8081/v1");
+    expect(overridden.profiles.find((item) => item.id === "writer")?.baseUrl).toBe("https://example.test/v1");
+    expect(next.profiles.find((item) => item.id === "embedding")?.baseUrl).toBe("http://embedding/v1");
+  });
+
+  it("supports a different model override for each vector purpose on one provider", async () => {
+    const next = config(
+      [profile({ id: "vectors", model: "default-model", capabilities: ["embedding", "rerank"] })],
+      [{ executor: "external-mcp" }],
+    );
+    next.routes["memory.embed"] = { candidates: [{ executor: "api", profileId: "vectors", model: "embed-model" }] };
+    next.routes["memory.rerank"] = { candidates: [{ executor: "api", profileId: "vectors", model: "rerank-model" }] };
+    const requestedModels: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      requestedModels.push(JSON.parse(String(init?.body)).model);
+      return url.endsWith("/embeddings")
+        ? new Response(JSON.stringify({ data: [{ index: 0, embedding: [1] }] }), { status: 200 })
+        : new Response(JSON.stringify({ results: [{ index: 0, relevance_score: 1 }] }), { status: 200 });
+    }));
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", next));
+
+    await gateway.embed({ purpose: "memory.embed", texts: ["文本"] });
+    await gateway.rerank({ purpose: "memory.rerank", query: "查询", documents: ["文本"] });
+
+    expect(requestedModels).toEqual(["embed-model", "rerank-model"]);
+  });
+
   it("masks inline secrets and never includes them in the routing snapshot", () => {
     const store = new ModelConfigStore("unused", config());
     expect(store.getMaskedConfig().profiles[0]).toMatchObject({ hasSecret: true, secretHint: "***cret" });
@@ -112,6 +146,93 @@ describe("RoutedModelGateway adapters", () => {
     const result = await gateway.generateText({ purpose: "writing.draft", prompt: "p" });
     expect(result.text).toBe("ok");
     expect(result.provenance).toMatchObject({ candidateIndex: 1, profileId: "good", model: "good-model" });
+  });
+
+  it("uses the SiliconFlow embedding contract and restores response index order", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe("https://example.test/v1/embeddings");
+      expect(JSON.parse(String(init?.body))).toEqual({ model: "writer-model", input: ["甲", "乙"], encoding_format: "float" });
+      return new Response(JSON.stringify({
+        data: [
+          { object: "embedding", index: 1, embedding: [0, 1] },
+          { object: "embedding", index: 0, embedding: [1, 0] },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 0, total_tokens: 2 },
+      }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new RoutedModelGateway(new ModelConfigStore("unused", config())).embed({ purpose: "memory.embed", texts: ["甲", "乙"] });
+
+    expect(result.vectors).toEqual([[1, 0], [0, 1]]);
+    expect(result.usage).toMatchObject({ inputTokens: 2, outputTokens: 0, usageSource: "provider" });
+  });
+
+  it("maps SiliconFlow sorted rerank results back to document order", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe("https://example.test/v1/rerank");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: "writer-model",
+        query: "人物关系",
+        documents: ["天气", "旧友重逢", "城门"],
+        top_n: 3,
+        return_documents: false,
+      });
+      return new Response(JSON.stringify({
+        results: [
+          { index: 1, relevance_score: 0.91 },
+          { index: 2, relevance_score: 0.37 },
+          { index: 0, relevance_score: 0.08 },
+        ],
+        meta: { tokens: { input_tokens: 12, output_tokens: 3 } },
+      }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new RoutedModelGateway(new ModelConfigStore("unused", config())).rerank({
+      purpose: "memory.rerank",
+      query: "人物关系",
+      documents: ["天气", "旧友重逢", "城门"],
+    });
+
+    expect(result.scores).toEqual([0.08, 0.91, 0.37]);
+    expect(result.usage).toMatchObject({ inputTokens: 12, outputTokens: 3, usageSource: "provider" });
+  });
+
+  it("rejects an incomplete rerank response instead of assigning silent zero scores", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      results: [{ index: 1, relevance_score: 0.91 }],
+      meta: { tokens: { input_tokens: 4, output_tokens: 1 } },
+    }), { status: 200 })));
+
+    await expect(new RoutedModelGateway(new ModelConfigStore("unused", config())).rerank({
+      purpose: "memory.rerank",
+      query: "关系",
+      documents: ["天气", "旧友"],
+    })).rejects.toThrow("要求覆盖 2 个文档");
+  });
+
+  it("marks an exhausted retryable transport failure as non-retryable for the workflow", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("gateway unavailable", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", config()));
+
+    await expect(gateway.generateText({ purpose: "writing.revision", prompt: "revise" }))
+      .rejects.toMatchObject({ name: "NonRetryableModelTransportError" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("also terminates structured review calls after their transport retries are exhausted", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("gateway unavailable", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", config()));
+
+    await expect(gateway.generateStructured({
+      purpose: "review.reader",
+      prompt: "review",
+      schema: { type: "object", required: ["verdict"], properties: { verdict: { type: "string" } } },
+    })).rejects.toMatchObject({ name: "NonRetryableModelTransportError" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("does not call fetch for an external MCP route", async () => {

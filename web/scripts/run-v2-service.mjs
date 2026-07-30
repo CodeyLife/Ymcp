@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 
 const service = process.argv[2];
 if (service !== "api" && service !== "worker") {
@@ -8,6 +9,7 @@ if (service !== "api" && service !== "worker") {
 const env = {
   ...process.env,
   NOVEL_OBJECT_BACKEND: process.env.NOVEL_OBJECT_BACKEND ?? "s3",
+  NOVEL_OBJECT_LEGACY_ROOT: process.env.NOVEL_OBJECT_LEGACY_ROOT ?? resolve(".data", "objects"),
   S3_ENDPOINT: process.env.S3_ENDPOINT ?? process.env.MINIO_ENDPOINT ?? "http://127.0.0.1:9000",
   S3_BUCKET: process.env.S3_BUCKET ?? process.env.MINIO_BUCKET ?? "ymcp-novel",
   S3_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY_ID ?? process.env.MINIO_ROOT_USER ?? "ymcp",

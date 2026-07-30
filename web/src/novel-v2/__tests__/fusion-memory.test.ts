@@ -45,4 +45,11 @@ describe("FusionMemoryProvider", () => {
     expect(results).toHaveLength(1);
     expect(results[0].matchedFacets).toEqual(["fact", "thread", "foreshadowing"]);
   });
+
+  it("returns more than 32 fused candidates for downstream token budgeting", async () => {
+    const semantic: MemoryProvider = { search: async () => Array.from({ length: 40 }, (_, index) => ({ ...hit("fact", 1 - index / 100), id: `claim-${index}` })) };
+    const provider = new FusionMemoryProvider({ semantic, lexical: { search: async () => [] }, perTrackLimit: 40 });
+    const results = await provider.search({ projectId: "project-1", facets: [{ kind: "fact", query: "事实", required: true }] });
+    expect(results).toHaveLength(40);
+  });
 });

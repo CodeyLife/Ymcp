@@ -3,6 +3,8 @@ import type {
   ExecutionBlueprint,
   ContextManifest,
   MemoryBundle,
+  MemoryHit,
+  MemorySelectionReceipt,
   MemoryProvider,
   NovelIntent,
   PreflightPlan,
@@ -13,13 +15,7 @@ import type {
   BlueprintTask,
 } from "./protocol";
 import type { ChapterPlanningContext } from "./application/story-arc";
-
-function hash(value: unknown): string {
-  const text = JSON.stringify(value, Object.keys(value as object).sort());
-  let result = 2166136261;
-  for (let index = 0; index < text.length; index += 1) result = Math.imul(result ^ text.charCodeAt(index), 16777619);
-  return (result >>> 0).toString(16).padStart(8, "0");
-}
+import { canonicalSha256 } from "./canonical-json";
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 2);
@@ -27,6 +23,28 @@ function estimateTokens(text: string): number {
 
 function authorityRank(authority: MemoryBundle["claims"][number]["authority"]): number {
   return ({ approved: 4, author: 3, derived: 2, candidate: 1, rejected: 0 } as const)[authority] ?? 0;
+}
+
+function compareCandidates(left: MemoryHit, right: MemoryHit): number {
+  const tokenDifference = estimateTokens(`${left.title}\n${left.content}`) - estimateTokens(`${right.title}\n${right.content}`);
+  return authorityRank(right.authority) - authorityRank(left.authority)
+    || right.score - left.score
+    || right.confidence - left.confidence
+    || tokenDifference
+    || left.id.localeCompare(right.id);
+}
+
+function selectionReceipt(claim: MemoryHit, status: MemorySelectionReceipt["status"], reason: MemorySelectionReceipt["reason"]): MemorySelectionReceipt {
+  return {
+    claimId: claim.id,
+    matchedFacets: matchedFacetsOf(claim),
+    score: claim.score,
+    authority: claim.authority,
+    tokenCost: estimateTokens(`${claim.title}\n${claim.content}`),
+    status,
+    reason,
+    sourceRevisionIds: claim.sourceRevisionIds,
+  };
 }
 
 export function matchedFacetsOf(claim: MemoryBundle["claims"][number]): string[] {
@@ -117,7 +135,7 @@ export function createPreflightPlan(intent: NovelIntent, snapshot: PreflightProj
     risk: taskClass === "drafting" || taskClass === "revision" ? "high" : taskClass === "review" ? "medium" : "low",
     requiresIndependentReview: taskClass === "drafting" || taskClass === "revision" || taskClass === "planning",
     createdAt: now,
-    sourceFingerprint: hash({ intent, snapshot }),
+    sourceFingerprint: canonicalSha256({ intent, snapshot }),
   };
 }
 
@@ -146,19 +164,55 @@ export function computeTokenBudget(taskClass: PreflightPlan["taskClass"], totalC
   return 32_000;
 }
 
-export async function buildMemoryBundle(plan: PreflightPlan, input: { projectId: string; provider: MemoryProvider; tokenBudget?: number }, now = Date.now()): Promise<MemoryBundle> {
-  const claims = await input.provider.search({ projectId: input.projectId, facets: plan.facets, narrativeCutoff: plan.narrativeCutoff, povCharacterId: plan.povCharacterId });
+export async function buildMemoryBundle(plan: PreflightPlan, input: { projectId: string; provider: MemoryProvider; tokenBudget?: number; pinnedClaims?: MemoryHit[] }, now = Date.now()): Promise<MemoryBundle> {
+  const retrieved = await input.provider.search({ projectId: input.projectId, facets: plan.facets, narrativeCutoff: plan.narrativeCutoff, povCharacterId: plan.povCharacterId });
+  const pinnedIds = new Set((input.pinnedClaims ?? []).map((claim) => claim.id));
+  const claims = [...(input.pinnedClaims ?? []), ...retrieved];
   const tokenBudget = input.tokenBudget ?? 24_000;
-  const visible = claims.filter((claim) => claim.narrativeRange?.start === undefined || plan.narrativeCutoff === undefined || claim.narrativeRange.start <= plan.narrativeCutoff);
-  const ordered = [...visible].sort((left, right) => authorityRank(right.authority) - authorityRank(left.authority) || right.score - left.score || right.confidence - left.confidence);
+  const receipts: MemorySelectionReceipt[] = [];
+  const visible = claims.filter((claim) => {
+    const allowed = claim.narrativeRange?.start === undefined || plan.narrativeCutoff === undefined || claim.narrativeRange.start <= plan.narrativeCutoff;
+    if (!allowed) receipts.push(selectionReceipt(claim, "excluded", "future-cutoff"));
+    return allowed;
+  });
+  const deduplicated = new Map<string, MemoryHit>();
+  for (const claim of visible) {
+    const existing = deduplicated.get(claim.id);
+    if (!existing) {
+      deduplicated.set(claim.id, claim);
+      continue;
+    }
+    receipts.push(selectionReceipt(claim, "excluded", "duplicate"));
+    const preferred = pinnedIds.has(claim.id) ? (input.pinnedClaims?.find((candidate) => candidate.id === claim.id) ?? existing) : [existing, claim].sort(compareCandidates)[0];
+    deduplicated.set(claim.id, {
+      ...preferred,
+      matchedFacets: [...new Set([...matchedFacetsOf(existing), ...matchedFacetsOf(claim)])],
+      sourceRevisionIds: [...new Set([...existing.sourceRevisionIds, ...claim.sourceRevisionIds])],
+    });
+  }
+  const ordered = [...deduplicated.values()].sort(compareCandidates);
   let spent = 0;
-  const budgeted = ordered.filter((claim) => {
+  const selected = new Map<string, { claim: MemoryHit; reason: MemorySelectionReceipt["reason"] }>();
+  const select = (claim: MemoryHit, reason: MemorySelectionReceipt["reason"]): boolean => {
+    if (selected.has(claim.id)) return true;
     const cost = estimateTokens(`${claim.title}\n${claim.content}`);
     if (spent + cost > tokenBudget) return false;
     spent += cost;
+    selected.set(claim.id, { claim, reason });
     return true;
-  });
+  };
+  for (const claim of ordered.filter((candidate) => pinnedIds.has(candidate.id))) select(claim, "pinned-narrative");
   const required = new Set(plan.facets.filter((facet) => facet.required).map((facet) => facet.kind));
+  for (const facet of required) {
+    if ([...selected.values()].some(({ claim }) => matchedFacetsOf(claim).includes(facet))) continue;
+    for (const claim of ordered.filter((candidate) => matchedFacetsOf(candidate).includes(facet))) {
+      if (select(claim, "required-facet")) break;
+    }
+  }
+  for (const claim of ordered) select(claim, "ranked-fill");
+  const budgeted = [...selected.values()].map(({ claim }) => claim);
+  for (const { claim, reason } of selected.values()) receipts.push(selectionReceipt(claim, "included", reason));
+  for (const claim of ordered.filter((candidate) => !selected.has(candidate.id))) receipts.push(selectionReceipt(claim, "excluded", "budget"));
   const found = new Set(budgeted.flatMap(matchedFacetsOf));
   const missingFacets = [...required].filter((facet) => !found.has(facet));
   const sourceRevisionIds = [...new Set(budgeted.flatMap((claim) => claim.sourceRevisionIds))];
@@ -173,17 +227,20 @@ export async function buildMemoryBundle(plan: PreflightPlan, input: { projectId:
     tokenBudget,
     sourceRevisionIds,
     narrativeCutoff: plan.narrativeCutoff,
+    selectionReceipts: receipts,
     fingerprint: "",
     createdAt: now,
   } satisfies Omit<MemoryBundle, "fingerprint"> & { fingerprint: string };
-  bundle.fingerprint = hash({ ...bundle, fingerprint: undefined });
+  bundle.fingerprint = canonicalSha256({ ...bundle, fingerprint: undefined, createdAt: undefined });
   return bundle;
 }
 
-export function buildContextManifest(plan: PreflightPlan, memory: MemoryBundle, input: { retrievalRunId?: string; allClaimIds?: string[] } = {}, now = Date.now()): ContextManifest {
+export function buildContextManifest(plan: PreflightPlan, memory: MemoryBundle, input: { retrievalRunId?: string } = {}, now = Date.now()): ContextManifest {
   if (memory.preflightId !== plan.id) throw new Error("记忆包不属于当前 Preflight");
-  const includedClaimIds = memory.claims.map((claim) => claim.id);
-  const excludedClaimIds = (input.allClaimIds ?? []).filter((id) => !includedClaimIds.includes(id));
+  const receipts = memory.selectionReceipts ?? memory.claims.map((claim) => selectionReceipt(claim, "included", "ranked-fill"));
+  const includedClaimIds = [...new Set(receipts.filter((receipt) => receipt.status === "included").map((receipt) => receipt.claimId))];
+  const includedSet = new Set(includedClaimIds);
+  const excludedClaimIds = [...new Set(receipts.filter((receipt) => receipt.status === "excluded" && !includedSet.has(receipt.claimId)).map((receipt) => receipt.claimId))];
   const estimatedTokens = memory.claims.reduce((sum, claim) => sum + estimateTokens(`${claim.title}\n${claim.content}`), 0);
   const manifest: ContextManifest = {
     id: `context:${plan.id}`,
@@ -197,11 +254,12 @@ export function buildContextManifest(plan: PreflightPlan, memory: MemoryBundle, 
     narrativeCutoff: plan.narrativeCutoff,
     tokenBudget: memory.tokenBudget,
     estimatedTokens,
-    truncationReason: excludedClaimIds.length ? "budget" : memory.missingFacets.length ? "future-cutoff" : "none",
+    selectionReceipts: receipts,
+    truncationReason: receipts.some((receipt) => receipt.reason === "budget") ? "budget" : receipts.some((receipt) => receipt.reason === "future-cutoff") ? "future-cutoff" : "none",
     fingerprint: "",
     createdAt: now,
   };
-  manifest.fingerprint = hash({ ...manifest, fingerprint: undefined });
+  manifest.fingerprint = canonicalSha256({ ...manifest, fingerprint: undefined, createdAt: undefined });
   return manifest;
 }
 
@@ -230,7 +288,7 @@ export async function resolveSkillBundle(plan: PreflightPlan, memory: MemoryBund
   const ids = new Set(chosen.map((skill) => skill.skillId));
   const conflicts = chosen.flatMap((skill) => skill.conflicts.filter((id) => ids.has(id)).map((id) => ({ skillId: skill.skillId, conflictsWith: id })));
   const bundle: SkillBundle = { id: `skills:${plan.id}`, projectId: input.projectId, preflightId: plan.id, skills: chosen.map((skill) => ({ skillId: skill.skillId, version: skill.version, qualityGates: skill.qualityGates, promptSections: skill.promptSections })), conflicts, missingCapabilities: [...capabilities].filter((capability) => !chosen.some((skill) => skill.capabilities.includes(capability))), fingerprint: "", createdAt: now };
-  bundle.fingerprint = hash({ ...bundle, fingerprint: undefined });
+  bundle.fingerprint = canonicalSha256({ ...bundle, fingerprint: undefined, createdAt: undefined });
   return bundle;
 }
 
@@ -271,6 +329,6 @@ export function compileExecutionBlueprint(intent: NovelIntent, plan: PreflightPl
   // 同时供审计/learning 闭环感知上下文质量。
   const foundationArtifactIds = foundationArtifacts?.length ? foundationArtifacts.map((artifact) => artifact.id) : undefined;
   const blueprint: ExecutionBlueprint = { id: `blueprint:${intent.id}`, projectId: intent.projectId, intentId: intent.id, preflightId: plan.id, memoryBundleId: memory.id, skillBundleId: skills.id, contextManifestId: context?.id, baseRevision: snapshot.currentRevision, tasks: [retrieve, draft, review, commit], commitPolicy: plan.requiresIndependentReview ? "dual-gate" : "human-only", factApprovalMode: intent.factApprovalMode ?? "auto", budget: { maxInputTokens: memory.tokenBudget, maxOutputTokens: plan.taskClass === "drafting" || plan.taskClass === "revision" ? 16_000 : 8_000 }, memoryGate: { status: manualReviewFacets.length ? "manual-review" : "passed", missingFacets, manualReviewFacets }, foundationArtifactIds, arcId: planningContext?.arcId, chapterBlueprintId: planningContext?.chapterBlueprintId, planningContextFingerprint: planningContext?.fingerprint, fingerprint: "", createdAt: now };
-  blueprint.fingerprint = hash({ ...blueprint, fingerprint: undefined });
+  blueprint.fingerprint = canonicalSha256({ ...blueprint, fingerprint: undefined, createdAt: undefined });
   return blueprint;
 }

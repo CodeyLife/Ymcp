@@ -17,10 +17,14 @@ export interface NovelDocumentSummary {
   povCharacterId?: string;
   wordCount?: number;
   latestRevision?: number;
+  chapterGoal?: string;
   blockingIssueCount?: number;
   arcId?: string;
   arcTitle?: string;
   arcPlanningStatus?: string;
+  reviewScore?: number;
+  reviewVerdict?: "passed" | "revise" | "blocked";
+  reviewStale?: boolean;
 }
 
 export interface NovelProjectSummary {
@@ -100,6 +104,7 @@ export interface NovelReviewSummary {
   }>;
   score?: number;
   role?: string;
+  dimensionScores?: Record<string, number>;
   createdAt: number;
 }
 
@@ -115,6 +120,7 @@ export function novelRunDocumentId(run: NovelWorkflowRunRecord | undefined): str
 }
 
 export function isChapterWorkflowRun(run: NovelWorkflowRunRecord): boolean {
+  if (run.workflowType === "chapter-title") return false;
   return run.workflowType === "chapter-review" || Boolean(novelRunDocumentId(run));
 }
 
@@ -125,6 +131,45 @@ export interface NovelDocumentContent {
   revision: number;
   contentHash: string;
   plainText: string;
+}
+
+export interface NovelChapterReviewIssue {
+  id: string;
+  fingerprint: string;
+  dimension?: string;
+  severity: "blocker" | "major" | "warning";
+  title: string;
+  description?: string;
+  evidenceQuote: string;
+  paragraph?: number;
+  revisionRanges: Array<{ start: number; end: number }>;
+  rule?: string;
+  suggestion?: string;
+  sourceRoles: string[];
+  status: "pending" | "ignored" | "resolved";
+  updatedAt: string;
+}
+
+export interface NovelChapterWorkspace {
+  document: NovelDocumentSummary;
+  content?: { revisionId: string; revision: number; contentHash: string; byteLength: number; plainText?: string };
+  spec: { chapterGoal: string; blueprint: Record<string, unknown>; blueprintFingerprint: string; updatedAt?: string };
+  review?: {
+    id: string;
+    revisionId?: string;
+    reviewedContentHash: string;
+    artifactFingerprint: string;
+    sourceWorkflowId?: string;
+    verdict: "passed" | "revise" | "blocked";
+    complete: boolean;
+    overallScore?: number;
+    dimensionScores: Record<string, number>;
+    reviewerRoles: string[];
+    reviewedAt: string;
+    stale: boolean;
+    issues: NovelChapterReviewIssue[];
+  };
+  versions: Array<{ id: string; revision: number; contentHash: string; retentionClass: "workflow" | "rolling" | "named"; label?: string; expiresAt?: string; createdAt: string; current: boolean }>;
 }
 
 export interface NovelFactCandidate {
@@ -156,6 +201,7 @@ export const novelKeys = {
   runArtifacts: (wfId: string) => ["novel", "run", wfId, "artifacts"] as const,
   runReviews: (wfId: string) => ["novel", "run", wfId, "reviews"] as const,
   docContent: (id: string, docId: string) => ["novel", "doc", id, docId, "content"] as const,
+  chapterWorkspace: (id: string, docId: string) => ["novel", "doc", id, docId, "workspace"] as const,
   factCandidates: (id: string, docId: string) => ["novel", "facts", id, docId] as const,
 };
 
@@ -183,7 +229,7 @@ export function useNovelProjectRuns(projectId: string) {
   });
 }
 
-const isActiveStatus = (status?: string) => status === "running" || status === "manual-review-required" || status === "paused" || status === "pending" || status === "accepted";
+const isActiveStatus = (status?: string) => status === "running" || status === "waiting-external" || status === "manual-review-required" || status === "paused" || status === "pending" || status === "accepted";
 
 export function useNovelRun(workflowId: string | undefined) {
   return useQuery({
@@ -254,12 +300,48 @@ export function useSubmitChapterReview(projectId: string, documentId: string | u
   });
 }
 
+export function useStartTargetedChapterRepair(projectId: string, documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { issueIds: string[]; instruction?: string }) => novelFetch<{ workflowId: string; runId?: string; targetIssueCount: number }>(`/v2/projects/${enc(projectId)}/documents/${enc(documentId!)}/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "targeted", targetIssueIds: input.issueIds, instruction: input.instruction?.trim() || undefined, idempotencyKey: `${projectId}:${documentId}:targeted-review:${crypto.randomUUID()}` }),
+    }),
+    onSuccess: () => {
+      if (documentId) void qc.invalidateQueries({ queryKey: novelKeys.chapterWorkspace(projectId, documentId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.runs(projectId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.project(projectId) });
+    },
+  });
+}
+
+export function useCancelNovelRun(projectId: string, workflowId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => novelFetch<{ workflowId: string; status: string }>(`/v2/runs/${enc(workflowId!)}/cancel`, { method: "POST" }),
+    onSuccess: () => {
+      if (workflowId) void qc.invalidateQueries({ queryKey: novelKeys.run(workflowId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.runs(projectId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.project(projectId) });
+    },
+  });
+}
+
 export function useNovelRunReviews(workflowId: string | undefined, active = false) {
   return useQuery({
     queryKey: novelKeys.runReviews(workflowId ?? "none"),
     queryFn: async () => (await novelFetch<{ reviews: NovelReviewSummary[] }>(`/v2/runs/${enc(workflowId!)}/reviews`)).reviews ?? [],
     enabled: Boolean(workflowId),
     refetchInterval: active ? 3000 : false,
+  });
+}
+
+export function useNovelChapterWorkspace(projectId: string, documentId: string | undefined) {
+  return useQuery({
+    queryKey: novelKeys.chapterWorkspace(projectId, documentId ?? "none"),
+    queryFn: async () => (await novelFetch<{ workspace: NovelChapterWorkspace }>(`/v2/projects/${enc(projectId)}/documents/${enc(documentId!)}/workspace`)).workspace,
+    enabled: Boolean(projectId && documentId),
   });
 }
 
@@ -306,7 +388,68 @@ export type NovelDocumentInput = {
   narrativeOrder?: number;
   povCharacterId?: string | null;
   status?: string;
+  chapterGoal?: string;
 };
+
+export function useSaveNovelDocumentContent(projectId: string, documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { plainText: string; expectedContentHash: string; label?: string }) => novelFetch<{ result: { unchanged: boolean; revisionId: string; revision: number; contentHash: string } }>(`/v2/projects/${enc(projectId)}/documents/${enc(documentId!)}/content`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+    onSuccess: () => {
+      if (!documentId) return;
+      void qc.invalidateQueries({ queryKey: novelKeys.chapterWorkspace(projectId, documentId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.docContent(projectId, documentId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.project(projectId) });
+    },
+  });
+}
+
+export function useUpdateChapterReviewIssue(projectId: string, documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { issueId: string; status: NovelChapterReviewIssue["status"] }) => novelFetch(`/v2/projects/${enc(projectId)}/documents/${enc(documentId!)}/review-issues/${enc(input.issueId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: input.status }),
+    }),
+    onSuccess: () => { if (documentId) void qc.invalidateQueries({ queryKey: novelKeys.chapterWorkspace(projectId, documentId) }); },
+  });
+}
+
+export function useCreateChapterReviewIssue(projectId: string, documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { severity: NovelChapterReviewIssue["severity"]; title: string; description?: string; evidenceQuote?: string; paragraph?: number; suggestion?: string }) => novelFetch<{ issue: NovelChapterReviewIssue }>(`/v2/projects/${enc(projectId)}/documents/${enc(documentId!)}/review-issues`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+    onSuccess: () => { if (documentId) void qc.invalidateQueries({ queryKey: novelKeys.chapterWorkspace(projectId, documentId) }); },
+  });
+}
+
+export function useChapterVersionActions(projectId: string, documentId: string | undefined) {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    if (!documentId) return;
+    void qc.invalidateQueries({ queryKey: novelKeys.chapterWorkspace(projectId, documentId) });
+    void qc.invalidateQueries({ queryKey: novelKeys.docContent(projectId, documentId) });
+    void qc.invalidateQueries({ queryKey: novelKeys.project(projectId) });
+  };
+  const restore = useMutation({
+    mutationFn: (revisionId: string) => novelFetch(`/v2/projects/${enc(projectId)}/documents/${enc(documentId!)}/versions/${enc(revisionId)}/restore`, { method: "POST" }),
+    onSuccess: invalidate,
+  });
+  const name = useMutation({
+    mutationFn: (input: { revisionId: string; label: string }) => novelFetch(`/v2/projects/${enc(projectId)}/documents/${enc(documentId!)}/versions/${enc(input.revisionId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: input.label }) }),
+    onSuccess: invalidate,
+  });
+  return { restore, name };
+}
 
 export function useCreateNovelDocument(projectId: string) {
   const qc = useQueryClient();
@@ -333,6 +476,18 @@ export function useUpdateNovelDocument(projectId: string) {
   });
 }
 
+export function useGenerateChapterTitle(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (documentId: string) => novelFetch<{ workflowId: string; runId?: string; status: string }>(`/v2/projects/${enc(projectId)}/documents/${enc(documentId)}/title/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: novelKeys.runs(projectId) }),
+  });
+}
+
 export function useDeleteNovelDocument(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -344,14 +499,14 @@ export function useDeleteNovelDocument(projectId: string) {
 export function useSubmitNovelIntent(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { objective: string; documentId?: string; factApprovalMode: "auto" | "manual" }) =>
+    mutationFn: (input: { objective: string; documentId?: string; factApprovalMode: "auto" | "manual"; idempotencyKey?: string }) =>
       novelFetch<{ workflowId: string; runId?: string }>("/v2/intents", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           projectId,
           objective: input.objective,
-          idempotencyKey: `${projectId}:${Date.now()}`,
+          idempotencyKey: input.idempotencyKey ?? crypto.randomUUID(),
           source: "web",
           requestedStage: input.documentId ? "drafting" : "planning",
           target: input.documentId ? { kind: "chapter", id: input.documentId } : undefined,
@@ -365,19 +520,29 @@ export function useSubmitNovelIntent(projectId: string) {
   });
 }
 
-export function useSignalHumanDecision(workflowId: string | undefined) {
+export function useSignalHumanDecision(projectId: string, workflowId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { artifactId: string; decision: "approve" | "reject"; authorId?: string; feedback?: string }) => {
+    mutationFn: async (input: { artifactId: string; decision: "approve" | "reject" | "revise"; authorId?: string; feedback?: string }) => {
       await novelFetch(`/v2/workflows/${enc(workflowId!)}/tasks/${enc(input.artifactId)}/signal`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ signal: "humanSignal", payload: { decision: input.decision, authorId: input.authorId ?? "web-author", feedback: input.feedback } }),
       });
     },
-    onSuccess: () => {
+    onSuccess: (_data, input) => {
       if (!workflowId) return;
+      const submittedStage = input.decision === "approve" ? "fact-extraction" : input.decision === "revise" ? "revision" : "manuscript-approval";
+      const markRunning = (run: NovelWorkflowRunRecord): NovelWorkflowRunRecord => run.temporalWorkflowId === workflowId
+        ? { ...run, status: "running", payload: { ...run.payload, stage: submittedStage, pendingHumanDecisionSubmitted: true }, updatedAt: new Date().toISOString() }
+        : run;
+      qc.setQueryData<NovelRunState>(novelKeys.run(workflowId), (current) => current
+        ? { ...current, status: "running", record: current.record ? markRunning(current.record) : current.record }
+        : current);
+      qc.setQueryData<NovelWorkflowRunRecord[]>(novelKeys.runs(projectId), (current) => current?.map(markRunning));
       void qc.invalidateQueries({ queryKey: novelKeys.run(workflowId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.runs(projectId) });
+      void qc.invalidateQueries({ queryKey: novelKeys.project(projectId) });
       void qc.invalidateQueries({ queryKey: novelKeys.runEvents(workflowId) });
       void qc.invalidateQueries({ queryKey: novelKeys.runArtifacts(workflowId) });
       void qc.invalidateQueries({ queryKey: novelKeys.runReviews(workflowId) });

@@ -22,6 +22,7 @@ import {
 } from "@/lib/novelApi";
 import "./novel-v2.css";
 import "./novel-v2/workspace-command.css";
+import { projectDisplayTitle } from "./novel-v2/presentation";
 
 function revisionOf(project: NovelProjectSummary) {
   return project.currentRevision ?? project.current_revision ?? 0;
@@ -89,9 +90,9 @@ export default function NovelV2Projects() {
     const keyword = query.trim().toLowerCase();
     const rank: Record<ProjectState, number> = { review: 0, failed: 1, running: 2, idle: 3, done: 4 };
     return projects
-      .filter((project) => (!keyword || `${project.title} ${project.id}`.toLowerCase().includes(keyword)) && (statusFilter === "all" || statusKind(project.latestRunStatus) === statusFilter))
+      .filter((project) => (!keyword || projectDisplayTitle(project.title, project.id).toLowerCase().includes(keyword)) && (statusFilter === "all" || statusKind(project.latestRunStatus) === statusFilter))
       .sort((a, b) => {
-        if (sortBy === "title") return a.title.localeCompare(b.title, "zh-CN");
+        if (sortBy === "title") return projectDisplayTitle(a.title, a.id).localeCompare(projectDisplayTitle(b.title, b.id), "zh-CN");
         if (sortBy === "updated") return updatedOf(b).localeCompare(updatedOf(a));
         return rank[statusKind(a.latestRunStatus)] - rank[statusKind(b.latestRunStatus)] || updatedOf(b).localeCompare(updatedOf(a));
       });
@@ -131,7 +132,7 @@ export default function NovelV2Projects() {
               const kind = statusKind(project.latestRunStatus);
               return <button key={project.id} type="button" onClick={() => navigate(`/novels/${encodeURIComponent(project.id)}`)}>
                 <span className={`nwc-project-signal is-${kind}`} />
-                <span><strong>{project.title}</strong><small>{STATUS_LABEL[kind]} · {updatedOf(project) ? new Date(updatedOf(project)).toLocaleString("zh-CN") : "未同步"}</small></span>
+                <span><strong>{projectDisplayTitle(project.title, project.id)}</strong><small>{STATUS_LABEL[kind]} · {updatedOf(project) ? new Date(updatedOf(project)).toLocaleString("zh-CN") : "未同步"}</small></span>
                 <ArrowRightOutlined />
               </button>;
             })}
@@ -149,7 +150,7 @@ export default function NovelV2Projects() {
         </div>
 
         <div className="nwc-library-latest">
-          <header className="nwc-section-head"><div><span className="nwc-kicker">最近作品</span><h2>{stats.latest?.title ?? "暂无作品"}</h2></div><ClockCircleOutlined /></header>
+          <header className="nwc-section-head"><div><span className="nwc-kicker">最近作品</span><h2>{stats.latest ? projectDisplayTitle(stats.latest.title, stats.latest.id) : "暂无作品"}</h2></div><ClockCircleOutlined /></header>
           {stats.latest ? <button type="button" onClick={() => navigate(`/novels/${encodeURIComponent(stats.latest!.id)}`)}><span>revision {revisionOf(stats.latest)}</span><strong>{updatedOf(stats.latest) ? new Date(updatedOf(stats.latest)).toLocaleString("zh-CN") : "未同步"}</strong><ArrowRightOutlined /></button> : <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>创建第一部作品</Button>}
         </div>
       </section>
@@ -158,7 +159,7 @@ export default function NovelV2Projects() {
         <header className="nwc-library-toolbar">
           <div><span className="nwc-kicker">作品库</span><h2>{filtered.length} 部作品</h2></div>
           <div>
-            <Input allowClear prefix={<SearchOutlined />} placeholder="搜索标题或 ID" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <Input allowClear prefix={<SearchOutlined />} placeholder="搜索作品书名" value={query} onChange={(event) => setQuery(event.target.value)} />
             <Select value={statusFilter} onChange={setStatusFilter} options={[{ value: "all", label: "全部状态" }, ...Object.entries(STATUS_LABEL).map(([value, label]) => ({ value, label }))]} />
             <Select value={sortBy} onChange={setSortBy} options={[{ value: "priority", label: "优先级" }, { value: "updated", label: "最近更新" }, { value: "title", label: "标题" }]} />
           </div>
@@ -168,12 +169,12 @@ export default function NovelV2Projects() {
             const kind = statusKind(project.latestRunStatus);
             return <article key={project.id} role="listitem">
               <span className={`nwc-project-signal is-${kind}`} />
-              <div className="nwc-project-name"><strong>{project.title}</strong><small>{project.id}</small></div>
+              <div className="nwc-project-name"><strong>{projectDisplayTitle(project.title, project.id)}</strong><small>修订 {revisionOf(project)}</small></div>
               <span className={`novel-status-pill novel-status-pill-${kind === "review" ? "gate" : kind}`}>{STATUS_LABEL[kind]}</span>
               <span className="nwc-project-revision">r{revisionOf(project)}</span>
               <span className="nwc-project-updated">{updatedOf(project) ? new Date(updatedOf(project)).toLocaleString("zh-CN") : "未同步"}</span>
               <div className="nwc-project-actions">
-                <Tooltip title="重命名"><Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(project); editForm.setFieldsValue({ title: project.title }); }} /></Tooltip>
+                <Tooltip title="重命名"><Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(project); editForm.setFieldsValue({ title: projectDisplayTitle(project.title, project.id) === "未命名作品" ? "" : project.title }); }} /></Tooltip>
                 <Popconfirm title="删除作品" description="会删除 Runtime 中该作品及其运行记录。" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => void remove(project)}><Tooltip title="删除作品"><Button size="small" danger icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
                 <Button size="small" type="primary" icon={<ArrowRightOutlined />} onClick={() => navigate(`/novels/${encodeURIComponent(project.id)}`)}>打开</Button>
               </div>

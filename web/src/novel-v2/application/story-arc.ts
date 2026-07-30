@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 export type ArcPlanningStatus = "generating" | "awaiting-review" | "approved" | "stale" | "failed";
 export type ArcExecutionStatus = "planned" | "active" | "completed" | "abandoned";
 
-export interface NarrativeArcPlan {
+export interface StoryArcPlan {
   title: string;
   objective: string;
   entryState: string;
@@ -14,7 +14,26 @@ export interface NarrativeArcPlan {
   plotThreadRefs: string[];
   foreshadowingRefs: string[];
   expectedChapterCount: number;
+  phases: Array<{ title: string; objective: string; exitCondition: string }>;
   authorIntent?: string;
+}
+export type NarrativeArcPlan = StoryArcPlan;
+
+export interface StoryArcBatchPlan {
+  batchIndex: number;
+  startChapterIndex: number;
+  complete: boolean;
+}
+
+export interface StoryArcBatchRecord extends StoryArcBatchPlan {
+  id: string;
+  arcId: string;
+  projectId: string;
+  endChapterIndex: number;
+  status: "generating" | "awaiting-review" | "approved" | "failed";
+  entryFingerprint: string;
+  sourceArtifactId?: string;
+  approvedAt?: string;
 }
 
 export interface ChapterSceneBlueprint {
@@ -47,6 +66,7 @@ export interface ChapterBlueprint {
 
 export interface StoryArcBundle {
   arc: NarrativeArcPlan;
+  batch: StoryArcBatchPlan;
   chapters: ChapterBlueprint[];
 }
 
@@ -59,6 +79,7 @@ export interface StoryArcRecord {
   executionStatus: ArcExecutionStatus;
   arc: NarrativeArcPlan;
   chapters: ChapterBlueprintRecord[];
+  batches: StoryArcBatchRecord[];
   sourceArtifactId?: string;
   blueprintArtifactId?: string;
   contextFingerprint?: string;
@@ -143,6 +164,9 @@ export function parseStoryArcBundle(value: unknown): StoryArcBundle {
       freedom: typeof chapter.freedom === "string" ? chapter.freedom : "允许使用背景、内省、情感积累和文学意象完成本章功能，不必机械执行节拍。",
     };
   });
+  const rawBatch = root.batch && typeof root.batch === "object" && !Array.isArray(root.batch) ? root.batch as Record<string, unknown> : {};
+  const batchIndex = Number.isInteger(rawBatch.batchIndex) && Number(rawBatch.batchIndex) > 0 ? Number(rawBatch.batchIndex) : 1;
+  const startChapterIndex = Number.isInteger(rawBatch.startChapterIndex) && Number(rawBatch.startChapterIndex) > 0 ? Number(rawBatch.startChapterIndex) : 1;
   return {
     arc: {
       title,
@@ -154,11 +178,21 @@ export function parseStoryArcBundle(value: unknown): StoryArcBundle {
       exitState: typeof arcValue.exitState === "string" ? arcValue.exitState : "",
       plotThreadRefs: strings(arcValue.plotThreadRefs),
       foreshadowingRefs: strings(arcValue.foreshadowingRefs),
-      expectedChapterCount: chapters.length,
+      expectedChapterCount: Math.max(chapters.length, Number.isInteger(arcValue.expectedChapterCount) ? Number(arcValue.expectedChapterCount) : chapters.length),
+      phases: Array.isArray(arcValue.phases) ? arcValue.phases.map((phase) => {
+        const item = phase && typeof phase === "object" && !Array.isArray(phase) ? phase as Record<string, unknown> : {};
+        return { title: String(item.title ?? ""), objective: String(item.objective ?? ""), exitCondition: String(item.exitCondition ?? "") };
+      }).filter((phase) => phase.title && phase.objective) : [],
       authorIntent: typeof arcValue.authorIntent === "string" && arcValue.authorIntent.trim() ? arcValue.authorIntent : undefined,
     },
+    batch: { batchIndex, startChapterIndex, complete: rawBatch.complete === true },
     chapters,
   };
+}
+
+export function canGenerateNextStoryArcBatch(input: { plannedInBatch: number; finalizedInBatch: number; batchStatus: StoryArcBatchRecord["status"] }): boolean {
+  if (input.batchStatus !== "approved" || input.plannedInBatch <= 0) return false;
+  return input.finalizedInBatch / input.plannedInBatch >= 0.7;
 }
 
 export function planningContextFingerprint(value: Omit<ChapterPlanningContext, "fingerprint">): string {

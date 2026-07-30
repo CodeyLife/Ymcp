@@ -47,6 +47,8 @@ export interface FusionMemoryProviderOptions {
   weights?: { semantic?: number; lexical?: number; graph?: number };
   /** 单 facet 内每轨道召回上限（避免某轨道爆量）。默认 32。 */
   perTrackLimit?: number;
+  /** 融合后的候选上限；最终注入数量由 MemoryBundle token 预算决定。默认 96。 */
+  candidateLimit?: number;
 }
 
 const DEFAULT_WEIGHTS = { semantic: 0.5, lexical: 0.3, graph: 0.2 };
@@ -77,6 +79,7 @@ export class FusionMemoryProvider implements MemoryProvider {
   async search(input: { projectId: string; facets: RetrievalFacet[]; narrativeCutoff?: number; povCharacterId?: string }): Promise<MemoryHit[]> {
     const weights = { ...DEFAULT_WEIGHTS, ...this.options.weights };
     const perTrackLimit = this.options.perTrackLimit ?? 32;
+    const candidateLimit = this.options.candidateLimit ?? 96;
 
     // 并行召回三轨（graph 可选，缺失时跳过）
     const tracks: Array<{ name: "semantic" | "lexical" | "graph"; weight: number; hits: MemoryHit[] }> = [];
@@ -143,8 +146,8 @@ export class FusionMemoryProvider implements MemoryProvider {
       }
     }
 
-    // 按融合 score 降序，截断到 32（与原 Qdrant TOP_K 一致）
-    return [...fused.values()].sort((a, b) => b.score - a.score).slice(0, 32);
+    // 这里只限制候选规模；最终注入由 buildMemoryBundle 按 facet coverage + token budget 决定。
+    return [...fused.values()].sort((a, b) => b.score - a.score).slice(0, candidateLimit);
   }
 }
 

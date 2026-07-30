@@ -2022,6 +2022,20 @@
 .novel-plan-actions > div { display: grid; gap: 7px; }
 .novel-plan-actions > div > strong { color: #f4f4f5; font-size: 18px; }
 .novel-plan-actions > div > small { color: #71717a; }
+.novel-plan-synopsis-action { padding-top: 18px; border-top: 1px solid var(--novel-hairline); }
+.novel-plan-book-synopsis { margin: 20px 0 4px; color: #d4d4d8; font-size: 16px; line-height: 1.9; white-space: pre-wrap; }
+.novel-plan-title-action,
+.novel-plan-synopsis-action { display: flex; flex-direction: column; gap: 9px; padding-top: 16px; border-top: 1px solid #27272a; }
+.novel-plan-title-action > strong { color: #f4f4f5; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+.novel-plan-title-action > small,
+.novel-plan-synopsis-action > small { color: #a1a1aa; line-height: 1.55; }
+.novel-plan-title-options { display: grid; gap: 8px; width: 100%; margin-top: 12px; }
+.novel-plan-title-options > label { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: 10px; padding: 12px 14px; border: 1px solid #303036; background: #17171a; cursor: pointer; transition: border-color .16s ease, background .16s ease; }
+.novel-plan-title-options > label:hover,
+.novel-plan-title-options > label.is-selected { border-color: #14b8a6; background: #182321; }
+.novel-plan-title-options > label span { display: grid; gap: 4px; min-width: 0; }
+.novel-plan-title-options > label strong { color: #f4f4f5; font-size: 16px; }
+.novel-plan-title-options > label small { color: #a1a1aa; line-height: 1.55; }
 
 .novel-plan-progress { padding: 20px; border-bottom: 1px solid var(--novel-hairline); }
 .novel-plan-progress > div { display: flex; justify-content: space-between; margin-bottom: 12px; color: #f4f4f5; }
@@ -2068,6 +2082,13 @@
 .novel-plan-editor label, .novel-plan-editor section { display: grid; gap: 8px; }
 .novel-plan-editor label > span { color: #a1a1aa; font-size: 12px; }
 .novel-plan-editor > section, .novel-plan-chapter-editor > section { padding: 14px; border: 1px solid var(--novel-hairline); border-radius: 6px; }
+.novel-plan-value-group { min-width: 0; display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--novel-hairline); border-radius: 6px; }
+.novel-plan-value-group .novel-plan-value-group { margin-left: 10px; border-color: var(--novel-hairline-soft); }
+.novel-plan-value-group legend { max-width: 100%; padding: 0 6px; color: #d4d4d8; font-size: 12px; overflow-wrap: anywhere; }
+.novel-plan-scalar-field { min-width: 0; }
+.novel-plan-scalar-field .ant-input-number { width: 100%; }
+.novel-plan-boolean-field { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.novel-plan-empty-value { color: #71717a; font-size: 12px; }
 .novel-plan-chapter-editor { display: grid; gap: 12px; }
 .novel-plan-chapter-editor > section { display: grid; gap: 8px; }
 .novel-plan-apply-preview { display: grid; gap: 10px; max-height: 55vh; overflow: auto; }

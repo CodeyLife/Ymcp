@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { foundationArtifactToMemoryClaim } from "./foundation-memory";
 import {
   PROJECT_PLAN_STAGES,
@@ -34,6 +35,7 @@ import type {
   PromotionReceipt,
   RetrievalFacet,
   Review,
+  ReviewIssue,
   RuntimeLearningAssessmentV2,
   SkillBundle,
   SkillDescriptor,
@@ -42,9 +44,19 @@ import type {
 } from "./protocol";
 import type { ModelInvocationAudit } from "./model-gateway";
 import type { ModelRoutingConfig, ModelRoutingSnapshot, ModelTaskRecord, ModelWorkPackage } from "./model-routing";
+import type { ObjectStoreAdapter } from "./object-store";
+import { countNovelCharacters } from "./word-count";
 import type { ObjectStoreIdentity } from "./object-store";
-import { planningContextFingerprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type NarrativeArcPlan, type StoryArcBundle, type StoryArcRecord } from "./application/story-arc";
-import { aggregateChapterReviews, type ChapterReviewIssueStatus } from "./chapter-review-snapshot";
+import { canGenerateNextStoryArcBatch, planningContextFingerprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type NarrativeArcPlan, type StoryArcBatchRecord, type StoryArcBundle, type StoryArcRecord } from "./application/story-arc";
+import { aggregateChapterReviews, reviewIssueFingerprint, type ChapterReviewIssueStatus } from "./chapter-review-snapshot";
+import {
+  bookSynopsisSourceFingerprint,
+  bookTitleSourceFingerprint,
+  parseBookTitleCandidatesMetadata,
+  type BookSynopsisRecord,
+  type BookTitleCandidatesRecord,
+} from "./application/book-synopsis";
+import { chapterTitleSourceFingerprint, type ChapterTitleSource } from "./application/chapter-title";
 
 export interface NovelProjectSnapshot {
   projectId: string;
@@ -65,7 +77,7 @@ export interface NovelProjectSnapshot {
 export type KnowledgeRecordKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills" | "foundation";
 
 type ProjectRow = { id: string; title: string; current_revision: string | number; metadata: Record<string, unknown>; created_at: Date | string; updated_at: Date | string };
-type DocumentRow = { id: string; project_id: string; title: string; narrative_order: string | number; pov_character_id: string | null; current_revision_id: string | null; status: string; created_at: Date | string; updated_at: Date | string; word_count?: string | number | null; latest_revision?: string | number | null; blocking_issue_count?: string | number | null; arc_id?: string | null; arc_title?: string | null; arc_planning_status?: string | null };
+type DocumentRow = { id: string; project_id: string; title: string; narrative_order: string | number; pov_character_id: string | null; current_revision_id: string | null; status: string; created_at: Date | string; updated_at: Date | string; word_count?: string | number | null; latest_revision?: string | number | null; chapter_goal?: string | null; blocking_issue_count?: string | number | null; review_score?: string | number | null; review_verdict?: "passed" | "revise" | "blocked" | null; review_stale?: boolean | null; arc_id?: string | null; arc_title?: string | null; arc_planning_status?: string | null };
 type WorkflowRunRow = { id: string; workflow_type: string; project_id: string; temporal_workflow_id: string; status: string; payload: Record<string, unknown>; created_at: Date | string; updated_at: Date | string };
 type ArtifactRow = { id: string; project_id: string; task_id: string; attempt_id: string; kind: Artifact["kind"]; content_hash: string; object_key: string | null; base_revision: string | number; fingerprint: string; payload: Record<string, unknown>; created_at: Date | string };
 type TaskAttemptRow = { id: string; workflow_run_id: string | null; task_id: string; lease_owner: string | null; lease_expires_at: Date | string | null; heartbeat_at: Date | string | null; status: TaskAttemptRecord["status"]; payload: Record<string, unknown> };
@@ -73,8 +85,17 @@ type ModelTaskRow = { id: string; workflow_run_id: string; task_id: string; purp
 type ProjectPlanSectionRow = { project_id: string; task_key: string; work_item_id: string | null; source_artifact_id: string | null; status: ProjectPlanStatus; payload: Record<string, unknown>; edit_revision: string | number; approved_at: Date | string | null; created_at: Date | string; updated_at: Date | string };
 type ArcRow = { id: string; volume_id: string; project_id: string; title: string; ordinal: string | number; planning_status: StoryArcRecord["planningStatus"]; execution_status: StoryArcRecord["executionStatus"]; payload: NarrativeArcPlan; source_artifact_id: string | null; blueprint_artifact_id: string | null; context_fingerprint: string | null; edit_revision: string | number; approved_at: Date | string | null; completed_at: Date | string | null; abandoned_at: Date | string | null; updated_at: Date | string };
 type ChapterBlueprintRow = { id: string; arc_id: string; project_id: string; document_id: string | null; title: string; ordinal: string | number; status: string; payload: Record<string, unknown>; source_artifact_id: string | null; blueprint_revision: string | number };
+type StoryArcBatchRow = { id: string; arc_id: string; project_id: string; batch_index: string | number; start_chapter_index: string | number; end_chapter_index: string | number; status: StoryArcBatchRecord["status"]; entry_fingerprint: string; source_artifact_id: string | null; payload: Record<string, unknown>; approved_at: Date | string | null };
 
 function iso(value: Date | string) { return value instanceof Date ? value.toISOString() : value; }
+export function isTransientPostgresStartupError(error: unknown): boolean {
+  const record = error as { code?: unknown; message?: unknown };
+  const code = typeof record.code === "string" ? record.code : undefined;
+  if (code && new Set(["57P03", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"]).has(code)) return true;
+  const message = typeof record.message === "string" ? record.message : "";
+  return /database system is (starting up|not yet accepting connections)|consistent recovery state has not been yet reached|connection terminated unexpectedly/i.test(message);
+}
+
 function documentFromRow(row: DocumentRow): ManuscriptDocumentSummary {
   return {
     id: row.id,
@@ -88,7 +109,11 @@ function documentFromRow(row: DocumentRow): ManuscriptDocumentSummary {
     updatedAt: iso(row.updated_at),
     wordCount: row.word_count === undefined || row.word_count === null ? undefined : Number(row.word_count),
     latestRevision: row.latest_revision === undefined || row.latest_revision === null ? undefined : Number(row.latest_revision),
+    chapterGoal: row.chapter_goal ?? undefined,
     blockingIssueCount: row.blocking_issue_count === undefined || row.blocking_issue_count === null ? undefined : Number(row.blocking_issue_count),
+    reviewScore: row.review_score === undefined || row.review_score === null ? undefined : Number(row.review_score),
+    reviewVerdict: row.review_verdict ?? undefined,
+    reviewStale: row.review_stale ?? undefined,
     arcId: row.arc_id ?? undefined,
     arcTitle: row.arc_title ?? undefined,
     arcPlanningStatus: row.arc_planning_status ?? undefined,
@@ -183,16 +208,33 @@ export class NovelPostgresRepository {
     const migrationsDir = process.env.NOVEL_V2_MIGRATIONS_DIR ?? join(process.cwd(), "deploy", "postgres");
     const files = readdirSync(migrationsDir).filter((file) => /^\d{3}_.+\.sql$/u.test(file)).sort();
     if (!files.length) throw new Error(`没有找到 V2 数据库迁移：${migrationsDir}`);
-    const client = await this.pool.connect();
+    const client = await this.connectForMigration();
     try {
       await client.query("SELECT pg_advisory_lock(hashtext('ymcp-novel-v2-migrations'))");
       await client.query("CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
       for (const file of files) {
         const sql = readFileSync(join(migrationsDir, file), "utf8");
-        const checksum = createHash("sha256").update(sql).digest("hex");
+        const rawChecksum = createHash("sha256").update(sql).digest("hex");
+        const normalizedSql = sql.replace(/\r\n?/gu, "\n");
+        const checksum = createHash("sha256").update(normalizedSql).digest("hex");
         const applied = await client.query<{ checksum: string }>("SELECT checksum FROM schema_migrations WHERE version=$1", [file]);
         if (applied.rowCount) {
-          if (applied.rows[0].checksum !== checksum) throw new Error(`已应用迁移被修改：${file}`);
+          if (applied.rows[0].checksum !== checksum && applied.rows[0].checksum !== rawChecksum) {
+            const legacyWorkspaceObjects = file === "022_chapter_workspace.sql"
+              ? await client.query<{ object_count: number }>(`
+                  SELECT count(*)::int AS object_count FROM (
+                    SELECT table_name,column_name FROM information_schema.columns
+                    WHERE table_schema=current_schema() AND (
+                      (table_name='workflow_run_summaries' AND column_name IN ('final_status','metrics')) OR
+                      (table_name='chapter_review_snapshots' AND column_name IN ('reviewed_content_hash','dimension_scores')) OR
+                      (table_name='manuscript_revisions' AND column_name IN ('retention_class','expires_at'))
+                    )
+                  ) markers
+                `)
+              : { rows: [{ object_count: 0 }] };
+            if (legacyWorkspaceObjects.rows[0]?.object_count !== 6) throw new Error(`已应用迁移被修改：${file}`);
+            await client.query("UPDATE schema_migrations SET checksum=$2 WHERE version=$1", [file, checksum]);
+          }
           continue;
         }
         await client.query("BEGIN");
@@ -209,6 +251,111 @@ export class NovelPostgresRepository {
       await client.query("SELECT pg_advisory_unlock(hashtext('ymcp-novel-v2-migrations'))").catch(() => undefined);
       client.release();
     }
+    await this.backfillCurrentChapterReviewSnapshots();
+  }
+
+  async backfillMissingContentWordCounts(objects: ObjectStoreAdapter): Promise<{ updated: number; failed: number }> {
+    const result = await this.pool.query<{ content_hash: string; object_key: string }>(
+      "SELECT content_hash,object_key FROM content_blobs WHERE word_count IS NULL ORDER BY created_at,content_hash",
+    );
+    let updated = 0;
+    let failed = 0;
+    for (const row of result.rows) {
+      try {
+        const text = await objects.getText(row.object_key);
+        const update = await this.pool.query(
+          "UPDATE content_blobs SET word_count=$2 WHERE content_hash=$1 AND word_count IS NULL",
+          [row.content_hash, countNovelCharacters(text)],
+        );
+        updated += update.rowCount ?? 0;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { updated, failed };
+  }
+
+  async recordMemoryGateCheck(input: { projectId: string; workflowId: string; criticalMissingFacets: string[]; blockAfter?: number }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const missing = [...new Set(input.criticalMissingFacets)].sort();
+      const result = await client.query<{ consecutive_critical_misses: number; last_missing_facets: string[] }>(`
+        INSERT INTO memory_gate_states(project_id,consecutive_critical_misses,last_missing_facets,last_workflow_id,last_checked_at)
+        VALUES($1,$2,$3,$4,now())
+        ON CONFLICT(project_id) DO UPDATE SET
+          consecutive_critical_misses=CASE WHEN cardinality(EXCLUDED.last_missing_facets)=0 THEN 0 ELSE memory_gate_states.consecutive_critical_misses+1 END,
+          last_missing_facets=EXCLUDED.last_missing_facets,
+          last_workflow_id=EXCLUDED.last_workflow_id,
+          last_checked_at=now()
+        RETURNING consecutive_critical_misses,last_missing_facets
+      `, [input.projectId, missing.length ? 1 : 0, missing, input.workflowId]);
+      const state = result.rows[0];
+      const blocked = missing.length > 0 && state.consecutive_critical_misses >= (input.blockAfter ?? 3);
+      if (blocked) {
+        await this.appendOutboxTx(client, "memory-gate", input.projectId, "memory-gate.blocked", { projectId: input.projectId, workflowId: input.workflowId, consecutiveCriticalMisses: state.consecutive_critical_misses, missingFacets: state.last_missing_facets });
+      }
+      await client.query("COMMIT");
+      return { consecutiveCriticalMisses: state.consecutive_critical_misses, missingFacets: state.last_missing_facets, blocked };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async connectForMigration(): Promise<PoolClient> {
+    const timeoutMs = Number(process.env.NOVEL_V2_POSTGRES_CONNECT_TIMEOUT_MS ?? 60_000);
+    const intervalMs = Number(process.env.NOVEL_V2_POSTGRES_CONNECT_RETRY_MS ?? 1_000);
+    const deadline = Date.now() + Math.max(timeoutMs, 0);
+    let attempt = 0;
+    let lastError: unknown;
+    while (true) {
+      try {
+        return await this.pool.connect();
+      } catch (error) {
+        lastError = error;
+        if (!isTransientPostgresStartupError(error) || Date.now() >= deadline) break;
+        attempt += 1;
+        const remainingMs = Math.max(deadline - Date.now(), 0);
+        await delay(Math.min(intervalMs * Math.min(attempt, 5), remainingMs));
+      }
+    }
+    throw new Error(`Postgres 未在 ${timeoutMs}ms 内准备好：${(lastError as Error)?.message ?? String(lastError)}`, { cause: lastError });
+  }
+
+  async requestMemoryRebuild(projectId: string) {
+    const result = await this.pool.query<{ consecutive_critical_misses: number; last_missing_facets: string[]; rebuild_requested_at: Date }>(`
+      INSERT INTO memory_gate_states(project_id,rebuild_requested_at,last_checked_at)
+      VALUES($1,now(),now())
+      ON CONFLICT(project_id) DO UPDATE SET rebuild_requested_at=now(),last_checked_at=now()
+      RETURNING consecutive_critical_misses,last_missing_facets,rebuild_requested_at
+    `, [projectId]);
+    await this.appendOutbox("memory-gate", projectId, "memory.rebuild-requested", { projectId, requestedAt: result.rows[0].rebuild_requested_at });
+    return { projectId, status: "rebuild-requested" as const, consecutiveCriticalMisses: result.rows[0].consecutive_critical_misses, missingFacets: result.rows[0].last_missing_facets };
+  }
+
+  async completeMemoryRebuild(projectId: string, indexedClaims: number) {
+    await this.pool.query(`
+      INSERT INTO memory_gate_states(project_id,consecutive_critical_misses,last_missing_facets,last_checked_at)
+      VALUES($1,0,'{}',now())
+      ON CONFLICT(project_id) DO UPDATE SET consecutive_critical_misses=0,last_missing_facets='{}',last_checked_at=now(),rebuild_requested_at=NULL
+    `, [projectId]);
+    await this.appendOutbox("memory-gate", projectId, "memory.rebuild-completed", { projectId, indexedClaims });
+    return { projectId, status: "ready" as const, indexedClaims };
+  }
+
+  async backfillCurrentChapterReviewSnapshots(): Promise<number> {
+    const result = await this.pool.query<{ artifact_id: string }>(`
+      SELECT DISTINCT mr.artifact_id
+      FROM manuscript_documents d JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+      WHERE mr.artifact_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM chapter_review_snapshots s WHERE s.document_id=d.id AND s.reviewed_content_hash=mr.content_hash)
+    `);
+    let refreshed = 0;
+    for (const row of result.rows) if (await this.refreshChapterReviewSnapshot(row.artifact_id)) refreshed += 1;
+    return refreshed;
   }
 
   async health() {
@@ -246,16 +393,16 @@ export class NovelPostgresRepository {
 
   async recordModelInvocation(input: ModelInvocationAudit): Promise<void> {
     await this.pool.query(
-      `INSERT INTO model_invocations(workflow_run_id,task_id,purpose,config_revision,candidate_index,executor,profile_id,protocol,model,status,input_tokens,output_tokens,latency_ms,prompt_fingerprint,response_id,error_category)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-      [input.workflowRunId ?? null, input.taskId ?? null, input.purpose, input.configRevision, input.candidateIndex, input.executor, input.profileId ?? null, input.protocol ?? null, input.model, input.status, input.inputTokens, input.outputTokens, input.latencyMs, input.promptFingerprint, input.responseId ?? null, input.errorCategory ?? null],
+      `INSERT INTO model_invocations(workflow_run_id,task_id,purpose,config_revision,candidate_index,executor,profile_id,protocol,model,status,input_tokens,output_tokens,provider_input_tokens,provider_output_tokens,estimated_input_tokens,estimated_output_tokens,usage_source,latency_ms,prompt_fingerprint,response_id,error_category)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+      [input.workflowRunId ?? null, input.taskId ?? null, input.purpose, input.configRevision, input.candidateIndex, input.executor, input.profileId ?? null, input.protocol ?? null, input.model, input.status, input.inputTokens, input.outputTokens, input.providerInputTokens ?? null, input.providerOutputTokens ?? null, input.estimatedInputTokens ?? null, input.estimatedOutputTokens ?? null, input.usageSource ?? "provider", input.latencyMs, input.promptFingerprint, input.responseId ?? null, input.errorCategory ?? null],
     );
   }
 
   async listModelUsage(limit = 100) {
     const result = await this.pool.query(
-      `SELECT purpose,profile_id,protocol,model,status,COUNT(*)::int AS calls,COALESCE(SUM(input_tokens),0)::bigint AS input_tokens,COALESCE(SUM(output_tokens),0)::bigint AS output_tokens,COALESCE(AVG(latency_ms),0)::int AS average_latency_ms
-       FROM model_invocations GROUP BY purpose,profile_id,protocol,model,status ORDER BY MAX(created_at) DESC LIMIT $1`,
+      `SELECT purpose,profile_id,protocol,model,status,usage_source,COUNT(*)::int AS calls,COALESCE(SUM(input_tokens),0)::bigint AS input_tokens,COALESCE(SUM(output_tokens),0)::bigint AS output_tokens,COALESCE(SUM(provider_input_tokens),0)::bigint AS provider_input_tokens,COALESCE(SUM(provider_output_tokens),0)::bigint AS provider_output_tokens,COALESCE(SUM(estimated_input_tokens),0)::bigint AS estimated_input_tokens,COALESCE(SUM(estimated_output_tokens),0)::bigint AS estimated_output_tokens,COALESCE(AVG(latency_ms),0)::int AS average_latency_ms
+       FROM model_invocations GROUP BY purpose,profile_id,protocol,model,status,usage_source ORDER BY MAX(created_at) DESC LIMIT $1`,
       [limit],
     );
     return result.rows;
@@ -477,18 +624,23 @@ export class NovelPostgresRepository {
     if (!project.rowCount) throw new Error("项目不存在");
     const documents = await this.pool.query<DocumentRow>(`
       SELECT d.id,d.project_id,d.title,d.narrative_order,d.pov_character_id,d.current_revision_id,d.status,d.created_at,d.updated_at,
-        COALESCE(cb.byte_length, 0) AS word_count,
+        COALESCE(cb.word_count, 0) AS word_count,
         mr.revision AS latest_revision,
-        COUNT(rv.id)::int AS blocking_issue_count,
+        cps.chapter_goal,
+        COUNT(crsi.id)::int AS blocking_issue_count,
+        crs.overall_score AS review_score,crs.verdict AS review_verdict,
+        CASE WHEN crs.id IS NULL THEN NULL ELSE crs.reviewed_content_hash<>mr.content_hash END AS review_stale,
         a.id AS arc_id,a.title AS arc_title,a.planning_status AS arc_planning_status
       FROM manuscript_documents d
       LEFT JOIN chapters ch ON ch.document_id=d.id
       LEFT JOIN arcs a ON a.id=ch.arc_id
       LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
       LEFT JOIN content_blobs cb ON cb.content_hash=mr.content_hash
-      LEFT JOIN reviews rv ON rv.artifact_id=mr.artifact_id AND rv.issues @> '[{"severity":"blocker"}]'::jsonb
+      LEFT JOIN chapter_production_specs cps ON cps.document_id=d.id
+      LEFT JOIN chapter_review_snapshots crs ON crs.document_id=d.id
+      LEFT JOIN chapter_review_snapshot_issues crsi ON crsi.snapshot_id=crs.id AND crsi.severity='blocker' AND crsi.status='pending'
       WHERE d.project_id=$1
-      GROUP BY d.id,d.project_id,d.title,d.narrative_order,d.pov_character_id,d.current_revision_id,d.status,d.created_at,d.updated_at,cb.byte_length,mr.revision,a.id,a.title,a.planning_status
+      GROUP BY d.id,d.project_id,d.title,d.narrative_order,d.pov_character_id,d.current_revision_id,d.status,d.created_at,d.updated_at,cb.word_count,mr.revision,cps.chapter_goal,crs.id,crs.overall_score,crs.verdict,crs.reviewed_content_hash,mr.content_hash,a.id,a.title,a.planning_status
       ORDER BY d.narrative_order,d.id
     `, [projectId]);
     const runs = await this.listProjectRuns(projectId, 5);
@@ -496,7 +648,7 @@ export class NovelPostgresRepository {
     return { id: row.id, title: row.title, currentRevision: Number(row.current_revision), metadata: row.metadata ?? {}, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), documents: documents.rows.map(documentFromRow), latestRuns: runs };
   }
 
-  async ensureDocument(input: { projectId: string; documentId?: string; title: string; narrativeOrder?: number; povCharacterId?: string; status?: string }): Promise<ManuscriptDocumentSummary> {
+  async ensureDocument(input: { projectId: string; documentId?: string; title: string; narrativeOrder?: number; povCharacterId?: string; status?: string; chapterGoal?: string }): Promise<ManuscriptDocumentSummary> {
     await this.ensureProject(input.projectId);
     const id = input.documentId?.trim() || randomUUID();
     const order = input.narrativeOrder ?? await this.nextDocumentOrder(input.projectId);
@@ -504,19 +656,139 @@ export class NovelPostgresRepository {
       VALUES($1,$2,$3,$4,$5,$6)
       ON CONFLICT(project_id,narrative_order) DO UPDATE SET title=EXCLUDED.title,pov_character_id=EXCLUDED.pov_character_id,status=EXCLUDED.status,updated_at=now()
       RETURNING id,project_id,title,narrative_order,pov_character_id,current_revision_id,status,created_at,updated_at`, [id, input.projectId, input.title, order, input.povCharacterId ?? null, input.status ?? "planned"]);
-    return documentFromRow(result.rows[0]);
+    const document = documentFromRow(result.rows[0]);
+    await this.upsertChapterProductionSpec({ projectId: input.projectId, documentId: document.id, chapterGoal: input.chapterGoal });
+    return document;
   }
 
   async updateProject(input: { projectId: string; title?: string; metadata?: Record<string, unknown> }) {
     const result = await this.pool.query<ProjectRow>(`
       UPDATE novel_projects
-      SET title=COALESCE($2, title), metadata=metadata || COALESCE($3, '{}'::jsonb), updated_at=now()
+      SET title=COALESCE($2, title),
+          metadata=(metadata || COALESCE($3, '{}'::jsonb)) - CASE WHEN $2::text IS NULL THEN '__unchanged__' ELSE 'bookTitleCandidates' END,
+          updated_at=now()
       WHERE id=$1
       RETURNING id,title,current_revision,metadata,created_at,updated_at
     `, [input.projectId, input.title ?? null, input.metadata ?? null]);
     if (!result.rowCount) throw new Error("项目不存在");
     await this.appendOutbox("novel-project", input.projectId, "project.updated", { projectId: input.projectId, title: input.title });
     return this.getProjectDetail(input.projectId);
+  }
+
+  async saveBookSynopsisIfCurrent(input: { projectId: string; sourceFingerprint: string; synopsis: BookSynopsisRecord }): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const sectionRows = await client.query<ProjectPlanSectionRow>(
+        `SELECT project_id,task_key,work_item_id,source_artifact_id,status,payload,edit_revision,approved_at,created_at,updated_at
+         FROM project_plan_sections WHERE project_id=$1 FOR UPDATE`,
+        [input.projectId],
+      );
+      const project = await client.query<ProjectRow>(
+        "SELECT id,title,current_revision,metadata,created_at,updated_at FROM novel_projects WHERE id=$1 FOR UPDATE",
+        [input.projectId],
+      );
+      if (!project.rowCount) throw new Error("项目不存在");
+      const byKey = new Map(sectionRows.rows.map((row) => [row.task_key, projectPlanSectionFromRow(row)]));
+      const sections = PROJECT_PLAN_STAGES.flatMap((stage) => {
+        const section = byKey.get(stage.taskKey);
+        return section ? [section] : [];
+      });
+      const currentFingerprint = bookSynopsisSourceFingerprint({ projectTitle: project.rows[0].title, sections });
+      if (currentFingerprint !== input.sourceFingerprint) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query(
+        "UPDATE novel_projects SET metadata=metadata || $2::jsonb,updated_at=now() WHERE id=$1",
+        [input.projectId, { bookSynopsis: input.synopsis }],
+      );
+      await client.query("COMMIT");
+      await this.appendOutbox("novel-project", input.projectId, "project.synopsis-updated", { projectId: input.projectId, sourceFingerprint: input.sourceFingerprint });
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async saveBookTitleCandidatesIfCurrent(input: { projectId: string; sourceFingerprint: string; candidates: BookTitleCandidatesRecord }): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const sectionRows = await client.query<ProjectPlanSectionRow>(
+        `SELECT project_id,task_key,work_item_id,source_artifact_id,status,payload,edit_revision,approved_at,created_at,updated_at
+         FROM project_plan_sections WHERE project_id=$1 FOR UPDATE`,
+        [input.projectId],
+      );
+      const project = await client.query<ProjectRow>(
+        "SELECT id,title,current_revision,metadata,created_at,updated_at FROM novel_projects WHERE id=$1 FOR UPDATE",
+        [input.projectId],
+      );
+      if (!project.rowCount) throw new Error("项目不存在");
+      const byKey = new Map(sectionRows.rows.map((row) => [row.task_key, projectPlanSectionFromRow(row)]));
+      const sections = PROJECT_PLAN_STAGES.flatMap((stage) => {
+        const section = byKey.get(stage.taskKey);
+        return section ? [section] : [];
+      });
+      if (bookTitleSourceFingerprint(sections) !== input.sourceFingerprint) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query(
+        "UPDATE novel_projects SET metadata=metadata || $2::jsonb,updated_at=now() WHERE id=$1",
+        [input.projectId, { bookTitleCandidates: input.candidates }],
+      );
+      await client.query("COMMIT");
+      await this.appendOutbox("novel-project", input.projectId, "project.title-candidates-updated", { projectId: input.projectId, sourceFingerprint: input.sourceFingerprint });
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async selectBookTitleCandidate(input: { projectId: string; sourceFingerprint: string; title: string }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const sectionRows = await client.query<ProjectPlanSectionRow>(
+        `SELECT project_id,task_key,work_item_id,source_artifact_id,status,payload,edit_revision,approved_at,created_at,updated_at
+         FROM project_plan_sections WHERE project_id=$1 FOR UPDATE`,
+        [input.projectId],
+      );
+      const project = await client.query<ProjectRow>(
+        "SELECT id,title,current_revision,metadata,created_at,updated_at FROM novel_projects WHERE id=$1 FOR UPDATE",
+        [input.projectId],
+      );
+      if (!project.rowCount) throw new Error("项目不存在");
+      const byKey = new Map(sectionRows.rows.map((row) => [row.task_key, projectPlanSectionFromRow(row)]));
+      const sections = PROJECT_PLAN_STAGES.flatMap((stage) => {
+        const section = byKey.get(stage.taskKey);
+        return section ? [section] : [];
+      });
+      if (bookTitleSourceFingerprint(sections) !== input.sourceFingerprint) throw new Error("全书规划已变化，请重新生成书名候选");
+      const candidates = parseBookTitleCandidatesMetadata(project.rows[0].metadata);
+      if (!candidates || candidates.sourceFingerprint !== input.sourceFingerprint) throw new Error("书名候选已失效，请重新生成");
+      const selected = candidates.candidates.find((candidate) => candidate.title === input.title.trim());
+      if (!selected) throw new Error("只能选择当前书名候选中的一项");
+      await client.query(
+        "UPDATE novel_projects SET title=$2,metadata=metadata - 'bookTitleCandidates',updated_at=now() WHERE id=$1",
+        [input.projectId, selected.title],
+      );
+      await client.query("COMMIT");
+      await this.appendOutbox("novel-project", input.projectId, "project.title-selected", { projectId: input.projectId, title: selected.title, sourceFingerprint: input.sourceFingerprint });
+      return this.getProjectDetail(input.projectId);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async deleteProject(projectId: string) {
@@ -545,7 +817,7 @@ export class NovelPostgresRepository {
     } finally { client.release(); }
   }
 
-  async updateDocument(input: { projectId: string; documentId: string; title?: string; narrativeOrder?: number; povCharacterId?: string | null; status?: string }): Promise<ManuscriptDocumentSummary> {
+  async updateDocument(input: { projectId: string; documentId: string; title?: string; narrativeOrder?: number; povCharacterId?: string | null; status?: string; chapterGoal?: string }): Promise<ManuscriptDocumentSummary> {
     const result = await this.pool.query<DocumentRow>(`
       UPDATE manuscript_documents
       SET title=COALESCE($3, title),
@@ -557,6 +829,7 @@ export class NovelPostgresRepository {
       RETURNING id,project_id,title,narrative_order,pov_character_id,current_revision_id,status,created_at,updated_at
     `, [input.projectId, input.documentId, input.title ?? null, input.narrativeOrder ?? null, input.povCharacterId !== undefined, input.povCharacterId ?? null, input.status ?? null]);
     if (!result.rowCount) throw new Error("章节不存在");
+    if (input.chapterGoal !== undefined) await this.upsertChapterProductionSpec({ projectId: input.projectId, documentId: input.documentId, chapterGoal: input.chapterGoal });
     await this.appendOutbox("manuscript-document", input.documentId, "document.updated", { projectId: input.projectId, documentId: input.documentId });
     return documentFromRow(result.rows[0]);
   }
@@ -582,14 +855,373 @@ export class NovelPostgresRepository {
     return result.rows;
   }
 
-  async putReview(review: Review) {
+  async putReview(review: Review, options: { refreshChapterSnapshot?: boolean } = {}) {
     // pg 对 JS 数组使用 PostgreSQL array literal 序列化（{elem1,elem2}），而非 JSON。
     // issues 是 JS 对象数组，直接传给 jsonb 列会导致 "invalid input syntax for type json" 错误。
     // 修复：显式 JSON.stringify，让 pg 以字符串参数发送，PostgreSQL 再解析为 jsonb。
     // modelProvenance 是对象，pg 本身会正确序列化为 JSON，但显式 stringify 保持一致性。
     await this.pool.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,model_provenance,score,role,dimension_scores) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO NOTHING", [review.id, review.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.modelProvenance ? JSON.stringify(review.modelProvenance) : null, review.score ?? null, review.role ?? null, JSON.stringify(review.dimensionScores ?? {})]);
-    await this.refreshChapterReviewSnapshot(review.artifactId);
+    if (options.refreshChapterSnapshot !== false) await this.refreshChapterReviewSnapshot(review.artifactId);
     return review;
+  }
+
+  async expireModelTask(taskId: string, reason: string): Promise<void> {
+    await this.pool.query(
+      "UPDATE model_tasks SET status='failed',result=$2,updated_at=now() WHERE id=$1 AND status IN ('pending','claimed','running')",
+      [taskId, { value: { reason, expired: true } }],
+    );
+    await this.pool.query("UPDATE task_attempts SET status='failed',payload=payload || $2 WHERE task_id=$1 AND status IN ('claimed','running')", [taskId, { reason, expired: true }]);
+  }
+
+  async expireWorkflowModelTasks(workflowRunId: string, reason: string): Promise<number> {
+    const result = await this.pool.query(
+      "UPDATE model_tasks SET status='failed',result=$2,updated_at=now() WHERE workflow_run_id=$1 AND status IN ('pending','claimed','running')",
+      [workflowRunId, { text: "", value: { reason } }],
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async listIndexableMemoryClaims(input: { offset?: number; limit?: number; projectId?: string } = {}): Promise<MemoryClaim[]> {
+    const result = await this.pool.query<any>(
+      `SELECT * FROM memory_claims
+       WHERE authority IN ('approved','author','derived') AND ($3::text IS NULL OR project_id=$3)
+       ORDER BY project_id,created_at,id OFFSET $1 LIMIT $2`,
+      [input.offset ?? 0, input.limit ?? 500, input.projectId ?? null],
+    );
+    return result.rows.map((row: any) => ({
+      id: row.id, projectId: row.project_id, kind: row.kind, title: row.title, content: row.content,
+      subjectRefs: row.subject_refs ?? [], narrativeRange: { start: row.narrative_start ?? undefined, end: row.narrative_end ?? undefined },
+      knowledgeScope: row.knowledge_scope, authority: row.authority, confidence: Number(row.confidence),
+      sourceRevisionIds: row.source_revision_ids ?? [], contentHash: row.content_hash, supersedes: row.supersedes ?? [],
+      predicate: row.predicate ?? undefined, sourceArtifactId: row.source_artifact_id ?? undefined,
+    }));
+  }
+
+  async countIndexableMemoryClaims(): Promise<number> {
+    const claims = await this.pool.query<{ count: string }>("SELECT count(*)::text AS count FROM memory_claims WHERE authority IN ('approved','author','derived')");
+    const chapters = await this.pool.query<{ count: string }>("SELECT count(*)::text AS count FROM chapter_memories");
+    return Number(claims.rows[0]?.count ?? 0) + Number(chapters.rows[0]?.count ?? 0);
+  }
+
+  async listAllChapterMemories(input: { offset?: number; limit?: number; projectId?: string } = {}): Promise<ChapterMemory[]> {
+    const result = await this.pool.query<any>("SELECT * FROM chapter_memories WHERE ($3::text IS NULL OR project_id=$3) ORDER BY project_id,narrative_start,id OFFSET $1 LIMIT $2", [input.offset ?? 0, input.limit ?? 500, input.projectId ?? null]);
+    return result.rows.map((row: any) => ({
+      id: row.id, projectId: row.project_id, documentId: row.document_id, revisionId: row.revision_id,
+      narrativeRange: { start: Number(row.narrative_start), end: Number(row.narrative_end) }, summary: row.summary,
+      keyEvents: row.key_events ?? [], characterStates: row.character_states ?? [], unresolvedThreads: row.unresolved_threads ?? [],
+      emotionalArc: row.emotional_arc ?? undefined, fingerprint: row.fingerprint, createdAt: new Date(row.created_at).getTime(),
+    }));
+  }
+
+  async upsertChapterProductionSpec(input: { projectId: string; documentId: string; chapterGoal?: string; blueprint?: Record<string, unknown>; blueprintFingerprint?: string; sourceArtifactId?: string }) {
+    const result = await this.pool.query(`
+      INSERT INTO chapter_production_specs(document_id,project_id,chapter_goal,blueprint,blueprint_fingerprint,source_artifact_id)
+      VALUES($1,$2,$3,$4,$5,$6)
+      ON CONFLICT(document_id) DO UPDATE SET
+        chapter_goal=CASE WHEN $7::boolean THEN EXCLUDED.chapter_goal ELSE chapter_production_specs.chapter_goal END,
+        blueprint=CASE WHEN $8::boolean THEN EXCLUDED.blueprint ELSE chapter_production_specs.blueprint END,
+        blueprint_fingerprint=CASE WHEN $8::boolean THEN EXCLUDED.blueprint_fingerprint ELSE chapter_production_specs.blueprint_fingerprint END,
+        source_artifact_id=CASE WHEN $8::boolean THEN EXCLUDED.source_artifact_id ELSE chapter_production_specs.source_artifact_id END,
+        updated_at=now()
+      RETURNING document_id,project_id,chapter_goal,blueprint,blueprint_fingerprint,source_artifact_id,updated_at
+    `, [input.documentId, input.projectId, input.chapterGoal ?? "", JSON.stringify(input.blueprint ?? {}), input.blueprintFingerprint ?? "", input.sourceArtifactId ?? null, input.chapterGoal !== undefined, input.blueprint !== undefined]);
+    return result.rows[0];
+  }
+
+  async getChapterWorkspace(projectId: string, documentId: string) {
+    const document = await this.pool.query(`
+      SELECT d.id,d.project_id,d.title,d.narrative_order,d.pov_character_id,d.current_revision_id,d.status,d.created_at,d.updated_at,
+        mr.revision,mr.content_hash,cb.object_key,cb.byte_length,
+        cps.chapter_goal,cps.blueprint,cps.blueprint_fingerprint,cps.updated_at AS spec_updated_at,
+        crs.id AS review_id,crs.revision_id AS reviewed_revision_id,crs.reviewed_content_hash,crs.artifact_fingerprint,
+        crs.source_workflow_id,crs.verdict,crs.complete,crs.overall_score,crs.dimension_scores,crs.reviewer_roles,crs.reviewed_at
+      FROM manuscript_documents d
+      LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+      LEFT JOIN content_blobs cb ON cb.content_hash=mr.content_hash
+      LEFT JOIN chapter_production_specs cps ON cps.document_id=d.id
+      LEFT JOIN chapter_review_snapshots crs ON crs.document_id=d.id
+      WHERE d.project_id=$1 AND d.id=$2
+    `, [projectId, documentId]);
+    if (!document.rowCount) return undefined;
+    const row = document.rows[0];
+    const issues = row.review_id ? await this.pool.query(`
+      SELECT id,issue_fingerprint,dimension,severity,title,description,evidence_quote,paragraph,revision_ranges,rule,suggestion,source_roles,status,updated_at
+      FROM chapter_review_snapshot_issues WHERE snapshot_id=$1
+      ORDER BY CASE severity WHEN 'blocker' THEN 0 WHEN 'major' THEN 1 ELSE 2 END,created_at,id
+    `, [row.review_id]) : { rows: [] };
+    const versions = await this.pool.query(`
+      SELECT mr.id,mr.revision,mr.content_hash,mr.retention_class,mr.label,mr.expires_at,mr.created_at,
+        mr.id=d.current_revision_id AS is_current
+      FROM manuscript_revisions mr JOIN manuscript_documents d ON d.id=mr.document_id
+      WHERE mr.project_id=$1 AND mr.document_id=$2
+      ORDER BY mr.revision DESC LIMIT 20
+    `, [projectId, documentId]);
+    return {
+      document: {
+        id: row.id, projectId: row.project_id, title: row.title, narrativeOrder: Number(row.narrative_order),
+        povCharacterId: row.pov_character_id ?? undefined, status: row.status, currentRevisionId: row.current_revision_id ?? undefined,
+        createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
+      },
+      content: row.current_revision_id ? { revisionId: row.current_revision_id, revision: Number(row.revision), contentHash: row.content_hash, objectKey: row.object_key, byteLength: Number(row.byte_length ?? 0) } : undefined,
+      spec: { chapterGoal: row.chapter_goal ?? "", blueprint: row.blueprint ?? {}, blueprintFingerprint: row.blueprint_fingerprint ?? "", updatedAt: row.spec_updated_at ? iso(row.spec_updated_at) : undefined },
+      review: row.review_id ? {
+        id: row.review_id, revisionId: row.reviewed_revision_id ?? undefined, reviewedContentHash: row.reviewed_content_hash,
+        artifactFingerprint: row.artifact_fingerprint, sourceWorkflowId: row.source_workflow_id ?? undefined, verdict: row.verdict,
+        complete: row.complete, overallScore: row.overall_score === null ? undefined : Number(row.overall_score), dimensionScores: row.dimension_scores ?? {},
+        reviewerRoles: row.reviewer_roles ?? [], reviewedAt: iso(row.reviewed_at), stale: row.reviewed_content_hash !== row.content_hash,
+        issues: issues.rows.map((issue) => ({ id: issue.id, fingerprint: issue.issue_fingerprint, dimension: issue.dimension ?? undefined, severity: issue.severity, title: issue.title, description: issue.description ?? undefined, evidenceQuote: issue.evidence_quote, paragraph: issue.paragraph ?? undefined, revisionRanges: issue.revision_ranges ?? [], rule: issue.rule ?? undefined, suggestion: issue.suggestion ?? undefined, sourceRoles: issue.source_roles ?? [], status: issue.status, updatedAt: iso(issue.updated_at) })),
+      } : undefined,
+      versions: versions.rows.map((version) => ({ id: version.id, revision: Number(version.revision), contentHash: version.content_hash, retentionClass: version.retention_class, label: version.label ?? undefined, expiresAt: version.expires_at ? iso(version.expires_at) : undefined, createdAt: iso(version.created_at), current: version.is_current })),
+    };
+  }
+
+  async updateChapterReviewIssueStatus(input: { projectId: string; documentId: string; issueId: string; status: ChapterReviewIssueStatus }) {
+    const result = await this.pool.query(`
+      UPDATE chapter_review_snapshot_issues i SET status=$4,updated_at=now()
+      FROM chapter_review_snapshots s
+      WHERE i.snapshot_id=s.id AND s.project_id=$1 AND s.document_id=$2 AND i.id=$3
+      RETURNING i.id,i.status,i.updated_at
+    `, [input.projectId, input.documentId, input.issueId, input.status]);
+    if (!result.rowCount) throw new Error("审核意见不存在");
+    return { id: result.rows[0].id, status: result.rows[0].status, updatedAt: iso(result.rows[0].updated_at) };
+  }
+
+  async addChapterReviewIssue(input: {
+    projectId: string;
+    documentId: string;
+    severity: ReviewIssue["severity"];
+    title: string;
+    description?: string;
+    evidenceQuote?: string;
+    paragraph?: number;
+    suggestion?: string;
+  }) {
+    const title = input.title.trim();
+    const evidenceQuote = input.evidenceQuote?.trim() || title;
+    const suggestion = input.suggestion?.trim() || undefined;
+    if (!title) throw new Error("审核意见标题不能为空");
+    const snapshot = await this.pool.query<{ id: string; reviewed_content_hash: string; current_content_hash: string | null; complete: boolean }>(`
+      SELECT s.id,s.reviewed_content_hash,mr.content_hash AS current_content_hash,s.complete
+      FROM chapter_review_snapshots s
+      JOIN manuscript_documents d ON d.id=s.document_id AND d.project_id=s.project_id
+      LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+      WHERE s.project_id=$1 AND s.document_id=$2
+    `, [input.projectId, input.documentId]);
+    const current = snapshot.rows[0];
+    if (!current?.complete) throw new Error("当前章节没有完整审核快照");
+    if (!current.current_content_hash || current.reviewed_content_hash !== current.current_content_hash) throw new Error("审核快照已过期，请先重新审校当前正文");
+    const issue: ReviewIssue = {
+      severity: input.severity,
+      title,
+      description: input.description?.trim() || undefined,
+      evidence: evidenceQuote,
+      excerpt: evidenceQuote,
+      paragraph: input.paragraph,
+      revisionRanges: input.paragraph ? [{ start: input.paragraph, end: input.paragraph }] : [],
+      suggestion,
+      rule: "author-review-note",
+    };
+    const id = randomUUID();
+    const fingerprint = `author:${reviewIssueFingerprint(issue)}:${id}`;
+    const result = await this.pool.query(`
+      INSERT INTO chapter_review_snapshot_issues(id,snapshot_id,issue_fingerprint,dimension,severity,title,description,evidence_quote,paragraph,revision_ranges,rule,suggestion,source_roles,status)
+      VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
+      RETURNING id,issue_fingerprint,dimension,severity,title,description,evidence_quote,paragraph,revision_ranges,rule,suggestion,source_roles,status,updated_at
+    `, [id, current.id, fingerprint, input.severity, title, issue.description ?? null, evidenceQuote, input.paragraph ?? null, JSON.stringify(issue.revisionRanges), issue.rule, suggestion ?? null, ["author"]]);
+    const row = result.rows[0];
+    return { id: row.id, fingerprint: row.issue_fingerprint, dimension: row.dimension ?? undefined, severity: row.severity, title: row.title, description: row.description ?? undefined, evidenceQuote: row.evidence_quote, paragraph: row.paragraph ?? undefined, revisionRanges: row.revision_ranges ?? [], rule: row.rule ?? undefined, suggestion: row.suggestion ?? undefined, sourceRoles: row.source_roles ?? [], status: row.status, updatedAt: iso(row.updated_at) };
+  }
+
+  async getTargetedChapterReviewIssues(input: { projectId: string; documentId: string; issueIds: string[] }): Promise<{ snapshotId: string; reviewedContentHash: string; fingerprints: string[]; issues: ReviewIssue[] }> {
+    const issueIds = [...new Set(input.issueIds.map((id) => id.trim()).filter(Boolean))];
+    if (!issueIds.length) throw new Error("至少选择一条待处理审核意见");
+    if (issueIds.length !== input.issueIds.length) throw new Error("目标审核意见不能重复");
+    const snapshot = await this.pool.query<{ id: string; reviewed_content_hash: string; current_content_hash: string | null; complete: boolean }>(`
+      SELECT s.id,s.reviewed_content_hash,mr.content_hash AS current_content_hash,s.complete
+      FROM chapter_review_snapshots s
+      JOIN manuscript_documents d ON d.id=s.document_id AND d.project_id=s.project_id
+      LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+      WHERE s.project_id=$1 AND s.document_id=$2
+    `, [input.projectId, input.documentId]);
+    const current = snapshot.rows[0];
+    if (!current?.complete) throw new Error("当前章节没有完整审核快照");
+    if (!current.current_content_hash || current.reviewed_content_hash !== current.current_content_hash) throw new Error("审核快照已过期，请先重新审校当前正文");
+    const rows = await this.pool.query<{
+      id: string; issue_fingerprint: string; dimension: string | null; severity: ReviewIssue["severity"]; title: string; description: string | null;
+      evidence_quote: string; paragraph: number | null; revision_ranges: Array<{ start: number; end: number }> | null;
+      rule: string | null; suggestion: string | null; status: ChapterReviewIssueStatus;
+    }>(`
+      SELECT id,issue_fingerprint,dimension,severity,title,description,evidence_quote,paragraph,revision_ranges,rule,suggestion,status
+      FROM chapter_review_snapshot_issues
+      WHERE snapshot_id=$1 AND id=ANY($2::text[])
+      ORDER BY id
+    `, [current.id, issueIds]);
+    if (rows.rowCount !== issueIds.length) throw new Error("部分审核意见不属于当前章节快照");
+    if (rows.rows.some((row) => row.status !== "pending")) throw new Error("只能修复状态为待处理的审核意见");
+    const issues = rows.rows.map((row): ReviewIssue => ({
+      dimension: row.dimension ?? undefined,
+      severity: row.severity,
+      title: row.title,
+      description: row.description ?? undefined,
+      evidence: row.evidence_quote,
+      excerpt: row.evidence_quote,
+      paragraph: row.paragraph ?? undefined,
+      revisionRanges: row.revision_ranges ?? [],
+      rule: row.rule ?? undefined,
+      suggestion: row.suggestion ?? undefined,
+    }));
+    if (issues.some((issue) => !issue.revisionRanges?.length && !issue.paragraph && !issue.excerpt?.trim())) throw new Error("所选审核意见缺少可定位的正文证据");
+    return { snapshotId: current.id, reviewedContentHash: current.reviewed_content_hash, fingerprints: rows.rows.map((row) => row.issue_fingerprint), issues };
+  }
+
+  async saveManualRevision(input: { projectId: string; documentId: string; expectedContentHash: string; text: string; contentHash: string; objectKey: string; label?: string }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query<{ current_revision: string; current_revision_id: string | null; content_hash: string | null }>(`
+        SELECT p.current_revision,d.current_revision_id,mr.content_hash
+        FROM novel_projects p JOIN manuscript_documents d ON d.project_id=p.id
+        LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+        WHERE p.id=$1 AND d.id=$2 FOR UPDATE OF p,d
+      `, [input.projectId, input.documentId]);
+      if (!current.rowCount) throw new Error("章节不存在");
+      if ((current.rows[0].content_hash ?? "") !== input.expectedContentHash) throw new Error("正文已被其他操作更新，请刷新后重新编辑");
+      if (input.contentHash === input.expectedContentHash) {
+        await client.query("COMMIT");
+        return { unchanged: true, revisionId: current.rows[0].current_revision_id, revision: Number(current.rows[0].current_revision), contentHash: input.contentHash };
+      }
+      const revision = Number(current.rows[0].current_revision) + 1;
+      const revisionId = randomUUID();
+      if (current.rows[0].current_revision_id) await client.query("UPDATE manuscript_revisions SET retention_class='rolling',expires_at=COALESCE(expires_at,now()+interval '30 days') WHERE id=$1 AND retention_class<>'named'", [current.rows[0].current_revision_id]);
+      await client.query("INSERT INTO content_blobs(content_hash,object_key,byte_length,word_count) VALUES($1,$2,$3,$4) ON CONFLICT(content_hash) DO UPDATE SET word_count=COALESCE(content_blobs.word_count,EXCLUDED.word_count)", [input.contentHash, input.objectKey, Buffer.byteLength(input.text, "utf8"), countNovelCharacters(input.text)]);
+      await client.query(`
+        INSERT INTO manuscript_revisions(id,project_id,document_id,revision,base_revision,content_hash,retention_class,label,expires_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,CASE WHEN $7='named' THEN NULL ELSE now()+interval '30 days' END)
+      `, [revisionId, input.projectId, input.documentId, revision, Number(current.rows[0].current_revision), input.contentHash, input.label ? "named" : "rolling", input.label ?? null]);
+      await client.query("UPDATE manuscript_documents SET current_revision_id=$1,status='final',updated_at=now() WHERE id=$2", [revisionId, input.documentId]);
+      await client.query("UPDATE novel_projects SET current_revision=$1,updated_at=now() WHERE id=$2", [revision, input.projectId]);
+      await this.appendOutboxTx(client, "manuscript-revision", revisionId, "manuscript-revision.saved", { projectId: input.projectId, documentId: input.documentId, revision, contentHash: input.contentHash, source: "web-author" });
+      await client.query("COMMIT");
+      return { unchanged: false, revisionId, revision, contentHash: input.contentHash };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async nameManuscriptVersion(input: { projectId: string; documentId: string; revisionId: string; label: string }) {
+    const result = await this.pool.query(`UPDATE manuscript_revisions SET retention_class='named',label=$4,expires_at=NULL
+      WHERE id=$3 AND project_id=$1 AND document_id=$2 RETURNING id,revision,content_hash,label,created_at`, [input.projectId, input.documentId, input.revisionId, input.label]);
+    if (!result.rowCount) throw new Error("正文版本不存在");
+    return { id: result.rows[0].id, revision: Number(result.rows[0].revision), contentHash: result.rows[0].content_hash, label: result.rows[0].label, createdAt: iso(result.rows[0].created_at) };
+  }
+
+  async restoreManuscriptVersion(input: { projectId: string; documentId: string; revisionId: string }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const source = await client.query<{ content_hash: string }>("SELECT content_hash FROM manuscript_revisions WHERE id=$3 AND project_id=$1 AND document_id=$2", [input.projectId, input.documentId, input.revisionId]);
+      if (!source.rowCount) throw new Error("正文版本不存在");
+      const head = await client.query<{ current_revision: string; current_revision_id: string | null }>("SELECT p.current_revision,d.current_revision_id FROM novel_projects p JOIN manuscript_documents d ON d.project_id=p.id WHERE p.id=$1 AND d.id=$2 FOR UPDATE OF p,d", [input.projectId, input.documentId]);
+      if (!head.rowCount) throw new Error("章节不存在");
+      if (head.rows[0].current_revision_id) await client.query("UPDATE manuscript_revisions SET retention_class='rolling',expires_at=COALESCE(expires_at,now()+interval '30 days') WHERE id=$1 AND retention_class<>'named'", [head.rows[0].current_revision_id]);
+      const revision = Number(head.rows[0].current_revision) + 1;
+      const revisionId = randomUUID();
+      await client.query("INSERT INTO manuscript_revisions(id,project_id,document_id,revision,base_revision,content_hash,retention_class,expires_at) VALUES($1,$2,$3,$4,$5,$6,'rolling',now()+interval '30 days')", [revisionId, input.projectId, input.documentId, revision, Number(head.rows[0].current_revision), source.rows[0].content_hash]);
+      await client.query("UPDATE manuscript_documents SET current_revision_id=$1,status='final',updated_at=now() WHERE id=$2", [revisionId, input.documentId]);
+      await client.query("UPDATE novel_projects SET current_revision=$1,updated_at=now() WHERE id=$2", [revision, input.projectId]);
+      await this.appendOutboxTx(client, "manuscript-revision", revisionId, "manuscript-revision.restored", { projectId: input.projectId, documentId: input.documentId, revision, sourceRevisionId: input.revisionId });
+      await client.query("COMMIT");
+      return { revisionId, revision, contentHash: source.rows[0].content_hash };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async cleanupExpiredChapterData(cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) {
+    const eligible = await this.pool.query<WorkflowRunRow>(`
+      SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at
+      FROM workflow_runs
+      WHERE status IN ('completed','succeeded') AND updated_at<$1
+        AND (workflow_type='chapter-review' OR payload#>>'{intent,target,kind}'='chapter' OR payload->>'documentId' IS NOT NULL)
+        AND NOT (payload ? 'diagnosticsCleanedAt')
+      ORDER BY updated_at LIMIT 100
+    `, [cutoff]);
+    let artifactsDeleted = 0;
+    let runsCompacted = 0;
+    for (const run of eligible.rows) {
+      const client = await this.pool.connect();
+      try {
+        await client.query("BEGIN");
+        const locked = await client.query<WorkflowRunRow>("SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at FROM workflow_runs WHERE id=$1 FOR UPDATE", [run.id]);
+        if (!locked.rowCount || locked.rows[0].payload?.diagnosticsCleanedAt) { await client.query("COMMIT"); continue; }
+        const current = locked.rows[0];
+        const documentId = typeof current.payload.documentId === "string"
+          ? current.payload.documentId
+          : typeof (current.payload.intent as { target?: { id?: unknown } } | undefined)?.target?.id === "string"
+            ? (current.payload.intent as { target: { id: string } }).target.id
+            : null;
+        const artifactRows = await client.query<{ id: string }>("SELECT id FROM artifacts WHERE project_id=$1 AND (payload->>'workflowId'=$2 OR payload->>'runId'=$2)", [current.project_id, current.temporal_workflow_id]);
+        const artifactIds = artifactRows.rows.map((row) => row.id);
+        const reviewCount = artifactIds.length ? await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM reviews WHERE artifact_id=ANY($1::text[])", [artifactIds]) : { rows: [{ count: "0" }] };
+        const eventCount = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM outbox_events WHERE (aggregate_type='workflow-run' AND aggregate_id=$1) OR payload->>'workflowId'=$1 OR payload->>'runId'=$1", [current.temporal_workflow_id]);
+        const usage = await client.query<{ calls: string; input_tokens: string; output_tokens: string }>("SELECT COUNT(*)::text AS calls,COALESCE(SUM(input_tokens),0)::text AS input_tokens,COALESCE(SUM(output_tokens),0)::text AS output_tokens FROM model_invocations WHERE workflow_run_id=$1", [current.temporal_workflow_id]);
+        const elapsedMs = Math.max(0, new Date(current.updated_at).getTime() - new Date(current.created_at).getTime());
+        const finalStage = typeof current.payload.stage === "string" ? current.payload.stage : null;
+        const failureSummary = typeof current.payload.error === "string" ? current.payload.error.slice(0, 1000) : null;
+        await client.query(`
+          INSERT INTO workflow_run_summaries(workflow_run_id,project_id,document_id,workflow_type,final_status,final_stage,elapsed_ms,failure_summary,metrics,cleaned_at,completed_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),$10)
+          ON CONFLICT(workflow_run_id) DO UPDATE SET cleaned_at=EXCLUDED.cleaned_at,metrics=EXCLUDED.metrics
+        `, [current.id, current.project_id, documentId, current.workflow_type, current.status, finalStage, elapsedMs, failureSummary, {
+          artifacts: artifactIds.length, reviews: Number(reviewCount.rows[0]?.count ?? 0), events: Number(eventCount.rows[0]?.count ?? 0),
+          modelCalls: Number(usage.rows[0]?.calls ?? 0), inputTokens: Number(usage.rows[0]?.input_tokens ?? 0), outputTokens: Number(usage.rows[0]?.output_tokens ?? 0),
+        }, current.updated_at]);
+        if (artifactIds.length) {
+          await client.query("UPDATE manuscript_revisions SET artifact_id=NULL WHERE artifact_id=ANY($1::text[])", [artifactIds]);
+          await client.query("DELETE FROM artifacts WHERE id=ANY($1::text[])", [artifactIds]);
+        }
+        await client.query("DELETE FROM task_attempts WHERE workflow_run_id=$1 OR workflow_run_id=$2", [current.id, current.temporal_workflow_id]);
+        await client.query("DELETE FROM model_tasks WHERE workflow_run_id=$1", [current.temporal_workflow_id]);
+        await client.query("DELETE FROM outbox_events WHERE (aggregate_type='workflow-run' AND aggregate_id=$1) OR payload->>'workflowId'=$1 OR payload->>'runId'=$1", [current.temporal_workflow_id]);
+        const compactPayload = {
+          documentId, finalScore: typeof current.payload.finalScore === "number" ? current.payload.finalScore : undefined,
+          reasonCode: typeof current.payload.reasonCode === "string" ? current.payload.reasonCode : undefined,
+          diagnosticsCleanedAt: new Date().toISOString(),
+        };
+        await client.query("UPDATE workflow_runs SET payload=$2 WHERE id=$1", [current.id, compactPayload]);
+        await client.query("COMMIT");
+        artifactsDeleted += artifactIds.length;
+        runsCompacted += 1;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    await this.pool.query(`
+      WITH ranked AS (
+        SELECT mr.id,mr.document_id,mr.expires_at,mr.id=d.current_revision_id AS is_current,
+          ROW_NUMBER() OVER(PARTITION BY mr.document_id ORDER BY mr.revision DESC) AS position
+        FROM manuscript_revisions mr JOIN manuscript_documents d ON d.id=mr.document_id
+        WHERE mr.retention_class='rolling'
+      )
+      DELETE FROM manuscript_revisions mr USING ranked r
+      WHERE mr.id=r.id AND NOT r.is_current AND (r.expires_at<now() OR r.position>10)
+    `);
+    const orphaned = await this.pool.query<{ content_hash: string; object_key: string }>(`
+      DELETE FROM content_blobs cb
+      WHERE NOT EXISTS (SELECT 1 FROM manuscript_revisions mr WHERE mr.content_hash=cb.content_hash)
+        AND NOT EXISTS (SELECT 1 FROM manuscript_blocks mb WHERE mb.content_hash=cb.content_hash)
+        AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.content_hash=cb.content_hash)
+      RETURNING content_hash,object_key
+    `);
+    return { runsCompacted, artifactsDeleted, orphanedObjects: orphaned.rows.map((row) => ({ contentHash: row.content_hash, objectKey: row.object_key })) };
   }
 
   async refreshChapterReviewSnapshot(artifactId: string, revisionId?: string): Promise<boolean> {
@@ -613,13 +1245,22 @@ export class NovelPostgresRepository {
     }>(`
       SELECT a.project_id,a.content_hash,a.fingerprint,
         COALESCE(a.payload->>'workflowId',a.payload->>'runId') AS workflow_id,
-        COALESCE(w.payload->>'documentId',w.payload#>>'{intent,target,id}') AS document_id
+        COALESCE(w.payload->>'documentId',w.payload#>>'{intent,target,id}',mr.document_id) AS document_id
       FROM artifacts a
       LEFT JOIN workflow_runs w ON w.temporal_workflow_id=COALESCE(a.payload->>'workflowId',a.payload->>'runId')
+      LEFT JOIN manuscript_revisions mr ON mr.artifact_id=a.id
       WHERE a.id=$1
     `, [artifactId]);
     const target = subject.rows[0];
     if (!target?.document_id) return false;
+    if (!revisionId) {
+      const current = await client.query<{ content_hash: string | null }>(`
+        SELECT mr.content_hash FROM manuscript_documents d
+        LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+        WHERE d.id=$1 AND d.project_id=$2
+      `, [target.document_id, target.project_id]);
+      if (!current.rows[0]?.content_hash || current.rows[0].content_hash !== target.content_hash) return false;
+    }
 
     const rows = await client.query<{
       id: string; project_id: string; artifact_id: string; reviewer_id: string; identity: Review["identity"];
@@ -647,7 +1288,7 @@ export class NovelPostgresRepository {
       INSERT INTO chapter_review_snapshots(id,document_id,project_id,revision_id,reviewed_content_hash,artifact_fingerprint,source_workflow_id,verdict,complete,overall_score,dimension_scores,reviewer_roles,reviewed_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12)
       ON CONFLICT(document_id) DO UPDATE SET
-        revision_id=COALESCE(EXCLUDED.revision_id,chapter_review_snapshots.revision_id),reviewed_content_hash=EXCLUDED.reviewed_content_hash,
+        revision_id=EXCLUDED.revision_id,reviewed_content_hash=EXCLUDED.reviewed_content_hash,
         artifact_fingerprint=EXCLUDED.artifact_fingerprint,source_workflow_id=EXCLUDED.source_workflow_id,verdict=EXCLUDED.verdict,
         complete=TRUE,overall_score=EXCLUDED.overall_score,dimension_scores=EXCLUDED.dimension_scores,reviewer_roles=EXCLUDED.reviewer_roles,
         reviewed_at=EXCLUDED.reviewed_at,updated_at=now()
@@ -784,6 +1425,40 @@ export class NovelPostgresRepository {
     const row = workflowFromRow(result.rows[0]);
     await this.appendOutbox("workflow-run", row.temporalWorkflowId, `workflow.${status}`, { projectId: row.projectId, workflowId: row.temporalWorkflowId, runId: row.id, ...payload });
     return row;
+  }
+
+  async claimHumanDecision(input: { workflowId: string; artifactId: string; decision: "approve" | "reject" | "revise"; authorId: string; feedback?: string }) {
+    const submittedAt = new Date().toISOString();
+    const claim = {
+      artifactId: input.artifactId,
+      decision: input.decision,
+      authorId: input.authorId,
+      ...(input.feedback ? { feedback: input.feedback } : {}),
+      submittedAt,
+    };
+    const result = await this.pool.query<WorkflowRunRow>(
+      `UPDATE workflow_runs
+       SET payload=payload || jsonb_build_object('pendingHumanDecision',$3::jsonb),updated_at=now()
+       WHERE temporal_workflow_id=$1
+         AND status='manual-review-required'
+         AND payload->>'artifactId'=$2
+         AND COALESCE(payload->'pendingHumanDecision'->>'artifactId','')<>$2
+       RETURNING id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at`,
+      [input.workflowId, input.artifactId, JSON.stringify(claim)],
+    );
+    return result.rows[0] ? workflowFromRow(result.rows[0]) : undefined;
+  }
+
+  async releaseHumanDecisionClaim(workflowId: string, artifactId: string) {
+    const result = await this.pool.query<WorkflowRunRow>(
+      `UPDATE workflow_runs
+       SET payload=payload-'pendingHumanDecision',updated_at=now()
+       WHERE temporal_workflow_id=$1
+         AND payload->'pendingHumanDecision'->>'artifactId'=$2
+       RETURNING id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at`,
+      [workflowId, artifactId],
+    );
+    return result.rows[0] ? workflowFromRow(result.rows[0]) : undefined;
   }
 
   async getWorkflowRunByTemporalId(temporalWorkflowId: string) {
@@ -1097,7 +1772,7 @@ export class NovelPostgresRepository {
       const ordinalResult = await client.query<{ ordinal: number }>("SELECT COALESCE(MAX(ordinal),0)+1 AS ordinal FROM arcs WHERE project_id=$1", [input.projectId]);
       const ordinal = Number(ordinalResult.rows[0]?.ordinal ?? 1);
       arcId = randomUUID();
-      const payload = { title: `故事弧 ${ordinal}`, objective: input.authorIntent || "依据当前宏观规划和已定稿故事状态，形成一个完整的小故事", entryState: "", centralConflict: "", development: [], resolution: "", exitState: "", plotThreadRefs: [], foreshadowingRefs: [], expectedChapterCount: 0, authorIntent: input.authorIntent, workflowId: input.workflowId };
+      const payload = { title: `故事弧 ${ordinal}`, objective: input.authorIntent || "依据当前宏观规划和已定稿故事状态，形成一个完整的小故事", entryState: "", centralConflict: "", development: [], resolution: "", exitState: "", plotThreadRefs: [], foreshadowingRefs: [], expectedChapterCount: 0, phases: [], authorIntent: input.authorIntent, workflowId: input.workflowId };
       await client.query(
         `INSERT INTO arcs(id,volume_id,project_id,title,ordinal,planning_status,execution_status,payload)
          VALUES($1,$2,$3,$4,$5,'generating','planned',$6)`,
@@ -1136,10 +1811,26 @@ export class NovelPostgresRepository {
         "SELECT GREATEST(COALESCE((SELECT MAX(ordinal) FROM chapters WHERE project_id=$1),0),COALESCE((SELECT MAX(narrative_order) FROM manuscript_documents WHERE project_id=$1),0))+1 AS ordinal",
         [input.projectId],
       );
-      const baseOrder = minExisting ?? Number(next.rows[0]?.ordinal ?? 1);
+      const baseOrder = input.bundle.batch.batchIndex === 1 ? minExisting ?? Number(next.rows[0]?.ordinal ?? 1) : Number(next.rows[0]?.ordinal ?? 1);
+      const batchId = `batch:${input.arcId}:${input.bundle.batch.batchIndex}`;
+      const isInitialBatch = input.bundle.batch.batchIndex === 1;
+      if (!isInitialBatch && current.rows[0].planning_status !== "approved") throw new Error("上一故事弧批次尚未批准");
+      if (!isInitialBatch) {
+        const approvedArc = current.rows[0].payload as NarrativeArcPlan;
+        for (const field of ["title", "objective", "entryState", "exitState", "expectedChapterCount"] as const) {
+          if (JSON.stringify(input.bundle.arc[field]) !== JSON.stringify(approvedArc[field])) throw new Error(`后续批次不得改写故事弧边界：${field}`);
+        }
+      }
+      await client.query(
+        `INSERT INTO story_arc_batches(id,arc_id,project_id,batch_index,start_chapter_index,end_chapter_index,status,source_artifact_id,payload)
+         VALUES($1,$2,$3,$4,$5,$6,'awaiting-review',$7,$8)
+         ON CONFLICT(arc_id,batch_index) DO UPDATE SET end_chapter_index=EXCLUDED.end_chapter_index,status='awaiting-review',source_artifact_id=EXCLUDED.source_artifact_id,payload=EXCLUDED.payload,updated_at=now()`,
+        [batchId, input.arcId, input.projectId, input.bundle.batch.batchIndex, input.bundle.batch.startChapterIndex, input.bundle.batch.startChapterIndex + input.bundle.chapters.length - 1, input.artifact.id, input.bundle.batch],
+      );
       const keptIds: string[] = [];
       for (const chapter of input.bundle.chapters) {
-        const previous = existingByLocal.get(chapter.index);
+        const globalIndex = input.bundle.batch.startChapterIndex + chapter.index - 1;
+        const previous = existingByLocal.get(globalIndex);
         const linkedDocument = previous?.document_id ? linkedDocumentById.get(previous.document_id) : undefined;
         const isProtected = Boolean(linkedDocument && (linkedDocument.status !== "planned" || linkedDocument.current_revision_id));
         const chapterId = previous?.id ?? chapter.id ?? randomUUID();
@@ -1147,11 +1838,11 @@ export class NovelPostgresRepository {
         keptIds.push(chapterId);
         if (previous && isProtected) continue;
         await client.query(
-          `INSERT INTO chapters(id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision,updated_at)
-           VALUES($1,$2,$3,$4,$5,$6,'planned',$7,$8,$9,now())
+          `INSERT INTO chapters(id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision,batch_id,batch_index,updated_at)
+           VALUES($1,$2,$3,$4,$5,$6,'planned',$7,$8,$9,$10,$11,now())
            ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,payload=EXCLUDED.payload,source_artifact_id=EXCLUDED.source_artifact_id,
-             blueprint_revision=chapters.blueprint_revision+1,updated_at=now()`,
-          [chapterId, input.arcId, input.projectId, previous?.document_id ?? null, chapter.title, globalOrder, { ...chapter, id: chapterId }, input.artifact.id, previous ? Number(previous.blueprint_revision) + 1 : 0],
+             blueprint_revision=chapters.blueprint_revision+1,batch_id=EXCLUDED.batch_id,batch_index=EXCLUDED.batch_index,updated_at=now()`,
+          [chapterId, input.arcId, input.projectId, previous?.document_id ?? null, chapter.title, globalOrder, { ...chapter, id: chapterId, index: globalIndex }, input.artifact.id, previous ? Number(previous.blueprint_revision) + 1 : 0, batchId, input.bundle.batch.batchIndex],
         );
         if (!isProtected) {
           await client.query("DELETE FROM scenes WHERE chapter_id=$1", [chapterId]);
@@ -1161,13 +1852,17 @@ export class NovelPostgresRepository {
           }
         }
       }
-      const removable = existing.rows.filter((row) => !keptIds.includes(row.id) && !row.document_id).map((row) => row.id);
+      const batchEnd = input.bundle.batch.startChapterIndex + input.bundle.chapters.length - 1;
+      const removable = existing.rows.filter((row) => {
+        const index = Number(row.payload?.index ?? 0);
+        return index >= input.bundle.batch.startChapterIndex && index <= batchEnd && !keptIds.includes(row.id) && !row.document_id;
+      }).map((row) => row.id);
       if (removable.length) await client.query("DELETE FROM chapters WHERE id=ANY($1::text[])", [removable]);
       await client.query(
-        `UPDATE arcs SET title=$3,payload=$4,source_artifact_id=COALESCE(source_artifact_id,$5),blueprint_artifact_id=$5,
+        `UPDATE arcs SET title=CASE WHEN $7 THEN $3 ELSE title END,payload=CASE WHEN $7 THEN $4 ELSE payload END,source_artifact_id=COALESCE(source_artifact_id,$5),blueprint_artifact_id=$5,
            planning_status='awaiting-review',context_fingerprint=NULL,approved_at=NULL,
            edit_revision=edit_revision+$6,updated_at=now() WHERE id=$1 AND project_id=$2`,
-        [input.arcId, input.projectId, input.bundle.arc.title, input.bundle.arc, input.artifact.id, input.edited ? 1 : 0],
+        [input.arcId, input.projectId, input.bundle.arc.title, input.bundle.arc, input.artifact.id, input.edited ? 1 : 0, isInitialBatch],
       );
       await client.query(
         "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,$3,'story-arc',$4,$5)",
@@ -1191,9 +1886,10 @@ export class NovelPostgresRepository {
   }
 
   async getStoryArc(projectId: string, arcId: string): Promise<StoryArcRecord | undefined> {
-    const [arcResult, chapterResult] = await Promise.all([
+    const [arcResult, chapterResult, batchResult] = await Promise.all([
       this.pool.query<ArcRow>("SELECT * FROM arcs WHERE id=$1 AND project_id=$2", [arcId, projectId]),
       this.pool.query<ChapterBlueprintRow>("SELECT id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision FROM chapters WHERE arc_id=$1 AND project_id=$2 ORDER BY ordinal", [arcId, projectId]),
+      this.pool.query<StoryArcBatchRow>("SELECT * FROM story_arc_batches WHERE arc_id=$1 AND project_id=$2 ORDER BY batch_index", [arcId, projectId]),
     ]);
     const row = arcResult.rows[0];
     if (!row) return undefined;
@@ -1206,6 +1902,7 @@ export class NovelPostgresRepository {
       executionStatus: row.execution_status,
       arc: row.payload,
       chapters: chapterResult.rows.map(chapterBlueprintFromRow),
+      batches: batchResult.rows.map((batch) => ({ id: batch.id, arcId: batch.arc_id, projectId: batch.project_id, batchIndex: Number(batch.batch_index), startChapterIndex: Number(batch.start_chapter_index), endChapterIndex: Number(batch.end_chapter_index), complete: batch.payload?.complete === true, status: batch.status, entryFingerprint: batch.entry_fingerprint, sourceArtifactId: batch.source_artifact_id ?? undefined, approvedAt: batch.approved_at ? iso(batch.approved_at) : undefined })),
       sourceArtifactId: row.source_artifact_id ?? undefined,
       blueprintArtifactId: row.blueprint_artifact_id ?? undefined,
       contextFingerprint: row.context_fingerprint ?? undefined,
@@ -1215,6 +1912,45 @@ export class NovelPostgresRepository {
       abandonedAt: row.abandoned_at ? iso(row.abandoned_at) : undefined,
       updatedAt: iso(row.updated_at),
     };
+  }
+
+  async prepareNextStoryArcBatch(projectId: string, arcId: string): Promise<{ batchIndex: number; startChapterIndex: number }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const arc = await client.query<ArcRow>("SELECT * FROM arcs WHERE id=$1 AND project_id=$2 FOR UPDATE", [arcId, projectId]);
+      if (!arc.rowCount || arc.rows[0].planning_status !== "approved" || arc.rows[0].execution_status !== "active") throw new Error("故事弧当前不可生成下一批次");
+      const batches = await client.query<StoryArcBatchRow>("SELECT * FROM story_arc_batches WHERE arc_id=$1 ORDER BY batch_index FOR UPDATE", [arcId]);
+      const last = batches.rows.at(-1);
+      if (!last || last.status !== "approved" || last.payload?.complete === true) throw new Error("上一批次未批准或故事弧已完成");
+      if (Number(last.end_chapter_index) >= Number((arc.rows[0].payload as NarrativeArcPlan).expectedChapterCount ?? Number.POSITIVE_INFINITY)) throw new Error("故事弧已达到预计章节数，请先完成或调整弧计划");
+      if (batches.rows.some((batch) => batch.status === "generating" || batch.status === "awaiting-review")) throw new Error("已有批次正在生成或等待审核");
+      const progress = await client.query<{ planned: string; finalized: string }>(
+        `SELECT count(*)::text AS planned,count(*) FILTER (WHERE d.status='final')::text AS finalized
+         FROM chapters c LEFT JOIN manuscript_documents d ON d.id=c.document_id WHERE c.batch_id=$1`, [last.id],
+      );
+      if (!canGenerateNextStoryArcBatch({ plannedInBatch: Number(progress.rows[0]?.planned ?? 0), finalizedInBatch: Number(progress.rows[0]?.finalized ?? 0), batchStatus: last.status })) {
+        throw new Error("当前批次尚未达到 70% 定稿门槛");
+      }
+      const batchIndex = Number(last.batch_index) + 1;
+      const startChapterIndex = Number(last.end_chapter_index) + 1;
+      const id = `batch:${arcId}:${batchIndex}`;
+      const entryFingerprint = createHash("sha256").update(JSON.stringify({ arcId, batchIndex, startChapterIndex, finalized: progress.rows[0]?.finalized, updatedAt: arc.rows[0].updated_at })).digest("hex");
+      await client.query(`INSERT INTO story_arc_batches(id,arc_id,project_id,batch_index,start_chapter_index,end_chapter_index,status,entry_fingerprint,payload)
+        VALUES($1,$2,$3,$4,$5,$5,'generating',$6,$7)`, [id, arcId, projectId, batchIndex, startChapterIndex, entryFingerprint, { complete: false }]);
+      await client.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,'runtime','story-arc-batch.started','story-arc-batch',$2,$3)", [projectId, id, { arcId, batchIndex, startChapterIndex, entryFingerprint }]);
+      await client.query("COMMIT");
+      return { batchIndex, startChapterIndex };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async failStoryArcBatch(projectId: string, arcId: string, batchIndex: number, reason: string): Promise<void> {
+    await this.pool.query("UPDATE story_arc_batches SET status='failed',payload=payload || $4,updated_at=now() WHERE project_id=$1 AND arc_id=$2 AND batch_index=$3 AND status='generating'", [projectId, arcId, batchIndex, { failureReason: reason }]);
   }
 
   async getStoryArcWorkflow(projectId: string, arcId: string): Promise<WorkflowRunRecord | undefined> {
@@ -1256,13 +1992,22 @@ export class NovelPostgresRepository {
         const documentId = randomUUID();
         await client.query("INSERT INTO manuscript_documents(id,project_id,title,narrative_order,pov_character_id,status) VALUES($1,$2,$3,$4,$5,'planned')", [documentId, projectId, blueprint.title, blueprint.globalOrder, blueprint.povCharacterId ?? null]);
         await client.query("UPDATE chapters SET document_id=$2,updated_at=now() WHERE id=$1", [blueprint.id, documentId]);
+        const source = blueprint.sourceArtifactId ? await client.query<{ fingerprint: string }>("SELECT fingerprint FROM artifacts WHERE id=$1", [blueprint.sourceArtifactId]) : { rows: [] };
+        await client.query(`INSERT INTO chapter_production_specs(document_id,project_id,chapter_goal,blueprint,blueprint_fingerprint,source_artifact_id)
+          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(document_id) DO UPDATE SET chapter_goal=EXCLUDED.chapter_goal,blueprint=EXCLUDED.blueprint,blueprint_fingerprint=EXCLUDED.blueprint_fingerprint,source_artifact_id=EXCLUDED.source_artifact_id,updated_at=now()`,
+        [documentId, projectId, blueprint.chapterPurpose, chapter.rows[0].payload, source.rows[0]?.fingerprint ?? "", blueprint.sourceArtifactId ?? null]);
       }
       for (const item of preview.updates) {
         const chapter = await client.query<ChapterBlueprintRow>("SELECT id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision FROM chapters WHERE id=$1", [item.chapterId]);
         const blueprint = chapterBlueprintFromRow(chapter.rows[0]);
         await client.query("UPDATE manuscript_documents SET title=$3,pov_character_id=$4,updated_at=now() WHERE id=$1 AND project_id=$2 AND status='planned' AND current_revision_id IS NULL", [item.documentId, projectId, blueprint.title, blueprint.povCharacterId ?? null]);
+        const source = blueprint.sourceArtifactId ? await client.query<{ fingerprint: string }>("SELECT fingerprint FROM artifacts WHERE id=$1", [blueprint.sourceArtifactId]) : { rows: [] };
+        await client.query(`INSERT INTO chapter_production_specs(document_id,project_id,chapter_goal,blueprint,blueprint_fingerprint,source_artifact_id)
+          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(document_id) DO UPDATE SET chapter_goal=EXCLUDED.chapter_goal,blueprint=EXCLUDED.blueprint,blueprint_fingerprint=EXCLUDED.blueprint_fingerprint,source_artifact_id=EXCLUDED.source_artifact_id,updated_at=now()`,
+        [item.documentId, projectId, blueprint.chapterPurpose, chapter.rows[0].payload, source.rows[0]?.fingerprint ?? "", blueprint.sourceArtifactId ?? null]);
       }
       await client.query("UPDATE arcs SET planning_status='approved',execution_status='active',context_fingerprint=$3,approved_at=now(),updated_at=now() WHERE id=$1 AND project_id=$2", [arcId, projectId, contextFingerprint]);
+      await client.query("UPDATE story_arc_batches SET status='approved',approved_at=now(),updated_at=now() WHERE arc_id=$1 AND project_id=$2 AND status='awaiting-review'", [arcId, projectId]);
       await client.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'story-arc.approved','story-arc',$3,$4)", [projectId, actor, arcId, { artifactId, preview, contextFingerprint }]);
       await client.query("COMMIT");
     } catch (error) {
@@ -1472,6 +2217,18 @@ export class NovelPostgresRepository {
     }
   }
 
+  async getRuntimeConfiguration<T>(key: string): Promise<T | undefined> {
+    const result = await this.pool.query<{ value: T }>("SELECT value FROM runtime_configuration WHERE key=$1", [key]);
+    return result.rows[0]?.value;
+  }
+
+  async setRuntimeConfiguration(key: string, value: Record<string, unknown>): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO runtime_configuration(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()",
+      [key, value],
+    );
+  }
+
   async listCurrentDocumentObjectKeys(): Promise<Array<{ documentId: string; title: string; objectKey: string }>> {
     const result = await this.pool.query<{ document_id: string; title: string; object_key: string }>(
       `SELECT d.id AS document_id,d.title,cb.object_key
@@ -1483,6 +2240,20 @@ export class NovelPostgresRepository {
     return result.rows.map((row) => ({ documentId: row.document_id, title: row.title, objectKey: row.object_key }));
   }
 
+  async listReferencedObjectKeys(): Promise<Array<{ objectKey: string; contentHash: string; reference: string }>> {
+    const result = await this.pool.query<{ object_key: string; content_hash: string; reference: string }>(`
+      SELECT cb.object_key,cb.content_hash,'content-blob'::text AS reference
+      FROM content_blobs cb
+      WHERE EXISTS (SELECT 1 FROM manuscript_revisions mr WHERE mr.content_hash=cb.content_hash)
+         OR EXISTS (SELECT 1 FROM manuscript_blocks mb WHERE mb.content_hash=cb.content_hash)
+         OR EXISTS (SELECT 1 FROM artifacts a WHERE a.content_hash=cb.content_hash)
+      UNION
+      SELECT a.object_key,a.content_hash,'artifact'::text AS reference FROM artifacts a
+      ORDER BY object_key
+    `);
+    return result.rows.map((row) => ({ objectKey: row.object_key, contentHash: row.content_hash, reference: row.reference }));
+  }
+
   async listRunReviews(temporalWorkflowId: string) {
     const run = await this.getWorkflowRunByTemporalId(temporalWorkflowId);
     if (!run) return [];
@@ -1490,10 +2261,10 @@ export class NovelPostgresRepository {
       id: string; artifact_id: string; reviewer_id: string;
       identity: "internal" | "independent" | "human";
       verdict: "passed" | "revise" | "blocked";
-      issues: Review["issues"]; score: number | null; role: string | null;
+      issues: Review["issues"]; score: number | null; role: string | null; dimension_scores: Review["dimensionScores"];
       created_at: Date | string;
     }>(`
-      SELECT r.id,r.artifact_id,r.reviewer_id,r.identity,r.verdict,r.issues,r.score,r.role,r.created_at
+      SELECT r.id,r.artifact_id,r.reviewer_id,r.identity,r.verdict,r.issues,r.score,r.role,r.dimension_scores,r.created_at
       FROM reviews r
       JOIN artifacts a ON a.id=r.artifact_id
       WHERE r.project_id=$1 AND (a.payload->>'workflowId'=$2 OR a.payload->>'runId'=$2)
@@ -1502,7 +2273,7 @@ export class NovelPostgresRepository {
     return result.rows.map((row) => ({
       id: row.id, artifactId: row.artifact_id, reviewerId: row.reviewer_id,
       identity: row.identity, verdict: row.verdict, issues: row.issues ?? [],
-      score: row.score === null ? undefined : Number(row.score), role: row.role ?? undefined,
+      score: row.score === null ? undefined : Number(row.score), role: row.role ?? undefined, dimensionScores: row.dimension_scores ?? {},
       createdAt: new Date(row.created_at).getTime(),
     }));
   }
@@ -1637,9 +2408,9 @@ export class NovelPostgresRepository {
     return result.rows[0] ? { blueprint: result.rows[0].payload, artifactId: result.rows[0].artifact_id } : undefined;
   }
 
-  async getFinalDocumentContentRef(projectId: string, documentId: string): Promise<{ title: string; status: string; revision: number; artifactId: string; contentHash: string; objectKey: string } | undefined> {
-    const result = await this.pool.query<{ title: string; status: string; revision: string | number; artifact_id: string; content_hash: string; object_key: string }>(
-      `SELECT d.title,d.status,mr.revision,mr.artifact_id,mr.content_hash,cb.object_key
+  async getFinalDocumentContentRef(projectId: string, documentId: string): Promise<{ title: string; status: string; revision: number; sourceRevisionId?: string; artifactId?: string; contentHash: string; objectKey: string } | undefined> {
+    const result = await this.pool.query<{ title: string; status: string; revision_id: string | null; revision: string | number | null; artifact_id: string | null; content_hash: string | null; object_key: string | null }>(
+      `SELECT d.title,d.status,mr.id AS revision_id,mr.revision,mr.artifact_id,mr.content_hash,cb.object_key
        FROM manuscript_documents d
        LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
        LEFT JOIN content_blobs cb ON cb.content_hash=mr.content_hash
@@ -1647,8 +2418,8 @@ export class NovelPostgresRepository {
       [projectId, documentId],
     );
     const row = result.rows[0];
-    if (!row || row.revision === null || !row.artifact_id || !row.content_hash || !row.object_key) return row ? { title: row.title, status: row.status, revision: 0, artifactId: "", contentHash: "", objectKey: "" } : undefined;
-    return { title: row.title, status: row.status, revision: Number(row.revision), artifactId: row.artifact_id, contentHash: row.content_hash, objectKey: row.object_key };
+    if (!row || row.revision === null || !row.revision_id || !row.content_hash || !row.object_key) return row ? { title: row.title, status: row.status, revision: 0, contentHash: "", objectKey: "" } : undefined;
+    return { title: row.title, status: row.status, revision: Number(row.revision), sourceRevisionId: row.revision_id, artifactId: row.artifact_id ?? undefined, contentHash: row.content_hash, objectKey: row.object_key };
   }
 
   async listCapturedSnapshots(projectId: string): Promise<Record<string, unknown>[]> {
@@ -1840,13 +2611,19 @@ export class NovelPostgresRepository {
    */
   async recordNarrativeElements(input: {
     projectId: string;
+    documentId: string;
     artifact: Artifact;
     revisionId: string;
     narrativeElements: NonNullable<FactExtractionOutput["narrativeElements"]>;
     /** 当前章节的叙事顺序（1-based）。用于让未兑现伏笔按叙事顺序过滤，避免剧透未来章节。 */
     narrativeOrder?: number;
   }): Promise<{ foreshadowings: number; promises: number; payoffs: number }> {
-    const { projectId, artifact, revisionId, narrativeElements, narrativeOrder } = input;
+    const { projectId, documentId, artifact, revisionId, narrativeElements, narrativeOrder } = input;
+    const revision = await this.pool.query<{ id: string }>(
+      "SELECT id FROM manuscript_revisions WHERE id=$1 AND project_id=$2 AND document_id=$3",
+      [revisionId, projectId, documentId],
+    );
+    if (!revision.rowCount) throw new Error(`叙事元素投影要求已提交且归属匹配的 revision：${revisionId}`);
     let foreshadowingCount = 0;
     let promiseCount = 0;
     let payoffCount = 0;
@@ -1917,6 +2694,111 @@ export class NovelPostgresRepository {
     }
 
     return { foreshadowings: foreshadowingCount, promises: promiseCount, payoffs: payoffCount };
+  }
+
+  async getChapterTitleSource(projectId: string, documentId: string): Promise<Omit<ChapterTitleSource, "plainText" | "blueprint"> & { blueprint: Record<string, unknown>; objectKey?: string } | undefined> {
+    const result = await this.pool.query<{
+      project_title: string; document_id: string; current_title: string; narrative_order: string | number;
+      chapter_goal: string | null; blueprint: Record<string, unknown> | null; blueprint_fingerprint: string | null;
+      content_hash: string | null; object_key: string | null;
+    }>(`
+      SELECT p.title AS project_title,d.id AS document_id,d.title AS current_title,d.narrative_order,
+        cps.chapter_goal,cps.blueprint,cps.blueprint_fingerprint,mr.content_hash,cb.object_key
+      FROM manuscript_documents d
+      JOIN novel_projects p ON p.id=d.project_id
+      LEFT JOIN chapter_production_specs cps ON cps.document_id=d.id
+      LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+      LEFT JOIN content_blobs cb ON cb.content_hash=mr.content_hash
+      WHERE d.project_id=$1 AND d.id=$2
+    `, [projectId, documentId]);
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      projectTitle: row.project_title,
+      documentId: row.document_id,
+      currentTitle: row.current_title,
+      narrativeOrder: Number(row.narrative_order),
+      chapterGoal: row.chapter_goal ?? "",
+      blueprint: row.blueprint ?? {},
+      blueprintFingerprint: row.blueprint_fingerprint ?? "",
+      contentHash: row.content_hash ?? undefined,
+      objectKey: row.object_key ?? undefined,
+    };
+  }
+
+  async saveGeneratedChapterTitleIfCurrent(input: { projectId: string; documentId: string; sourceFingerprint: string; title: string }): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{
+        project_title: string; document_id: string; current_title: string; narrative_order: string | number;
+        chapter_goal: string | null; blueprint: Record<string, unknown> | null; blueprint_fingerprint: string | null; content_hash: string | null;
+      }>(`
+        SELECT p.title AS project_title,d.id AS document_id,d.title AS current_title,d.narrative_order,
+          cps.chapter_goal,cps.blueprint,cps.blueprint_fingerprint,mr.content_hash
+        FROM manuscript_documents d
+        JOIN novel_projects p ON p.id=d.project_id
+        LEFT JOIN chapter_production_specs cps ON cps.document_id=d.id
+        LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
+        WHERE d.project_id=$1 AND d.id=$2
+        FOR UPDATE OF d,p
+      `, [input.projectId, input.documentId]);
+      const row = result.rows[0];
+      if (!row) throw new Error("章节不存在");
+      const currentFingerprint = chapterTitleSourceFingerprint({
+        projectTitle: row.project_title,
+        documentId: row.document_id,
+        currentTitle: row.current_title,
+        narrativeOrder: Number(row.narrative_order),
+        chapterGoal: row.chapter_goal ?? "",
+        blueprintFingerprint: row.blueprint_fingerprint ?? "",
+        contentHash: row.content_hash ?? undefined,
+      });
+      if (currentFingerprint !== input.sourceFingerprint) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query("UPDATE manuscript_documents SET title=$3,updated_at=now() WHERE project_id=$1 AND id=$2", [input.projectId, input.documentId, input.title]);
+      await client.query(
+        "UPDATE chapters SET title=$3,payload=jsonb_set(payload,'{title}',to_jsonb($3::text),true),updated_at=now() WHERE project_id=$1 AND document_id=$2",
+        [input.projectId, input.documentId, input.title],
+      );
+      await client.query("COMMIT");
+      await this.appendOutbox("manuscript-document", input.documentId, "chapter.title-generated", { projectId: input.projectId, documentId: input.documentId, title: input.title, sourceFingerprint: input.sourceFingerprint });
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordProjectionFailure(input: { projectId: string; projectionType: string; aggregateId: string; payload: Record<string, unknown>; error: string }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO projection_failures(project_id,projection_type,aggregate_id,payload,error_message,attempts,updated_at)
+       VALUES($1,$2,$3,$4,$5,1,now())
+       ON CONFLICT(projection_type,aggregate_id) DO UPDATE SET payload=EXCLUDED.payload,error_message=EXCLUDED.error_message,status='pending',attempts=projection_failures.attempts+1,updated_at=now()`,
+      [input.projectId, input.projectionType, input.aggregateId, input.payload, input.error],
+    );
+  }
+
+  async heartbeatRuntimeService(input: { serviceId: string; serviceType: string; status: string; details?: Record<string, unknown> }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO runtime_services(service_id,service_type,status,details,heartbeat_at)
+       VALUES($1,$2,$3,$4,now())
+       ON CONFLICT(service_id) DO UPDATE SET status=EXCLUDED.status,details=EXCLUDED.details,heartbeat_at=now()`,
+      [input.serviceId, input.serviceType, input.status, input.details ?? {}],
+    );
+  }
+
+  async latestRuntimeService(serviceType: string): Promise<{ serviceId: string; status: string; details: Record<string, unknown>; heartbeatAt: string } | undefined> {
+    const result = await this.pool.query<{ service_id: string; status: string; details: Record<string, unknown>; heartbeat_at: Date | string }>(
+      "SELECT service_id,status,details,heartbeat_at FROM runtime_services WHERE service_type=$1 ORDER BY heartbeat_at DESC LIMIT 1",
+      [serviceType],
+    );
+    const row = result.rows[0];
+    return row ? { serviceId: row.service_id, status: row.status, details: row.details, heartbeatAt: new Date(row.heartbeat_at).toISOString() } : undefined;
   }
 
   /**
@@ -2159,6 +3041,44 @@ export class NovelPostgresRepository {
     return input;
   }
 
+  async refreshChapterMemoryRollup(projectId: string, narrativeOrder: number, windowSize = 20): Promise<MemoryClaim> {
+    const start = Math.floor(Math.max(0, narrativeOrder - 1) / windowSize) * windowSize + 1;
+    const end = start + windowSize - 1;
+    const memories = (await this.getChapterMemories({ projectId, narrativeCutoff: end, limit: windowSize }))
+      .filter((memory) => memory.narrativeRange.start >= start && memory.narrativeRange.start <= end);
+    if (!memories.length) throw new Error(`第 ${start}-${end} 章没有可汇总的 chapter memory`);
+
+    const unresolved = [...new Set(memories.flatMap((memory) => memory.unresolvedThreads))].slice(0, 80);
+    const latestCharacterStates = new Map<string, string>();
+    for (const memory of memories) for (const state of memory.characterStates) latestCharacterStates.set(state.characterId, state.stateSnapshot);
+    const chapterSummaries = memories.map((memory) => `第${memory.narrativeRange.start}章：${memory.summary}`);
+    const content = [
+      `章节窗口：第${start}-${Math.min(end, memories.at(-1)?.narrativeRange.end ?? end)}章`,
+      `阶段进展：\n${chapterSummaries.join("\n")}`,
+      unresolved.length ? `尚未解决：${unresolved.join("；")}` : "尚未解决：无",
+      latestCharacterStates.size ? `窗口末角色状态：${[...latestCharacterStates].map(([characterId, state]) => `${characterId}——${state}`).join("；")}` : "",
+    ].filter(Boolean).join("\n").slice(0, 12_000);
+    const id = `chapter-memory:rollup:${projectId}:${start}-${end}`;
+    const claim: MemoryClaim = {
+      id,
+      projectId,
+      kind: "hierarchical",
+      title: `第${start}-${end}章长期记忆汇总`,
+      content,
+      subjectRefs: [...latestCharacterStates.keys()],
+      narrativeRange: { start, end: Math.min(end, memories.at(-1)?.narrativeRange.end ?? end) },
+      knowledgeScope: "author",
+      authority: "derived",
+      confidence: 0.9,
+      sourceRevisionIds: [...new Set(memories.map((memory) => memory.revisionId))],
+      contentHash: createHash("sha256").update(content).digest("hex"),
+      supersedes: [],
+      predicate: "chapter-memory-rollup",
+    };
+    const [recorded] = await this.recordMemoryClaims({ projectId, claims: [claim] });
+    return recorded ?? claim;
+  }
+
   /**
    * 按项目 + 章节顺序范围检索 chapter memory（用于 buildMemoryBundle 注入前章摘要）。
    *
@@ -2176,16 +3096,21 @@ export class NovelPostgresRepository {
     params.push(input.limit ?? 32);
     const limitClause = ` LIMIT $${params.length}`;
     const result = await this.pool.query<any>(
-      `SELECT DISTINCT ON (document_id)
-          id,project_id,document_id,revision_id,narrative_start,narrative_end,summary,key_events,character_states,unresolved_threads,emotional_arc,fingerprint,created_at
-       FROM chapter_memories
-       WHERE project_id=$1${cutoffClause}
-       ORDER BY document_id ASC, created_at DESC${limitClause}`,
+      `WITH latest_per_document AS (
+         SELECT DISTINCT ON (document_id)
+           id,project_id,document_id,revision_id,narrative_start,narrative_end,summary,key_events,character_states,unresolved_threads,emotional_arc,fingerprint,created_at
+         FROM chapter_memories
+         WHERE project_id=$1${cutoffClause}
+         ORDER BY document_id ASC, created_at DESC, id DESC
+       ), recent AS (
+         SELECT * FROM latest_per_document
+         ORDER BY narrative_start DESC, created_at DESC, id DESC${limitClause}
+       )
+       SELECT * FROM recent
+       ORDER BY narrative_start ASC, created_at ASC, id ASC`,
       params,
     );
-    // 二次排序：按 narrative_start ASC（DISTINCT ON 后顺序被打乱）
-    const rows = result.rows.sort((a: any, b: any) => Number(a.narrative_start) - Number(b.narrative_start));
-    return rows.map((row: any) => ({
+    return result.rows.map((row: any) => ({
       id: row.id,
       projectId: row.project_id,
       documentId: row.document_id,
@@ -2432,7 +3357,7 @@ export class NovelPostgresRepository {
       if (existing.rowCount) { await client.query("COMMIT"); return existing.rows[0].result; }
       const project = await client.query<{ current_revision: string }>("SELECT current_revision FROM novel_projects WHERE id=$1 FOR UPDATE", [input.projectId]);
       if (!project.rowCount || Number(project.rows[0].current_revision) !== input.baseRevision) throw new Error("正式稿基线已变化，需要重新生成和审核");
-      await client.query("INSERT INTO content_blobs(content_hash,object_key,byte_length) VALUES($1,$2,$3) ON CONFLICT(content_hash) DO NOTHING", [input.contentHash, input.objectKey, Buffer.byteLength(input.text, "utf8")]);
+      await client.query("INSERT INTO content_blobs(content_hash,object_key,byte_length,word_count) VALUES($1,$2,$3,$4) ON CONFLICT(content_hash) DO UPDATE SET word_count=COALESCE(content_blobs.word_count,EXCLUDED.word_count)", [input.contentHash, input.objectKey, Buffer.byteLength(input.text, "utf8"), countNovelCharacters(input.text)]);
       await client.query("INSERT INTO artifacts(id,project_id,task_id,attempt_id,kind,content_hash,object_key,base_revision,fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO NOTHING", [input.artifact.id, input.projectId, input.artifact.taskId, input.artifact.attemptId, input.artifact.kind, input.contentHash, input.objectKey, input.baseRevision, input.artifact.fingerprint, input.artifact.structuredData ?? {}]);
       // 修复：显式 JSON.stringify，与 putReview 一致。
       // 原因：review.issues 是 ReviewIssue[]，pg 直接传数组到 jsonb 列时，
@@ -2440,6 +3365,8 @@ export class NovelPostgresRepository {
       // （如 "Expected ":", but found ",""）。先 JSON.stringify 为字符串，让 PostgreSQL 解析为 jsonb。
       for (const review of input.reviews) await client.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,score,role,model_provenance,dimension_scores) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO NOTHING", [review.id, input.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.score ?? null, review.role ?? null, review.modelProvenance ? JSON.stringify(review.modelProvenance) : null, JSON.stringify(review.dimensionScores ?? {})]);
       const revision = input.baseRevision + 1;
+      const currentDocument = await client.query<{ current_revision_id: string | null }>("SELECT current_revision_id FROM manuscript_documents WHERE id=$1 AND project_id=$2 FOR UPDATE", [input.documentId, input.projectId]);
+      if (currentDocument.rows[0]?.current_revision_id) await client.query("UPDATE manuscript_revisions SET retention_class='rolling',expires_at=COALESCE(expires_at,now()+interval '30 days') WHERE id=$1 AND retention_class<>'named'", [currentDocument.rows[0].current_revision_id]);
       await client.query("INSERT INTO manuscript_revisions(id,project_id,document_id,revision,base_revision,content_hash,artifact_id) VALUES($1,$2,$3,$4,$5,$6,$7)", [input.revisionId, input.projectId, input.documentId, revision, input.baseRevision, input.contentHash, input.artifact.id]);
       await this.refreshChapterReviewSnapshotTx(client, input.artifact.id, input.revisionId);
       await client.query("UPDATE manuscript_documents SET current_revision_id=$1,status='final',updated_at=now() WHERE id=$2 AND project_id=$3", [input.revisionId, input.documentId, input.projectId]);

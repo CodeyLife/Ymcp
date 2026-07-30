@@ -32,11 +32,11 @@ describe("V2 cognition compiler", () => {
     ] };
     const plan = createPreflightPlan(intent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 });
     const memory = await buildMemoryBundle(plan, { projectId: "p1", provider });
-    const manifest = buildContextManifest(plan, memory, { retrievalRunId: "retrieval-1", allClaimIds: ["approved", "candidate", "excluded"] });
+    const manifest = buildContextManifest(plan, memory, { retrievalRunId: "retrieval-1" });
     const skills = await resolveSkillBundle(plan, memory, { projectId: "p1", provider: { list: async () => [] } satisfies SkillProvider });
     const blueprint = compileExecutionBlueprint(intent, plan, memory, skills, { projectId: "p1", currentRevision: 7 }, manifest);
-    expect(memory.claims.map((claim) => claim.id)).toEqual(["approved", "thread", "foreshadowing", "candidate"]);
-    expect(manifest).toMatchObject({ memoryBundleId: memory.id, includedClaimIds: ["approved", "thread", "foreshadowing", "candidate"], excludedClaimIds: ["excluded"], truncationReason: "budget" });
+    expect(memory.claims.map((claim) => claim.id)).toEqual(["candidate", "approved", "foreshadowing", "thread"]);
+    expect(manifest).toMatchObject({ memoryBundleId: memory.id, includedClaimIds: ["candidate", "approved", "foreshadowing", "thread"], excludedClaimIds: [], truncationReason: "none" });
     expect(blueprint.contextManifestId).toBe(manifest.id);
     expect(blueprint.factApprovalMode).toBe("auto");
   });
@@ -61,5 +61,43 @@ describe("V2 cognition compiler", () => {
       status: "manual-review",
       manualReviewFacets: expect.arrayContaining(["fact", "chapter-memory"]),
     });
+  });
+
+  it("selects pinned narratives and required facets before ranked fill and records exclusions", async () => {
+    const plan = createPreflightPlan(intent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 });
+    const claim = (id: string, facet: string, content: string, score: number) => ({ id, projectId: "p1", kind: "canonical" as const, title: id, content, subjectRefs: [], knowledgeScope: "author" as const, authority: "approved" as const, confidence: 1, sourceRevisionIds: [`r-${id}`], contentHash: id, supersedes: [], score, matchedFacet: facet, reason: "test" });
+    const provider: MemoryProvider = { search: async () => [
+      claim("high-score", "style", "x".repeat(60), 1),
+      claim("fact", "fact", "fact", 0.5),
+      claim("future", "fact", "future", 1),
+    ].map((item) => item.id === "future" ? { ...item, narrativeRange: { start: 20 } } : item) };
+    const pinned = claim("promise", "foreshadowing", "promise", 1);
+    const memory = await buildMemoryBundle(plan, { projectId: "p1", provider, tokenBudget: 20, pinnedClaims: [pinned] }, 1);
+    const manifest = buildContextManifest(plan, memory, { retrievalRunId: "r" }, 2);
+
+    expect(memory.claims.map((item) => item.id)).toEqual(["promise", "fact"]);
+    expect(memory.sourceRevisionIds).toEqual(["r-promise", "r-fact"]);
+    expect(manifest.includedClaimIds).toEqual(["promise", "fact"]);
+    expect(manifest.excludedClaimIds).toEqual(expect.arrayContaining(["future", "high-score"]));
+    expect(manifest.selectionReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ claimId: "promise", status: "included", reason: "pinned-narrative" }),
+      expect.objectContaining({ claimId: "fact", status: "included", reason: "required-facet" }),
+      expect.objectContaining({ claimId: "future", status: "excluded", reason: "future-cutoff" }),
+      expect.objectContaining({ claimId: "high-score", status: "excluded", reason: "budget" }),
+    ]));
+  });
+
+  it("fingerprints the selected claim and pinned narrative content without depending on creation time", async () => {
+    const plan = createPreflightPlan(intent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 }, 1);
+    const makeClaim = (content: string) => ({ id: "fact", projectId: "p1", kind: "canonical" as const, title: "事实", content, subjectRefs: [], knowledgeScope: "author" as const, authority: "approved" as const, confidence: 1, sourceRevisionIds: ["r1"], contentHash: content, supersedes: [], score: 1, matchedFacet: "fact", reason: "test" });
+    const makePinned = (content: string) => ({ ...makeClaim(content), id: "promise", title: "承诺", matchedFacet: "foreshadowing", sourceRevisionIds: ["r2"] });
+    const first = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [makeClaim("原事实")] }, pinnedClaims: [makePinned("原承诺")] }, 1);
+    const same = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [makeClaim("原事实")] }, pinnedClaims: [makePinned("原承诺")] }, 2);
+    const changedClaim = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [makeClaim("变更事实")] }, pinnedClaims: [makePinned("原承诺")] }, 1);
+    const changedPinned = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [makeClaim("原事实")] }, pinnedClaims: [makePinned("变更承诺")] }, 1);
+
+    expect(same.fingerprint).toBe(first.fingerprint);
+    expect(changedClaim.fingerprint).not.toBe(first.fingerprint);
+    expect(changedPinned.fingerprint).not.toBe(first.fingerprint);
   });
 });

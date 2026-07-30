@@ -24,6 +24,30 @@ profiles:
       name: RESPONSES_API_KEY
     enabled: true
     timeoutMs: 180000
+  - id: siliconflow-embedding
+    label: SiliconFlow BGE-M3 Embedding
+    protocol: chat-completions
+    baseUrl: https://api.siliconflow.cn/v1
+    model: BAAI/bge-m3
+    responseMode: json
+    capabilities: [embedding]
+    secret:
+      source: env
+      name: SILICONFLOW_API_KEY
+    enabled: true
+    timeoutMs: 120000
+  - id: siliconflow-rerank
+    label: SiliconFlow BGE Reranker
+    protocol: chat-completions
+    baseUrl: https://api.siliconflow.cn/v1
+    model: BAAI/bge-reranker-v2-m3
+    responseMode: json
+    capabilities: [rerank]
+    secret:
+      source: env
+      name: SILICONFLOW_API_KEY
+    enabled: true
+    timeoutMs: 120000
 routes:
   "planning.foundation":
     conversationPolicy: stateless
@@ -75,10 +99,16 @@ routes:
       - executor: api
         profileId: web-chat
       - executor: external-mcp
-  "memory.*":
+  "memory.embed":
     conversationPolicy: stateless
     candidates:
-      - executor: external-mcp
+      - executor: api
+        profileId: siliconflow-embedding
+  "memory.rerank":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: siliconflow-rerank
   "*":
     conversationPolicy: stateless
     candidates:

@@ -13,7 +13,7 @@
  * v1 的 ProjectHead 含 finalDocumentHeads 详情，v2 简化为 finalDocumentHashes 字符串列表
  * （protocol.ts 已定义 ProjectHead 只有 projectRevision + finalDocumentHashes）。
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type {
   Artifact,
   ExecutionBlueprint,
@@ -29,6 +29,7 @@ import type {
   ReviewIssue,
   SkillDescriptor,
 } from "../protocol";
+import { canonicalSha256 } from "../canonical-json";
 import type { NovelPostgresRepository } from "../postgres-repository";
 
 // ===== 行类型映射 =====
@@ -137,7 +138,7 @@ type ReviewRow = {
 type ExecutionBlueprintRow = { id: string; intent_id: string; preflight_id: string; memory_bundle_id: string; skill_bundle_id: string; payload: ExecutionBlueprint; fingerprint: string };
 type MemoryBundleRow = { id: string; preflight_id: string; payload: MemoryBundle; fingerprint: string };
 type NovelIntentRow = { payload: NovelIntent };
-type ContentBlobRow = { content_hash: string; object_key: string; byte_length: string | number };
+type ContentBlobRow = { content_hash: string; object_key: string; byte_length: string | number; word_count: string | number | null };
 
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : value;
@@ -230,23 +231,6 @@ function mapReviewRow(row: ReviewRow): Review {
   };
 }
 
-// ===== 稳定 JSON 序列化 =====
-
-/**
- * 对 payload 做稳定 JSON 序列化：递归排序 key、过滤 undefined。
- *
- * 用于计算可复现的快照哈希。
- */
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (value === null) return "null";
-  if (typeof value !== "object") return JSON.stringify(value);
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, item]) => item !== undefined)
-    .sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
-}
-
 // ===== 公共接口 =====
 
 /**
@@ -255,7 +239,7 @@ function stableJson(value: unknown): string {
  * 用于快照完整性校验：捕获时计算并存储，恢复/晋升时重算比对。
  */
 export function computeSnapshotHash(payload: ProjectSnapshotBundle["payload"]): string {
-  return createHash("sha256").update(stableJson(payload)).digest("hex");
+  return canonicalSha256(payload);
 }
 
 /**
@@ -363,7 +347,7 @@ export async function captureProjectSnapshot(
     ),
     repository.pool.query<NovelIntentRow>("SELECT payload FROM novel_intents WHERE project_id=$1 ORDER BY created_at,id", [projectId]),
     repository.pool.query<ContentBlobRow>(
-      `SELECT DISTINCT cb.content_hash,cb.object_key,cb.byte_length
+      `SELECT DISTINCT cb.content_hash,cb.object_key,cb.byte_length,cb.word_count
        FROM content_blobs cb
        JOIN manuscript_revisions mr ON mr.content_hash=cb.content_hash
        WHERE mr.project_id=$1 ORDER BY cb.content_hash`,
@@ -404,7 +388,12 @@ export async function captureProjectSnapshot(
     artifacts: artifactRows.rows.map(mapArtifactRow),
     reviews: reviewRows.rows.map(mapReviewRow),
     novelIntents: novelIntentRows.rows.map((row) => row.payload),
-    contentBlobs: contentBlobRows.rows.map((row) => ({ contentHash: row.content_hash, objectKey: row.object_key, byteLength: Number(row.byte_length) })),
+    contentBlobs: contentBlobRows.rows.map((row) => ({
+      contentHash: row.content_hash,
+      objectKey: row.object_key,
+      byteLength: Number(row.byte_length),
+      wordCount: row.word_count === null ? undefined : Number(row.word_count),
+    })),
     executionBlueprints: executionBlueprintRows.rows.map((row) => ({ id: row.id, intentId: row.intent_id, preflightId: row.preflight_id, memoryBundleId: row.memory_bundle_id, skillBundleId: row.skill_bundle_id, payload: row.payload, fingerprint: row.fingerprint })),
     memoryBundles: memoryBundleRows.rows.map((row) => ({ id: row.id, preflightId: row.preflight_id, narrativeCutoff: row.payload.narrativeCutoff, sourceRevisionIds: row.payload.sourceRevisionIds, tokenBudget: row.payload.tokenBudget, payload: row.payload, fingerprint: row.fingerprint })),
   } as ProjectSnapshotBundle["payload"];

@@ -22,6 +22,7 @@
  * 编排器强制执行，失败时调用 rollback 恢复正文、事实和 skill prompt。
  */
 import { createHash, randomUUID } from "node:crypto";
+import { countNovelCharacters } from "../word-count";
 import type {
   AuthorDecision,
   CandidateBundle,
@@ -170,8 +171,8 @@ class PromotionServiceImpl implements PromotionService {
 
       // 6.2 INSERT content_blobs
       await client.query(
-        "INSERT INTO content_blobs(content_hash, object_key, byte_length) VALUES($1, $2, $3) ON CONFLICT(content_hash) DO NOTHING",
-        [candidate.manuscript.contentHash, object.key, object.bytes],
+        "INSERT INTO content_blobs(content_hash, object_key, byte_length, word_count) VALUES($1, $2, $3, $4) ON CONFLICT(content_hash) DO UPDATE SET word_count=COALESCE(content_blobs.word_count,EXCLUDED.word_count)",
+        [candidate.manuscript.contentHash, object.key, object.bytes, countNovelCharacters(candidate.manuscript.plainText)],
       );
 
       // 6.3 INSERT artifacts

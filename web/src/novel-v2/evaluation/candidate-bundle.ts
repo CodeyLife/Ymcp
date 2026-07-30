@@ -31,6 +31,7 @@ import type {
 import type { ExperimentWorkspaceHandle } from "./experiment-workspace";
 import { ContentObjectStore, type ObjectStoreAdapter } from "../object-store";
 import { parseSerializedPromptSections } from "./prompt-sections";
+import { countNovelCharacters } from "../word-count";
 
 // ===== 辅助 =====
 
@@ -42,19 +43,6 @@ import { parseSerializedPromptSections } from "./prompt-sections";
  */
 export function computeManuscriptContentHash(plainText: string, _contentHtml: string): string {
   return createHash("sha256").update(plainText, "utf8").digest("hex");
-}
-
-/**
- * 估算字数：CJK 字符逐字计数 + 非 CJK 按空白分词。
- *
- * 用于 manuscript.wordCount。与 v1 countNovelWords 策略一致。
- */
-function countWords(text: string): number {
-  const cjkMatches = text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/g);
-  const cjkCount = cjkMatches ? cjkMatches.length : 0;
-  const nonCjkText = text.replace(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/g, " ");
-  const wordCount = nonCjkText.split(/\s+/).filter((s) => s.length > 0).length;
-  return cjkCount + wordCount;
 }
 
 // ===== 行类型 =====
@@ -232,9 +220,7 @@ export async function extractCandidateBundle(
       manuscriptTitle = documentResult.rows[0]?.title ?? "";
       plainText = await objects.getText(latestRevision.object_key);
       contentHtml = typeof artifactPayload.contentHtml === "string" ? artifactPayload.contentHtml : "";
-      wordCount = typeof artifactPayload.wordCount === "number"
-        ? artifactPayload.wordCount
-        : countWords(plainText);
+      wordCount = countNovelCharacters(plainText);
     } else {
       throw new Error(`实验 revision ${latestRevision.id} 缺少 source artifact，拒绝构造不可审计候选包`);
     }

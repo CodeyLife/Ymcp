@@ -63,7 +63,7 @@ export default defineConfig({
                 proxyTimeout: 600000,
             },
             "/v2": {
-                target: "http://127.0.0.1:4770",
+                target: process.env.NOVEL_V2_API_URL ?? "http://127.0.0.1:4770",
                 changeOrigin: true,
                 secure: false,
                 timeout: 600000,

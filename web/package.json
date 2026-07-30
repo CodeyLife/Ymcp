@@ -14,7 +14,10 @@
     "novel:v2:worker": "node scripts/run-v2-service.mjs worker",
     "novel:mcp:v2": "node --import tsx scripts/novel-v2-mcp-server.mjs",
     "novel:v2:compose": "docker compose -f docker-compose.v2.yml up -d",
-    "novel:v2:smoke": "node --import tsx scripts/novel-v2-smoke.ts"
+    "novel:v2:smoke": "node --import tsx scripts/novel-v2-smoke.ts",
+    "novel:v2:objects:migrate": "node --import tsx scripts/migrate-object-store.ts",
+    "novel:v2:memory:configure": "node --import tsx scripts/configure-local-vector-profile.ts",
+    "novel:v2:memory:reindex": "node --import tsx scripts/reindex-novel-memory.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",

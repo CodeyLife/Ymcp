@@ -1,4 +1,5 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
+import { createHash } from "node:crypto";
 import type { MemoryClaim, MemoryHit, MemoryProvider, RetrievalFacet } from "./protocol";
 import type { ModelGateway } from "./model-gateway";
 
@@ -15,19 +16,40 @@ export interface MemoryIndex {
  */
 const CHAPTER_MEMORY_ID_PREFIX = "memory:chapter:";
 
+export function qdrantPointId(projectId: string, claimId: string): string {
+  const bytes = createHash("sha256").update(projectId).update("\0").update(claimId).digest().subarray(0, 16);
+  // RFC 9562 UUIDv8: deterministic application-defined content with the standard variant bits.
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export class QdrantMemoryProvider implements MemoryProvider, MemoryIndex {
   readonly collection: string;
-  constructor(private readonly client: QdrantClient, private readonly gateway: ModelGateway, collection = process.env.QDRANT_COLLECTION ?? "novel-memory") { this.collection = collection; }
+  readonly dimension: number;
+  constructor(private readonly client: QdrantClient, private readonly gateway: ModelGateway, collection = process.env.QDRANT_COLLECTION ?? "novel-memory", dimension = Number(process.env.NOVEL_EMBEDDING_DIM ?? 1024)) { this.collection = collection; this.dimension = dimension; }
 
   async ensureCollection() {
-    const collections = await this.client.getCollections();
-    if (!collections.collections.some((item) => item.name === this.collection)) await this.client.createCollection(this.collection, { vectors: { size: Number(process.env.NOVEL_EMBEDDING_DIM ?? 1536), distance: "Cosine" } });
+    let info: Awaited<ReturnType<QdrantClient["getCollection"]>>;
+    try {
+      // getCollection resolves aliases as well as physical collection names.
+      info = await this.client.getCollection(this.collection);
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status !== 404) throw error;
+      await this.client.createCollection(this.collection, { vectors: { size: this.dimension, distance: "Cosine" } });
+      return;
+    }
+    const vectors = info.config?.params?.vectors as { size?: number } | undefined;
+    if (Number(vectors?.size) !== this.dimension) throw new Error(`Qdrant 集合 ${this.collection} 维度 ${String(vectors?.size)} 与 embedding 维度 ${this.dimension} 不一致`);
   }
 
   async search(input: { projectId: string; facets: RetrievalFacet[]; narrativeCutoff?: number; povCharacterId?: string }): Promise<MemoryHit[]> {
     await this.ensureCollection();
     const query = input.facets.map((facet) => facet.query).join(" ");
     const embedding = await this.gateway.embed({ purpose: "memory.embed", texts: [query] });
+    if (embedding.vectors[0]?.length !== this.dimension) throw new Error(`查询向量维度 ${embedding.vectors[0]?.length ?? 0} 与集合维度 ${this.dimension} 不一致`);
     const filter: any = { must: [{ key: "projectId", match: { value: input.projectId } }] };
     // P0-A4: narrativeStart=null 表示全局可见（无章节归属的基础事实），
     // 不应被 narrativeCutoff 屏蔽。Qdrant 的 range:lte 过滤会排除 null 值，
@@ -146,10 +168,13 @@ export class QdrantMemoryProvider implements MemoryProvider, MemoryIndex {
     if (!claims.length) return;
     await this.ensureCollection();
     const embeddings = await this.gateway.embed({ purpose: "memory.embed", texts: claims.map((claim) => `${claim.title}\n${claim.content}`) });
+    if (embeddings.vectors.length !== claims.length || embeddings.vectors.some((vector) => vector.length !== this.dimension)) {
+      throw new Error(`embedding 返回 ${embeddings.vectors.length} 个向量，要求 ${claims.length} 个且每个维度为 ${this.dimension}`);
+    }
     await this.client.upsert(this.collection, {
       wait: true,
       points: claims.map((claim, index) => ({
-        id: claim.id,
+        id: qdrantPointId(projectId, claim.id),
         vector: embeddings.vectors[index],
         payload: {
           projectId,

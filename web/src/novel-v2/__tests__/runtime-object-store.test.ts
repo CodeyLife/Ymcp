@@ -7,8 +7,8 @@ describe("runtime object store binding", () => {
   it("refuses startup when a current final manuscript object is missing", async () => {
     const repository = {
       assertRuntimeObjectStoreIdentity: vi.fn().mockResolvedValue(undefined),
-      listCurrentDocumentObjectKeys: vi.fn().mockResolvedValue([
-        { documentId: "chapter-1", title: "第一章", objectKey: "aa/missing" },
+      listReferencedObjectKeys: vi.fn().mockResolvedValue([
+        { contentHash: "aabb", reference: "content-blob", objectKey: "aa/missing" },
       ]),
     } as unknown as NovelPostgresRepository;
     const objects = {
@@ -18,7 +18,7 @@ describe("runtime object store binding", () => {
     } as unknown as ContentObjectStore;
 
     await expect(bindRuntimeObjectStore(repository, objects, "api"))
-      .rejects.toThrow("1 个当前定稿对象不可读：第一章(aa/missing)");
+      .rejects.toThrow("1 个活跃引用对象不可读：content-blob(aa/missing)");
     expect(repository.assertRuntimeObjectStoreIdentity).not.toHaveBeenCalled();
   });
 });

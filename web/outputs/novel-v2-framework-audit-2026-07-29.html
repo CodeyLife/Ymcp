@@ -12,21 +12,22 @@
 <body><main class="wrap">
 <header class="hero">
   <h1>Novel V2 小说自动创作框架全面审核</h1>
-  <div class="sub">审核目标不是确认“模块存在”，而是判断当前实现能否长期、稳定、可审计地生成数百万字高质量中文网文。结论基于当前工作树代码、PostgreSQL 迁移、Temporal 状态机、测试配置、构建结果与现有章节产物。</div>
-  <div class="meta"><span class="pill">审核日期：2026-07-29</span><span class="pill">范围：src/novel-v2 + deploy/postgres + config + tests + 真实章节</span><span class="pill">基线：commit 91db80c</span><span class="pill">复审：2026-07-29 17:05</span><span class="pill">审核过程未改业务代码</span></div>
-  <div class="verdict"><strong>总判断：</strong>当前系统已经是“具备耐久工作流、规划、审校、事实与学习闭环的高级小说生成工程原型”，但还不能证明、也尚未具备足够机制保证“数百万字中文顶尖网文”的稳定生产。复审确认两项原 P0（五审硬门禁、爽点 revision provenance）已在 commit 91db80c 根因级修复；<strong>剩余关键阻断</strong>是测试证据链不可用、长期记忆无分层整合、融合检索固定 32 条上限、ContextManifest 预算排除缺失、independent reviewer 不保证独立模型、回归仅覆盖原失败场景。修复这些并补 50/200/500 章证据前，仍不能宣称具备百万字稳定生产能力。</div>
+  <div class="sub">审核目标不是确认“模块存在”，而是判断当前实现能否长期、稳定、可审计地生成数百万字高质量中文网文。报告区分历史基线、当前工作树修复和仍待验证的长期能力，避免把旧故障继续描述为当前状态。</div>
+  <div class="meta"><span class="pill">审核日期：2026-07-29</span><span class="pill">范围：src/novel-v2 + deploy/postgres + tests + 真实章节</span><span class="pill">历史基线：commit 91db80c</span><span class="pill">报告提交：4556801</span><span class="pill">当前状态：可信性底座工作树复验</span></div>
+  <div class="verdict"><strong>总判断：</strong>当前系统已经是“具备耐久工作流、规划、审校、事实与学习闭环的高级小说生成工程原型”。五审硬门禁、payoff revision lineage、认知 fingerprint、最近章节顺序、候选/注入分离和 ContextManifest 排除证据均已有实现与自动化证据；<strong>剩余关键限制</strong>是长期记忆尚无 story-unit/arc/volume/book 分层投影、independent reviewer 不保证不同模型族、规划默认门禁与作者覆盖边界偏宽、晋升回归仍以原失败场景为主，以及缺少 50/200/500 章质量证据。当前仍不能宣称具备百万字顶尖网文的稳定生产能力。</div>
 </header>
 
 <section style="border-left:5px solid var(--green)">
-<h2>0. 复审更新（2026-07-29 17:05）</h2>
-<p class="lede">距首次审核，基线已从“含未提交改动”推进到 <code>commit 91db80c</code>。本次复审复核了全部 P0/P1 的真实代码状态并复跑测试。</p>
+<h2>0. 可信性底座复验（2026-07-29）</h2>
+<p class="lede">本节以 <code>commit 91db80c</code> 为历史基线，并单独记录当前工作树中的可信性修复。状态只由当前代码、可执行测试和数据库反例决定。</p>
 <div class="ok callout"><strong>自首次审核已实质修复（已提交）：</strong>
 <ul style="margin:8px 0 0">
 <li><strong>五审硬门禁（原 P0）：</strong><code>evaluateCommitGate</code> 已改为以 <code>REQUIRED_CHAPTER_REVIEWERS</code> 五元组为硬门禁，缺失任一角色即拒绝提交；<code>runAllReviewers</code> 失败的 reviewer 不产生伪回执，自然转入人工队列。曾“2/5 审校可提交”的最坏情况已消除。</li>
 <li><strong>爽点 provenance（原 P0）：</strong>fact-extraction 不再在 commit 前写 <code>payoff_curve</code>，改为暂存 artifact，commit 后用正式 <code>result.revisionId</code> 落库，从机制上消除 fact artifact ID 冒充正文 revision。</li>
 <li><strong>人工事实审批门禁、未来伏笔 narrative_order cutoff、CreativeRun failWork、Reflection 修订计数</strong>均已正式提交（见第 4 节）。</li>
 </ul></div>
-<div class="danger callout"><strong>复审确认仍未修复：</strong>测试基础设施（Vitest 4.1.10 suite 注册失败、0 tests 执行）、百万字分层长期记忆（仍仅章节级、参考最近 5 章）、融合检索固定 32 条上限、ContextManifest 预算排除项恒空、independent reviewer 不保证独立模型、回归只覆盖原失败场景。</div>
+<div class="ok callout"><strong>当前工作树已实现并验证：</strong>递归 canonical JSON + SHA-256 认知指纹；融合层最多 96 条候选与 token-budget 最终选择分离；<code>MemorySelectionReceipt</code> 记录 included/excluded 及原因；伏笔/承诺在预算和 fingerprint 前进入候选；最近章节查询先按 document 取最新 revision，再按 narrative order 取最近 N 章。全量 Vitest 可执行，原 runner 双实例故障属于历史环境问题。</div>
+<div class="warn callout"><strong>仍未覆盖：</strong>百万字分层长期记忆、不同模型族的独立审校硬约束、planning 默认审核策略、作者人工覆盖策略、跨题材冻结评估器与 50/200/500 章真实质量验证。</div>
 </section>
 
 <div class="score-grid">
@@ -53,7 +54,7 @@
 <path d="M175 70H208M360 70H393M545 70H578" stroke="#668078" stroke-width="2" marker-end="url(#a)"/>
 <text x="28" y="137" font-size="15" font-weight="700">共享章节生命周期 runChapterLifecycle</text>
 <g fill="#e9f7f1" stroke="#76b89d"><rect x="25" y="153" width="120" height="54" rx="10"/><rect x="173" y="153" width="120" height="54" rx="10"/><rect x="321" y="153" width="120" height="54" rx="10"/><rect x="469" y="153" width="120" height="54" rx="10"/><rect x="617" y="153" width="120" height="54" rx="10"/><rect x="765" y="153" width="120" height="54" rx="10"/></g>
-<text x="85" y="185" text-anchor="middle">草稿</text><text x="233" y="175" text-anchor="middle"><tspan x="233">Reflection</tspan><tspan x="233" dy="18">最多 1 次修订</tspan></text><text x="381" y="175" text-anchor="middle"><tspan x="381">五角色 Review</tspan><tspan x="381" dy="18">当前允许缺席</tspan></text><text x="529" y="175" text-anchor="middle"><tspan x="529">Revision</tspan><tspan x="529" dy="18">最多 2 轮</tspan></text><text x="677" y="175" text-anchor="middle"><tspan x="677">Commit Gate</tspan><tspan x="677" dy="18">或人工审批</tspan></text><text x="825" y="175" text-anchor="middle"><tspan x="825">Learning</tspan><tspan x="825" dy="18">根因评估</tspan></text>
+<text x="85" y="185" text-anchor="middle">草稿</text><text x="233" y="175" text-anchor="middle"><tspan x="233">Reflection</tspan><tspan x="233" dy="18">最多 1 次修订</tspan></text><text x="381" y="175" text-anchor="middle"><tspan x="381">五角色 Review</tspan><tspan x="381" dy="18">缺失即拒绝自动提交</tspan></text><text x="529" y="175" text-anchor="middle"><tspan x="529">Revision</tspan><tspan x="529" dy="18">最多 2 轮</tspan></text><text x="677" y="175" text-anchor="middle"><tspan x="677">Commit Gate</tspan><tspan x="677" dy="18">或人工审批</tspan></text><text x="825" y="175" text-anchor="middle"><tspan x="825">Learning</tspan><tspan x="825" dy="18">根因评估</tspan></text>
 <path d="M145 180H171M293 180H319M441 180H467M589 180H615M737 180H763" stroke="#668078" stroke-width="2" marker-end="url(#a)"/>
 <path d="M529 208C529 242 381 242 381 210" fill="none" stroke="#9a5a00" stroke-width="2" marker-end="url(#a)"/><text x="455" y="246" text-anchor="middle" fill="#9a5a00">blocker / major 回环</text>
 <text x="28" y="286" font-size="15" font-weight="700">事实与提交后闭环</text>
@@ -71,13 +72,13 @@
 <table><thead><tr><th>阶段</th><th>成熟度</th><th>实现状态</th><th>审核结论</th></tr></thead><tbody>
 <tr><td>全书 Foundation 规划</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>10 阶段 DAG、审批状态与下游 stale 传播存在；但 bootstrap 默认 <code>reviewGate: none</code>，章节入口仅显式要求 4 个规划 key。</td></tr>
 <tr><td>滚动故事弧 / 章节蓝图</td><td>7.5/10</td><td><span class="tag done">已实现</span></td><td>StoryArcBundle、ChapterBlueprint、审批与 context fingerprint 较完整；宏观规划漂移可阻断章节生成并要求重基线。</td></tr>
-<tr><td>Preflight / Context / Skill</td><td>6/10</td><td><span class="tag partial">部分实现</span></td><td>动态 32K/48K/64K 预算存在，但融合检索固定最多 32 条；ContextManifest 无法记录真实 budget 排除项。</td></tr>
+<tr><td>Preflight / Context / Skill</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>动态 32K/48K/64K 预算存在；融合层返回最多 96 条候选，MemoryBundle 按叙事义务、必需 facet、authority 与 token budget 选择；ContextManifest 持久化 selection receipts 与排除原因。</td></tr>
 <tr><td>草稿 + Reflection</td><td>6.5/10</td><td><span class="tag done">已实现</span></td><td>Reflection 位于草稿后、五审前，可单独修订 1 次；但不生成正式审核凭证，也可能增加内容漂移。</td></tr>
 <tr><td>五角色审校</td><td>7.5/10</td><td><span class="tag done">已实现</span></td><td>五角色与独立 ModelPurpose 存在；复审确认 <code>evaluateCommitGate</code> 以 <code>REQUIRED_CHAPTER_REVIEWERS</code> 五元组为硬门禁，缺失角色即抛错；allSettled 失败的 reviewer 不产生伪回执而转人工队列。残留：人工批准路径 <code>commitAuthorApproved</code> 仅需 human passed，可单点绕过。</td></tr>
 <tr><td>自动修订 / 人工审批</td><td>6.5/10</td><td><span class="tag done">已实现</span></td><td>最多 2 轮、blocker 强制、改善阈值 0.15、上限后人工介入；定位失败时可退化整章重写，稳定性边界偏宽。</td></tr>
 <tr><td>事实 / 伏笔 / 承诺</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>MemoryClaim 时态、authority、knowledge scope、supersedes 已实现；人工事实门禁（factApprovalMode=manual）与伏笔 narrative_order cutoff 已提交 HEAD；默认事实审批仍 auto，未来伏笔 NULL 旧数据仍被返回（向后兼容边界）。</td></tr>
 <tr><td>Commit / Provenance</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>正式正文 revision 与对象存储提交完整；复审确认 fact-extraction 不再直接写 payoff_curve，改为暂存 artifact，commit 后用正式 <code>result.revisionId</code> 落库，provenance 已从机制上修正。残留：payoff_curve.setup_revision_id 暂留空，铺垫→兑现映射缺失。</td></tr>
-<tr><td>章节记忆 / 角色富化</td><td>5.5/10</td><td><span class="tag partial">部分实现</span></td><td>章节摘要、事件、角色状态、未解线索、情绪弧与 Qdrant 索引存在；仅参考最近 5 章，没有自动 story-unit/arc/volume/book rollup。</td></tr>
+<tr><td>章节记忆 / 角色富化</td><td>6/10</td><td><span class="tag partial">部分实现</span></td><td>章节摘要、事件、角色状态、未解线索、情绪弧与 Qdrant 索引存在；最近 N 章查询已按 narrative order 和每章最新 revision 修正，但仍没有自动 story-unit/arc/volume/book rollup。</td></tr>
 <tr><td>Learning / Skill 迭代</td><td>7/10</td><td><span class="tag done">已实现</span></td><td>支持 symptom、failingLayer、underlyingMechanism、affectedInputClass、boundary 与 regression risks，方向正确。</td></tr>
 <tr><td>Promote / 回归 / rollback</td><td>6/10</td><td><span class="tag partial">部分实现</span></td><td>真实实验、正式状态重跑和 rollback 存在；但只重跑原失败场景，缺跨题材反例和冻结评估器。</td></tr>
 <tr><td>百万字质量评估</td><td>2.5/10</td><td><span class="tag missing">证据缺失</span></td><td>只有 2 章可审读正文；没有 50/200/500 章压力样本、人工盲评、弃读/追更代理指标或长期漂移曲线。</td></tr>
@@ -90,14 +91,15 @@
 <table><thead><tr><th>风险</th><th>根因机制</th><th>影响输入类别</th><th>整改边界</th></tr></thead><tbody>
 <tr><td><span class="tag ok">已修复</span> 五审硬门禁</td><td>原 <code>evaluateCommitGate</code> 只要求一条 internal + 一条 independent；已在 commit 91db80c 重构为 <code>REQUIRED_CHAPTER_REVIEWERS</code> 五元组硬门禁，缺失角色即抛错，<code>runAllReviewers</code> 失败角色不产生伪回执。</td><td>所有章节提交路径；修复后最坏情况从“2/5 审校可提交”变为“缺失角色自动转人工队列”。</td><td>残留：人工批准路径 <code>commitAuthorApproved</code> 仅需 human passed，可单点绕过；建议明确作者对已五审章节的覆盖策略并补回归测试。</td></tr>
 <tr><td><span class="tag ok">已修复</span> 爽点 provenance</td><td>原事实提取在 commit 前用 <code>factArtifact.id</code> 写 payoff_curve.revision_id；已根因级重构：fact-extraction 暂存 payoffMoments 到 artifact，commit 后用正式 <code>result.revisionId</code> 落库。</td><td>所有含 payoff moment 的章节，特别是重审/重写/回滚后。</td><td>残留：payoff_curve.setup_revision_id 暂留空，铺垫→兑现映射未打通；建议补前章铺垫关联以支持爽点升级追踪与疲劳控制。</td></tr>
-<tr><td><span class="tag p0">P0</span> 测试证据链不可用</td><td>当前安装同时存在顶层与 pnpm store 两套不同 realpath 的 <code>@vitest/runner</code>/<code>@vitest/utils</code> 实例，suite collector context 分裂；结果是 describe 阶段读取不到 runner config。</td><td>全部 32 个测试文件；当前“测试文件存在”不等于任何行为已验证。</td><td>在干净环境执行冻结 lockfile 安装，确保单一 Vitest 模块实例；CI 加 <code>pnpm install --frozen-lockfile</code>、模块 realpath 自检和最小 smoke。先修基础设施再讨论断言结果。</td></tr>
-<tr><td><span class="tag p0">P0</span> 百万字记忆无分层整合</td><td>只有章节级 memory；提取时只参考最近 5 章；没有 story-unit、arc、volume、book-current-state、cold-memory 的自动归并与失效传播。</td><td>50 章后跨弧线索，200 章后人物状态和事实演变，500 章后卷级因果与主题回响。</td><td>增加“事件事实真源 + 分层投影”而不是无限加上下文：章节→故事单元→弧→卷→全书当前态；投影必须带 source revision、valid range、supersedes 和可重建能力。</td></tr>
+<tr><td><span class="tag ok">工作树已修复</span> 认知 fingerprint 忽略嵌套内容</td><td>原 <code>JSON.stringify(value, Object.keys(value).sort())</code> 把嵌套 intent、snapshot、claim 序列化为近似空对象，不同内容可能得到相同指纹。当前改为递归 canonical JSON + SHA-256。</td><td>所有 Preflight、MemoryBundle、ContextManifest、SkillBundle 与 ExecutionBlueprint；旧机制会让 stale 判断和审计错误复用上下文。</td><td><code>canonical-json.test.ts</code> 覆盖嵌套值、数组顺序、对象 key 顺序和 Preflight 反例；历史指纹不重写，新运行使用新算法。</td></tr>
+<tr><td><span class="tag ok">工作树已修复</span> 最近章节查询并非最近</td><td>原查询在 <code>DISTINCT ON(document_id)</code> 后按 document UUID 排序并直接 LIMIT，返回的是 UUID 顺序下的任意 N 章。当前先选每章最新 memory，再按 narrative order 降序截断并正序返回。</td><td>章节记忆提取与 Story Arc 规划，尤其是 document ID 与章节顺序无关的全部项目。</td><td><code>chapter-memory-order.test.ts</code> 在全新 PostgreSQL 中覆盖逆序 UUID、7 章取最近 5 章和同章多 revision。</td></tr>
+<tr><td><span class="tag p0">P0</span> 百万字记忆无分层整合</td><td>只有章节级 memory；提取时参考正确的最近 5 章，但没有 story-unit、arc、volume、book-current-state、cold-memory 的自动归并与失效传播。</td><td>50 章后跨弧线索，200 章后人物状态和事实演变，500 章后卷级因果与主题回响。</td><td>增加“事件事实真源 + 分层投影”而不是无限加上下文：章节→故事单元→弧→卷→全书当前态；投影必须带 source revision、valid range、supersedes 和可重建能力。</td></tr>
 </tbody></table>
 <h3>P1 — 会显著限制长期质量或造成错误自信</h3>
 <table><thead><tr><th>风险</th><th>证据</th><th>建议</th></tr></thead><tbody>
-<tr><td><span class="tag p1">P1</span> 64K 预算与固定 32 条召回冲突</td><td><code>computeTokenBudget</code> 在 ≥200 章返回 64K，但 <code>FusionMemoryProvider</code> 最终固定 <code>slice(0, 32)</code>。</td><td>按 token 成本、facet coverage、recency、authority 和 diversity 做预算型选择；候选召回数与最终注入数分离。</td></tr>
-<tr><td><span class="tag p1">P1</span> ContextManifest 不完整</td><td>调用方把预算后的 <code>memory.claims</code> 同时当 <code>allClaimIds</code>，导致 excludedClaimIds 通常为空。</td><td>MemoryProvider 返回候选 receipt；manifest 记录 candidate/included/excluded、排除理由、分数与 token 成本。</td></tr>
-<tr><td><span class="tag p1">P1</span> 伏笔/承诺在预算与 fingerprint 后注入</td><td>MemoryBundle 先计算 budget、source revisions 与 fingerprint，activity 随后把 open narratives prepend 到 claims。</td><td>把高优先级 narrative obligations 纳入统一 bundle builder，重新预算并计算最终 fingerprint。</td></tr>
+<tr><td><span class="tag ok">工作树已修复</span> 候选召回与最终注入混同</td><td>融合层现返回最多 96 条候选；最终 claims 由 <code>buildMemoryBundle</code> 在 token budget 内按叙事义务、必需 facet、authority、融合分、confidence 与 token 成本确定。</td><td><code>fusion-memory.test.ts</code> 验证超过 32 条候选仍可进入下游预算。</td></tr>
+<tr><td><span class="tag ok">工作树已修复</span> ContextManifest 不完整</td><td><code>MemorySelectionReceipt</code> 记录 claim、facet、分数、token 成本、included/excluded 与 future-cutoff/budget/duplicate 等原因。</td><td>included/excluded IDs 从 receipt 派生，不再由预算后 claims 伪造全部候选。</td></tr>
+<tr><td><span class="tag ok">工作树已修复</span> 伏笔/承诺在预算与 fingerprint 后注入</td><td>activity 先加载 open narratives，再以 pinned candidates 交给统一 bundle builder。</td><td>相关内容现在受预算约束，并进入 source revision、selection receipt 和 fingerprint。</td></tr>
 <tr><td><span class="tag p1">P1</span> independent reviewer 不保证独立</td><td>示例路由的所有 <code>review.*</code> 默认使用同一个 <code>web-chat</code> profile；stateless 不等于模型独立。</td><td>门禁凭证记录 provider/profile/model/prompt-version；至少一类 independent 必须与生成模型不同 provider 或不同模型族，并隔离生成 rationale。</td></tr>
 <tr><td><span class="tag p1">P1</span> 规划默认缺质量审核</td><td>Bootstrap 默认 <code>reviewGate: none</code>；章节入口只直接检查 architecture/characters/worldview/plot-design。</td><td>生产模式默认 planning review；章节前验证完整依赖闭包 approved 且 fingerprint 一致，而非只看 4 个叶节点。</td></tr>
 <tr><td><span class="tag p1">P1</span> 回归只覆盖原失败场景</td><td><code>regressionPassed</code> 只检查旧 blocker/major pattern 消失且分数不降。</td><td>候选晋升前运行：原失败场景 + 跨题材 counterexample + 不同章节功能 + 冻结审核器 + 人工抽检；避免生成器与审核器共同迎合新规则。</td></tr>
@@ -114,16 +116,19 @@
 </section>
 
 <section>
-<h2>4. 当前工作树中的修复：不能与正式能力混为一谈</h2>
+<h2>4. 状态与证据：历史提交和当前工作树分开记录</h2>
 <table><thead><tr><th>事项</th><th>当前状态</th><th>评价</th></tr></thead><tbody>
-<tr><td>未来伏笔 narrative cutoff</td><td><span class="tag done">已提交</span></td><td>迁移 020 与 narrative_order 过滤已落地 HEAD；当前代码对 cutoff 下 NULL 旧数据仍返回（向后兼容边界）。无集成测试执行（Vitest 基础设施不可用）。</td></tr>
-<tr><td>人工事实审批门禁</td><td><span class="tag done">已提交</span></td><td><code>factApprovalMode=manual</code> 可在 commit 前阻断并等待 signal；默认仍 auto，且尚无可运行测试证据。</td></tr>
+<tr><td>未来伏笔 narrative cutoff</td><td><span class="tag done">已提交</span></td><td>迁移 020 与 narrative_order 过滤已落地 HEAD；NULL 旧数据继续返回是明确的兼容边界。</td></tr>
+<tr><td>人工事实审批门禁</td><td><span class="tag done">已提交</span></td><td><code>factApprovalMode=manual</code> 可在 commit 前阻断并等待 signal；默认仍 auto。</td></tr>
 <tr><td>CreativeRun 重试上限 failWork</td><td><span class="tag done">已提交</span></td><td>从只记录事件改为真正结束 work item，可消除 running 悬挂；仍需 Temporal 恢复/重放测试。</td></tr>
 <tr><td>Reflection 修订计数</td><td><span class="tag done">已提交</span></td><td>显式常量化为 1 次，行为边界更清楚；仍应纳入总变更预算和 artifact lineage。</td></tr>
 <tr><td>五审硬门禁</td><td><span class="tag done">已提交</span></td><td><code>evaluateCommitGate</code> 五元组硬门禁，缺失角色即抛错；见第 3 节 P0 修复。</td></tr>
 <tr><td>爽点 provenance 重构</td><td><span class="tag done">已提交</span></td><td>payoff 推迟到 commit 后用正式 revisionId 落库；见第 3 节 P0 修复。</td></tr>
+<tr><td>Canonical cognition fingerprint</td><td><span class="tag partial">当前工作树</span></td><td><code>src/novel-v2/canonical-json.ts</code> 与 <code>cognition.ts</code>；focused 与全量测试通过，历史记录不迁移。</td></tr>
+<tr><td>Memory selection receipts</td><td><span class="tag partial">当前工作树</span></td><td><code>protocol.ts</code>、<code>fusion-memory.ts</code> 与 <code>cognition.ts</code>；候选/注入分离、预算排除和伏笔前置已有回归。</td></tr>
+<tr><td>最近章节顺序</td><td><span class="tag partial">当前工作树</span></td><td><code>postgres-repository.ts</code>；使用全新 PostgreSQL 数据库执行逆序 UUID 与多 revision 反例通过。</td></tr>
 </tbody></table>
-<div class="warn callout">上述事项已正式提交至 <code>commit 91db80c</code>。但当前测试 runner 仍不可用（见剩余 P0），因此它们属于“已实现代码”而非“已通过测试验证的能力”。报告不把它们算作已证明的生产能力，直到 Vitest 基础设施修复并有可运行回归。</div>
+<div class="warn callout">“当前工作树”表示代码与测试证据存在但尚未形成独立提交，不等同于生产发布；“已提交”表示存在于历史基线。两类状态均不替代 50/200/500 章长期质量验证。</div>
 </section>
 
 <section>
@@ -138,48 +143,49 @@
 <section>
 <h2>6. 构建与测试验证结果</h2>
 <table><thead><tr><th>验证项</th><th>结果</th><th>解释</th></tr></thead><tbody>
-<tr><td>关键 Vitest：revision-policy + chapter-lifecycle</td><td><span class="tag p0">失败</span></td><td>2 个 suite、0 个 test；均在 <code>describe</code> 注册阶段报 <code>Cannot read properties of undefined (reading 'config')</code>。这不是业务断言失败，而是 runner context 失效。</td></tr>
-<tr><td>全量 Vitest</td><td><span class="tag p0">失败</span></td><td>32 个 test files failed，Tests no tests。当前自动化测试证据链不可用。</td></tr>
-<tr><td>依赖实例检查</td><td><span class="tag p0">异常</span></td><td>顶层与 Vitest 内部解析到的 <code>@vitest/runner</code>/<code>@vitest/utils</code> 版本同为 4.1.10，但 realpath 不同，属于重复模块实例；与 suite collector 分裂症状吻合。</td></tr>
-<tr><td><code>tsc -p tsconfig.runtime.json</code></td><td><span class="tag done">通过</span></td><td>运行时 TypeScript 配置无错误。</td></tr>
-<tr><td><code>npm run lint</code></td><td><span class="tag p1">失败</span></td><td>前端 <code>KnowledgeWorkbenchPanel.tsx</code> 有未使用的 <code>Tag</code> 导入；第一段 tsc 因此中止。</td></tr>
-<tr><td>生产打包到全新临时目录</td><td><span class="tag done">通过</span></td><td>Vite 6.4.3 成功转换 3,685 个模块并生成产物；有 vendor-antd 超过 500kB 的 chunk warning。</td></tr>
-<tr><td>标准 <code>npm run build</code></td><td><span class="tag partial">环境拦截</span></td><td>TypeScript 与模块转换成功；清空现有 dist/assets 时触发安全删除批量确认，不属于源码编译错误。</td></tr>
+<tr><td>关键 Vitest：revision-policy + chapter-lifecycle</td><td><span class="tag done">通过</span></td><td><code>2 files / 22 tests</code> 全部执行通过；原 describe 注册错误未复现。</td></tr>
+<tr><td>全量 Vitest</td><td><span class="tag done">通过</span></td><td><code>39 files passed；246 tests passed；38 skipped</code>。skip 为需特定外部条件的既有套件，不是 runner collector 故障。</td></tr>
+<tr><td>PostgreSQL 章节顺序反例</td><td><span class="tag done">通过</span></td><td>在全新临时数据库应用全部迁移后执行：逆序 UUID 下返回第 3–7 章，并选择第 7 章最新 revision；测试后删除数据库。</td></tr>
+<tr><td><code>pnpm lint</code></td><td><span class="tag done">通过</span></td><td>前端与 <code>tsconfig.runtime.json</code> 均无 TypeScript 错误。</td></tr>
+<tr><td><code>pnpm build</code></td><td><span class="tag done">通过</span></td><td>Vite 6.4.3 成功转换 3,633 个模块；仅保留 vendor-antd 超过 500kB 的非阻断 warning。</td></tr>
+<tr><td>Compose / Runtime health</td><td><span class="tag done">通过</span></td><td><code>docker compose config --quiet</code> 通过；<code>/health</code> 返回 temporal=true、postgres=true。</td></tr>
 </tbody></table>
-<pre>建议的测试基础设施修复顺序：
-1. 在隔离目录/CI 中执行 pnpm install --frozen-lockfile，禁止复用当前异常 node_modules。
-2. 断言 vitest、@vitest/runner、@vitest/utils 均解析到同一 pnpm store 实例。
-3. 先运行 1 个仅含 describe/it 的最小 smoke，再跑 revision-policy。
-4. 跑 chapter-lifecycle、foreshadowing-order，再跑全量 32 suites。
-5. 不要通过改测试 import 或添加业务特判绕过 collector 分裂。</pre>
+<pre>当前证据命令：
+1. pnpm exec vitest run src/novel-v2/__tests__/revision-policy.test.ts src/novel-v2/__tests__/chapter-lifecycle.test.ts
+2. pnpm test -- --run
+3. TEST_DATABASE_URL=&lt;fresh-db&gt; pnpm exec vitest run src/novel-v2/__tests__/chapter-memory-order.test.ts
+4. pnpm lint &amp;&amp; pnpm build
+5. git diff --check &amp;&amp; docker compose -f docker-compose.v2.yml config --quiet
+
+历史边界：首次报告观察到的 Vitest 双实例错误是真实历史症状，但当前环境不能复现，不能继续列为当前 P0。</pre>
 </section>
 
 <section>
 <h2>7. 百万字能力建设路线图</h2>
-<div class="road"><strong>阶段 0<br>P0 止血</strong><div><b>先让质量门与证据可信。</b><ul><li>五角色完整门禁 + reviewer 重试/替代路由凭证。</li><li>修复 payoff candidate → committed revision lineage。</li><li>恢复单实例 Vitest 与 CI，补 Temporal/Postgres 集成 smoke。</li><li>将当前未提交的事实审批、伏笔顺序和 failWork 修复正式化并验证。</li></ul><b>退出条件：</b>全量单测可执行；任一 reviewer 缺席时禁止自动 commit；revision 回滚后不存在错误爽点记录。</div></div>
-<div class="road"><strong>阶段 1<br>50 章</strong><div><b>验证单卷内稳定性。</b><ul><li>建立 story-unit summary 与 arc current state；检索按 facet coverage + token budget 选择。</li><li>构建 5 种章节功能集：开篇、过渡、冲突升级、高潮、余波；至少 3 种题材。</li><li>记录事实冲突率、角色声部混淆率、伏笔漏兑现率、重复意象/句式率、人工返修字数。</li></ul><b>门槛建议：</b>50 章无 blocker continuity；关键角色声部盲测可区分；每 10 章人工抽检，不能出现持续退化趋势。</div></div>
-<div class="road"><strong>阶段 2<br>200 章</strong><div><b>验证跨弧与跨卷因果。</b><ul><li>增加 volume summary、book current state、cold memory 和可重建投影。</li><li>规划变更产生 impact report：受影响事实、弧、伏笔、已写正文和人工决策。</li><li>召回候选数量与注入预算解耦；ContextManifest 完整记录排除原因。</li><li>引入爽点“铺垫成本—兑现强度—类型疲劳—升级曲线”模型。</li></ul><b>门槛建议：</b>随机抽取 100 个跨 100 章事实问答；关键状态准确率达到预设线；卷级高潮由冻结评审器和人工双评。</div></div>
+<div class="road"><strong>阶段 0<br>可信性底座</strong><div><b>当前工作树已满足代码级退出条件。</b><ul><li>五角色自动提交硬门禁与 payoff committed revision lineage 已在历史基线。</li><li>canonical cognition fingerprint、最近章节顺序、候选/注入分离、selection receipts 与伏笔前置已实现。</li><li>全量测试、全新 PostgreSQL 反例、lint、build、Compose 和 API health 已复验。</li></ul><b>发布边界：</b>当前工作树尚需正常代码审查与提交；这些证据只证明上下文与审计底座，不证明百万字文学质量。</div></div>
+<div class="road"><strong>阶段 1<br>50 章</strong><div><b>验证单卷内稳定性。</b><ul><li>建立 story-unit summary 与 arc current state；复用现有 facet coverage + token budget 选择契约。</li><li>构建 5 种章节功能集：开篇、过渡、冲突升级、高潮、余波；至少 3 种题材。</li><li>记录事实冲突率、角色声部混淆率、伏笔漏兑现率、重复意象/句式率、人工返修字数。</li></ul><b>门槛建议：</b>50 章无 blocker continuity；关键角色声部盲测可区分；每 10 章人工抽检，不能出现持续退化趋势。</div></div>
+<div class="road"><strong>阶段 2<br>200 章</strong><div><b>验证跨弧与跨卷因果。</b><ul><li>增加 volume summary、book current state、cold memory 和可重建投影。</li><li>规划变更产生 impact report：受影响事实、弧、伏笔、已写正文和人工决策。</li><li>在现有候选/注入分离与 ContextManifest receipts 上接入分层投影。</li><li>引入爽点“铺垫成本—兑现强度—类型疲劳—升级曲线”模型。</li></ul><b>门槛建议：</b>随机抽取 100 个跨 100 章事实问答；关键状态准确率达到预设线；卷级高潮由冻结评审器和人工双评。</div></div>
 <div class="road"><strong>阶段 3<br>500 章</strong><div><b>验证百万字前的长期疲劳和自我迭代安全。</b><ul><li>跨题材 counterexample 回归集与冻结评估器；生成器、审校器、晋升器职责隔离。</li><li>每次 skill/prompt promote 跑失败场景、反例、不同章节功能及历史金标；不只看自评分。</li><li>建立重复模式、人物工具化、冲突成本、弃读风险、追更动力的时间序列。</li><li>真实作者盲评与目标读者小样本 A/B，保留人工否决权。</li></ul><b>退出条件：</b>500 章压力运行完成，质量曲线没有不可逆下滑；回滚能恢复内容规则与投影状态；人工评审认可达到预设稳定线。</div></div>
 <div class="road"><strong>阶段 4<br>百万字</strong><div><b>只能在前三级证据通过后宣称能力。</b>百万字不是“上下文更长”，而是可追溯事实、分层状态、节奏规划、跨场景回归和人工质量校准共同成立。系统应输出能力置信区间和失败模式，而不是单一“顶尖”标签。</div></div>
 </section>
 
 <section>
-<h2>8. 推荐执行顺序与验收矩阵</h2>
-<table><thead><tr><th>优先级</th><th>实施包</th><th>必须验证的原场景</th><th>至少一个跨场景反例</th></tr></thead><tbody>
-<tr><td>1</td><td>五审完整门禁</td><td>3 个 reviewer 超时、剩余 2 个 passed 时不得 commit</td><td>单个 reviewer 首次失败、替代路由成功后五角色齐全可 commit</td></tr>
-<tr><td>2</td><td>测试 runner 单实例化</td><td>现有 describe 注册错误消失</td><td>全新 checkout + frozen lockfile 在 CI 重现通过</td></tr>
-<tr><td>3</td><td>Payoff revision lineage</td><td>首次正文 commit 后 payoff 指向 manuscript revision</td><td>定稿重审产生新 revision，旧 payoff 失效或保留历史但不参与当前曲线</td></tr>
-<tr><td>4</td><td>统一 MemoryBundle 构建</td><td>被预算裁剪 claim 出现在 manifest excluded 中</td><td>open promise/foreshadowing 加入后仍不超预算，fingerprint 可复现</td></tr>
-<tr><td>5</td><td>分层记忆投影</td><td>跨 50 章伏笔和人物状态准确召回</td><td>旧事实被 supersede 后，卷摘要和全书当前态可重建且不保留错误当前值</td></tr>
-<tr><td>6</td><td>跨场景晋升回归</td><td>原 blocking pattern 消失且分数不降</td><td>不同题材、POV、章节功能不发生新 blocker；冻结评估器不与生成器共用新规则</td></tr>
+<h2>8. 实施状态与验收矩阵</h2>
+<table><thead><tr><th>状态</th><th>实施包</th><th>必须验证的原场景</th><th>至少一个跨场景反例</th></tr></thead><tbody>
+<tr><td>已验证</td><td>五审完整门禁 + payoff lineage</td><td>缺失 reviewer 不得自动 commit；payoff 使用 committed revision</td><td>人工覆盖策略与 setup revision 仍单独保留为后续边界</td></tr>
+<tr><td>已验证</td><td>Canonical fingerprint</td><td>嵌套 intent/snapshot/claim 变化导致指纹变化</td><td>对象 key 顺序变化不改变指纹；数组顺序变化必须改变</td></tr>
+<tr><td>已验证</td><td>统一 MemoryBundle 构建</td><td>预算裁剪 claim 出现在 manifest excluded 中</td><td>open promise/foreshadowing 加入后仍不超预算，fingerprint 可复现</td></tr>
+<tr><td>已验证</td><td>最近章节查询</td><td>逆序 UUID 项目仍返回叙事顺序最近 N 章</td><td>同章多 revision 只返回最新 memory</td></tr>
+<tr><td>下一阶段</td><td>分层记忆投影</td><td>跨 50 章伏笔和人物状态准确召回</td><td>旧事实被 supersede 后，卷摘要和全书当前态可重建且不保留错误当前值</td></tr>
+<tr><td>下一阶段</td><td>独立审校与跨场景晋升</td><td>独立门使用不同模型族；原 blocking pattern 消失</td><td>不同题材、POV、章节功能不发生新 blocker；冻结评估器不共享新规则</td></tr>
 </tbody></table>
 </section>
 
 <section>
 <h2>9. 最终结论</h2>
 <div class="info callout"><strong>工程层面：</strong>框架已经超出普通原型：耐久化工作流、人工 signal、规划重基线、事实账本、章节重审复用和 learning/promote/rollback 都有真实代码基础。</div>
-<div class="warn callout"><strong>产品层面：</strong>它目前能够支持“可控地生成并审核章节”，但还不具备经过证明的长期叙事操作系统。固定 32 条召回、章节级记忆、五审缺席容忍、provenance 错误和单场景回归，会在篇幅增长后累积成结构性质量风险。</div>
-<div class="danger callout"><strong>对目标的回答：</strong>现在不能合理宣称能自动创作“高质量、数百万字、顶尖中文网文”。应先完成 P0 止血，再按 50→200→500 章证据阶梯验证。达到百万字目标的最短路径不是继续堆提示词，而是把<strong>审核门完整性、分层状态投影、可复现上下文、跨场景回归与真实读者评价</strong>建设成硬契约。</div>
+<div class="warn callout"><strong>产品层面：</strong>它目前能够支持“上下文可追溯地生成并审核章节”，但还不具备经过证明的长期叙事操作系统。剩余结构性风险集中在章节级记忆缺少分层投影、独立审校未绑定不同模型族、规划/人工覆盖边界偏宽和单场景晋升回归。</div>
+<div class="danger callout"><strong>对目标的回答：</strong>现在仍不能合理宣称能自动创作“高质量、数百万字、顶尖中文网文”。可信性底座已经具备进入下一阶段的条件，后续应按 50→200→500 章证据阶梯建设分层状态、跨场景回归和真实读者评价，而不是继续堆提示词或把单章测试当作百万字证明。</div>
 </section>
-<div class="footer">报告基于 2026-07-29 当前工作树。未执行真实 PostgreSQL / Temporal / Qdrant 端到端环境，也未进行真实模型 50+ 章压力生成；相关能力明确标记为待验证。</div>
+<div class="footer">报告基于 2026-07-29 当前工作树。已执行全新 PostgreSQL 集成反例、全量测试、构建、Compose 配置与 Runtime health；未执行真实模型驱动的 Temporal/Qdrant 长篇闭环或 50+ 章压力生成，相关能力明确标记为待验证。</div>
 </main></body></html>

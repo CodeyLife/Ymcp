@@ -35,6 +35,8 @@ export interface RevisionDecision {
 
 export const DEFAULT_MAX_AUTO_REVISIONS = 2;
 export const MIN_IMPROVEMENT_THRESHOLD = 0.15;
+export const MIN_AUTOMATIC_COMMIT_SCORE = 4.0;
+export const MIN_REVIEWER_SCORE = 3.5;
 
 /**
  * 计算 review 列表的综合质量分数（0-5）。
@@ -82,12 +84,25 @@ export function evaluateCommitGate(reviews: Review[], artifactFingerprint: strin
   const missingRoles = REQUIRED_CHAPTER_REVIEWERS
     .filter((_, index) => !requiredReviews[index])
     .map(({ role }) => role);
+  const overallScore = scoreReviews(requiredReviews.filter((review): review is Review => Boolean(review)));
+  const lowReviewer = requiredReviews.find((review) => review && scoreReviews([review]) < MIN_REVIEWER_SCORE);
+  const hasBlockingIssue = requiredReviews.some((review) => review?.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major"));
+  const qualityFailure = hasBlockingIssue
+    ? "blocking-issue"
+    : lowReviewer
+      ? "reviewer-score"
+      : requiredReviews.length > 0 && overallScore < MIN_AUTOMATIC_COMMIT_SCORE
+        ? "overall-score"
+        : undefined;
   return {
     passed: missingRoles.length === 0
-      && requiredReviews.every((review) => review?.verdict === "passed"),
+      && requiredReviews.every((review) => review?.verdict === "passed")
+      && !qualityFailure,
     reviewIds: currentReviews.map((review) => review.id),
     failedReviewIds: currentReviews.filter((review) => review.verdict !== "passed").map((review) => review.id),
     missingRoles,
+    ...(qualityFailure ? { qualityFailure } : {}),
+    overallScore,
   };
 }
 
@@ -114,11 +129,13 @@ export function decideRevision(params: {
   const blocker = hasBlocker(params.reviews);
   const major = hasBlockerOrMajor(params.reviews);
   const passed = allReviewsPassed(params.reviews);
+  const belowQualityScore = currentScore < MIN_AUTOMATIC_COMMIT_SCORE
+    || params.reviews.some((review) => scoreReviews([review]) < MIN_REVIEWER_SCORE);
 
   let shouldRevise = false;
   let reason = "";
 
-  if (passed) {
+  if (passed && !belowQualityScore) {
     shouldRevise = false;
     reason = "所有 reviewer 通过";
   } else if (params.iteration >= maxIterations) {
@@ -127,6 +144,9 @@ export function decideRevision(params: {
   } else if (blocker) {
     shouldRevise = true;
     reason = `存在 blocker，必须修订（第 ${params.iteration + 1}/${maxIterations} 轮）`;
+  } else if (belowQualityScore) {
+    shouldRevise = true;
+    reason = `质量分未达到自动定稿门槛（综合 ${currentScore.toFixed(2)} / ${MIN_AUTOMATIC_COMMIT_SCORE.toFixed(2)}）`;
   } else if (!major) {
     shouldRevise = false;
     reason = "无 blocker 或 major，仅 warning 可人工微调";

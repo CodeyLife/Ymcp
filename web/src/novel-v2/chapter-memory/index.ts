@@ -131,11 +131,12 @@ export async function createChapterMemoryFromRevision(input: CreateChapterMemory
 
   // 4. 写入 Postgres
   await deps.repository.createChapterMemory(chapterMemory);
+  const rollupClaim = await deps.repository.refreshChapterMemoryRollup(input.projectId, input.narrativeOrder);
 
   // 5. 同步 Qdrant 向量索引（失败不阻塞，只警告）
   if (deps.memoryIndex) {
     try {
-      await upsertChapterMemoryToQdrant(deps.memoryIndex, chapterMemory);
+      await deps.memoryIndex.upsertClaims(input.projectId, [chapterMemoryAsClaim(chapterMemory), rollupClaim]);
     } catch (error) {
       // TODO P2: 接入 learning 闭环，把 Qdrant 索引失败作为 RuntimeLearningAssessment 的 symptom
       console.warn(`[chapter-memory] Qdrant 索引失败（不阻塞 Postgres 落库）：${(error as Error).message}`);
@@ -214,7 +215,3 @@ export function chapterMemoryAsClaim(memory: ChapterMemory) {
  * 复用 QdrantMemoryProvider.upsertClaims，把 ChapterMemory 投影为 MemoryClaim 形态。
  * 这样在检索时，chapter memory 会作为 episodic memory 被 recall。
  */
-async function upsertChapterMemoryToQdrant(memoryIndex: MemoryIndex, memory: ChapterMemory): Promise<void> {
-  const claim = chapterMemoryAsClaim(memory);
-  await memoryIndex.upsertClaims(memory.projectId, [claim]);
-}

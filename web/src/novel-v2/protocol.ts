@@ -114,6 +114,25 @@ export interface MemoryConflict {
   blocking: boolean;
 }
 
+export type MemorySelectionReason =
+  | "pinned-narrative"
+  | "required-facet"
+  | "ranked-fill"
+  | "future-cutoff"
+  | "budget"
+  | "duplicate";
+
+export interface MemorySelectionReceipt {
+  claimId: string;
+  matchedFacets: string[];
+  score: number;
+  authority: MemoryAuthority;
+  tokenCost: number;
+  status: "included" | "excluded";
+  reason: MemorySelectionReason;
+  sourceRevisionIds: string[];
+}
+
 export interface MemoryBundle {
   id: string;
   projectId: string;
@@ -124,6 +143,8 @@ export interface MemoryBundle {
   tokenBudget: number;
   sourceRevisionIds: string[];
   narrativeCutoff?: number;
+  /** Optional for historical persisted bundles created before selection receipts existed. */
+  selectionReceipts?: MemorySelectionReceipt[];
   fingerprint: string;
   createdAt: number;
 }
@@ -140,6 +161,8 @@ export interface ContextManifest {
   narrativeCutoff?: number;
   tokenBudget: number;
   estimatedTokens: number;
+  /** Optional for historical manifests; every newly compiled manifest includes it. */
+  selectionReceipts?: MemorySelectionReceipt[];
   truncationReason?: "budget" | "future-cutoff" | "authority-conflict" | "none";
   fingerprint: string;
   createdAt: number;
@@ -397,7 +420,11 @@ export interface ManuscriptDocumentSummary {
   updatedAt: string;
   wordCount?: number;
   latestRevision?: number;
+  chapterGoal?: string;
   blockingIssueCount?: number;
+  reviewScore?: number;
+  reviewVerdict?: "passed" | "revise" | "blocked";
+  reviewStale?: boolean;
   arcId?: string;
   arcTitle?: string;
   arcPlanningStatus?: string;
@@ -499,7 +526,7 @@ export interface ProjectSnapshotBundle {
     artifacts: Artifact[];
     reviews: Review[];
     novelIntents: NovelIntent[];
-    contentBlobs: Array<{ contentHash: string; objectKey: string; byteLength: number }>;
+    contentBlobs: Array<{ contentHash: string; objectKey: string; byteLength: number; wordCount?: number }>;
     executionBlueprints: Array<{ id: string; intentId: string; preflightId: string; memoryBundleId: string; skillBundleId: string; payload: ExecutionBlueprint; fingerprint: string }>;
     memoryBundles: Array<{ id: string; preflightId: string; narrativeCutoff?: number; sourceRevisionIds: string[]; tokenBudget: number; payload: MemoryBundle; fingerprint: string }>;
   };

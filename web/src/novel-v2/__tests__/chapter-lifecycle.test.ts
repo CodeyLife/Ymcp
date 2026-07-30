@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { finalizeChapterLifecycle, runChapterLifecycle } from "../application/chapter-lifecycle";
-import type { Artifact, FactApprovalSummary, Review } from "../protocol";
+import type { Artifact, FactApprovalSummary, Review, ReviewIssue } from "../protocol";
 
 const artifact: Artifact = {
   id: "artifact-1",
@@ -45,8 +45,8 @@ function baseParams(reviews: Review[], events: string[]) {
   return {
     projectId: artifact.projectId,
     initialDraft: { artifact, text: "正文" },
-    review: vi.fn(async () => reviews),
-    revise: vi.fn(async (current: { artifact: Artifact; text: string }) => current),
+    review: vi.fn(async (_current?: { artifact: Artifact; text: string }) => reviews),
+    revise: vi.fn(async (current: { artifact: Artifact; text: string }, _reviews: Review[], _iteration: number, _directedIssues?: ReviewIssue[]) => current),
     assessLearning: vi.fn(async () => {
       events.push("learning");
       return {
@@ -146,5 +146,38 @@ describe("runChapterLifecycle", () => {
 
     expect(result.commitResult.revisionId).toBe("revision-2");
     expect(events).toEqual(["commit", "enrich", "learning"]);
+  });
+
+  it("runs a directed revision from selected issues before reviewing the revised draft", async () => {
+    const events: string[] = [];
+    const initialReviews = fivePassedReviews();
+    const revisedArtifact = { ...artifact, id: "artifact-targeted", fingerprint: "fingerprint-targeted", contentHash: "content-targeted", kind: "revision" as const };
+    const targetIssue = { severity: "warning" as const, title: "意象不够贴合人物", evidence: "像困兽撞笼", paragraph: 2, revisionRanges: [{ start: 2, end: 2 }], suggestion: "改用结构性意象" };
+    const params = baseParams(initialReviews, events);
+    params.review = vi.fn(async (current?: { artifact: Artifact; text: string }) => {
+      events.push("professional-review");
+      expect(current?.artifact.id).toBe(revisedArtifact.id);
+      return fivePassedReviews().map((item) => ({ ...item, artifactId: revisedArtifact.id, artifactFingerprint: revisedArtifact.fingerprint }));
+    });
+    params.revise = vi.fn(async (_current: { artifact: Artifact; text: string }, revisionReviews: Review[], _iteration: number, directedIssues?: ReviewIssue[]) => {
+      events.push("targeted-revision");
+      expect(revisionReviews).toMatchObject([{ identity: "human", reviewerId: "author-selected-review-issues", verdict: "revise", issues: [targetIssue] }]);
+      expect(directedIssues).toEqual([targetIssue]);
+      return { artifact: revisedArtifact, text: "正文\n\n结构如断齿般卡住" };
+    });
+
+    const result = await runChapterLifecycle({
+      ...params,
+      directedRevision: { issues: [targetIssue], requireManuscriptApproval: true },
+    });
+
+    expect(params.review).toHaveBeenCalledTimes(1);
+    expect(params.revise).toHaveBeenCalledTimes(1);
+    expect(result.draft.artifact.id).toBe(revisedArtifact.id);
+    expect(result.iteration).toBe(1);
+    expect(result.commitBlocked).toEqual({ reasonCode: "targeted-manuscript-approval", targetIssueCount: 1 });
+    expect(params.extractFacts).not.toHaveBeenCalled();
+    expect(params.commit).not.toHaveBeenCalled();
+    expect(events).toEqual(["learning", "targeted-revision", "professional-review", "learning"]);
   });
 });

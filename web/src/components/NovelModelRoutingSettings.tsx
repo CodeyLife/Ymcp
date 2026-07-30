@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ApiOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExperimentOutlined, HolderOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
-import { Alert, App, AutoComplete, Button, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, App, AutoComplete, Button, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import { Reorder } from "motion/react";
+import { requestJson } from "../lib/json-response";
 
 const { Text, Title } = Typography;
 
@@ -65,10 +66,7 @@ function inheritedRoute(config: Config | undefined, purpose: Purpose): Route {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
-  return body as T;
+  return requestJson<T>(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
 }
 
 export function NovelModelRoutingSettings() {
@@ -150,11 +148,12 @@ export function NovelModelRoutingSettings() {
     finally { setSaving(false); }
   };
 
-  const probe = async (profileId: string) => {
-    setProbing(profileId);
+  const probe = async (profileId: string, capability: Capability) => {
+    setProbing(`${profileId}:${capability}`);
     try {
-      const result = await request<{ latencyMs: number }>(`/v2/model-config/profiles/${encodeURIComponent(profileId)}/probe`, { method: "POST", body: "{}" });
-      message.success(`连接正常，${result.latencyMs} ms`);
+      const result = await request<{ latencyMs: number; contract: Record<string, unknown> }>(`/v2/model-config/profiles/${encodeURIComponent(profileId)}/probe`, { method: "POST", body: JSON.stringify({ capability }) });
+      const contract = Object.entries(result.contract).map(([key, value]) => `${key}=${String(value)}`).join("，");
+      message.success(`${capability} 正常，${result.latencyMs} ms${contract ? `；${contract}` : ""}`);
     } catch (error) { message.error(error instanceof Error ? error.message : "连接失败"); }
     finally { setProbing(undefined); }
   };
@@ -209,7 +208,9 @@ export function NovelModelRoutingSettings() {
           { title: "密钥", render: (_, profile) => <Text type={profile.hasSecret || profile.secret ? "success" : "warning"}>{profile.secretHint ?? (profile.secret ? "待保存" : "未配置")}</Text> },
           { title: "状态", dataIndex: "enabled", render: (value) => <Tag color={value ? "success" : "default"}>{value ? "启用" : "禁用"}</Tag> },
           { title: "操作", width: 142, render: (_, profile) => <Space>
-            <Tooltip title="测试连接"><Button aria-label="测试连接" icon={<ExperimentOutlined />} loading={probing === profile.id} onClick={() => void probe(profile.id)} /></Tooltip>
+            <Dropdown menu={{ items: profile.capabilities.map((capability) => ({ key: capability, label: `探测 ${capability}` })), onClick: ({ key }) => void probe(profile.id, key as Capability) }} trigger={["click"]}>
+              <Tooltip title="按能力测试"><Button aria-label="按能力测试" icon={<ExperimentOutlined />} loading={probing?.startsWith(`${profile.id}:`)} /></Tooltip>
+            </Dropdown>
             <Tooltip title="编辑"><Button aria-label="编辑" icon={<EditOutlined />} onClick={() => openProfile(profile)} /></Tooltip>
             <Popconfirm title="删除该接口？" onConfirm={() => setConfig((current) => current ? { ...current, profiles: current.profiles.filter((item) => item.id !== profile.id) } : current)}><Tooltip title="删除"><Button danger aria-label="删除" icon={<DeleteOutlined />} /></Tooltip></Popconfirm>
           </Space> },
@@ -320,7 +321,7 @@ function CandidateChainEditor({ value, options, incompatibleIds, requiredCap, on
   const values = value.map(candidateValue);
   const labelOf = (v: string) => options.find((o) => o.value === v)?.label ?? v;
   const remainingOptions = options.filter((o) => !values.includes(o.value) && !o.disabled);
-  const setValues = (next: string[]) => onChange(next.map(fromCandidateValue));
+  const setValues = (next: string[]) => onChange(next.map((candidate) => value.find((existing) => candidateValue(existing) === candidate) ?? fromCandidateValue(candidate)));
 
   return (
     <Space direction="vertical" size={4} style={{ width: "100%" }} align="start">

@@ -122,3 +122,12 @@
   font-size: 11px; color: var(--color-ink-muted);
   background: color-mix(in srgb, var(--color-surface) 50%, transparent);
 }
+
+.me-plain-input {
+  width: 100%; min-height: var(--me-min-height, 360px); resize: vertical;
+  border: 0; outline: 0; padding: 28px clamp(28px, 5vw, 76px);
+  background: #121215; color: #dedee3; font: 15px/2 "Noto Serif SC", "Songti SC", serif;
+  letter-spacing: 0; white-space: pre-wrap;
+}
+.me-plain-input::placeholder { color: #52525b; }
+.me-plain-editor:focus-within { border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-line-soft)); }

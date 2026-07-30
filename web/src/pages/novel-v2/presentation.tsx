@@ -38,7 +38,16 @@ const WORKFLOW_TYPE_META: Record<string, { label: string; icon: ReactNode }> = {
   "novel-intent": { label: "创作意图", icon: <SendOutlined /> },
   "chapter-review": { label: "章节审校", icon: <AuditOutlined /> },
   "creative-run": { label: "创意执行", icon: <ThunderboltOutlined /> },
+  "book-synopsis": { label: "作品简介生成", icon: <HighlightOutlined /> },
+  "book-title-candidates": { label: "书名生成", icon: <EditOutlined /> },
+  "chapter-title": { label: "章节更名", icon: <EditOutlined /> },
 };
+
+export function projectDisplayTitle(title: string | undefined, projectId?: string): string {
+  const normalized = title?.trim();
+  if (!normalized || normalized === projectId || /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(normalized)) return "未命名作品";
+  return normalized;
+}
 
 export function workflowTypeMeta(workflowType: string | undefined): { label: string; icon: ReactNode } {
   if (!workflowType) return { label: "运行", icon: <PlayCircleFilled /> };
@@ -51,6 +60,7 @@ const STATUS_META: Record<string, { label: string; pill: string; icon: ReactNode
   accepted: { label: "已受理", pill: "novel-status-pill novel-status-pill-running", icon: <ClockCircleOutlined /> },
   pending: { label: "等待中", pill: "novel-status-pill novel-status-pill-idle", icon: <ClockCircleOutlined /> },
   running: { label: "运行中", pill: "novel-status-pill novel-status-pill-running", icon: <ReloadOutlined spin /> },
+  "waiting-external": { label: "等待模型", pill: "novel-status-pill novel-status-pill-running", icon: <ReloadOutlined spin /> },
   paused: { label: "已暂停", pill: "novel-status-pill novel-status-pill-running", icon: <ClockCircleOutlined /> },
   completed: { label: "已完成", pill: "novel-status-pill novel-status-pill-done", icon: <CheckCircleFilled /> },
   succeeded: { label: "已成功", pill: "novel-status-pill novel-status-pill-done", icon: <CheckCircleFilled /> },

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { CreateBucketCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { CreateBucketCommand, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 export interface ContentObject { hash: string; key: string; bytes: number; }
 export interface ObjectStoreIdentity { backend: "file" | "s3"; location: string; fingerprint: string; }
@@ -13,6 +13,7 @@ export interface RuntimeObjectStoreAdapter extends ObjectStoreAdapter {
   has(key: string): Promise<boolean>;
   ensureReady(): Promise<void>;
   identity(): ObjectStoreIdentity;
+  delete(key: string): Promise<void>;
 }
 
 type ObjectStoreEnvironment = Record<string, string | undefined>;
@@ -41,6 +42,7 @@ export class FileContentObjectStore implements RuntimeObjectStoreAdapter {
   }
 
   async getText(key: string) { return readFile(join(this.root, key), "utf8"); }
+  async delete(key: string) { await unlink(join(this.root, key)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); }
   async has(key: string) { try { await access(join(this.root, key)); return true; } catch { return false; } }
   async ensureReady() { await mkdir(this.root, { recursive: true }); }
   identity() { return identity("file", this.root.replaceAll("\\", "/")); }
@@ -86,6 +88,8 @@ export class S3ContentObjectStore implements RuntimeObjectStoreAdapter {
     }
   }
 
+  async delete(key: string) { await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key })); }
+
   identity() { return identity("s3", `${this.endpoint}/${this.bucket}`); }
 
   async health() {
@@ -104,8 +108,34 @@ export class ContentObjectStore implements RuntimeObjectStoreAdapter {
   putText(text: string) { return this.adapter.putText(text); }
   getText(key: string) { return this.adapter.getText(key); }
   has(key: string) { return this.adapter.has(key); }
+  delete(key: string) { return this.adapter.delete(key); }
   ensureReady() { return this.adapter.ensureReady(); }
   identity() { return this.adapter.identity(); }
+}
+
+export class ReadRepairContentObjectStore implements RuntimeObjectStoreAdapter {
+  private fallbackReads = 0;
+
+  constructor(
+    private readonly primary: RuntimeObjectStoreAdapter,
+    private readonly fallback: RuntimeObjectStoreAdapter,
+    private readonly onFallbackRead: (input: { key: string; total: number }) => void = ({ key, total }) => console.warn(`[object-store] legacy fallback 命中 ${key}，累计 ${total}`),
+  ) {}
+
+  putText(text: string) { return this.primary.putText(text); }
+  delete(key: string) { return this.primary.delete(key); }
+  identity() { return this.primary.identity(); }
+  async ensureReady() { await this.primary.ensureReady(); await this.fallback.ensureReady(); }
+  async has(key: string) { return await this.primary.has(key) || await this.fallback.has(key); }
+  async getText(key: string) {
+    if (await this.primary.has(key)) return this.primary.getText(key);
+    const text = await this.fallback.getText(key);
+    const repaired = await this.primary.putText(text);
+    if (repaired.key !== key) throw new Error(`legacy 对象内容与 key 不匹配：期望 ${key}，实际 ${repaired.key}`);
+    this.fallbackReads += 1;
+    this.onFallbackRead({ key, total: this.fallbackReads });
+    return text;
+  }
 }
 
 export function resolveObjectStoreConfig(env: ObjectStoreEnvironment = process.env): ResolvedObjectStoreConfig {
@@ -128,9 +158,13 @@ export function resolveObjectStoreConfig(env: ObjectStoreEnvironment = process.e
 
 export function createDefaultObjectStore(): RuntimeObjectStoreAdapter {
   const config = resolveObjectStoreConfig();
-  return config.backend === "file"
+  const primary = config.backend === "file"
     ? new FileContentObjectStore(config.root)
     : new S3ContentObjectStore(config);
+  const legacyRoot = process.env.NOVEL_OBJECT_LEGACY_ROOT?.trim();
+  return legacyRoot && config.backend === "s3"
+    ? new ReadRepairContentObjectStore(primary, new FileContentObjectStore(legacyRoot))
+    : primary;
 }
 
 

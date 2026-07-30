@@ -98,6 +98,7 @@ describe("revision-policy classification helpers", () => {
       reviewIds: ["internal", "independent"],
       failedReviewIds: ["internal"],
       missingRoles: ["plot-reviewer", "continuity-reviewer", "character-reviewer", "reader-reviewer"],
+      overallScore: 5,
     });
   });
 
@@ -115,23 +116,40 @@ describe("revision-policy classification helpers", () => {
 
   it("allows formal commit only when all five assigned reviewer roles pass", () => {
     const reviews = [
-      makeReview({ id: "plot", role: "plot-reviewer", identity: "internal" }),
-      makeReview({ id: "continuity", role: "continuity-reviewer", identity: "internal" }),
-      makeReview({ id: "style", role: "style-reviewer", identity: "independent" }),
-      makeReview({ id: "character", role: "character-reviewer", identity: "independent" }),
-      makeReview({ id: "reader", role: "reader-reviewer", identity: "independent" }),
+      makeReview({ id: "plot", role: "plot-reviewer", identity: "internal", score: 4.2 }),
+      makeReview({ id: "continuity", role: "continuity-reviewer", identity: "internal", score: 4.1 }),
+      makeReview({ id: "style", role: "style-reviewer", identity: "independent", score: 4.3 }),
+      makeReview({ id: "character", role: "character-reviewer", identity: "independent", score: 4.0 }),
+      makeReview({ id: "reader", role: "reader-reviewer", identity: "independent", score: 4.4 }),
     ];
 
     expect(evaluateCommitGate(reviews, artifact.fingerprint)).toMatchObject({ passed: true, missingRoles: [] });
   });
+
+  it("routes a low-scoring all-passed chapter to manual review", () => {
+    const reviews = [
+      makeReview({ id: "plot", role: "plot-reviewer", identity: "internal", score: 3.8 }),
+      makeReview({ id: "continuity", role: "continuity-reviewer", identity: "internal", score: 3.8 }),
+      makeReview({ id: "style", role: "style-reviewer", identity: "independent", score: 3.8 }),
+      makeReview({ id: "character", role: "character-reviewer", identity: "independent", score: 3.8 }),
+      makeReview({ id: "reader", role: "reader-reviewer", identity: "independent", score: 3.8 }),
+    ];
+    expect(evaluateCommitGate(reviews, artifact.fingerprint)).toMatchObject({ passed: false, qualityFailure: "overall-score" });
+  });
 });
 
 describe("revision-policy decideRevision branches", () => {
-  it("stops when all reviewers pass regardless of iteration", () => {
-    const decision = decideRevision({ reviews: [makeReview({ verdict: "passed" })], iteration: 0 });
+  it("stops when all reviewers pass the score threshold regardless of iteration", () => {
+    const decision = decideRevision({ reviews: [makeReview({ verdict: "passed", score: 4.2 })], iteration: 0 });
     expect(decision.shouldRevise).toBe(false);
     expect(decision.reason).toContain("通过");
-    expect(decision.currentScore).toBe(5);
+    expect(decision.currentScore).toBe(4.2);
+  });
+
+  it("revises an all-passed result that remains below the quality threshold", () => {
+    const decision = decideRevision({ reviews: [makeReview({ verdict: "passed", score: 3.8 })], iteration: 0 });
+    expect(decision.shouldRevise).toBe(true);
+    expect(decision.reason).toContain("质量分");
   });
 
   it("stops when iteration reaches the max ceiling even with blockers", () => {
