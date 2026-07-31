@@ -649,6 +649,53 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const assessment = parseRuntimeLearningAssessmentV2(task.result?.value, { id: `learning:${input.artifact.id}`, projectId: input.projectId, source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: input.reviews.map((review) => review.id), fingerprint: input.artifact.fingerprint }, createdAt: Date.now() });
       return recordLearning(assessment);
     },
+    assessStoryArcLearning: async (input: { projectId: string; workflowId: string; artifact: Artifact; reviewArtifact: Artifact; review: StoryArcReviewOutput; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<GeneratedLearningResult> => {
+      const issues = input.review.issues.map((issue): ReviewIssue => ({
+        severity: issue.severity,
+        title: issue.title,
+        description: issue.suggestion,
+        evidence: issue.evidence,
+        dimension: "story-arc",
+        suggestion: issue.suggestion,
+      }));
+      const review: Review = {
+        id: createHash("sha256").update(`${input.reviewArtifact.id}:story-arc-learning`).digest("hex"),
+        projectId: input.projectId,
+        artifactId: input.artifact.id,
+        reviewerId: "story-arc-reviewer",
+        identity: "independent",
+        verdict: input.review.verdict,
+        issues,
+        role: "plot-reviewer",
+        createdAt: Date.now(),
+        artifactFingerprint: input.artifact.fingerprint,
+      };
+      let availableSkills: Array<{ skillId: string; capabilities: string[] }> = [];
+      try {
+        const skills = await deps.repository.listSkills(input.projectId);
+        availableSkills = skills.map((s) => ({ skillId: s.skillId, capabilities: s.capabilities }));
+      } catch (skillError) {
+        console.warn(`[assessStoryArcLearning] listSkills 失败（不阻塞 learning）：${(skillError as Error).message}`);
+      }
+      try {
+        const { assessment, validationError } = await assessRuntimeLearningWithModel({ projectId: input.projectId, workflowId: input.workflowId, artifact: input.artifact, reviews: [review], model, routingSnapshot: input.routingSnapshot, candidateStartIndex: input.candidateStartIndex, availableSkills });
+        return { kind: "completed", assessment: await recordLearning(validationError ? { ...assessment, validationError } : assessment) };
+      } catch (error) {
+        if (!(error instanceof ExternalMcpRequiredError)) throw error;
+        const blocking = blockingReviewIssues([review]);
+        if (!blocking.length) throw error;
+        const system = "你是长篇小说 Runtime 的学习闭环审计员，只在能说明底层机制和影响输入类时提出可复用规则改进。";
+        const promptPackage = compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "learning.assess", stage: "review", system, prompt: buildRuntimeLearningPrompt({ artifact: input.artifact, reviews: [review], availableSkills }), schema: runtimeLearningAssessmentSchema, reservedOutputTokens: 4_096, provenanceRefs: [input.artifact.id, input.reviewArtifact.id] });
+        const task = await externalTask({ workflowId: input.workflowId, taskId: `${input.artifact.taskId}:learning:story-arc:${input.reviewArtifact.id}`, purpose: "learning.assess", candidateIndex: error.candidateIndex, routingSnapshot: input.routingSnapshot, outputKind: "structured", system, instruction: promptPackage.instruction, schema: runtimeLearningAssessmentSchema, schemaName: "runtime-learning-assessment", baseRevision: input.artifact.baseRevision, contextRefs: { artifactId: input.artifact.id, reviewIds: review.id }, promptContext: promptPackage.manifest });
+        return { kind: "external", task };
+      }
+    },
+    materializeExternalStoryArcLearning: async (input: { modelTaskId: string; projectId: string; workflowId: string; artifact: Artifact; reviewArtifact: Artifact; review: StoryArcReviewOutput; value: unknown }): Promise<RuntimeLearningAssessmentV2> => {
+      const issues = input.review.issues.map((issue): ReviewIssue => ({ severity: issue.severity, title: issue.title, description: issue.suggestion, evidence: issue.evidence, dimension: "story-arc", suggestion: issue.suggestion }));
+      const reviewId = createHash("sha256").update(`${input.reviewArtifact.id}:story-arc-learning`).digest("hex");
+      const assessment = parseRuntimeLearningAssessmentV2(input.value, { id: `learning:${input.reviewArtifact.id}:story-arc`, projectId: input.projectId, source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: [reviewId], fingerprint: input.artifact.fingerprint }, createdAt: Date.now() });
+      return recordLearning({ ...assessment, source: { ...assessment.source, reviewIds: issues.length ? [reviewId] : [] } });
+    },
     commit: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commit({ ...input, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined, chapterMemoryDelta: input.factArtifact?.structuredData?.chapterMemory as ChapterStateDelta["chapterMemory"] }),
     commitAuthorApproved: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; baseRevision: number; idempotencyKey: string }) => commitService.commitAuthorApproved({ ...input, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined, chapterMemoryDelta: input.factArtifact?.structuredData?.chapterMemory as ChapterStateDelta["chapterMemory"] }),
     /** P0 #1: 人工事实审批门通过后，批量批准 pending 事实候选（candidate → approved）。

@@ -80,6 +80,10 @@ export function buildChapterReflectionPrompt(input: ReflectionPromptInput): stri
 
 ${dimensionLines}
 
+# 篇幅边界
+
+字数、字符数、段落数量或是否达到某个目标篇幅，不是反思/审校目标，也不能单独触发 blocker、major 或 warning。只能批评可由正文证据证明的阅读机制：章节功能是否完成、信息是否抵达、情绪/关系/因果是否有承载、是否重复空转或提前消费后续节点。若你想指出篇幅相关问题，必须改写为具体机制（例如"关键转折缺少可观察承载""多段重复同一信息""章尾在结果出现前收束"），并引用正文片段；找不到机制证据时不得输出 issue。
+
 # 蓝图摘要
 
 ${blueprintDigest}

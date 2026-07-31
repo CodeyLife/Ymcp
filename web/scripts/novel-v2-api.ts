@@ -908,6 +908,11 @@ const server = createServer(async (request, response) => {
       const bundle = parseStoryArcBundle(artifact.structuredData);
       return send(response, 200, { arc: await repository.projectStoryArcBundle({ projectId, arcId, bundle, artifact, actor: "web-author", edited: true }) });
     }
+    if (request.method === "DELETE" && storyArcItemMatch) {
+      const projectId = decodeURIComponent(storyArcItemMatch[1]);
+      const arcId = decodeURIComponent(storyArcItemMatch[2]);
+      return send(response, 200, await repository.deleteStoryArc(projectId, arcId, "web-author"));
+    }
     const storyArcActionMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/(approve|rebase|abandon)$/);
     if (request.method === "POST" && storyArcActionMatch) {
       const projectId = decodeURIComponent(storyArcActionMatch[1]);

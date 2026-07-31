@@ -122,6 +122,9 @@ export const TOOL_NAMES = [
   "novel_story_arc_get",
   // 评估闭环（1，v2 新增）
   "novel_closed_loop_run",
+  // Workflow 查询（2，新增）
+  "novel_workflow_get",
+  "novel_workflow_list",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -256,11 +259,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 
   {
     name: "novel_catalog_get",
-    description: "获取项目目录（项目详情 + 文档列表 + skills + creative runs），并行查询。",
+    description: "获取项目目录（项目详情 + 文档列表 + creative runs），并行查询。支持 compact 精简模式与 documentStatus 过滤，避免大项目响应过重。",
     inputSchema: {
       type: "object",
       properties: {
         projectId: { type: "string", minLength: 1 },
+        compact: { type: "boolean", default: false, description: "true 时省略 documents 与 creativeRuns，只返回项目元数据 + latestRuns。用于快速确认项目状态" },
+        documentStatus: {
+          type: "array",
+          items: { type: "string", enum: ["planned", "drafting", "reviewing", "final", "archived"] },
+          description: "可选，按 status 过滤 documents（仅 compact=false 时生效）",
+        },
       },
       required: ["projectId"],
       additionalProperties: false,
@@ -560,6 +569,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         idempotencyKey: { type: "string", minLength: 1 },
       },
       required: ["projectId", "documentId", "idempotencyKey"],
+      additionalProperties: false,
+    },
+  },
+
+  // ===== Workflow 查询（2，新增）=====
+
+  {
+    name: "novel_workflow_get",
+    description: "按 workflowId 查询单个 workflow run 状态（章节生成/章节审校/故事弧规划）。返回 workflow_runs 记录 + Temporal 运行时状态。workflowId 来自 novel_chapter_generate / novel_chapter_review 的返回值。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workflowId: { type: "string", minLength: 1 },
+      },
+      required: ["workflowId"],
+      additionalProperties: false,
+    },
+  },
+
+  {
+    name: "novel_workflow_list",
+    description: "按 projectId 列出最新 workflow runs，按 updatedAt DESC 排序。支持 workflowType 过滤。轻量替代 novel_catalog_get 查章节生成历史。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+        workflowType: { type: "string", description: "可选。常见值: novel-intent(章节生成)、chapter-review(章节审校)、story-arc-planning(故事弧规划)" },
+      },
+      required: ["projectId"],
       additionalProperties: false,
     },
   },

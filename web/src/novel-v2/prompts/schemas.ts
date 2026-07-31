@@ -11,7 +11,21 @@
  */
 
 /**
- * 审核 issue 维度枚举：与 v1 reviewerSchema 保持一致。
+ * 审核 issue 维度枚举。
+ *
+ * 前 8 维度是"单章可读性"维度（v1 继承）；后 4 维度是"长篇文学质量"维度
+ * （对照 docs/novel-v2/quality-standard.md 的 D1/D3/D4/D5）。
+ *
+ * 设计依据：AGENTS.md「Fix the problem at the lowest shared layer」+ pipeline-audit.md F9
+ * ——REVIEW_DIMENSIONS 是全流程审核的共享契约层，原 8 维度完全不覆盖世界观/群像/感情线/幽默，
+ * 导致 5 reviewer 即使审核认真也无法度量这些维度 → verdict=passed → 缺陷带病通过 commit gate。
+ * 新增 4 维度让审核层能度量文学质量，驱动迭代。
+ *
+ * 维度与 quality-standard.md 映射：
+ * - worldbuilding → D1 世界观（W1 规则可内化/W2 主题承载/W4 独立质地）
+ * - ensemble → D3 群像（E1 配角独立欲望/E3 弧光/E4 关系网络/E5 日常质地）
+ * - romance → D4 感情线（R1 行动承载/R2 阶段性/R4 女主独立/R5 复杂度）
+ * - humor → D5 幽默（H1 贴合人物/H2 时代契合/H3 调节功能/H4 人物一致性）
  */
 export const REVIEW_DIMENSIONS = [
   "plot",
@@ -22,6 +36,11 @@ export const REVIEW_DIMENSIONS = [
   "hookPayoff",
   "continuity",
   "readerRetention",
+  // 长篇文学质量维度（对照 quality-standard.md D1/D3/D4/D5）
+  "worldbuilding",
+  "ensemble",
+  "romance",
+  "humor",
 ] as const;
 
 export type ReviewDimension = (typeof REVIEW_DIMENSIONS)[number];

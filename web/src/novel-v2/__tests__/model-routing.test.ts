@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ModelConfigStore, applyRuntimeModelOverrides } from "../model-config-store";
 import { RoutedModelGateway } from "../model-gateway";
@@ -66,6 +69,38 @@ describe("model routing config", () => {
     const store = new ModelConfigStore("unused", config());
     expect(store.getMaskedConfig().profiles[0]).toMatchObject({ hasSecret: true, secretHint: "***cret" });
     expect(JSON.stringify(createRoutingSnapshot(config()))).not.toContain("toolkey-secret");
+  });
+
+  it("reloads file changes before a long-lived worker gateway resolves the next route", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ymcp-model-config-"));
+    const path = join(dir, "model-providers.local.yaml");
+    try {
+      const initial = config([profile({ model: "old-model" })]);
+      const updated = config([profile({ model: "new-model" })]);
+      const apiStore = new ModelConfigStore(path, initial);
+      await apiStore.save(initial);
+
+      const workerStore = new ModelConfigStore(path);
+      await workerStore.load();
+      const gateway = new RoutedModelGateway(workerStore);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await apiStore.save(updated);
+
+      const requestedModels: string[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+        requestedModels.push(JSON.parse(String(init?.body)).model);
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+      }));
+
+      const result = await gateway.generateText({ purpose: "writing.draft", prompt: "p" });
+
+      expect(result.text).toBe("ok");
+      expect(requestedModels).toEqual(["new-model"]);
+      expect(result.provenance.model).toBe("new-model");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects task-chain on non-writing purposes", () => {

@@ -13,13 +13,13 @@ export const storyArcBundleSchema = {
         title: { type: "string", minLength: 1 }, objective: { type: "string", minLength: 1 }, entryState: { type: "string" }, centralConflict: { type: "string" },
         development: { type: "array", items: { type: "string" } }, resolution: { type: "string" }, exitState: { type: "string" },
         plotThreadRefs: { type: "array", items: { type: "string" } }, foreshadowingRefs: { type: "array", items: { type: "string" } },
-        expectedChapterCount: { type: "integer", minimum: 12, maximum: 30 }, authorIntent: { type: "string" },
+        expectedChapterCount: { type: "integer", minimum: 8, maximum: 80 }, authorIntent: { type: "string" },
         phases: { type: "array", minItems: 2, items: { type: "object", additionalProperties: false, required: ["title", "objective", "exitCondition"], properties: { title: { type: "string", minLength: 1 }, objective: { type: "string", minLength: 1 }, exitCondition: { type: "string", minLength: 1 } } } },
       },
     },
     batch: { type: "object", additionalProperties: false, required: ["batchIndex", "startChapterIndex", "complete"], properties: { batchIndex: { type: "integer", minimum: 1 }, startChapterIndex: { type: "integer", minimum: 1 }, complete: { type: "boolean" } } },
     chapters: {
-      type: "array", minItems: 5, maxItems: 8, items: {
+      type: "array", minItems: 1, maxItems: 16, items: {
         type: "object", additionalProperties: false,
         required: ["index", "title", "summary", "chapterPurpose", "dramaticQuestion", "emotionalMovement", "stateDeltaBudget", "optionalBeats", "scenes", "continuityConstraints", "setupRefs", "payoffRefs", "closingForce", "freedom"],
         properties: {
@@ -66,8 +66,13 @@ const STORY_ARC_REVIEW_DIMENSIONS = [
   },
   {
     name: "提前消费检测",
-    rule: "后续大节点（高潮、反转、关系跃迁、伏笔回收）不在弧内提前触发；弧内只兑现该弧应有的进度。",
-    anchors: "5=节奏克制；3=个别节点略早但不破坏后续；1=重大节点被提前消费。",
+    rule: "后续大节点（高潮、反转、关系跃迁、伏笔回收）不在当前故事弧或当前批次提前触发；弧内只兑现该弧应有的进度。",
+    anchors: "5=节奏克制；3=个别节点略早但不破坏后续；1=重大节点或卷级节点被提前消费。",
+  },
+  {
+    name: "长篇节奏与批次边界",
+    rule: "卷/篇章分区只是展示和长篇结构层，故事弧是阶段性推进层；不得把完整一卷、卷级高潮、关键关系跃迁或重大权力身份变化压缩进首批章节。",
+    anchors: "5=批次只承担自然起步或阶段推进；3=批次略拥挤但仍留有铺陈余地；1=首批像卷级摘要，多个重大节点被连续兑现。",
   },
   {
     name: "机械逐项检测",
@@ -91,7 +96,9 @@ const STORY_ARC_OUTPUT_FORMAT_GUARD =
 export function buildStoryArcPrompt(input: { projectTitle: string; authorIntent?: string; macro: Array<{ taskKey: string; title: string; summary: string }>; recentChapters: Array<{ order: number; summary: string; unresolvedThreads: string[]; emotionalArc?: string }>; openThreads: Array<{ id: string; title: string; payload: Record<string, unknown> }> }): string {
   return [
     "规划下一个顺序故事弧的宏观边界，并只展开第一批连续章节蓝图。",
-    "故事弧默认容纳 12–30 章，必须从已经发生的状态出发形成局部完整的小故事；本次 batchIndex=1、startChapterIndex=1，只展开 5–8 章，后续批次将基于新定稿状态滚动生成。",
+    "卷/篇章分区不是故事弧：如果作者意图提到「卷一/卷二/卷三」或类似分卷目标，只把它当作长篇位置与主题背景，不要把完整一卷压缩成一个故事弧，也不要把故事弧标题伪装成卷标题。",
+    "故事弧 expectedChapterCount 由当前宏观规划、题材密度、人物关系和冲突复杂度自行判定；第一批章节数也由叙事需要决定，只展开足以自然进入本弧的连续章节，不固定五章，不为了凑节点压缩铺陈、相处、内省和过渡。",
+    "batchIndex=1；batch.startChapterIndex 表示全书叙事序号起点，需承接最近已定稿/已规划章节。后续批次将基于新定稿状态滚动生成。",
     "章节蓝图是创作边界，不是待办清单。铺陈、相处、内省、情绪积累、文学意象和日常过程可以成为章节主体；optionalBeats 允许作者在正文中灵活取舍。",
     STORY_ARC_OUTPUT_FORMAT_GUARD,
     buildStoryArcContext(input),
@@ -114,9 +121,9 @@ function buildStoryArcContext(input: Parameters<typeof buildStoryArcPrompt>[0]):
 export function buildStoryArcBatchPrompt(input: Parameters<typeof buildStoryArcPrompt>[0] & { arc: StoryArcBundle["arc"]; batchIndex: number; startChapterIndex: number }): string {
   return [
     "为已批准故事弧生成下一批连续章节蓝图。",
-    `本次 batchIndex=${input.batchIndex}、startChapterIndex=${input.startChapterIndex}，只展开 5–8 章。chapter.index 从 1 重新编号；batch.startChapterIndex 才是整弧位置。`,
+    `本次 batchIndex=${input.batchIndex}、startChapterIndex=${input.startChapterIndex}。章节数由叙事密度和当前阶段需要决定，不固定五章；chapter.index 从 1 重新编号，batch.startChapterIndex 表示全书叙事序号起点。`,
     "arc 必须原样保留既定的 title、objective、entryState、exitState 和 expectedChapterCount，不得借滚动规划改写已经批准的故事弧边界。",
-    "以最近定稿状态、开放剧情线和未兑现伏笔为进入状态；不得改写前序已批准批次。只有确实抵达既定 exitState 时 batch.complete=true。",
+    "以最近定稿状态、开放剧情线和未兑现伏笔为进入状态；不得改写前序已批准批次。只有确实抵达既定 exitState 且覆盖 expectedChapterCount 所需阶段时 batch.complete=true。",
     STORY_ARC_OUTPUT_FORMAT_GUARD,
     "## 已批准故事弧边界",
     JSON.stringify(input.arc, null, 2),
@@ -134,6 +141,7 @@ export function buildStoryArcReviewPrompt(bundle: StoryArcBundle, context: strin
     STORY_ARC_OUTPUT_FORMAT_GUARD,
     "## 审核维度与锚点",
     "逐维度对照下列锚点评分，找到真正破坏本弧功能或连续性的问题；不要因安静章、铺陈章、关系章没有明显推进主线而判错。",
+    "重点检查当前批次是否把卷级目标、高潮、重大身份变化、关键情感跃迁或主线真相过早压缩；如果首批章节像卷级剧情摘要，必须报告 blocker/major。",
     ...dimensionLines,
     "## issue 证据要求",
     "每个 issue 的 evidence 必须引用 arc 内的章节编号（如「第 3 章」）+ 蓝图逐字片段或 JSON 路径，格式：`第 X 章：<逐字片段或字段路径>`。evidence 不得仅写概括性描述，必须有可定位的原文依据。找不到具体证据时不要报告该 issue。",

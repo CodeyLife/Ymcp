@@ -414,14 +414,30 @@ const novel_catalog_get: ToolHandler = async (args, ctx) => {
   const projectId = asString(args.projectId);
   if (!projectId) throw new Error("projectId 必填");
 
-  // 并行查询项目详情 + creative runs
+  const compact = asBoolean(args.compact) ?? false;
+  const documentStatus = asStringArray(args.documentStatus);
+
+  if (compact) {
+    // 精简模式：只返回项目元数据 + latestRuns，省略 documents 与 creativeRuns
+    // 响应从 32KB+ 降到 ~2KB，用于快速确认项目状态
+    const project = await ctx.repository.getProjectDetail(projectId);
+    return { project: { ...project, documents: [] } };
+  }
+
+  // 完整模式：并行查询项目详情 + creative runs
   const [project, runs] = await Promise.all([
     ctx.repository.getProjectDetail(projectId),
     listCreativeRuns(ctx.repository, projectId),
   ]);
 
+  // documentStatus 过滤在 handler 层（getProjectDetail 不支持参数）
+  // TODO P2: repository 层加 documentStatus 参数，避免拉取多余 document 行
+  const filteredDocuments = documentStatus
+    ? project.documents.filter((d) => documentStatus.includes(d.status))
+    : project.documents;
+
   return {
-    project,
+    project: { ...project, documents: filteredDocuments },
     creativeRuns: runs,
   };
 };
@@ -745,10 +761,11 @@ const novel_chapter_generate: ToolHandler = async (args, ctx) => {
 
   return {
     workflowId,
-    runId: handle.firstExecutionRunId,
+    temporalRunId: handle.firstExecutionRunId,
     documentId: targetDocumentId,
     intentId: stored.id,
     status: "accepted",
+    nextAction: "调用 novel_workflow_get({ workflowId }) 查询生成进度",
   };
 };
 
@@ -775,7 +792,7 @@ const novel_chapter_review: ToolHandler = async (args, ctx) => {
   // 若 id=randomUUID() 而 workflow 用 workflowId，FK 会失败。与 novelIntentWorkflow 对齐。
   await ctx.repository.putWorkflowRun({ id: workflowId, workflowType: "chapter-review", projectId, temporalWorkflowId: workflowId, status: "accepted", payload: { documentId, instruction, idempotencyKey } });
   const handle = await ctx.temporal.workflow.start("chapterReviewWorkflow", { args: [params], taskQueue: ctx.taskQueue ?? "novel-v2", workflowId });
-  return { workflowId, runId: handle.firstExecutionRunId, documentId, instruction, status: "accepted" };
+  return { workflowId, temporalRunId: handle.firstExecutionRunId, documentId, instruction, status: "accepted", nextAction: "调用 novel_workflow_get({ workflowId }) 查询审校进度" };
 };
 
 // ===== 评估闭环（1，v2 新增）=====
@@ -803,6 +820,60 @@ const novel_closed_loop_run: ToolHandler = async (args, ctx) => {
   });
 
   return result;
+};
+
+// ===== Workflow 查询（2，新增）=====
+
+/**
+ * 按 workflowId 查询单个 workflow run 状态。
+ *
+ * 设计依据：novel_chapter_generate / novel_chapter_review 写入 workflow_runs 表，
+ * 但 novel_run_get 查 creative_runs 表（两表不相交），导致 Agent 无法用返回的
+ * workflowId 查询生成进度。此工具填补该缺口，复用 repository.getWorkflowRunByTemporalId。
+ *
+ * 附加 Temporal 运行时状态：workflow_runs.status 由 workflow 自己写，可能滞后于
+ * Temporal 实际状态（如 commit activity 还没更新 DB）。Agent 需要真实状态判断是否
+ * 继续轮询。Temporal 不可达时 temporal 字段留空，以 run.status 为准。
+ */
+const novel_workflow_get: ToolHandler = async (args, ctx) => {
+  const workflowId = asString(args.workflowId);
+  if (!workflowId) throw new Error("workflowId 必填");
+
+  const run = await ctx.repository.getWorkflowRunByTemporalId(workflowId);
+  if (!run) throw new Error(`WorkflowRun 不存在：${workflowId}`);
+
+  let temporal: { status: string; closeTime?: string } | undefined;
+  if (ctx.temporal) {
+    try {
+      const handle = ctx.temporal.workflow.getHandle(workflowId);
+      const info = await handle.describe();
+      temporal = {
+        status: info.status.name,
+        closeTime: info.closeTime?.toISOString(),
+      };
+    } catch {
+      // Temporal 不可达或 workflow 不存在——temporal 留空，仅返回 DB 状态。
+      // TODO P2: 结构化日志记录 describe 失败，便于排查 Temporal 连通性。
+    }
+  }
+
+  return { run, temporal };
+};
+
+/**
+ * 按 projectId 列出最新 workflow runs。
+ *
+ * 轻量替代 novel_catalog_get（32KB+）查章节生成历史的场景。
+ * 支持 workflowType 过滤（如只看 novel-intent 章节生成）。
+ */
+const novel_workflow_list: ToolHandler = async (args, ctx) => {
+  const projectId = asString(args.projectId);
+  if (!projectId) throw new Error("projectId 必填");
+  const limit = asNumber(args.limit) ?? 20;
+  const workflowType = asString(args.workflowType) || undefined;
+
+  const runs = await ctx.repository.listProjectRuns(projectId, limit, workflowType);
+  return { runs };
 };
 
 // ===== Handler 注册表 =====
@@ -845,4 +916,8 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
 
   // 评估闭环（1）
   novel_closed_loop_run,
+
+  // Workflow 查询（2）
+  novel_workflow_get,
+  novel_workflow_list,
 };

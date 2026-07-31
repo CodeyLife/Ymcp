@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildChapterDraftPrompt, buildChapterDraftPromptPackage } from "../prompts/chapter-draft";
+import { buildChapterReflectionPrompt } from "../prompts/chapter-reflection";
 import { buildChapterReviewPrompt, buildChapterReviewPromptPackage, getReviewFocus, toReview, type ReviewerRole } from "../prompts/chapter-review";
 import { REVIEW_DIMENSIONS, type ReviewerOutput } from "../prompts/schemas";
 import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent } from "../protocol";
@@ -188,7 +189,7 @@ describe("prompts buildChapterReviewPrompt", () => {
     const styleFocus = getReviewFocus("style-reviewer");
     expect(styleFocus).toContain("解释性心理总结");
     const stylePrompt = buildChapterReviewPrompt({ role: "style-reviewer", artifact, text: "x", blueprint: makeBlueprint(), memory: makeMemory() });
-    expect(stylePrompt).toContain("sceneEmbodiment、specificity"); // 维度边界仍在 user prompt
+    expect(stylePrompt).toContain("sceneEmbodiment、specificity、humor"); // 维度边界仍在 user prompt
 
     const continuityFocus = getReviewFocus("continuity-reviewer");
     expect(continuityFocus).toContain("POV 越界");
@@ -229,13 +230,42 @@ describe("prompts buildChapterReviewPrompt", () => {
     expect(packageResult.instruction.match(/唯一审校规则：关注隐含冲突。/g)).toHaveLength(1);
     expect(packageResult.manifest.sections.filter((section) => section.id === "payoff-stats")).toHaveLength(1);
   });
+
+  it("states that word count is not an audit target", () => {
+    const prompt = buildChapterReviewPrompt({
+      role: "reader-reviewer",
+      artifact,
+      text: "短章也可以完整完成一次余波。",
+      blueprint: makeBlueprint(),
+      memory: makeMemory(),
+    });
+
+    expect(prompt).toContain("字数、字符数、段落数量或是否达到某个目标篇幅，不是审校目标");
+    expect(prompt).toContain("不能单独触发降分");
+    expect(prompt).toContain("必须把问题改写为具体机制");
+  });
+});
+
+describe("prompts buildChapterReflectionPrompt", () => {
+  it("does not let word count become a reflection target", () => {
+    const prompt = buildChapterReflectionPrompt({
+      artifact,
+      text: "第一段。\n\n第二段。",
+      blueprint: makeBlueprint(),
+      memory: makeMemory(),
+    });
+
+    expect(prompt).toContain("字数、字符数、段落数量或是否达到某个目标篇幅，不是反思/审校目标");
+    expect(prompt).toContain("不能单独触发 blocker、major 或 warning");
+    expect(prompt).toContain("找不到机制证据时不得输出 issue");
+  });
 });
 
 describe("prompts toReview projection", () => {
   function makeReviewerOutput(overrides: Partial<ReviewerOutput> = {}): ReviewerOutput {
     return {
       verdict: "revise",
-      scores: { plot: 4, characterVoice: 3, sceneEmbodiment: 3, dialogue: 4, specificity: 3, hookPayoff: 4, continuity: 5, readerRetention: 4 },
+      scores: { plot: 4, characterVoice: 3, sceneEmbodiment: 3, dialogue: 4, specificity: 3, hookPayoff: 4, continuity: 5, readerRetention: 4, worldbuilding: 4, ensemble: 3, romance: 4, humor: 3 },
       issues: [
         {
           dimension: "characterVoice",
@@ -303,7 +333,7 @@ describe("prompts toReview projection", () => {
     expect(review.issues[0].evidence).toBe("最后节拍只写到开头。");
   });
 
-  it("preserves all 8 REVIEW_DIMENSIONS in the scores object contract", () => {
+  it("preserves all 12 REVIEW_DIMENSIONS in the scores object contract", () => {
     const output = makeReviewerOutput();
     expect(Object.keys(output.scores).sort()).toEqual([...REVIEW_DIMENSIONS].sort());
   });

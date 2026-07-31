@@ -71,12 +71,15 @@ export interface NovelWorkflowActivities {
   generateChapterTitle(input: { workflowId: string; projectId: string; documentId: string; sourceFingerprint: string; candidateStartIndex?: number }): Promise<{ kind: "completed"; title: string } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalChapterTitle(input: { modelTaskId: string; value: unknown }): Promise<{ title: string }>;
   persistGeneratedChapterTitle(input: { projectId: string; documentId: string; sourceFingerprint: string; title: string }): Promise<{ title: string }>;
+  getStoryArcRoutingSnapshot(): Promise<ModelRoutingSnapshot>;
   generateStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; authorIntent?: string; candidateStartIndex?: number; batchIndex?: number; startChapterIndex?: number }): Promise<{ kind: "completed"; artifact: Artifact; bundle: StoryArcBundle } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalStoryArcBundle(input: { modelTaskId: string; projectId: string; arcId: string; value: unknown }): Promise<{ artifact: Artifact; bundle: StoryArcBundle }>;
   projectStoryArcBundle(input: { projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; actor: string; edited?: boolean }): Promise<unknown>;
   reviewStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; candidateStartIndex?: number }): Promise<{ kind: "completed"; artifact: Artifact; review: StoryArcReviewOutput } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalStoryArcReview(input: { modelTaskId: string; projectId: string; arcId: string; subjectArtifactId: string; value: unknown }): Promise<{ artifact: Artifact; review: StoryArcReviewOutput }>;
   reviseStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; review: StoryArcReviewOutput; candidateStartIndex?: number }): Promise<{ kind: "completed"; artifact: Artifact; bundle: StoryArcBundle } | { kind: "external"; task: ModelTaskRecord }>;
+  assessStoryArcLearning(input: { projectId: string; workflowId: string; artifact: Artifact; reviewArtifact: Artifact; review: StoryArcReviewOutput; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; assessment: RuntimeLearningAssessmentV2 } | { kind: "external"; task: ModelTaskRecord }>;
+  materializeExternalStoryArcLearning(input: { modelTaskId: string; projectId: string; workflowId: string; artifact: Artifact; reviewArtifact: Artifact; review: StoryArcReviewOutput; value: unknown }): Promise<RuntimeLearningAssessmentV2>;
   approveStoryArcAutomatically(input: { projectId: string; arcId: string; artifactId: string }): Promise<unknown>;
   failStoryArc(input: { projectId: string; arcId: string; reason: string }): Promise<void>;
   failStoryArcBatch(input: { projectId: string; arcId: string; batchIndex: number; reason: string }): Promise<void>;
@@ -888,6 +891,13 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
 
   const reviewPolicy = params.reviewPolicy ?? (params.mode === "mcp" ? "auto" : "manual");
   await activities.updateWorkflowStatus({ workflowId: params.workflowId, status: "running", payload: { arcId: params.arcId, mode: params.mode, reviewPolicy } });
+  const routingSnapshot = await activities.getStoryArcRoutingSnapshot();
+  const runStoryArcLearning = async (current: { artifact: Artifact }, reviewed: { artifact: Artifact; review: StoryArcReviewOutput }, candidateStartIndex?: number): Promise<void> => {
+    if (!reviewed.review.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major")) return;
+    const generated = await activities.assessStoryArcLearning({ projectId: params.projectId, workflowId: params.workflowId, artifact: current.artifact, reviewArtifact: reviewed.artifact, review: reviewed.review, routingSnapshot, candidateStartIndex });
+    if (generated.kind === "completed") return;
+    await activities.materializeExternalStoryArcLearning({ modelTaskId: generated.task.id, projectId: params.projectId, workflowId: params.workflowId, artifact: current.artifact, reviewArtifact: reviewed.artifact, review: reviewed.review, value: (await waitForExternal(generated.task)).value });
+  };
   try {
     let current = await generateBundle();
     await activities.projectStoryArcBundle({ projectId: params.projectId, arcId: params.arcId, artifact: current.artifact, bundle: current.bundle, actor: "runtime" });
@@ -903,6 +913,7 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
     for (let iteration = 0; iteration <= maxRetries; iteration += 1) {
       const reviewed = await reviewBundle(current);
       const blocking = reviewed.review.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major");
+      await runStoryArcLearning(current, reviewed);
       if (reviewed.review.verdict === "passed" && !blocking) {
         await activities.approveStoryArcAutomatically({ projectId: params.projectId, arcId: params.arcId, artifactId: current.artifact.id });
         await activities.updateWorkflowStatus({ workflowId: params.workflowId, status: "completed", payload: { arcId: params.arcId, artifactId: current.artifact.id, reviewArtifactId: reviewed.artifact.id, iterations: iteration } });

@@ -21,12 +21,34 @@ import { reviewerSchemaForDimensions } from "./schemas";
 
 export type ReviewerRole = "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "reader-reviewer";
 
+/**
+ * 5 reviewer × 评分维度映射。
+ *
+ * 设计依据：AGENTS.md「Fix the problem at the lowest shared layer」+ pipeline-audit.md F9
+ * ——REVIEW_DIMENSIONS 已扩展为 12 维度（8 单章可读性 + 4 长篇文学质量），但若不分配给
+ * 具体 reviewer，维度边界约束（buildChapterReviewPrompt L248）会阻止任何 reviewer 报告
+ * 这些维度的问题 → 新维度形同虚设。本映射把 4 个长篇文学质量维度分配给职责最匹配的 reviewer。
+ *
+ * 分配依据（对照 docs/novel-v2/quality-standard.md D1/D3/D4/D5）：
+ * - worldbuilding → continuity-reviewer：W1 规则可内化（规则间无逻辑冲突）是 continuity 的自然延伸；
+ *   continuity-reviewer 已持有 world/rule 术语与 fact/timeline/foreshadowing 记忆 facet。
+ * - ensemble → character-reviewer：E1/E3/E4/E5（配角独立欲望/弧光/关系网络/日常质地）是人物审核的延伸；
+ *   character-reviewer 已持有 entity/relation 记忆 facet 与 character/voice 术语。
+ * - romance → reader-reviewer：R2 阶段性/R5 复杂度直接影响追更体验（《我在风花雪月里等你》靠感情线驱动追更）；
+ *   reader-reviewer 的追更视角最适合判断"感情线是否有进展、是否兑现读者期待"。
+ *   R1 行动承载/R3 留白/R4 女主独立的技法问题由 character/style 的现有维度间接覆盖。
+ * - humor → style-reviewer：H1 贴合人物声部/H2 时代契合/H3 调节功能是语言风格的延伸；
+ *   style-reviewer 已负责"模板化表达、语言质感、时代与叙述距离"。
+ *
+ * 负载平衡：style(3) / character(3) / continuity(2) / plot(2) / reader(2)，避免单 reviewer 过重。
+ * plot-reviewer 不新增维度：D2 故事性已由 plot/hookPayoff 覆盖（章节功能/章尾驱动力/因果推进）。
+ */
 export const REVIEWER_DIMENSIONS: Record<ReviewerRole, ReadonlyArray<keyof ReviewerOutput["scores"]>> = {
-  "style-reviewer": ["sceneEmbodiment", "specificity"],
-  "character-reviewer": ["characterVoice", "dialogue"],
-  "continuity-reviewer": ["continuity"],
+  "style-reviewer": ["sceneEmbodiment", "specificity", "humor"],
+  "character-reviewer": ["characterVoice", "dialogue", "ensemble"],
+  "continuity-reviewer": ["continuity", "worldbuilding"],
   "plot-reviewer": ["plot", "hookPayoff"],
-  "reader-reviewer": ["readerRetention"],
+  "reader-reviewer": ["readerRetention", "romance"],
 };
 
 /**
@@ -37,11 +59,11 @@ export const REVIEWER_DIMENSIONS: Record<ReviewerRole, ReadonlyArray<keyof Revie
  * craft rule 通过 learning 闭环沉淀后，会以 skill 形式注入，覆盖/补充默认职责。
  */
 const DEFAULT_REVIEW_FOCUS: Record<ReviewerRole, string> = {
-  "style-reviewer": "重点检查解释性心理总结、意象替人物说理、可替换的通用细节、段落碎片化、匀速句段和模板化表达。核对语言是否符合项目文风、时代和叙述距离；不要因为全文保持同一种语体就自动降分。环境可以承担氛围、情绪余波、信息或行动功能，只在重复且没有深化体验时报告问题。关键情绪和转折应有足够具体的现场承载，但不要要求固定的动作公式或句式配比。",
-  "character-reviewer": "重点检查人物是否有符合本章功能的欲望、注意力、选择或情感变化；对白和行为是否符合冻结上下文中的年龄、职业、关系距离、知识边界与既有声音。配角可以承担陪伴、见证、阻力或日常质地，不强制每人拥有独立抉择。重要器物若被蓝图赋予意义，应参与行动、关系或记忆；普通场景物件无需强行象征化。不要套用固定身份声部，也不要要求蓝图未安排的角色亲自到场或开口。",
-  "continuity-reviewer": "重点检查事实、时间、位置、物品、人物知识边界与选择后果是否连续；不要把审美偏好误报为事实矛盾。检查 POV 越界——叙述是否替视角人物总结他人心理意图（如'各自守着一处不肯越过的距离''谁也不肯先开口''都带着各自的盘算'），这类句子表面是观察，实质是作者借视角人物之口宣告对他人内在状态的判断——若把描述他人状态的句子改写为'视角人物能看到/听到的具体动作'后信息丢失，则该句子越界，标为 major。",
+  "style-reviewer": "重点检查解释性心理总结、意象替人物说理、可替换的通用细节、段落碎片化、匀速句段和模板化表达。核对语言是否符合项目文风、时代和叙述距离；不要因为全文保持同一种语体就自动降分。环境可以承担氛围、情绪余波、信息或行动功能，只在重复且没有深化体验时报告问题。关键情绪和转折应有足够具体的现场承载，但不要要求固定的动作公式或句式配比。\n\n## 幽默维度（humor）\n检查幽默是否贴合人物声部与时代（不得用现代网络梗冒充古风幽默，不得让严肃角色突然插科打诨破坏声部）、是否承担调节节奏、释放压力或深化人物关系的功能。幽默不是每章必须——铺陈、悲剧、高潮章可以无幽默；但若出现，应服务于人物或情境，不得是无关插科打诨或作者强行抖机灵。若幽默与角色既有声部冲突（如沉默寡言者突然妙语连珠），标为 major。",
+  "character-reviewer": "重点检查人物是否有符合本章功能的欲望、注意力、选择或情感变化；对白和行为是否符合冻结上下文中的年龄、职业、关系距离、知识边界与既有声音。重要配角应有自己的欲望、抉择与弧光，不应只是主角的陪伴、见证或阻力工具；次要配角可承担日常质地，但不应在关键场景消失或仅作背景。检查配角之间是否形成关系网络（敌友、师徒、恩怨），而非只与主角单线联系。重要器物若被蓝图赋予意义，应参与行动、关系或记忆；普通场景物件无需强行象征化。不要套用固定身份声部，也不要要求蓝图未安排的角色亲自到场或开口。\n\n## 群像维度（ensemble）\n以跨章视角审视群像结构：本章出场的配角是否有独立于主角的欲望与处境（E1）；重要配角是否在多章中呈现可识别的弧光而非固定功能符号（E3）；配角之间是否存在直接关系（E4），而非全部经由主角中转；日常场景是否有配角独立质地（E5）。若本章把配角写成纯工具（无欲望、无抉择、无关系），或群像仅围绕主角单点运转，标为 major。判断需依据冻结上下文与记忆中的角色档案，不得仅凭本章臆断。",
+  "continuity-reviewer": "重点检查事实、时间、位置、物品、人物知识边界与选择后果是否连续；不要把审美偏好误报为事实矛盾。检查 POV 越界——叙述是否替视角人物总结他人心理意图（如'各自守着一处不肯越过的距离''谁也不肯先开口''都带着各自的盘算'），这类句子表面是观察，实质是作者借视角人物之口宣告对他人内在状态的判断——若把描述他人状态的句子改写为'视角人物能看到/听到的具体动作'后信息丢失，则该句子越界，标为 major。\n\n## 世界观维度（worldbuilding）\n检查世界观规则是否自洽：已确立的规则（修炼体系/势力结构/关键技术/社会制度）在后续章节是否被违反或临时编造（W1）；随机抽取设定，问「若主角在 X 情境下做 Y，世界规则会如何反应」，答案能否从已确立规则推导。检查核心设定是否承载主题或哲思（W2），而非纯力量体系堆砌。检查世界质地是否有独立于主角的文化、思想、生活细节（W4）——若全书场景只为主角服务、无独立运转的世界纹理，标为 major。规则冲突或设定空洞会破坏长篇可信度，即使文句通顺也不得通过。",
   "plot-reviewer": "重点检查正文是否尊重目标章功能、状态变化预算、连续性约束与故事弧边界，是否把大纲压缩成当章任务清单，是否提前完成后续秘密、关系跃迁、重大转折或伏笔回收。可选节拍允许调整、合并或省略，不得逐项核对；只有章节功能或蓝图明确规定的结果整体缺失，才报告 chapter.incomplete-blueprint。铺陈、相处、内省和余波章不要求不可逆结果。章尾按目标章的 closingForce 判断，不得强制添加危险、反转或行动命令。",
-  "reader-reviewer": "你是严苛的追更读者，不是编辑。先识别本章承担的是悬疑、行动、关系、生活流、铺陈、余波还是阶段闭合功能，再判断正文是否持续兑现作品承诺，不做文风或事实的技术分析。检查开篇是否建立与本章功能相称的注意力中心，中段是否通过新信息、关系温度、人物认识、状态变化或行动后果深化体验，信息是否在读者需要时抵达，以及正文是否出现真实的跳读区。章尾驱动力不等于强钩子：悬疑与行动章可以依靠未解压力，关系、生活流、余波或阶段闭合章也可以停在未尽交流、状态变化或有功能的情感与意象余韵。不得仅因没有问号、突发事件、强制选择或立即翻页冲动就判为 major；只有章尾没有完成本章功能、重复已知信息、切断既有长线动力或用空泛意象代替实际变化时才报告。项目卖点只在合适兑现窗口检查，不要求每章机械出现。每个问题必须引用正文证据，并说明它如何损害当前章节功能和后续阅读，而不是套用固定字数、钩子密度或章尾公式。",
+  "reader-reviewer": "你是严苛的追更读者，不是编辑。先识别本章承担的是悬疑、行动、关系、生活流、铺陈、余波还是阶段闭合功能，再判断正文是否持续兑现作品承诺，不做文风或事实的技术分析。检查开篇是否建立与本章功能相称的注意力中心，中段是否通过新信息、关系温度、人物认识、状态变化或行动后果深化体验，信息是否在读者需要时抵达，以及正文是否出现真实的跳读区。章尾驱动力不等于强钩子：悬疑与行动章可以依靠未解压力，关系、生活流、余波或阶段闭合章也可以停在未尽交流、状态变化或有功能的情感与意象余韵。不得仅因没有问号、突发事件、强制选择或立即翻页冲动就判为 major；只有章尾没有完成本章功能、重复已知信息、切断既有长线动力或用空泛意象代替实际变化时才报告。项目卖点只在合适兑现窗口检查，不要求每章机械出现。每个问题必须引用正文证据，并说明它如何损害当前章节功能和后续阅读，而不是套用固定字数、钩子密度或章尾公式。\n\n## 感情线维度（romance）\n若作品含感情线，从追更视角检查感情发展是否靠行动累积（R1）——告白、心理宣言、突然亲密若没有前置行动铺垫，读者会感到廉价；是否有清晰的阶段感（R2）——相遇/试探/深化/危机/确认，本章的感情进展是否符合当前阶段，不得跳阶；感情对象（女主或对应角色）是否有独立人格与欲望（R4），而非主角附属或工具；感情线是否有复杂度（R5）——阻碍、误会、牺牲、代价，而非一帆风顺。若本章感情线无进展、靠宣言跳进、或感情对象沦为工具人，标为 major。判断需结合前章感情线记忆与冻结上下文，不得仅凭本章臆断阶段。",
 };
 
 /**
@@ -95,11 +117,11 @@ export interface ReviewPromptInput {
 }
 
 const REVIEW_ROLE_TERMS: Record<ReviewerRole, string[]> = {
-  "style-reviewer": ["style", "prose", "language", "specificity", "scene", "文体", "文风", "语言", "具体", "场景", "呈现", "叙述", "意象"],
-  "character-reviewer": ["character", "voice", "dialogue", "relation", "romance", "desire", "人物", "角色", "对白", "声音", "关系", "欲望", "动机"],
-  "continuity-reviewer": ["continuity", "fact", "knowledge", "foreshadow", "world", "rule", "连续", "事实", "知识", "伏笔", "世界", "规则", "状态"],
+  "style-reviewer": ["style", "prose", "language", "specificity", "scene", "humor", "文体", "文风", "语言", "具体", "场景", "呈现", "叙述", "意象", "幽默", "诙谐", "趣味"],
+  "character-reviewer": ["character", "voice", "dialogue", "relation", "romance", "desire", "ensemble", "人物", "角色", "对白", "声音", "关系", "欲望", "动机", "群像", "配角", "弧光"],
+  "continuity-reviewer": ["continuity", "fact", "knowledge", "foreshadow", "world", "rule", "worldbuilding", "连续", "事实", "知识", "伏笔", "世界", "规则", "状态", "设定"],
   "plot-reviewer": ["plot", "blueprint", "causal", "pacing", "tension", "rhythm", "arc", "因果", "情节", "章节", "功能", "节奏", "主线", "支线"],
-  "reader-reviewer": ["reader", "hook", "payoff", "retention", "serial", "tension", "读者", "钩子", "爽点", "追更", "回报", "疲劳", "卖点", "期待"],
+  "reader-reviewer": ["reader", "hook", "payoff", "retention", "serial", "tension", "romance", "读者", "钩子", "爽点", "追更", "回报", "疲劳", "卖点", "期待", "感情", "情感"],
 };
 
 export function selectReviewerSkills(skills: SkillBundle | undefined, role: ReviewerRole, limit = 6): SkillBundle | undefined {
@@ -226,6 +248,12 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
   const isReaderReviewer = role === "reader-reviewer";
   const payoffMarkdown = isReaderReviewer && payoffStats ? buildPayoffStatsMarkdown(payoffStats) : "";
 
+  // 长篇文学质量维度（对照 quality-standard.md D1/D3/D4/D5）——仅负责这些维度的 reviewer
+  // 会收到额外的跨章视角审核提示。
+  const roleLongFormDims = REVIEWER_DIMENSIONS[role].filter((d): d is typeof d =>
+    d === "worldbuilding" || d === "ensemble" || d === "romance" || d === "humor",
+  );
+
   const sections = [
     `独立审校下面正文。不要读取或猜测写作者解释，只按读者在正文中实际得到的体验评分。`,
     "",
@@ -243,9 +271,17 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
     `## 长篇耐心`,
     `先判断本章是在铺陈、相处、蓄势、行动、余波还是兑现。背景展开、人物内省、情感抒发、文学意象和日常过程可以是章节主体，不得因为主线没有明显前进而降分。反过来，若正文过早揭示秘密、完成关系转变、回收伏笔，或把多个后续大纲节点压入本章，应报告为 major。不要建议用突发危险、强行选择或新钩子修复安静章节。`,
     "",
+    `## 篇幅边界`,
+    `字数、字符数、段落数量或是否达到某个目标篇幅，不是审校目标，也不能单独触发降分、verdict=revise/blocked 或 blocker/major issue。只能审查可被正文证据证明的阅读机制：章节功能是否完成、信息是否抵达、情绪/关系/因果是否有承载、是否重复空转或提前消费后续节点。若你认为篇幅相关，必须把问题改写为具体机制（例如"关键转折缺少可观察承载""三段重复同一信息""章尾在结果出现前收束"），并引用正文证据；找不到机制证据时不得报告。`,
+    "",
     `## 当前职责`,
     `你的完整职责定义见 system prompt（默认职责 + 题材/项目特化补充）。下面仅强调维度边界。`,
     `你只能把 ${REVIEWER_DIMENSIONS[role].join("、")} 维度的问题写入 issues；其他维度即使有改进空间，也交给对应 reviewer，不得重复报告。scores 只填写你的职责维度，当前 verdict 只由这些维度决定。`,
+    ...(roleLongFormDims.length ? [
+      "",
+      `## 长篇文学质量维度审核提示`,
+      `你负责的长篇文学质量维度（${roleLongFormDims.join("、")}）需要跨章视角：结合下方"冻结章节规划上下文""工作流执行编排"与"相关事实"判断，而非仅看本章正文。这些维度度量全书质量耐久度——世界观规则自洽、群像独立弧光、感情线阶段感、幽默贴合人物——缺陷会在百章尺度上累积放大。若本章在这些维度存在结构性缺陷（规则冲突/配角工具化/感情线跳阶/幽默破坏声部），即使单章可读性成立，也应标为 major。具体判据见 system prompt 中对应维度的职责定义。`,
+    ] : []),
     "",
     "## 已激活审校技能",
     skills?.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, skill.promptSections.review ?? ""].filter(Boolean).join("\n")).join("\n\n") || "（无额外审校技能）",

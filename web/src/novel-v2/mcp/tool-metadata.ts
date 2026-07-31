@@ -18,6 +18,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
   { key: "project", title: "项目生命周期", tools: ["novel_project_create", "novel_project_list", "novel_project_delete"] },
   { key: "bootstrap", title: "规划与创作", tools: ["novel_bootstrap_run", "novel_story_arc_start", "novel_story_arc_get", "novel_chapter_review", "novel_chapter_generate"] },
   { key: "closed-loop", title: "评估闭环", tools: ["novel_closed_loop_run"] },
+  { key: "workflow", title: "Workflow 查询", tools: ["novel_workflow_get", "novel_workflow_list"] },
 ];
 
 const SHORT_LABELS: Partial<Record<ToolName, string>> = {
@@ -47,6 +48,8 @@ const SHORT_LABELS: Partial<Record<ToolName, string>> = {
   novel_story_arc_start: "规划下一故事弧",
   novel_story_arc_get: "查询故事弧",
   novel_closed_loop_run: "执行评估闭环",
+  novel_workflow_get: "查询 Workflow 状态",
+  novel_workflow_list: "列出 Workflow Runs",
 };
 
 export const TOOL_DESCRIPTIONS: Record<string, ToolInfo> = Object.fromEntries(

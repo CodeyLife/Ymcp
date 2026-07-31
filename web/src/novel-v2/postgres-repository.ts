@@ -1632,8 +1632,12 @@ export class NovelPostgresRepository {
     return result.rows[0] ? workflowFromRow(result.rows[0]) : undefined;
   }
 
-  async listProjectRuns(projectId: string, limit = 20): Promise<WorkflowRunRecord[]> {
-    const result = await this.pool.query<WorkflowRunRow>("SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at FROM workflow_runs WHERE project_id=$1 ORDER BY updated_at DESC LIMIT $2", [projectId, limit]);
+  async listProjectRuns(projectId: string, limit = 20, workflowType?: string): Promise<WorkflowRunRecord[]> {
+    const sql = workflowType
+      ? "SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at FROM workflow_runs WHERE project_id=$1 AND workflow_type=$2 ORDER BY updated_at DESC LIMIT $3"
+      : "SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at FROM workflow_runs WHERE project_id=$1 ORDER BY updated_at DESC LIMIT $2";
+    const params = workflowType ? [projectId, workflowType, limit] : [projectId, limit];
+    const result = await this.pool.query<WorkflowRunRow>(sql, params);
     return result.rows.map(workflowFromRow);
   }
 
@@ -1966,6 +1970,7 @@ export class NovelPostgresRepository {
       if (!current.rowCount) throw new Error("故事弧不存在");
       if (current.rows[0].execution_status === "completed" || current.rows[0].execution_status === "abandoned") throw new Error("已结束故事弧不可改写");
       const existing = await client.query<ChapterBlueprintRow>("SELECT id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision FROM chapters WHERE arc_id=$1 ORDER BY ordinal", [input.arcId]);
+      const existingBatch = await client.query<StoryArcBatchRow>("SELECT * FROM story_arc_batches WHERE arc_id=$1 AND project_id=$2 AND batch_index=$3 FOR UPDATE", [input.arcId, input.projectId, input.bundle.batch.batchIndex]);
       const existingByLocal = new Map(existing.rows.map((row) => [Number(row.payload?.index ?? 0), row]));
       const linkedDocumentIds = existing.rows.flatMap((row) => row.document_id ? [row.document_id] : []);
       const linkedDocuments = linkedDocumentIds.length
@@ -1974,10 +1979,23 @@ export class NovelPostgresRepository {
       const linkedDocumentById = new Map(linkedDocuments.rows.map((row) => [row.id, row]));
       const minExisting = existing.rows.length ? Math.min(...existing.rows.map((row) => Number(row.ordinal))) : undefined;
       const next = await client.query<{ ordinal: number }>(
-        "SELECT GREATEST(COALESCE((SELECT MAX(ordinal) FROM chapters WHERE project_id=$1),0),COALESCE((SELECT MAX(narrative_order) FROM manuscript_documents WHERE project_id=$1),0))+1 AS ordinal",
+        `SELECT GREATEST(
+           COALESCE((
+             SELECT MAX(c.ordinal)
+             FROM chapters c
+             JOIN arcs a ON a.id=c.arc_id
+             WHERE c.project_id=$1
+               AND NOT (a.execution_status='abandoned' AND c.document_id IS NULL)
+           ),0),
+           COALESCE((SELECT MAX(narrative_order) FROM manuscript_documents WHERE project_id=$1),0)
+         )+1 AS ordinal`,
         [input.projectId],
       );
       const baseOrder = input.bundle.batch.batchIndex === 1 ? minExisting ?? Number(next.rows[0]?.ordinal ?? 1) : Number(next.rows[0]?.ordinal ?? 1);
+      const batchStartChapterIndex = input.bundle.batch.batchIndex === 1 ? baseOrder : input.bundle.batch.startChapterIndex;
+      const previousBatchStart = existingBatch.rows[0] ? Number(existingBatch.rows[0].start_chapter_index) : batchStartChapterIndex;
+      const previousBatchEnd = existingBatch.rows[0] ? Number(existingBatch.rows[0].end_chapter_index) : batchStartChapterIndex + input.bundle.chapters.length - 1;
+      const batchPayload = { ...input.bundle.batch, startChapterIndex: batchStartChapterIndex };
       const batchId = `batch:${input.arcId}:${input.bundle.batch.batchIndex}`;
       const isInitialBatch = input.bundle.batch.batchIndex === 1;
       if (!isInitialBatch && current.rows[0].planning_status !== "approved") throw new Error("上一故事弧批次尚未批准");
@@ -1991,11 +2009,11 @@ export class NovelPostgresRepository {
         `INSERT INTO story_arc_batches(id,arc_id,project_id,batch_index,start_chapter_index,end_chapter_index,status,source_artifact_id,payload)
          VALUES($1,$2,$3,$4,$5,$6,'awaiting-review',$7,$8)
          ON CONFLICT(arc_id,batch_index) DO UPDATE SET end_chapter_index=EXCLUDED.end_chapter_index,status='awaiting-review',source_artifact_id=EXCLUDED.source_artifact_id,payload=EXCLUDED.payload,updated_at=now()`,
-        [batchId, input.arcId, input.projectId, input.bundle.batch.batchIndex, input.bundle.batch.startChapterIndex, input.bundle.batch.startChapterIndex + input.bundle.chapters.length - 1, input.artifact.id, input.bundle.batch],
+        [batchId, input.arcId, input.projectId, input.bundle.batch.batchIndex, batchStartChapterIndex, batchStartChapterIndex + input.bundle.chapters.length - 1, input.artifact.id, batchPayload],
       );
       const keptIds: string[] = [];
       for (const chapter of input.bundle.chapters) {
-        const globalIndex = input.bundle.batch.startChapterIndex + chapter.index - 1;
+        const globalIndex = batchStartChapterIndex + chapter.index - 1;
         const previous = existingByLocal.get(globalIndex);
         const linkedDocument = previous?.document_id ? linkedDocumentById.get(previous.document_id) : undefined;
         const isProtected = Boolean(linkedDocument && (linkedDocument.status !== "planned" || linkedDocument.current_revision_id));
@@ -2018,10 +2036,9 @@ export class NovelPostgresRepository {
           }
         }
       }
-      const batchEnd = input.bundle.batch.startChapterIndex + input.bundle.chapters.length - 1;
       const removable = existing.rows.filter((row) => {
         const index = Number(row.payload?.index ?? 0);
-        return index >= input.bundle.batch.startChapterIndex && index <= batchEnd && !keptIds.includes(row.id) && !row.document_id;
+        return index >= previousBatchStart && index <= previousBatchEnd && !keptIds.includes(row.id) && !row.document_id;
       }).map((row) => row.id);
       if (removable.length) await client.query("DELETE FROM chapters WHERE id=ANY($1::text[])", [removable]);
       await client.query(
@@ -2078,6 +2095,43 @@ export class NovelPostgresRepository {
       abandonedAt: row.abandoned_at ? iso(row.abandoned_at) : undefined,
       updatedAt: iso(row.updated_at),
     };
+  }
+
+  async deleteStoryArc(projectId: string, arcId: string, actor: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const arc = await client.query<ArcRow>("SELECT * FROM arcs WHERE id=$1 AND project_id=$2 FOR UPDATE", [arcId, projectId]);
+      if (!arc.rowCount) throw new Error("故事弧不存在");
+      const chapters = await client.query<{ id: string; document_id: string | null; document_status: string | null; current_revision_id: string | null; revision_count: string }>(
+        "WITH locked_chapters AS (SELECT * FROM chapters WHERE arc_id=$1 AND project_id=$2 FOR UPDATE) " +
+        "SELECT c.id,c.document_id,d.status AS document_status,d.current_revision_id,COUNT(mr.id)::text AS revision_count " +
+        "FROM locked_chapters c " +
+        "LEFT JOIN manuscript_documents d ON d.id=c.document_id AND d.project_id=c.project_id " +
+        "LEFT JOIN manuscript_revisions mr ON mr.document_id=d.id " +
+        "GROUP BY c.id,c.document_id,d.status,d.current_revision_id ",
+        [arcId, projectId],
+      );
+      const protectedChapter = chapters.rows.find((chapter) => chapter.current_revision_id || Number(chapter.revision_count) > 0 || (chapter.document_id && chapter.document_status !== "planned"));
+      if (protectedChapter) throw new Error("故事弧已关联进入创作或已有正文的章节，不能删除；请使用放弃故事弧保留历史");
+      const documentIds = chapters.rows.flatMap((chapter) => chapter.document_id ? [chapter.document_id] : []);
+      await client.query("DELETE FROM scenes WHERE chapter_id IN (SELECT id FROM chapters WHERE arc_id=$1 AND project_id=$2)", [arcId, projectId]);
+      await client.query("DELETE FROM chapters WHERE arc_id=$1 AND project_id=$2", [arcId, projectId]);
+      if (documentIds.length) await client.query("DELETE FROM manuscript_documents WHERE project_id=$1 AND id=ANY($2::text[]) AND status='planned' AND current_revision_id IS NULL", [projectId, documentIds]);
+      await client.query("DELETE FROM story_arc_batches WHERE arc_id=$1 AND project_id=$2", [arcId, projectId]);
+      const deleted = await client.query("DELETE FROM arcs WHERE id=$1 AND project_id=$2 RETURNING id", [arcId, projectId]);
+      await client.query(
+        "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'story-arc.deleted','story-arc',$3,$4)",
+        [projectId, actor, arcId, { title: arc.rows[0].title, chapterCount: chapters.rowCount, documentIds }],
+      );
+      await client.query("COMMIT");
+      return { deleted: Boolean(deleted.rowCount), projectId, arcId, removedDocumentIds: documentIds };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async prepareNextStoryArcBatch(projectId: string, arcId: string): Promise<{ batchIndex: number; startChapterIndex: number }> {
@@ -3544,6 +3598,19 @@ export class NovelPostgresRepository {
            AND NOT EXISTS (
              SELECT 1 FROM chapters c JOIN manuscript_documents d ON d.id=c.document_id
              WHERE c.arc_id=a.id AND d.status<>'final'
+           )
+           AND EXISTS (
+             SELECT 1
+             FROM story_arc_batches b
+             WHERE b.arc_id=a.id
+               AND b.batch_index=(SELECT MAX(batch_index) FROM story_arc_batches WHERE arc_id=a.id)
+               AND b.status='approved'
+               AND COALESCE((b.payload->>'complete')::boolean,false)=true
+               AND b.end_chapter_index >= CASE
+                 WHEN COALESCE((a.payload->>'expectedChapterCount')::integer,0)>0
+                   THEN (a.payload->>'expectedChapterCount')::integer
+                 ELSE b.end_chapter_index
+               END
            )`,
         [input.documentId],
       );

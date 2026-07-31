@@ -5,10 +5,10 @@ import { REVIEW_DIMENSIONS } from "../prompts/schemas";
 
 const responsibilities = {
   "plot-reviewer": ["plot", "hookPayoff"],
-  "continuity-reviewer": ["continuity"],
-  "style-reviewer": ["sceneEmbodiment", "specificity"],
-  "character-reviewer": ["characterVoice", "dialogue"],
-  "reader-reviewer": ["readerRetention"],
+  "continuity-reviewer": ["continuity", "worldbuilding"],
+  "style-reviewer": ["sceneEmbodiment", "specificity", "humor"],
+  "character-reviewer": ["characterVoice", "dialogue", "ensemble"],
+  "reader-reviewer": ["readerRetention", "romance"],
 } as const;
 
 function makeReview(role: keyof typeof responsibilities, identity: Review["identity"], score: number, issues: ReviewIssue[] = []): Review {
@@ -27,11 +27,11 @@ function completeReviews(issue: ReviewIssue[] = []) {
 }
 
 describe("aggregateChapterReviews", () => {
-  it("persists the responsible reviewer's eight dimensions without issue-derived fallback", () => {
+  it("persists the responsible reviewer's twelve dimensions without issue-derived fallback", () => {
     const snapshot = aggregateChapterReviews(completeReviews());
     expect(snapshot.complete).toBe(true);
-    expect(snapshot.dimensionScores).toEqual({ plot: 4, hookPayoff: 4, continuity: 3, sceneEmbodiment: 5, specificity: 5, characterVoice: 2, dialogue: 2, readerRetention: 1 });
-    expect(snapshot.overallScore).toBe(3.25);
+    expect(snapshot.dimensionScores).toEqual({ plot: 4, hookPayoff: 4, continuity: 3, worldbuilding: 3, sceneEmbodiment: 5, specificity: 5, humor: 5, characterVoice: 2, dialogue: 2, ensemble: 2, readerRetention: 1, romance: 1 });
+    expect(snapshot.overallScore).toBe(37 / 12);
     expect(snapshot.verdict).toBe("passed");
   });
 
