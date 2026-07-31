@@ -1,36 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Input, Modal, Popconfirm, Segmented, Space, Table, Tabs, message } from "antd";
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Button, Input, Modal, Popconfirm, Segmented, Space, Table, Tabs, Tag, Tooltip, message } from "antd";
+import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { motion } from "motion/react";
 import "../novel-v2.css";
 import { knowledgeKindMeta, shortId } from "./presentation";
 import KnowledgeRecordForm, { type KnowledgeFormKind } from "./KnowledgeRecordForm";
 
-type KnowledgeKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills";
-type KnowledgeRecord = Record<string, unknown> & { id?: string };
+type KnowledgeKind = "characters" | "relations" | "claims" | "chapter-memories" | "project-skills" | "skills";
+type EditableKnowledgeKind = "characters" | "relations" | "claims" | "skills";
+type KnowledgeRecord = Record<string, unknown> & { id?: string; readOnly?: boolean; source?: string };
 
 const KINDS: Array<{ key: KnowledgeKind; label: string }> = [
-  { key: "planning", label: "规划" },
-  { key: "worldview", label: "世界观" },
   { key: "characters", label: "角色" },
   { key: "relations", label: "关系" },
-  { key: "timeline", label: "时间线" },
-  { key: "facts", label: "事实账本" },
-  { key: "skills", label: "Skill 治理" },
+  { key: "claims", label: "叙事事实" },
+  { key: "chapter-memories", label: "章节记忆" },
+  { key: "project-skills", label: "本项目 Skill" },
+  { key: "skills", label: "全局 Skill 治理" },
 ];
 
-const NEW_RECORD: Record<KnowledgeKind, KnowledgeRecord> = {
-  planning: { name: "", payload: { objective: "", constraints: [] } },
-  worldview: { name: "", payload: { rule: "", boundary: "" } },
+const NEW_RECORD: Record<EditableKnowledgeKind, KnowledgeRecord> = {
   characters: { name: "", payload: { role: "", motivation: "", voiceAnchor: "" } },
   relations: { subjectId: "", predicate: "", objectId: "" },
-  timeline: { narrativeTime: 1, eventType: "", content: {} },
-  facts: { subjectId: "", predicate: "", objectValue: {}, truthStatus: "candidate", confidence: 0.8 },
+  claims: { title: "", subjectRefs: [], predicate: "", content: "", narrativeStart: undefined, narrativeEnd: undefined },
   skills: { id: "", version: "1.0.0", capabilities: [], applicableTasks: [], qualityGates: [], promptSections: {}, enabled: true },
 };
 
+export function isEditableKnowledgeKind(kind: KnowledgeKind): kind is EditableKnowledgeKind {
+  return kind === "characters" || kind === "relations" || kind === "claims" || kind === "skills";
+}
+
 function labelOf(record: KnowledgeRecord) {
-  return String(record.name ?? record.predicate ?? record.event_type ?? record.eventType ?? record.taskId ?? record.task_id ?? record.id ?? "未命名记录");
+  return String(record.name ?? record.title ?? record.skillId ?? record.predicate ?? record.documentId ?? record.taskKey ?? record.id ?? "未命名记录");
 }
 
 function recordId(record: KnowledgeRecord) {
@@ -42,23 +43,24 @@ function describeRecord(kind: KnowledgeKind, record: KnowledgeRecord): string {
   const p = (record.payload ?? record) as Record<string, unknown>;
   const str = (v: unknown) => (v === undefined || v === null || v === "") ? "" : String(v);
   const arrLen = (v: unknown) => Array.isArray(v) ? v.length : 0;
+  const compact = (v: unknown, max = 180) => {
+    const text = str(v).replace(/\s+/gu, " ").trim();
+    return text.length > max ? `${text.slice(0, max)}...` : text;
+  };
 
   switch (kind) {
-    case "planning":
-      return str(p.objective) || `规划记录 · ${arrLen(p.constraints)} 条约束`;
-    case "worldview":
-      return str(p.rule) || str(p.boundary) || "世界观规则";
     case "characters":
       return [str(p.role), str(p.motivation)].filter(Boolean).join(" · ") || "角色档案";
     case "relations":
       return `${str(record.subjectId) || "?"} → ${str(record.predicate) || "?"} → ${str(record.objectId) || "?"}`;
-    case "timeline":
-      return `第 ${str(record.narrativeTime) || "?"} 章 · ${str(record.eventType) || "事件"}`;
-    case "facts": {
-      const truth = str(record.truthStatus) || "candidate";
+    case "claims": {
+      const authority = str(record.authority) || "candidate";
       const conf = typeof record.confidence === "number" ? record.confidence.toFixed(2) : "";
-      return `${str(record.subjectId) || "?"} · ${str(record.predicate) || "?"} · ${truth}${conf ? ` (${conf})` : ""}`;
+      return [compact(record.content), authority, conf ? `置信度 ${conf}` : ""].filter(Boolean).join(" · ");
     }
+    case "chapter-memories":
+      return compact(record.summary) || `第 ${str(record.narrativeStart) || "?"} 章 · ${arrLen(record.keyEvents)} 个关键事件`;
+    case "project-skills":
     case "skills": {
       const ver = str(record.version);
       const caps = arrLen(record.capabilities);
@@ -70,11 +72,24 @@ function describeRecord(kind: KnowledgeKind, record: KnowledgeRecord): string {
   }
 }
 
+function sourceLabel(source: unknown): string {
+  switch (source) {
+    case "project-plan": return "当前契约";
+    case "fact-extraction": return "章节抽取";
+    case "manual-claim": return "作者维护";
+    case "chapter-memory": return "章节派生";
+    case "skill-bundle": return "当前 Bundle";
+    case "skill-definition": return "全局定义";
+    default: return "项目投影";
+  }
+}
+
 export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: string }) {
-  const [kind, setKind] = useState<KnowledgeKind>("planning");
+  const [kind, setKind] = useState<KnowledgeKind>("characters");
   const [records, setRecords] = useState<KnowledgeRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<KnowledgeRecord>();
+  const [viewing, setViewing] = useState<KnowledgeRecord>();
   const [draft, setDraft] = useState<KnowledgeRecord>({});
   const [jsonText, setJsonText] = useState("");
   const [editorMode, setEditorMode] = useState<"form" | "json">("form");
@@ -101,6 +116,7 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
   useEffect(() => { void load(kind); }, [projectId, kind]);
 
   function openCreate() {
+    if (!isEditableKnowledgeKind(kind)) return;
     setEditing({});
     setDraft(NEW_RECORD[kind]);
     setJsonText(JSON.stringify(NEW_RECORD[kind], null, 2));
@@ -115,7 +131,7 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
   }
 
   async function save() {
-    if (!editing) return;
+    if (!editing || !isEditableKnowledgeKind(kind)) return;
     let value: KnowledgeRecord;
     if (editorMode === "json") {
       try {
@@ -129,18 +145,26 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
     }
     const id = recordId(editing);
     const path = `/v2/projects/${encodeURIComponent(projectId)}/knowledge/${kind}${id ? `/${encodeURIComponent(id)}` : ""}`;
-    await readJson(path, { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
-    setEditing(undefined);
-    await load();
-    message.success(id ? "记录已更新" : "记录已创建");
+    try {
+      await readJson(path, { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
+      setEditing(undefined);
+      await load();
+      message.success(id ? "记录已更新" : "记录已创建");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function remove(record: KnowledgeRecord) {
     const id = recordId(record);
     if (!id) return;
-    await readJson(`/v2/projects/${encodeURIComponent(projectId)}/knowledge/${kind}/${encodeURIComponent(id)}`, { method: "DELETE" });
-    await load();
-    message.success("记录已删除");
+    try {
+      await readJson(`/v2/projects/${encodeURIComponent(projectId)}/knowledge/${kind}/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await load();
+      message.success("记录已删除");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    }
   }
 
   const kindMeta = knowledgeKindMeta(kind);
@@ -154,6 +178,7 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
         <code className="novel-table-cell-sub">{recordId(record) ? shortId(recordId(record)) : "自动生成"}</code>
       </div>
     )},
+    { title: "来源", key: "source", width: 110, render: (_: unknown, record: KnowledgeRecord) => <Tag>{sourceLabel(record.source)}</Tag> },
     { title: "详情", key: "data", render: (_: unknown, record: KnowledgeRecord) => (
       <span className="novel-table-cell-sub" style={{ fontSize: 12, color: "#a1a1aa" }}>{describeRecord(kind, record)}</span>
     )},
@@ -161,10 +186,13 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
       title: "操作", key: "actions", width: 120,
       render: (_: unknown, record: KnowledgeRecord) => (
         <Space size="small">
-          <Button type="text" icon={<EditOutlined />} aria-label="编辑" onClick={() => openEdit(record)} />
-          <Popconfirm title="删除此记录？" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => void remove(record)}>
-            <Button type="text" danger icon={<DeleteOutlined />} aria-label="删除" />
-          </Popconfirm>
+          <Tooltip title="查看详情"><Button type="text" icon={<EyeOutlined />} aria-label="查看详情" onClick={() => setViewing(record)} /></Tooltip>
+          {isEditableKnowledgeKind(kind) && record.readOnly !== true ? <>
+            <Tooltip title="编辑"><Button type="text" icon={<EditOutlined />} aria-label="编辑" onClick={() => openEdit(record)} /></Tooltip>
+            <Popconfirm title="删除此记录？" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => void remove(record)}>
+              <Tooltip title="删除"><Button type="text" danger icon={<DeleteOutlined />} aria-label="删除" /></Tooltip>
+            </Popconfirm>
+          </> : null}
         </Space>
       ),
     },
@@ -184,11 +212,14 @@ export default function KnowledgeWorkbenchPanel({ projectId }: { projectId: stri
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
+          {isEditableKnowledgeKind(kind) ? <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button> : null}
         </Space>
       </div>
       <Tabs activeKey={kind} items={KINDS.map((item) => ({ key: item.key, label: item.label }))} onChange={(value) => setKind(value as KnowledgeKind)} />
-      <Table rowKey={(record) => recordId(record) || JSON.stringify(record)} loading={loading} dataSource={records} columns={columns} pagination={{ pageSize: 12 }} scroll={{ x: 760 }} />
+      <Table rowKey={(record) => recordId(record) || JSON.stringify(record)} loading={loading} dataSource={records} columns={columns} pagination={{ pageSize: 12 }} scroll={{ x: 900 }} />
+      <Modal title={viewing ? labelOf(viewing) : "资料详情"} open={Boolean(viewing)} onCancel={() => setViewing(undefined)} footer={<Button onClick={() => setViewing(undefined)}>关闭</Button>} width={820} destroyOnHidden>
+        <pre style={{ margin: 0, maxHeight: "62vh", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: 12, lineHeight: 1.65 }}>{viewing ? JSON.stringify(viewing, null, 2) : ""}</pre>
+      </Modal>
       <Modal title={recordId(editing ?? {}) ? "编辑记录" : "新增记录"} open={Boolean(editing)} onCancel={() => setEditing(undefined)} onOk={() => void save()} okText="保存" width={820} destroyOnHidden>
         <Segmented
           value={editorMode}

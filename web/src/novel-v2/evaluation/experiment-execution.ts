@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { runChapterLifecycle } from "../application/chapter-lifecycle";
+import type { ManuscriptStructuralReport } from "../application/manuscript-structure";
 import { ContentObjectStore } from "../object-store";
 import type { ModelGateway } from "../model-gateway";
 import type { Artifact, NovelIntent, Review, RuntimeLearningAssessmentV2 } from "../protocol";
@@ -22,6 +23,7 @@ export interface ExperimentExecutionResult {
   artifact: Artifact;
   committed: boolean;
   finalScore: number;
+  structuralReport: ManuscriptStructuralReport;
 }
 
 /** Run the formal chapter review lifecycle inside an isolated schema. */
@@ -74,6 +76,7 @@ export async function executeChapterReviewExperiment(input: {
     const lifecycle = await runChapterLifecycle({
       projectId: input.projectId,
       initialDraft: { artifact: initialArtifact, text: documentState.plainText },
+      inspect: (current) => activities.inspectManuscript({ projectId: input.projectId, artifact: current.artifact, text: current.text }),
       review: reviewAll,
       revise: async (current, reviews) => {
         const generated = await activities.revise({ workflowId: workflowRunId, intent: reviewIntent, artifact: current.artifact, text: current.text, reviews, memory, blueprint: blueprintRecord.blueprint, skills, routingSnapshot });
@@ -92,16 +95,16 @@ export async function executeChapterReviewExperiment(input: {
         return generated.artifact;
       },
       approveFacts: (factArtifact) => activities.approveFacts({ workflowId: workflowRunId, projectId: input.projectId, artifact: factArtifact }),
-      commit: (current, reviews) => activities.commit({ projectId: input.projectId, documentId: input.documentId, artifact: current.artifact, text: current.text, reviews, baseRevision: snapshot.currentRevision, idempotencyKey: workflowRunId }),
-      enrich: async (current, commitResult) => {
+      commit: (current, reviews, factArtifact, structuralReport) => activities.commit({ projectId: input.projectId, documentId: input.documentId, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews, structuralReport, baseRevision: snapshot.currentRevision, idempotencyKey: workflowRunId }),
+      enrich: async (current, commitResult, factArtifact) => {
         if (snapshot.targetDocumentOrder === undefined) return;
-        const generated = await activities.enrichCharacters({ workflowId: workflowRunId, projectId: input.projectId, documentId: input.documentId, revisionId: commitResult.revisionId, narrativeOrder: snapshot.targetDocumentOrder, artifact: current.artifact, text: current.text, routingSnapshot });
+        const generated = await activities.enrichCharacters({ workflowId: workflowRunId, projectId: input.projectId, documentId: input.documentId, revisionId: commitResult.revisionId, narrativeOrder: snapshot.targetDocumentOrder, artifact: current.artifact, factArtifact, text: current.text, routingSnapshot });
         if (generated.kind !== "completed") throw new Error(`实验角色富化不允许等待 external-mcp：${generated.task.id}`);
       },
       progress: (payload) => repository.updateWorkflowRunStatus(workflowRunId, "running", payload),
     });
     await repository.updateWorkflowRunStatus(workflowRunId, lifecycle.commitResult ? "completed" : "manual-review-required", { finalScore: lifecycle.finalScore, artifactId: lifecycle.draft.artifact.id, reviewIds: lifecycle.commitGate.reviewIds, failedReviewIds: lifecycle.commitGate.failedReviewIds });
-    return { workflowRunId, reviews: lifecycle.reviews, learningAssessment: latestLearning, artifact: lifecycle.draft.artifact, committed: Boolean(lifecycle.commitResult), finalScore: lifecycle.finalScore };
+    return { workflowRunId, reviews: lifecycle.reviews, learningAssessment: latestLearning, artifact: lifecycle.draft.artifact, committed: Boolean(lifecycle.commitResult), finalScore: lifecycle.finalScore, structuralReport: lifecycle.structuralReport };
   } catch (error) {
     await repository.updateWorkflowRunStatus(workflowRunId, "failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
     throw error;

@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { Client, Connection } from "@temporalio/client";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { createHash, randomUUID } from "node:crypto";
-import { NovelPostgresRepository } from "../src/novel-v2/postgres-repository";
+import { NovelPostgresRepository, type KnowledgeRecordKind, type MutableKnowledgeRecordKind } from "../src/novel-v2/postgres-repository";
 import type { Artifact, AuthorDecision, NovelIntent } from "../src/novel-v2/protocol";
 import { CommitService } from "../src/novel-v2/commit-service";
 import { createRuntimeModelGateway } from "../src/novel-v2/model-runtime";
@@ -37,10 +37,12 @@ import {
 import { startBookSynopsisGeneration, startBookTitleCandidateGeneration } from "../src/novel-v2/application/book-synopsis-workflow";
 import { startChapterTitleGeneration } from "../src/novel-v2/application/chapter-title-workflow";
 import { parseStoryArcBundle } from "../src/novel-v2/application/story-arc";
-import { startStoryArcBatchPlanning, startStoryArcPlanning } from "../src/novel-v2/application/story-arc-workflow";
+import { startStoryArcBatchPlanning, startStoryArcPlanning, startStoryArcReview } from "../src/novel-v2/application/story-arc-workflow";
 import { QdrantMemoryProvider } from "../src/novel-v2/qdrant-memory";
 import { chapterMemoryAsClaim } from "../src/novel-v2/chapter-memory";
 import { countNovelCharacters } from "../src/novel-v2/word-count";
+import { ChapterStateRebuildConflictError, ChapterStateRebuildService } from "../src/novel-v2/application/chapter-state-rebuild";
+import { inspectManuscript } from "../src/novel-v2/application/manuscript-structure";
 
 // 通过 Extract 从 CreativeCommand 联合类型中派生 review.submit 的 review 字段类型，
 // 避免新增 CreativeReviewInput / ReviewIssue 的直接导入。
@@ -60,6 +62,7 @@ if (wordCountBackfill.updated || wordCountBackfill.failed) console.log("[word-co
 // API 入口的 commitService 也启用 chapter memory 创建（与 worker 保持一致）
 // 设计依据：AGENTS.md「commit-stage 对新 DocumentRevision 创建 chapter memory」契约
 const commitService = new CommitService(repository, objectStore, { model, memoryIndex: qdrantMemory });
+const chapterStateRebuildService = new ChapterStateRebuildService({ repository, objects: objectStore, model, memoryIndex: qdrantMemory, skillProvider: { list: (projectId) => repository.listSkills(projectId) } });
 const promotionService = createPromotionService(repository, objectStore);
 const connection = await Connection.connect({ address: process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233" });
 const temporal = new Client({ connection, namespace: process.env.TEMPORAL_NAMESPACE ?? "default" });
@@ -498,7 +501,7 @@ const server = createServer(async (request, response) => {
       const project = await repository.getProjectDetail(projectId);
 
       // 自动启动全书规划:premise 作为 objective,让每个 foundation task 都知道创意核心
-      // includeChapterPlan 默认 true,避免后续章节生成被 REQUIRED_FOUNDATION_TASK_KEYS 拒绝
+      // includeChapterPlan 仅保留旧客户端兼容；bootstrap 会固定关闭静态章节表。
       if (autoBootstrap) {
         const bootstrapRun = await startNovelBootstrap(repository, temporal, {
           projectId,
@@ -913,12 +916,16 @@ const server = createServer(async (request, response) => {
       const arcId = decodeURIComponent(storyArcItemMatch[2]);
       return send(response, 200, await repository.deleteStoryArc(projectId, arcId, "web-author"));
     }
-    const storyArcActionMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/(approve|rebase|abandon)$/);
+    const storyArcActionMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/(approve|review|rebase|abandon)$/);
     if (request.method === "POST" && storyArcActionMatch) {
       const projectId = decodeURIComponent(storyArcActionMatch[1]);
       const arcId = decodeURIComponent(storyArcActionMatch[2]);
       const action = storyArcActionMatch[3];
       const input = await readJson(request);
+      if (action === "review") {
+        const reviewPolicy = input.reviewPolicy === "manual" ? "manual" : "auto";
+        return send(response, 202, await startStoryArcReview(repository, temporal, { projectId, arcId, mode: "web", reviewPolicy, taskQueue }));
+      }
       if (action === "rebase") {
         const reviewPolicy = input.reviewPolicy === "auto" ? "auto" : "manual";
         return send(response, 202, await startStoryArcPlanning(repository, temporal, { projectId, arcId, mode: "web", reviewPolicy, authorIntent: asString(input.authorIntent), taskQueue }));
@@ -930,34 +937,65 @@ const server = createServer(async (request, response) => {
       }
       const preview = await repository.previewStoryArcApproval(projectId, arcId);
       if (input.confirm !== true) return send(response, 200, { preview });
-      const result = await repository.approveStoryArc(projectId, arcId, preview.artifactId, "web-author");
       const workflow = await repository.getStoryArcWorkflow(projectId, arcId);
+      const reviewArtifactId = typeof workflow?.payload.reviewArtifactId === "string" ? workflow.payload.reviewArtifactId : undefined;
+      if (!reviewArtifactId) return send(response, 409, { error: "故事弧缺少当前蓝图的审核证据，请先完成审核" });
+      const result = await repository.approveStoryArc(projectId, arcId, preview.artifactId, reviewArtifactId, "web-author");
       if (workflow && ["accepted", "running", "manual-review-required"].includes(workflow.status)) {
         await temporal.workflow.getHandle(workflow.temporalWorkflowId).signal("storyArcApproved", { arcId, artifactId: preview.artifactId });
       }
       return send(response, 200, result);
     }
-    const knowledgeMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/knowledge\/(planning|worldview|characters|relations|timeline|facts|skills|foundation)$/);
+    const knowledgeMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/knowledge\/(planning|worldview|characters|relations|timeline|facts|skills|foundation|claims|chapter-memories|project-skills)$/);
     if (knowledgeMatch) {
       const projectId = decodeURIComponent(knowledgeMatch[1]);
-      const kind = knowledgeMatch[2] as "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills" | "foundation";
+      const kind = knowledgeMatch[2] as KnowledgeRecordKind;
       if (request.method === "GET") return send(response, 200, { records: await repository.listKnowledgeRecords(projectId, kind) });
       if (request.method === "POST") {
-        if (kind === "foundation") return send(response, 405, { error: "foundation artifact 不可原地修改，请重新运行 bootstrap 生成新版本" });
+        if (["foundation", "chapter-memories", "project-skills"].includes(kind)) {
+          return send(response, 405, { error: "该资料由正式工作流维护，不支持从资料工作台直接修改" });
+        }
         const input = await readJson(request);
-        return send(response, 201, await repository.upsertKnowledgeRecord(projectId, kind, input));
+        const result = await repository.upsertKnowledgeRecord(projectId, kind as MutableKnowledgeRecordKind, input);
+        if (kind === "claims" && "claim" in result) {
+          try {
+            await qdrantMemory.upsertClaims(projectId, [result.claim]);
+          } catch (error) {
+            console.warn(`[knowledge.claims] Qdrant 更新失败，PostgreSQL 真源已保存：${(error as Error).message}`);
+          }
+        }
+        return send(response, 201, result);
       }
     }
-    const knowledgeItemMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/knowledge\/(planning|worldview|characters|relations|timeline|facts|skills)\/([^/?]+)$/);
+    const knowledgeItemMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/knowledge\/(planning|worldview|characters|relations|timeline|facts|claims|skills)\/([^/?]+)$/);
     if (knowledgeItemMatch) {
       const projectId = decodeURIComponent(knowledgeItemMatch[1]);
-      const kind = knowledgeItemMatch[2] as "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills";
+      const kind = knowledgeItemMatch[2] as MutableKnowledgeRecordKind;
       const recordId = decodeURIComponent(knowledgeItemMatch[3]);
       if (request.method === "PATCH") {
         const input = await readJson(request);
-        return send(response, 200, await repository.upsertKnowledgeRecord(projectId, kind, { ...input, id: recordId }));
+        const result = await repository.upsertKnowledgeRecord(projectId, kind, { ...input, id: recordId });
+        if (kind === "claims" && "claim" in result) {
+          try {
+            await qdrantMemory.upsertClaims(projectId, [result.claim]);
+          } catch (error) {
+            console.warn(`[knowledge.claims] Qdrant 更新失败，PostgreSQL 真源已保存：${(error as Error).message}`);
+          }
+        }
+        return send(response, 200, result);
       }
-      if (request.method === "DELETE") return send(response, 200, await repository.deleteKnowledgeRecord(projectId, kind, recordId));
+      if (request.method === "DELETE") {
+        const result = await repository.deleteKnowledgeRecord(projectId, kind, recordId);
+        if (kind === "claims" && result.deleted) {
+          try {
+            const deletedClaimIds = "deletedClaimIds" in result && Array.isArray(result.deletedClaimIds) ? result.deletedClaimIds : [recordId];
+            await qdrantMemory.deleteClaims(projectId, deletedClaimIds);
+          } catch (error) {
+            console.warn(`[knowledge.claims] Qdrant 删除失败，PostgreSQL 真源已撤回：${(error as Error).message}`);
+          }
+        }
+        return send(response, 200, result);
+      }
     }
     const recordMatch = request.url?.match(/^\/v2\/(preflight-plans|memory-bundles|skills|blueprints|artifacts|context-manifests|learning-assessments)\/([^/]+)$/);
     if (request.method === "GET" && recordMatch) {
@@ -1052,8 +1090,31 @@ const server = createServer(async (request, response) => {
     if (request.method === "POST" && request.url === "/v2/commits") {
       const input = await readJson(request);
       if (typeof input.projectId !== "string" || typeof input.documentId !== "string" || typeof input.baseRevision !== "number" || typeof input.idempotencyKey !== "string" || !input.artifact) return send(response, 400, { error: "projectId、documentId、baseRevision、artifact、idempotencyKey 必填" });
-      const result = await commitService.commit({ projectId: input.projectId, documentId: input.documentId, artifact: input.artifact as any, reviews: Array.isArray(input.reviews) ? input.reviews as any[] : [], baseRevision: input.baseRevision, idempotencyKey: input.idempotencyKey, text: typeof input.text === "string" ? input.text : "" });
+      const text = typeof input.text === "string" ? input.text : "";
+      const result = await commitService.commit({ projectId: input.projectId, documentId: input.documentId, artifact: input.artifact as any, reviews: Array.isArray(input.reviews) ? input.reviews as any[] : [], structuralReport: inspectManuscript({ text }), baseRevision: input.baseRevision, idempotencyKey: input.idempotencyKey, text });
       return send(response, 201, { result });
+    }
+    const humanDecisionMatch = request.url?.match(/^\/v2\/workflows\/([^/]+)\/tasks\/([^/]+)\/human-decision$/);
+    if (request.method === "POST" && humanDecisionMatch) {
+      const input = await readJson(request);
+      const workflowId = decodeURIComponent(humanDecisionMatch[1]);
+      const taskId = decodeURIComponent(humanDecisionMatch[2]);
+      const decision = input.decision === "approve" || input.decision === "reject" || input.decision === "revise" || input.decision === "abandon" ? input.decision : undefined;
+      if (!decision) return send(response, 400, { error: "decision(approve/reject/revise/abandon) 必填" });
+      const revisionBase = input.revisionBase === "previous" ? "previous" : input.revisionBase === "current" ? "current" : undefined;
+      const claimed = await repository.claimApprovalEvidence({ workflowId, artifactId: taskId, decision, actorSource: "interactive-web", actorId: "web-author", feedback: asString(input.feedback), revisionBase });
+      if (!claimed) return send(response, 409, { error: "该候选稿的审批已提交，或运行已离开当前审批阶段" });
+      const signalPayload = { approvalEvidenceId: claimed.evidence.id, taskId };
+      try {
+        await repository.recordTaskSignal({ workflowId, taskId, signal: "humanSignal", payload: signalPayload });
+        await temporal.workflow.getHandle(workflowId).signal("humanSignal", signalPayload);
+        const stage = decision === "approve" ? "fact-extraction" : decision === "revise" ? "revision" : "manuscript-approval";
+        await repository.updateWorkflowRunStatus(workflowId, "running", { stage, decision, pendingHumanDecisionSubmitted: true });
+        return send(response, 202, { accepted: true, workflowId, taskId, approvalEvidenceId: claimed.evidence.id });
+      } catch (error) {
+        await repository.releaseHumanDecisionClaim(workflowId, taskId).catch(() => undefined);
+        throw error;
+      }
     }
     const workflowTaskSignalMatch = request.url?.match(/^\/v2\/workflows\/([^/]+)\/tasks\/([^/]+)\/signal$/);
     if (request.method === "POST" && workflowTaskSignalMatch) {
@@ -1061,21 +1122,17 @@ const server = createServer(async (request, response) => {
       const workflowId = decodeURIComponent(workflowTaskSignalMatch[1]);
       const taskId = decodeURIComponent(workflowTaskSignalMatch[2]);
       const signal = String(input.signal ?? "humanSignal");
-      const payload: Record<string, unknown> = { ...(typeof input.payload === "object" && input.payload ? input.payload as Record<string, unknown> : {}), taskId };
+      let payload: Record<string, unknown> = { ...(typeof input.payload === "object" && input.payload ? input.payload as Record<string, unknown> : {}), taskId };
       let humanDecisionClaimed = false;
+      let humanDecision: "approve" | "reject" | "revise" | "abandon" | undefined;
       if (signal === "humanSignal") {
         const decision = payload.decision === "approve" || payload.decision === "reject" || payload.decision === "revise" || payload.decision === "abandon" ? payload.decision : undefined;
-        const authorId = asString(payload.authorId);
-        if (!decision || !authorId) return send(response, 400, { error: "humanSignal 的 decision(approve/reject/revise/abandon) 和 authorId 必填" });
-        if (decision === "revise") {
-          const run = await repository.getWorkflowRunByTemporalId(workflowId);
-          if (run?.workflowType !== "chapter-review" || run.payload.mode !== "targeted") {
-            return send(response, 400, { error: "revise 仅适用于定向章节修订的人工审批" });
-          }
-        }
+        if (!decision) return send(response, 400, { error: "humanSignal 的 decision(approve/reject/revise/abandon) 必填" });
+        humanDecision = decision;
         const revisionBase = payload.revisionBase === "previous" ? "previous" : payload.revisionBase === "current" ? "current" : undefined;
-        const claimed = await repository.claimHumanDecision({ workflowId, artifactId: taskId, decision, authorId, feedback: asString(payload.feedback), revisionBase });
+        const claimed = await repository.claimApprovalEvidence({ workflowId, artifactId: taskId, decision, actorSource: "automation", actorId: "automation", feedback: asString(payload.feedback), revisionBase });
         if (!claimed) return send(response, 409, { error: "该候选稿的审批已提交，或运行已离开当前审批阶段" });
+        payload = { approvalEvidenceId: claimed.evidence.id, taskId };
         humanDecisionClaimed = true;
       }
       try {
@@ -1083,8 +1140,8 @@ const server = createServer(async (request, response) => {
         const handle = temporal.workflow.getHandle(workflowId);
         await handle.signal(signal, payload);
         if (humanDecisionClaimed) {
-          const stage = payload.decision === "approve" ? "fact-extraction" : payload.decision === "revise" ? "revision" : "manuscript-approval";
-          await repository.updateWorkflowRunStatus(workflowId, "running", { stage, decision: payload.decision, pendingHumanDecisionSubmitted: true });
+          const stage = humanDecision === "approve" ? "fact-extraction" : humanDecision === "revise" ? "revision" : "manuscript-approval";
+          await repository.updateWorkflowRunStatus(workflowId, "running", { stage, decision: humanDecision, pendingHumanDecisionSubmitted: true });
         }
         return send(response, 202, { accepted: true, workflowId, taskId });
       } catch (error) {
@@ -1099,11 +1156,23 @@ const server = createServer(async (request, response) => {
       const workflowId = asString(input.workflowId);
       if (!workflowId) return send(response, 400, { error: "workflowId 必填；任务信号必须绑定 Temporal workflow，不能把 taskId 当作 workflowId" });
       const signal = String(input.signal ?? "humanSignal");
-      const payload = { ...(typeof input.payload === "object" && input.payload ? input.payload as Record<string, unknown> : {}), taskId };
-      await repository.recordTaskSignal({ workflowId, taskId, signal, payload });
-      const handle = temporal.workflow.getHandle(workflowId);
-      await handle.signal(signal, payload);
-      return send(response, 202, { accepted: true, workflowId, taskId });
+      let payload: Record<string, unknown> = { ...(typeof input.payload === "object" && input.payload ? input.payload as Record<string, unknown> : {}), taskId };
+      if (signal === "humanSignal") {
+        const decision = payload.decision === "approve" || payload.decision === "reject" || payload.decision === "revise" || payload.decision === "abandon" ? payload.decision : undefined;
+        if (!decision) return send(response, 400, { error: "humanSignal 的 decision(approve/reject/revise/abandon) 必填" });
+        const claimed = await repository.claimApprovalEvidence({ workflowId, artifactId: taskId, decision, actorSource: "automation", actorId: "automation", feedback: asString(payload.feedback), revisionBase: payload.revisionBase === "previous" ? "previous" : "current" });
+        if (!claimed) return send(response, 409, { error: "该候选稿的审批已提交，或运行已离开当前审批阶段" });
+        payload = { approvalEvidenceId: claimed.evidence.id, taskId };
+      }
+      try {
+        await repository.recordTaskSignal({ workflowId, taskId, signal, payload });
+        const handle = temporal.workflow.getHandle(workflowId);
+        await handle.signal(signal, payload);
+        return send(response, 202, { accepted: true, workflowId, taskId });
+      } catch (error) {
+        if (signal === "humanSignal") await repository.releaseHumanDecisionClaim(workflowId, taskId).catch(() => undefined);
+        throw error;
+      }
     }
     const learningPromoteMatch = request.url?.match(/^\/v2\/learning\/([^/?]+)\/promote$/);
     if (request.method === "POST" && learningPromoteMatch) return send(response, 202, { promotion: await repository.requestLearningPromotion(decodeURIComponent(learningPromoteMatch[1])) });
@@ -1326,6 +1395,21 @@ const server = createServer(async (request, response) => {
     }
 
     // POST /v2/projects/:projectId/documents/:documentId/review —— 章节审校工作流
+    const chapterStateRebuildMatch = request.url?.match(/^\/v2\/projects\/([^/]+)\/documents\/([^/]+)\/state\/rebuild$/);
+    if (request.method === "POST" && chapterStateRebuildMatch) {
+      const projectId = decodeURIComponent(chapterStateRebuildMatch[1]);
+      const documentId = decodeURIComponent(chapterStateRebuildMatch[2]);
+      try {
+        const result = await chapterStateRebuildService.rebuildCommittedChapterState(projectId, documentId, "web-author");
+        return send(response, 200, { result });
+      } catch (error) {
+        if (error instanceof ChapterStateRebuildConflictError) {
+          return send(response, 409, { code: error.code, error: error.message, ...error.details });
+        }
+        throw error;
+      }
+    }
+
     const chapterReviewMatch = request.url?.match(/^\/v2\/projects\/([^/]+)\/documents\/([^/]+)\/review$/);
     if (request.method === "POST" && chapterReviewMatch) {
       try {

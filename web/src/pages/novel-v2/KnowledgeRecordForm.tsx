@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { Input, InputNumber, Select, Switch } from "antd";
 import "./knowledge-form.css";
 
-export type KnowledgeFormKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills";
+export type KnowledgeFormKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "claims" | "skills";
 
 type FieldType = "text" | "textarea" | "number" | "select" | "switch" | "stringList" | "json";
 
@@ -76,6 +76,14 @@ export const KNOWLEDGE_FORM_SCHEMA: Record<KnowledgeFormKind, FieldSchema[]> = {
       { value: "candidate", label: "候选" },
     ] },
     { path: "confidence", label: "置信度", type: "number", min: 0, max: 1, step: 0.05 },
+  ],
+  claims: [
+    { path: "title", label: "事实标题", type: "text", span: 2, placeholder: "简洁概括这条事实" },
+    { path: "subjectRefs", label: "事实主体", type: "stringList", span: 2, help: "输入明确的人物、地点、组织或物品名，回车添加" },
+    { path: "predicate", label: "关系谓词", type: "text", placeholder: "如：持有 / 位于 / 知晓" },
+    { path: "narrativeStart", label: "首次成立章节", type: "number", min: 1, step: 1 },
+    { path: "narrativeEnd", label: "成立截止章节", type: "number", min: 1, step: 1, help: "持续有效可留空" },
+    { path: "content", label: "事实内容", type: "textarea", rows: 5, span: 2, placeholder: "写明正文已经建立、后续创作需要保持一致的事实" },
   ],
   skills: [
     { path: "id", label: "Skill ID", type: "text", placeholder: "如：chapter-draft" },

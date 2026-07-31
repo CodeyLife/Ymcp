@@ -11,8 +11,10 @@ import {
   type RevisionDecision,
 } from "../temporal/revision-policy";
 import type { Artifact, Review } from "../protocol";
+import { inspectManuscript } from "../application/manuscript-structure";
 
 const artifact: Artifact = { id: "artifact-1", projectId: "p1", taskId: "task-1", attemptId: "attempt-1", kind: "draft", contentHash: "hash", objectKey: "obj", baseRevision: 0, createdAt: 1, fingerprint: "fp-1" };
+const structuralReport = inspectManuscript({ text: "正文" });
 
 function makeReview(overrides: Partial<Review> = {}): Review {
   return {
@@ -93,7 +95,7 @@ describe("revision-policy classification helpers", () => {
       makeReview({ id: "stale", identity: "internal", artifactFingerprint: "old-fingerprint" }),
     ];
 
-    expect(evaluateCommitGate(reviews, artifact.fingerprint)).toEqual({
+    expect(evaluateCommitGate(reviews, artifact.fingerprint, structuralReport)).toEqual({
       passed: false,
       reviewIds: ["internal", "independent"],
       failedReviewIds: ["internal"],
@@ -108,7 +110,7 @@ describe("revision-policy classification helpers", () => {
       makeReview({ id: "independent", role: "style-reviewer", identity: "independent" }),
     ];
 
-    expect(evaluateCommitGate(reviews, artifact.fingerprint)).toMatchObject({
+    expect(evaluateCommitGate(reviews, artifact.fingerprint, structuralReport)).toMatchObject({
       passed: false,
       missingRoles: ["continuity-reviewer", "character-reviewer", "reader-reviewer"],
     });
@@ -123,7 +125,7 @@ describe("revision-policy classification helpers", () => {
       makeReview({ id: "reader", role: "reader-reviewer", identity: "independent", score: 4.4 }),
     ];
 
-    expect(evaluateCommitGate(reviews, artifact.fingerprint)).toMatchObject({ passed: true, missingRoles: [] });
+    expect(evaluateCommitGate(reviews, artifact.fingerprint, structuralReport)).toMatchObject({ passed: true, missingRoles: [] });
   });
 
   it("routes a low-scoring all-passed chapter to manual review", () => {
@@ -134,7 +136,7 @@ describe("revision-policy classification helpers", () => {
       makeReview({ id: "character", role: "character-reviewer", identity: "independent", score: 3.8 }),
       makeReview({ id: "reader", role: "reader-reviewer", identity: "independent", score: 3.8 }),
     ];
-    expect(evaluateCommitGate(reviews, artifact.fingerprint)).toMatchObject({ passed: false, qualityFailure: "overall-score" });
+    expect(evaluateCommitGate(reviews, artifact.fingerprint, structuralReport)).toMatchObject({ passed: false, qualityFailure: "overall-score" });
   });
 });
 

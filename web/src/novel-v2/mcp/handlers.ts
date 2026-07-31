@@ -627,8 +627,7 @@ const novel_project_create: ToolHandler = async (args, ctx) => {
   // 自动启动全书规划(默认 true):创建项目后立即调用 startNovelBootstrap
   // 设计依据:用户需求"一句话创意创建项目"——一站式完成项目创建+全书规划。
   // premise 作为 objective 传给 bootstrap,让每个 foundation task 都知道创意核心。
-  // includeChapterPlan 默认 true:chapter-plan 是 REQUIRED_FOUNDATION_TASK_KEYS 的必填项,
-  // 默认生成避免后续 novel_chapter_generate 被前置检查拒绝。
+  // includeChapterPlan 仅保留旧客户端兼容；bootstrap 已由滚动故事弧替代静态章节表。
   if (autoBootstrap) {
     if (!ctx.temporal) throw new Error("novel_project_create(autoBootstrap=true) 需要 ToolContext.temporal 才能启动 Temporal 工作流");
     const bootstrapRun = await startNovelBootstrap(ctx.repository, ctx.temporal, {
@@ -667,9 +666,7 @@ const novel_bootstrap_run: ToolHandler = async (args, ctx) => {
   if (!projectId || !idempotencyKey) throw new Error("projectId/idempotencyKey 必填且非空");
 
   const objective = asString(args.objective) || "完成基础+规划阶段";
-  // includeChapterPlan 默认 true:章节计划(chapter-plan)是章节生成的必填 foundation artifact
-  // (见 REQUIRED_FOUNDATION_TASK_KEYS)。若用户未显式禁用,默认生成章节计划,
-  // 避免后续 novel_chapter_generate 被前置检查拒绝。
+  // includeChapterPlan 仅保留旧客户端兼容，startNovelBootstrap 会忽略该值。
   const includeChapterPlan = asBoolean(args.includeChapterPlan) ?? true;
   // 解析 reviewGate/progression,使 foundation 10 阶段支持人工审核门禁(架构阶段必备)。
   // 未提供时为 undefined,由 startNovelBootstrap 兜底为 "none" / "automatic"(向后兼容)。

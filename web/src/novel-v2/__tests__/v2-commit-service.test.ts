@@ -3,6 +3,7 @@ import { CommitService } from "../commit-service";
 import type { Artifact, CommitResult, Review } from "../protocol";
 import type { ContentObjectStore } from "../object-store";
 import type { NovelPostgresRepository } from "../postgres-repository";
+import { inspectManuscript } from "../application/manuscript-structure";
 
 const artifact: Artifact = { id: "artifact-1", projectId: "p1", taskId: "task-1", attemptId: "attempt-1", kind: "draft", contentHash: "old", objectKey: "old", baseRevision: 0, createdAt: 1, fingerprint: "fp-1" };
 function review(role: string, identity: Review["identity"]): Review {
@@ -15,6 +16,7 @@ const reviews = [
   review("character-reviewer", "independent"),
   review("reader-reviewer", "independent"),
 ];
+const structuralReport = inspectManuscript({ text: "正文" });
 
 function createService() {
   const commits: Array<Record<string, unknown>> = [];
@@ -33,13 +35,20 @@ function createService() {
 describe("V2 CommitService", () => {
   it("rejects commits without all five current reviewer roles", async () => {
     const { service } = createService();
-    await expect(service.commit({ projectId: "p1", documentId: "doc-1", artifact, reviews: [reviews[0], reviews[2]], baseRevision: 0, idempotencyKey: "k1", text: "正文" })).rejects.toThrow(/完整五角色/);
-    await expect(service.commit({ projectId: "p1", documentId: "doc-1", artifact, reviews: reviews.map((item, index) => index === 4 ? { ...item, artifactFingerprint: "stale" } : item), baseRevision: 0, idempotencyKey: "k1", text: "正文" })).rejects.toThrow(/reader-reviewer/);
+    await expect(service.commit({ projectId: "p1", documentId: "doc-1", artifact, reviews: [reviews[0], reviews[2]], structuralReport, baseRevision: 0, idempotencyKey: "k1", text: "正文" })).rejects.toThrow(/完整五角色/);
+    await expect(service.commit({ projectId: "p1", documentId: "doc-1", artifact, reviews: reviews.map((item, index) => index === 4 ? { ...item, artifactFingerprint: "stale" } : item), structuralReport, baseRevision: 0, idempotencyKey: "k1", text: "正文" })).rejects.toThrow(/reader-reviewer/);
+  });
+
+  it("rejects a structurally blocked manuscript even when all reviewers pass", async () => {
+    const { service } = createService();
+    const repeated = "这是一段用于验证提交结构门的长正文，任何评分都不能覆盖确定性重复问题。".repeat(5);
+    const text = `${repeated}\n\n${repeated}`;
+    await expect(service.commit({ projectId: "p1", documentId: "doc-1", artifact, reviews, structuralReport: inspectManuscript({ text }), baseRevision: 0, idempotencyKey: "k-structural", text })).rejects.toThrow(/完整五角色|结构/);
   });
 
   it("persists through the repository only after all five roles pass", async () => {
     const { service, commits, result } = createService();
-    await expect(service.commit({ projectId: "p1", documentId: "doc-1", artifact, reviews, baseRevision: 0, idempotencyKey: "k1", text: "正文" })).resolves.toEqual(result);
+    await expect(service.commit({ projectId: "p1", documentId: "doc-1", artifact, reviews, structuralReport, baseRevision: 0, idempotencyKey: "k1", text: "正文" })).resolves.toEqual(result);
     expect(commits).toHaveLength(1);
     expect(commits[0]).toMatchObject({ contentHash: "hash-1", objectKey: "objects/hash-1", revisionId: expect.any(String) });
   });
@@ -51,6 +60,7 @@ describe("V2 CommitService", () => {
       documentId: "doc-1",
       artifact,
       reviews,
+      structuralReport,
       baseRevision: 0,
       idempotencyKey: "k-payoff",
       text: "正文",
@@ -68,6 +78,7 @@ describe("V2 CommitService", () => {
       documentId: "doc-1",
       artifact,
       reviews,
+      structuralReport,
       baseRevision: 0,
       idempotencyKey: "k-narrative",
       text: "正文",

@@ -55,9 +55,13 @@ export function buildFactExtractionPrompt(input: FactExtractionPromptInput): str
 
   sections.push(
     `## 提取规则（facts）`,
+    `- 准入原则：只有后续章节为避免矛盾、延续因果或维护角色知识边界而需要再次使用的信息，才是叙事事实。正文中出现过不等于值得沉淀。`,
+    `- 必须至少属于一类长期用途：身份/世界规则，关系或能力边界，持续状态，明确的状态变化，角色知识变化，尚未履行的承诺，或会约束后续行动的因果结果。`,
+    `- 一次性动作、临时站位、普通行程过程、服饰、天气、表情和无后续影响的环境细节不提取；只有它们改变持续状态或形成后续约束时才提取变化后的事实。`,
+    `- 同一持续状态在后续章节被再次提及但没有变化时必须省略，不得换一种谓词重复写入。`,
     `- subject.kind 限定为：project/entity/relation/outline/scene/thread/foreshadowing/timeline。`,
     `- subject.id 必须是正文中可指认的对象（人物名、地点名、关系名等）；不得用"主角""反派"等代词。`,
-    `- predicate 是事实陈述的谓词，如"出生于""持有""与X约定""位于"。`,
+    `- predicate 只写稳定、最短的关系词，不得夹带主体、客体、时间或原因；同类关系优先复用已存在记忆中的谓词。系统预置关系使用"身份/持有/位于/知晓/隶属/给予/状态变化"，确有不同语义时才使用项目自定义谓词。`,
     `- object.kind 限定为：entity-ref/string/number/boolean/json。entity-ref 时 value 必须是另一主体的 id。`,
     `- polarity=affirmed 表示正面陈述；negated 表示正文明确否定（如"并未出生于此"）。`,
     `- truthStatus：objective=客观事实（地点、时间、物件状态）；claim=人物声明（可能不可靠）；contested=多方冲突陈述；open-question=正文留白。`,
@@ -123,7 +127,7 @@ export function buildFactExtractionPrompt(input: FactExtractionPromptInput): str
     `## 不提取`,
     `- 修辞、隐喻、意象（如"她的心像落叶"）。`,
     `- 读者推断（如"作者暗示她会后悔"）。`,
-    `- 已在冻结记忆中存在且无更新的事实（novelty=duplicate 可省略）。`,
+    `- 已在冻结记忆中存在且无更新的事实（novelty=duplicate 必须省略）。`,
     `- narrativeElements 可以为空数组——不要为了凑数虚构伏笔或承诺。`,
     "",
     `## 已存在记忆摘要（用于 novelty/conflict 判断）`,

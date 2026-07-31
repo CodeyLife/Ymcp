@@ -564,11 +564,11 @@ export function useSubmitNovelIntent(projectId: string) {
 export function useSignalHumanDecision(projectId: string, workflowId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { artifactId: string; decision: "approve" | "reject" | "revise" | "abandon"; authorId?: string; feedback?: string; revisionBase?: "current" | "previous" }) => {
-      await novelFetch(`/v2/workflows/${enc(workflowId!)}/tasks/${enc(input.artifactId)}/signal`, {
+    mutationFn: async (input: { artifactId: string; decision: "approve" | "reject" | "revise" | "abandon"; feedback?: string; revisionBase?: "current" | "previous" }) => {
+      await novelFetch(`/v2/workflows/${enc(workflowId!)}/tasks/${enc(input.artifactId)}/human-decision`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ signal: "humanSignal", payload: { decision: input.decision, authorId: input.authorId ?? "web-author", feedback: input.feedback, revisionBase: input.revisionBase, approvedArtifactId: input.artifactId } }),
+        body: JSON.stringify({ decision: input.decision, feedback: input.feedback, revisionBase: input.revisionBase }),
       });
     },
     onSuccess: (_data, input) => {

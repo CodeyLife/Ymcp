@@ -1,4 +1,5 @@
 import type { Review } from "../protocol";
+import type { ManuscriptStructuralReport } from "../application/manuscript-structure";
 
 export const REQUIRED_CHAPTER_REVIEWERS = [
   { role: "plot-reviewer", identity: "internal" },
@@ -45,8 +46,9 @@ export const MIN_REVIEWER_SCORE = 3.5;
  * without a score retain the severity-derived fallback.
  */
 export function scoreReviews(reviews: Review[]): number {
-  if (!reviews.length) return 0;
-  const scores = reviews.map((review) => {
+  const scoredReviews = reviews.filter((review) => review.role !== "structural-validator");
+  if (!scoredReviews.length) return 0;
+  const scores = scoredReviews.map((review) => {
     if (typeof review.score === "number" && Number.isFinite(review.score)) return Math.max(0, Math.min(5, review.score));
     let fallback = 5;
     for (const issue of review.issues) {
@@ -76,7 +78,7 @@ export function allReviewsPassed(reviews: Review[]): boolean {
   return reviews.length > 0 && reviews.every((review) => review.verdict === "passed");
 }
 
-export function evaluateCommitGate(reviews: Review[], artifactFingerprint: string) {
+export function evaluateCommitGate(reviews: Review[], artifactFingerprint: string, structuralReport: ManuscriptStructuralReport) {
   const currentReviews = reviews.filter((review) => review.artifactFingerprint === artifactFingerprint);
   const requiredReviews = REQUIRED_CHAPTER_REVIEWERS.map(({ role, identity }) =>
     currentReviews.find((review) => review.role === role && review.identity === identity),
@@ -97,13 +99,43 @@ export function evaluateCommitGate(reviews: Review[], artifactFingerprint: strin
   return {
     passed: missingRoles.length === 0
       && requiredReviews.every((review) => review?.verdict === "passed")
+      && structuralReport.passed
       && !qualityFailure,
     reviewIds: currentReviews.map((review) => review.id),
     failedReviewIds: currentReviews.filter((review) => review.verdict !== "passed").map((review) => review.id),
     missingRoles,
     ...(qualityFailure ? { qualityFailure } : {}),
+    ...(!structuralReport.passed ? { structuralFailure: "structural-blocker" as const } : {}),
     overallScore,
   };
+}
+
+export interface CandidateQualityKey {
+  structuralPassed: boolean;
+  blockerCount: number;
+  majorCount: number;
+  minimumReviewerScore: number;
+  overallScore: number;
+}
+
+export function candidateQualityKey(reviews: Review[], structuralReport: ManuscriptStructuralReport): CandidateQualityKey {
+  const current = reviews.filter((review) => review.role !== "structural-validator");
+  const scores = current.map((review) => scoreReviews([review]));
+  return {
+    structuralPassed: structuralReport.passed,
+    blockerCount: reviews.flatMap((review) => review.issues).filter((item) => item.severity === "blocker").length,
+    majorCount: reviews.flatMap((review) => review.issues).filter((item) => item.severity === "major").length,
+    minimumReviewerScore: scores.length ? Math.min(...scores) : 0,
+    overallScore: scoreReviews(current),
+  };
+}
+
+export function isCandidateQualityBetter(candidate: CandidateQualityKey, currentBest: CandidateQualityKey): boolean {
+  if (candidate.structuralPassed !== currentBest.structuralPassed) return candidate.structuralPassed;
+  if (candidate.blockerCount !== currentBest.blockerCount) return candidate.blockerCount < currentBest.blockerCount;
+  if (candidate.majorCount !== currentBest.majorCount) return candidate.majorCount < currentBest.majorCount;
+  if (candidate.minimumReviewerScore !== currentBest.minimumReviewerScore) return candidate.minimumReviewerScore > currentBest.minimumReviewerScore;
+  return candidate.overallScore > currentBest.overallScore;
 }
 
 /**
@@ -123,14 +155,15 @@ export function decideRevision(params: {
   previousScore?: number;
 }): RevisionDecision {
   const maxIterations = params.maxIterations ?? DEFAULT_MAX_AUTO_REVISIONS;
-  const currentScore = scoreReviews(params.reviews);
+  const scoredReviews = params.reviews.filter((review) => review.role !== "structural-validator");
+  const currentScore = scoreReviews(scoredReviews);
   const previousScore = params.previousScore;
   const improvement = previousScore === undefined ? Number.POSITIVE_INFINITY : currentScore - previousScore;
   const blocker = hasBlocker(params.reviews);
   const major = hasBlockerOrMajor(params.reviews);
   const passed = allReviewsPassed(params.reviews);
   const belowQualityScore = currentScore < MIN_AUTOMATIC_COMMIT_SCORE
-    || params.reviews.some((review) => scoreReviews([review]) < MIN_REVIEWER_SCORE);
+    || scoredReviews.some((review) => scoreReviews([review]) < MIN_REVIEWER_SCORE);
 
   let shouldRevise = false;
   let reason = "";

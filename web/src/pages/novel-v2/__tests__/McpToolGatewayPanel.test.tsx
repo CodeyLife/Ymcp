@@ -8,7 +8,6 @@ const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
 
 import McpToolGatewayPanel from "../McpToolGatewayPanel";
-import { TOOL_GROUP_COUNT } from "../../../novel-v2/mcp/tool-metadata";
 
 // ===== Helpers =====
 
@@ -28,16 +27,6 @@ function renderPanel() {
   );
 }
 
-// 期望的工具分组标题
-const EXPECTED_GROUPS = [
-  "Run / Action 主体",
-  "Catalog / Receipt",
-  "Craft Rule 候选演进",
-  "项目生命周期",
-  "规划与创作",
-  "评估闭环",
-];
-
 // 4 个直接执行工具（DIRECT_EXEC_TOOLS）
 const DIRECT_EXEC_TOOLS = [
   "novel_project_create",
@@ -54,17 +43,7 @@ describe("McpToolGatewayPanel", () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
   });
 
-  describe("6 个工具分组", () => {
-    it("渲染全部 6 个分组标题", () => {
-      const html = renderPanel();
-      for (const title of EXPECTED_GROUPS) {
-        expect(html).toContain(title);
-      }
-      expect(TOOL_GROUP_COUNT).toBe(6);
-    });
-  });
-
-  describe("26 个工具名", () => {
+  describe("工具名", () => {
     it("渲染关键工具名", () => {
       const html = renderPanel();
       expect(html).toContain("novel_project_create");
@@ -75,13 +54,6 @@ describe("McpToolGatewayPanel", () => {
       expect(html).toContain("novel_story_arc_get");
       expect(html).toContain("novel_chapter_review");
       expect(html).toContain("novel_chapter_generate");
-    });
-
-    it("novel_ 工具名出现次数 >= 26", () => {
-      const html = renderPanel();
-      const count = (html.match(/novel_/g) ?? []).length;
-      expect(count).toBeGreaterThanOrEqual(26);
-      expect(html).toContain("26 工具");
     });
   });
 

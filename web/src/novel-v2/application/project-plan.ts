@@ -32,7 +32,7 @@ export const PROJECT_PLAN_STAGES = [
   { taskKey: "foreshadowing", label: "伏笔规划", dependsOn: ["plot-threads"], instruction: "设计伏笔、承诺、预期兑现窗口与回收节点" },
   { taskKey: "timeline", label: "时间线", dependsOn: ["plot-threads", "worldview"], instruction: "构建故事时间线与关键事件顺序" },
   { taskKey: "story-control", label: "叙事控制", dependsOn: ["architecture", "plot-threads"], instruction: "设计信息释放、节奏变化与叙事控制点" },
-  { taskKey: "plot-design", label: "情节设计", dependsOn: ["relations", "foreshadowing", "timeline", "story-control"], instruction: "形成可执行的情节设计与章节推进原则" },
+  { taskKey: "plot-design", label: "长程叙事战略", dependsOn: ["relations", "foreshadowing", "timeline", "story-control"], instruction: "确定全书的长程叙事承诺、终局边界与防止提前消费的战略护栏，不生成固定章节表" },
 ] as const;
 
 export type ProjectPlanStageTaskKey = (typeof PROJECT_PLAN_STAGES)[number]["taskKey"];

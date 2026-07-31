@@ -54,6 +54,25 @@ describe("stage context compiler", () => {
     })).toThrow(StageContextBudgetError);
   });
 
+  it("records upstream memory exclusions without injecting placeholder sections", () => {
+    const result = compileStageContext({
+      projectId: "p1", workflowId: "wf-memory", purpose: "writing.draft", stage: "drafting",
+      maxInputTokens: 1_000, reservedOutputTokens: 100,
+      sections: [
+        { id: "active", kind: "fact", title: "有效事实", text: "角色仍在站台", priority: "required", provenanceRefs: ["r1"] },
+        { id: "inactive", kind: "fact", title: "失活事实", text: "", priority: "soft", provenanceRefs: ["r0"], exclusionReason: "inactive" },
+        { id: "merged", kind: "fact", title: "同值来源", text: "", priority: "soft", provenanceRefs: ["r2"], exclusionReason: "merged-source" },
+      ],
+    });
+
+    expect(result.instruction).toContain("角色仍在站台");
+    expect(result.instruction).not.toContain("失活事实");
+    expect(result.manifest.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "inactive", status: "excluded", reason: "inactive" }),
+      expect.objectContaining({ id: "merged", status: "excluded", reason: "merged-source" }),
+    ]));
+  });
+
   it("creates stable semantic goal identities without keyword taxonomies", () => {
     const first = createStageGoalContract({
       projectId: "p1", workflowId: "wf1", stage: "revision", targetArtifactId: "a1",

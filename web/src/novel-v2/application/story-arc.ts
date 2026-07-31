@@ -64,6 +64,16 @@ export interface ChapterBlueprint {
   freedom: string;
 }
 
+export {
+  CHAPTER_PLAN_CHECK_DIMENSIONS,
+  compileChapterPlanValidationReport,
+} from "./story-arc-review-policy";
+export type {
+  ChapterPlanCheckDimension,
+  ChapterPlanValidationCheck,
+  ChapterPlanValidationReport,
+} from "./story-arc-review-policy";
+
 export interface StoryArcBundle {
   arc: NarrativeArcPlan;
   batch: StoryArcBatchPlan;
@@ -83,6 +93,8 @@ export interface StoryArcRecord {
   sourceArtifactId?: string;
   blueprintArtifactId?: string;
   contextFingerprint?: string;
+  reviewArtifactId?: string;
+  reviewFingerprint?: string;
   editRevision: number;
   approvedAt?: string;
   completedAt?: string;

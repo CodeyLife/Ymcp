@@ -5,6 +5,7 @@ import type { ModelGateway } from "./model-gateway";
 
 export interface MemoryIndex {
   upsertClaims(projectId: string, claims: MemoryClaim[]): Promise<void>;
+  deleteClaims?(projectId: string, claimIds: string[]): Promise<void>;
 }
 
 /**
@@ -50,7 +51,10 @@ export class QdrantMemoryProvider implements MemoryProvider, MemoryIndex {
     const query = input.facets.map((facet) => facet.query).join(" ");
     const embedding = await this.gateway.embed({ purpose: "memory.embed", texts: [query] });
     if (embedding.vectors[0]?.length !== this.dimension) throw new Error(`查询向量维度 ${embedding.vectors[0]?.length ?? 0} 与集合维度 ${this.dimension} 不一致`);
-    const filter: any = { must: [{ key: "projectId", match: { value: input.projectId } }] };
+    const filter: any = { must: [
+      { key: "projectId", match: { value: input.projectId } },
+      { key: "lifecycleStatus", match: { value: "active" } },
+    ] };
     // P0-A4: narrativeStart=null 表示全局可见（无章节归属的基础事实），
     // 不应被 narrativeCutoff 屏蔽。Qdrant 的 range:lte 过滤会排除 null 值，
     // 因此改用 should（OR）组合：narrativeStart <= cutoff OR narrativeStart IS NULL。
@@ -82,7 +86,7 @@ export class QdrantMemoryProvider implements MemoryProvider, MemoryIndex {
     const hits = points.points
       .map((point: any) => {
         const claim = point.payload?.claim as MemoryHit | undefined;
-        if (!claim || !claim.id || claim.projectId !== input.projectId || !["approved", "author", "derived"].includes(claim.authority)) return null;
+        if (!claim || !claim.id || claim.projectId !== input.projectId || claim.lifecycleStatus === "staged" || !["approved", "author", "derived"].includes(claim.authority)) return null;
         // P0-A5: matchedFacet 按 claim.kind 匹配 facet 列表，而非强制标记为 facets[0].kind
         // 设计依据：AGENTS.md「root-cause analysis」——matchedFacet 错标会导致 missingFacets
         // 计算错误，高风险任务可能因 missingFacets.length && risk==="high" 抛错阻断生成。
@@ -167,6 +171,8 @@ export class QdrantMemoryProvider implements MemoryProvider, MemoryIndex {
   async upsertClaims(projectId: string, claims: MemoryClaim[]) {
     if (!claims.length) return;
     await this.ensureCollection();
+    const supersededIds = [...new Set(claims.flatMap((claim) => claim.supersedes))];
+    if (supersededIds.length) await this.deleteClaims(projectId, supersededIds);
     const embeddings = await this.gateway.embed({ purpose: "memory.embed", texts: claims.map((claim) => `${claim.title}\n${claim.content}`) });
     if (embeddings.vectors.length !== claims.length || embeddings.vectors.some((vector) => vector.length !== this.dimension)) {
       throw new Error(`embedding 返回 ${embeddings.vectors.length} 个向量，要求 ${claims.length} 个且每个维度为 ${this.dimension}`);
@@ -179,6 +185,7 @@ export class QdrantMemoryProvider implements MemoryProvider, MemoryIndex {
         payload: {
           projectId,
           authority: claim.authority,
+          lifecycleStatus: claim.lifecycleStatus ?? "active",
           narrativeStart: claim.narrativeRange?.start ?? null,
           kind: claim.kind,
           // P0-A2: 存储 knowledgeScopeCharacterId 用于 POV 知识边界过滤
@@ -189,6 +196,15 @@ export class QdrantMemoryProvider implements MemoryProvider, MemoryIndex {
           claim,
         },
       })),
+    });
+  }
+
+  async deleteClaims(projectId: string, claimIds: string[]) {
+    if (!claimIds.length) return;
+    await this.ensureCollection();
+    await this.client.delete(this.collection, {
+      wait: true,
+      points: [...new Set(claimIds)].map((claimId) => qdrantPointId(projectId, claimId)),
     });
   }
 }

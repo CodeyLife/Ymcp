@@ -23,7 +23,9 @@ const workflowsPath = fileURLToPath(new URL("../src/novel-v2/temporal/workflows.
 // P2-G2: 三轨加权融合（semantic 0.5 + lexical 0.3 + graph 0.2）
 // 设计依据：AGENTS.md「reusable contracts」——融合逻辑从 worker 内联抽到
 // FusionMemoryProvider 共享层，min-max 归一化 + 权重重分配，避免 last-wins 丢信号。
-const fusionMemory = createFusionMemoryProvider(qdrantMemory, repository);
+const fusionMemory = createFusionMemoryProvider(qdrantMemory, repository, {
+  search: (input) => repository.searchGraphMemory(input),
+});
 const serviceId = `worker:${randomUUID()}`;
 let readiness: { status: "healthy" | "degraded"; details: Record<string, unknown> } = { status: "healthy", details: {} };
 try {
@@ -62,7 +64,10 @@ const worker = await Worker.create({
     objectStore,
     // CommitService 由 createNovelWorkflowActivities 自动注入 chapter memory 依赖
     // 设计依据：AGENTS.md「commit-stage 对新 DocumentRevision 创建 chapter memory」契约
-    memoryIndex: { upsertClaims: async (projectId, claims) => { try { await qdrantMemory.upsertClaims(projectId, claims); } catch (error) { console.warn("Qdrant 写入失败，PostgreSQL memory_claims 已保留为真源", error); } } },
+    memoryIndex: {
+      upsertClaims: async (projectId, claims) => { try { await qdrantMemory.upsertClaims(projectId, claims); } catch (error) { console.warn("Qdrant 写入失败，PostgreSQL memory_claims 已保留为真源", error); } },
+      deleteClaims: async (projectId, claimIds) => { try { await qdrantMemory.deleteClaims(projectId, claimIds); } catch (error) { console.warn("Qdrant 删除失败，旧向量将被 active 状态过滤", error); } },
+    },
     enableChapterMemory: true,
   }),
 });

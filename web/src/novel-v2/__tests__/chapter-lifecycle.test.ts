@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { finalizeChapterLifecycle, runChapterLifecycle } from "../application/chapter-lifecycle";
+import { inspectManuscript, structuralReviewFromReport } from "../application/manuscript-structure";
 import type { Artifact, FactApprovalSummary, Review, ReviewIssue } from "../protocol";
 
 const artifact: Artifact = {
@@ -45,6 +46,10 @@ function baseParams(reviews: Review[], events: string[]) {
   return {
     projectId: artifact.projectId,
     initialDraft: { artifact, text: "正文" },
+    inspect: vi.fn(async (current: { artifact: Artifact; text: string }) => {
+      const report = inspectManuscript({ text: current.text });
+      return { report, review: structuralReviewFromReport(artifact.projectId, current.artifact, report, 1) };
+    }),
     review: vi.fn(async (_current?: { artifact: Artifact; text: string }) => reviews),
     revise: vi.fn(async (current: { artifact: Artifact; text: string }, _reviews: Review[], _iteration: number, _directedIssues?: ReviewIssue[]) => current),
     assessLearning: vi.fn(async () => {
@@ -138,6 +143,7 @@ describe("runChapterLifecycle", () => {
       projectId: params.projectId,
       draft: params.initialDraft,
       reviews: await params.review(),
+      structuralReport: inspectManuscript({ text: params.initialDraft.text }),
       commit: params.commit,
       enrich: params.enrich,
       assessLearning: params.assessLearning,
@@ -179,5 +185,81 @@ describe("runChapterLifecycle", () => {
     expect(params.extractFacts).not.toHaveBeenCalled();
     expect(params.commit).not.toHaveBeenCalled();
     expect(events).toEqual(["learning", "targeted-revision", "professional-review", "learning"]);
+  });
+
+  it("keeps the baseline candidate when a directed revision lowers lexicographic quality", async () => {
+    const events: string[] = [];
+    const baselineReviews = fivePassedReviews();
+    const baselineStructuralReport = inspectManuscript({ text: "正文" });
+    const revisedArtifact = { ...artifact, id: "artifact-directed-worse", fingerprint: "fingerprint-directed-worse", contentHash: "content-directed-worse", kind: "revision" as const };
+    const targetIssue = { severity: "major" as const, title: "视角越界", evidence: "出现不可见信息" };
+    const worseReviews = fivePassedReviews().map((item) => ({
+      ...item,
+      artifactId: revisedArtifact.id,
+      artifactFingerprint: revisedArtifact.fingerprint,
+      verdict: "revise" as const,
+      score: 3,
+      issues: [targetIssue],
+    }));
+    const params = baseParams(worseReviews, events);
+    params.revise = vi.fn(async () => ({ artifact: revisedArtifact, text: "修订后正文" }));
+
+    const result = await runChapterLifecycle({
+      ...params,
+      directedRevision: {
+        issues: [targetIssue],
+        requireManuscriptApproval: true,
+        baseline: { reviews: baselineReviews, structuralReport: baselineStructuralReport },
+      },
+    });
+
+    expect(result.draft.artifact.id).toBe(artifact.id);
+    expect(result.reviews).toBe(baselineReviews);
+    expect(result.finalScore).toBe(5);
+    expect(result.commitGate.passed).toBe(true);
+    expect(params.progress).toHaveBeenCalledWith(expect.objectContaining({ stage: "revision-reverted" }));
+  });
+
+  it("reviews an unscored author-selected source and keeps it when directed revision is worse", async () => {
+    const events: string[] = [];
+    const sourceArtifact = { ...artifact, id: "artifact-author-edited", fingerprint: "fingerprint-author-edited", contentHash: "content-author-edited" };
+    const revisedArtifact = { ...artifact, id: "artifact-author-revision", fingerprint: "fingerprint-author-revision", contentHash: "content-author-revision", kind: "revision" as const };
+    const sourceReviews = fivePassedReviews().map((item) => ({ ...item, artifactId: sourceArtifact.id, artifactFingerprint: sourceArtifact.fingerprint, score: 4.4 }));
+    const worseReviews = sourceReviews.map((item) => ({ ...item, artifactId: revisedArtifact.id, artifactFingerprint: revisedArtifact.fingerprint, verdict: "revise" as const, score: 3, issues: [{ severity: "major" as const, title: "修订引入退化", evidence: "证据" }] }));
+    const params = baseParams(sourceReviews, events);
+    params.initialDraft = { artifact: sourceArtifact, text: "作者编辑后的正文" };
+    params.review = vi.fn(async (current?: { artifact: Artifact; text: string }) => current?.artifact.id === sourceArtifact.id ? sourceReviews : worseReviews);
+    params.revise = vi.fn(async () => ({ artifact: revisedArtifact, text: "更差的定向修订" }));
+
+    const result = await runChapterLifecycle({
+      ...params,
+      directedRevision: { issues: [{ severity: "major", title: "待处理问题", evidence: "证据" }], requireManuscriptApproval: true },
+      reviewBeforeDirectedRevision: true,
+      preserveDirectedRevisionCandidate: true,
+    });
+
+    expect(params.review).toHaveBeenCalledTimes(2);
+    expect(result.draft.artifact.id).toBe(sourceArtifact.id);
+    expect(result.reviews.map((review) => review.id)).toEqual([expect.stringMatching(/^structural:/), ...sourceReviews.map((review) => review.id)]);
+    expect(result.finalScore).toBe(4.4);
+    expect(params.progress).toHaveBeenCalledWith(expect.objectContaining({ stage: "revision-reverted" }));
+  });
+
+  it("skips model reviewers for a structural blocker and reviews only after repair", async () => {
+    const events: string[] = [];
+    const repeated = "这是一段足够长的正文，用来验证结构门不会把连续重复交给五个模型审校员。".repeat(4);
+    const initial = { ...artifact, id: "artifact-duplicate", fingerprint: "fingerprint-duplicate" };
+    const repaired = { ...artifact, id: "artifact-repaired", fingerprint: "fingerprint-repaired", contentHash: "content-repaired", kind: "revision" as const };
+    const params = baseParams(fivePassedReviews(), events);
+    params.initialDraft = { artifact: initial, text: [repeated, repeated].join("\n\n") };
+    params.revise = vi.fn(async () => ({ artifact: repaired, text: "雨停以后，他把旧案卷交给了等在门外的人。" }));
+    params.review = vi.fn(async () => fivePassedReviews().map((item) => ({ ...item, artifactId: repaired.id, artifactFingerprint: repaired.fingerprint, score: 4 })));
+
+    const result = await runChapterLifecycle(params);
+
+    expect(params.revise).toHaveBeenCalledTimes(1);
+    expect(params.review).toHaveBeenCalledTimes(1);
+    expect(result.draft.artifact.id).toBe(repaired.id);
+    expect(result.structuralReport.passed).toBe(true);
   });
 });

@@ -55,6 +55,14 @@ describe("targeted chapter review issues", () => {
     });
   });
 
+  it("normalizes PostgreSQL bigint narrative order to a runtime number", async () => {
+    if (!available) return;
+    await expect(repository.getProjectSnapshot(projectId, documentId)).resolves.toMatchObject({
+      targetDocumentOrder: 1,
+    });
+    expect(typeof (await repository.getProjectSnapshot(projectId, documentId)).targetDocumentOrder).toBe("number");
+  });
+
   it("loads only pending issues from the current non-stale snapshot", async () => {
     if (!available) return;
     const result = await repository.getTargetedChapterReviewIssues({ projectId, documentId, issueIds: [pendingIssueId] });
@@ -141,6 +149,7 @@ describe("targeted chapter review issues", () => {
     if (!available) return;
     const workflowId = `human-decision-${suffix}`;
     const artifactId = `candidate-${suffix}`;
+    await repository.recordArtifact({ id: artifactId, projectId, taskId: `${workflowId}:draft`, attemptId: `${workflowId}:attempt`, kind: "revision", contentHash, baseRevision: 1, fingerprint: `candidate-fingerprint-${suffix}`, createdAt: Date.now() });
     await repository.putWorkflowRun({
       id: workflowId,
       workflowType: "chapter-review",
@@ -150,17 +159,69 @@ describe("targeted chapter review issues", () => {
       payload: { documentId, artifactId, reasonCode: "targeted-manuscript-approval" },
     });
 
-    await expect(repository.claimHumanDecision({ workflowId, artifactId, decision: "approve", authorId: "author-1" })).resolves.toMatchObject({
-      status: "manual-review-required",
-      payload: { pendingHumanDecision: { artifactId, decision: "approve", authorId: "author-1" } },
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId, decision: "approve", actorSource: "automation", actorId: "automation" })).rejects.toThrow(/自动化来源/);
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId, decision: "approve", actorSource: "interactive-web", actorId: "web-author" })).resolves.toMatchObject({
+      evidence: { artifactId, decision: "approve", actorSource: "interactive-web", actorId: "web-author" },
+      run: { status: "manual-review-required", payload: { pendingHumanDecision: { artifactId, decision: "approve", actorSource: "interactive-web", actorId: "web-author" } } },
     });
-    await expect(repository.claimHumanDecision({ workflowId, artifactId, decision: "approve", authorId: "author-1" })).resolves.toBeUndefined();
-    await expect(repository.claimHumanDecision({ workflowId, artifactId: `${artifactId}-stale`, decision: "reject", authorId: "author-1" })).resolves.toBeUndefined();
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId, decision: "approve", actorSource: "interactive-web", actorId: "web-author" })).resolves.toBeUndefined();
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId: `${artifactId}-stale`, decision: "reject", actorSource: "interactive-web", actorId: "web-author" })).resolves.toBeUndefined();
 
     await repository.releaseHumanDecisionClaim(workflowId, artifactId);
-    await expect(repository.claimHumanDecision({ workflowId, artifactId, decision: "abandon", authorId: "author-2", feedback: "质量不足，放弃本轮", revisionBase: "previous" })).resolves.toMatchObject({
-      payload: { pendingHumanDecision: { artifactId, decision: "abandon", authorId: "author-2", feedback: "质量不足，放弃本轮", revisionBase: "previous" } },
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId, decision: "abandon", actorSource: "interactive-web", actorId: "web-author", feedback: "质量不足，放弃本轮", revisionBase: "previous" })).resolves.toMatchObject({
+      run: { payload: { pendingHumanDecision: { artifactId, decision: "abandon", actorSource: "interactive-web", actorId: "web-author", feedback: "质量不足，放弃本轮", revisionBase: "previous" } } },
     });
+  });
+
+  it("consumes an approval claim so a reverted candidate can be decided again", async () => {
+    if (!available) return;
+    const workflowId = `reverted-human-decision-${suffix}`;
+    const artifactId = `candidate-reverted-${suffix}`;
+    await repository.recordArtifact({ id: artifactId, projectId, taskId: `${workflowId}:draft`, attemptId: `${workflowId}:attempt`, kind: "revision", contentHash, baseRevision: 1, fingerprint: `candidate-reverted-fingerprint-${suffix}`, createdAt: Date.now() });
+    await repository.putWorkflowRun({ id: workflowId, workflowType: "chapter-review", projectId, temporalWorkflowId: workflowId, status: "manual-review-required", payload: { documentId, artifactId, reasonCode: "quality-gate-not-passed" } });
+
+    const first = await repository.claimApprovalEvidence({ workflowId, artifactId, decision: "revise", actorSource: "interactive-web", actorId: "web-author", revisionBase: "current" });
+    expect(first).toBeDefined();
+    await expect(repository.getApprovalEvidence(workflowId, first!.evidence.id)).resolves.toMatchObject({ revisionBase: "current" });
+    await repository.updateWorkflowRunStatus(workflowId, "manual-review-required", { artifactId, reasonCode: "quality-gate-not-passed" });
+
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId, decision: "abandon", actorSource: "interactive-web", actorId: "web-author" })).resolves.toBeDefined();
+  });
+
+  it("allows automation to approve the fact gate without allowing a manuscript override", async () => {
+    if (!available) return;
+    const workflowId = `fact-gate-automation-${suffix}`;
+    const artifactId = `fact-gate-candidate-${suffix}`;
+    await repository.recordArtifact({ id: artifactId, projectId, taskId: `${workflowId}:draft`, attemptId: `${workflowId}:attempt`, kind: "draft", contentHash, baseRevision: 1, fingerprint: `fact-gate-fingerprint-${suffix}`, createdAt: Date.now() });
+    await repository.putWorkflowRun({ id: workflowId, workflowType: "novel-intent", projectId, temporalWorkflowId: workflowId, status: "manual-review-required", payload: { documentId, artifactId, reasonCode: "fact-approval-pending" } });
+
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId, decision: "approve", actorSource: "automation", actorId: "automation" })).resolves.toMatchObject({ evidence: { actorSource: "automation", decision: "approve" } });
+  });
+
+  it("accepts a decision for a new candidate after the previous candidate was revised", async () => {
+    if (!available) return;
+    const workflowId = `multi-round-human-decision-${suffix}`;
+    const firstArtifactId = `candidate-round-1-${suffix}`;
+    const secondArtifactId = `candidate-round-2-${suffix}`;
+    for (const [index, artifactId] of [firstArtifactId, secondArtifactId].entries()) {
+      await repository.recordArtifact({ id: artifactId, projectId, taskId: `${workflowId}:draft:${index}`, attemptId: `${workflowId}:attempt:${index}`, kind: "revision", contentHash, baseRevision: 1, fingerprint: `candidate-round-${index}-${suffix}`, createdAt: Date.now() + index });
+    }
+    await repository.putWorkflowRun({
+      id: workflowId,
+      workflowType: "chapter-review",
+      projectId,
+      temporalWorkflowId: workflowId,
+      status: "manual-review-required",
+      payload: { documentId, artifactId: firstArtifactId, reasonCode: "quality-gate-not-passed" },
+    });
+
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId: firstArtifactId, decision: "revise", actorSource: "interactive-web", actorId: "web-author" })).resolves.toBeDefined();
+    await repository.updateWorkflowRunStatus(workflowId, "manual-review-required", { artifactId: secondArtifactId, reasonCode: "quality-gate-not-passed" });
+
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId: secondArtifactId, decision: "abandon", actorSource: "interactive-web", actorId: "web-author" })).resolves.toMatchObject({
+      run: { payload: { artifactId: secondArtifactId, pendingHumanDecision: { artifactId: secondArtifactId, decision: "abandon" } } },
+    });
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId: secondArtifactId, decision: "abandon", actorSource: "interactive-web", actorId: "web-author" })).resolves.toBeUndefined();
   });
 
   it("replaces the pending human artifact and makes the old artifact stale", async () => {
@@ -204,9 +265,9 @@ describe("targeted chapter review issues", () => {
       artifact: { id: replacementArtifactId },
       run: { payload: { artifactId: replacementArtifactId, replacedArtifactId: sourceArtifactId, authorEditedBy: "author-1" } },
     });
-    await expect(repository.claimHumanDecision({ workflowId, artifactId: sourceArtifactId, decision: "approve", authorId: "author-1" })).resolves.toBeUndefined();
-    await expect(repository.claimHumanDecision({ workflowId, artifactId: replacementArtifactId, decision: "approve", authorId: "author-1" })).resolves.toMatchObject({
-      payload: { pendingHumanDecision: { artifactId: replacementArtifactId, decision: "approve", authorId: "author-1" } },
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId: sourceArtifactId, decision: "approve", actorSource: "interactive-web", actorId: "web-author" })).resolves.toBeUndefined();
+    await expect(repository.claimApprovalEvidence({ workflowId, artifactId: replacementArtifactId, decision: "approve", actorSource: "interactive-web", actorId: "web-author" })).resolves.toMatchObject({
+      run: { payload: { pendingHumanDecision: { artifactId: replacementArtifactId, decision: "approve", actorSource: "interactive-web", actorId: "web-author" } } },
     });
   });
 

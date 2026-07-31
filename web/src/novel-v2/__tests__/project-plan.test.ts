@@ -45,6 +45,25 @@ describe("project plan dependency contract", () => {
     expect(prompt).toContain("不要沿用项目 ID、英文代号或临时标题");
   });
 
+  it("defines plot-design as a revisable long-horizon strategy rather than a chapter outline", () => {
+    const stage = PROJECT_PLAN_STAGES.find((candidate) => candidate.taskKey === "plot-design");
+    expect(stage).toMatchObject({ label: "长程叙事战略" });
+    expect(stage?.instruction).toContain("不生成固定章节表");
+
+    const prompt = buildFoundationPrompt({
+      taskKey: "plot-design",
+      instruction: stage!.instruction,
+      projectTitle: "长夜归舟",
+      premise: "归乡者追查一桩旧案",
+      priorArtifacts: [],
+    });
+    expect(prompt).toContain("plotStrategy");
+    expect(prompt).toContain("修订触发器");
+    expect(prompt).toContain("不生成固定章节表");
+    expect(prompt).not.toContain("第一章的功能");
+    expect(prompt).not.toContain("关键转折的章节位置");
+  });
+
   it("only adopts an explicit Chinese title from approved positioning data", () => {
     expect(approvedProjectBookTitle({ structuredData: { positioning: { bookTitle: "《长夜归舟》" } } })).toBe("长夜归舟");
     expect(approvedProjectBookTitle({ structuredData: { positioning: { bookTitle: "technical-project-id" } } })).toBeUndefined();

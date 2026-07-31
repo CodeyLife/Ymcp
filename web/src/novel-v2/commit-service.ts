@@ -8,12 +8,15 @@ import type { MemoryIndex } from "./qdrant-memory";
 import { createChapterMemoryFromRevision, persistChapterMemoryOutput, validateChapterMemoryOutput } from "./chapter-memory";
 import { evaluateCommitGate } from "./temporal/revision-policy";
 import type { ChapterStateDelta, FactExtractionOutput } from "./prompts/schemas";
+import { inspectManuscript, type ManuscriptStructuralReport } from "./application/manuscript-structure";
 
 type CommitDerivedData = {
+  structuralReport: ManuscriptStructuralReport;
   payoffMoments?: FactExtractionOutput["payoffMoments"];
   narrativeElements?: FactExtractionOutput["narrativeElements"];
   narrativeOrder?: number;
   chapterMemoryDelta?: ChapterStateDelta["chapterMemory"];
+  factArtifactId?: string;
 };
 
 /**
@@ -52,25 +55,39 @@ export class CommitService {
   ) {}
 
   async commit(input: CommitRequest & { text: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
-    const gate = evaluateCommitGate(input.reviews, input.artifact.fingerprint);
+    const gate = evaluateCommitGate(input.reviews, input.artifact.fingerprint, input.structuralReport);
     if (!gate.passed) throw new Error(`正式提交必须具备当前 artifact 的完整五角色通过证据；缺失角色：${gate.missingRoles.join("、") || "无"}`);
+    if (!inspectManuscript({ text: input.text }).passed) throw new Error("正式提交正文未通过确定性结构复检");
     return this.persistApprovedRevision(input);
   }
 
   /** Commit a manuscript only after an explicit durable author approval signal. */
-  async commitAuthorApproved(input: CommitRequest & { text: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
-    const authorApproval = input.reviews.some((review) =>
-      review.identity === "human"
-      && review.verdict === "passed"
-      && review.artifactFingerprint === input.artifact.fingerprint,
-    );
-    if (!authorApproval) throw new Error("作者批准提交必须包含当前 artifact 的 human passed 证据");
+  async commitAuthorApproved(input: CommitRequest & { text: string; approvalEvidenceId: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
+    if (!input.structuralReport.passed || !inspectManuscript({ text: input.text }).passed) throw new Error("作者覆盖不能越过正文结构 blocker");
+    const evidence = await this.repository.getApprovalEvidenceById(input.approvalEvidenceId);
+    if (!evidence
+      || evidence.projectId !== input.projectId
+      || evidence.artifactId !== input.artifact.id
+      || evidence.decision !== "approve"
+      || evidence.actorSource !== "interactive-web") {
+      throw new Error("作者批准提交必须绑定当前项目和 artifact 的 interactive-web 批准证据");
+    }
     return this.persistApprovedRevision(input);
   }
 
   private async persistApprovedRevision(input: CommitRequest & { text: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
     const object = await this.objects.putText(input.text);
     const result = await this.repository.commitRevision({ ...input, contentHash: object.hash, objectKey: object.key, revisionId: randomUUID() });
+
+    if (this.chapterMemoryDeps?.memoryIndex) {
+      try {
+        if (result.removedClaimIds?.length) await this.chapterMemoryDeps.memoryIndex.deleteClaims?.(input.projectId, result.removedClaimIds);
+        const retrievable = (result.activatedClaims ?? []).filter((claim) => ["approved", "author", "derived"].includes(claim.authority));
+        if (retrievable.length) await this.chapterMemoryDeps.memoryIndex.upsertClaims(input.projectId, retrievable);
+      } catch (error) {
+        console.warn(`[commit-service] 事实索引同步失败（PostgreSQL 已完成修订切换，可重建索引）：${(error as Error).message}`);
+      }
+    }
 
     if (input.narrativeElements) {
       try {
@@ -112,6 +129,7 @@ export class CommitService {
     // chapter memory 创建：失败不阻塞 commit（revision 已落库），记录到 learning 闭环
     // 设计依据：AGENTS.md「不阻塞 commit」契约 + Phase 1.2 chapter memory 闭环
     // 失败处理：构造 RuntimeLearningAssessmentV2(conclusion=no-shared-learning) 让 learning 闭环感知症状
+    let chapterMemory: ChapterMemory | undefined;
     if (this.chapterMemoryDeps) {
       try {
         const narrativeOrder = this.chapterMemoryDeps.narrativeOrder ?? await this.lookupNarrativeOrder(input.projectId, input.documentId);
@@ -131,7 +149,7 @@ export class CommitService {
             chapterMemoryDelta = undefined;
           }
         }
-        const chapterMemory = chapterMemoryDelta
+        chapterMemory = chapterMemoryDelta
           ? await persistChapterMemoryOutput(memoryInput, { repository: this.repository, objects: this.objects, memoryIndex: this.chapterMemoryDeps.memoryIndex }, chapterMemoryDelta)
           : await createChapterMemoryFromRevision(
           {
@@ -143,15 +161,36 @@ export class CommitService {
           },
           { repository: this.repository, objects: this.objects, memoryIndex: this.chapterMemoryDeps.memoryIndex },
         );
-        return { ...result, chapterMemory };
       } catch (error) {
         // chapter memory 创建失败：记录到 learning 闭环（conclusion=no-shared-learning，仅 symptom 不构造 candidate）
         // 设计依据：AGENTS.md「review-stage → learning 通路」契约——审核结果必须反馈到 learning
         await this.recordChapterMemoryFailure(input, result.revisionId, error instanceof Error ? error : new Error(String(error)));
-        return result;
       }
     }
-    return result;
+    if (chapterMemory) {
+      try {
+        const narrativeOrder = input.narrativeOrder ?? chapterMemory.narrativeRange.end;
+        await this.repository.recordNarrativeStateSnapshot({
+          projectId: input.projectId,
+          documentId: input.documentId,
+          revisionId: result.revisionId,
+          narrativeOrder,
+          chapterMemory,
+          narrativeElements: input.narrativeElements,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[commit-service] 叙事状态账本写入失败（正文 revision 已提交，可重建）：${message}`);
+        await this.repository.recordProjectionFailure({
+          projectId: input.projectId,
+          projectionType: "narrative-state-snapshot",
+          aggregateId: result.revisionId,
+          payload: { documentId: input.documentId, revisionId: result.revisionId, narrativeOrder: input.narrativeOrder },
+          error: message,
+        }).catch((recordError) => console.warn(`[commit-service] 叙事账本投影失败记录写入失败：${(recordError as Error).message}`));
+      }
+    }
+    return chapterMemory ? { ...result, chapterMemory } : result;
   }
 
   /**

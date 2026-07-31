@@ -69,6 +69,12 @@ export interface CreateChapterMemoryDeps {
  * 检索时（getChapterMemories）用 DISTINCT ON (document_id) 取最新一条。
  */
 export async function createChapterMemoryFromRevision(input: CreateChapterMemoryInput, deps: CreateChapterMemoryDeps): Promise<ChapterMemory> {
+  const output = await generateChapterMemoryOutput(input, deps);
+  return persistChapterMemoryOutput(input, deps, output);
+}
+
+/** Generate and validate chapter-memory data without writing projections. */
+export async function generateChapterMemoryOutput(input: CreateChapterMemoryInput, deps: Pick<CreateChapterMemoryDeps, "repository">): Promise<ChapterMemoryOutput> {
   // 1. 取前章 chapter memory 摘要（让 LLM 理解上下文连续性）
   const priorMemories = await deps.repository.getChapterMemories({
     projectId: input.projectId,
@@ -103,8 +109,7 @@ export async function createChapterMemoryFromRevision(input: CreateChapterMemory
 
   const output = generated.value;
   validateChapterMemoryOutput(output);
-
-  return persistChapterMemoryOutput(input, deps, output);
+  return output;
 }
 
 /** Persist a chapter-memory projection already produced by ChapterStateDelta. */
@@ -113,9 +118,31 @@ export async function persistChapterMemoryOutput(
   deps: CreateChapterMemoryDeps,
   output: ChapterMemoryOutput,
 ): Promise<ChapterMemory> {
-  validateChapterMemoryOutput(output);
+  const chapterMemory = buildChapterMemoryProjection(input, output);
 
-  // 3. 构造 ChapterMemory
+  // 3. 写入 Postgres
+  await deps.repository.createChapterMemory(chapterMemory);
+  const rollupClaim = await deps.repository.refreshChapterMemoryRollup(input.projectId, input.narrativeOrder);
+
+  // 4. 同步 Qdrant 向量索引（失败不阻塞，只警告）
+  if (deps.memoryIndex) {
+    try {
+      await deps.memoryIndex.upsertClaims(input.projectId, [chapterMemoryAsClaim(chapterMemory), rollupClaim]);
+    } catch (error) {
+      // TODO P2: 接入 learning 闭环，把 Qdrant 索引失败作为 RuntimeLearningAssessment 的 symptom
+      console.warn(`[chapter-memory] Qdrant 索引失败（不阻塞 Postgres 落库）：${(error as Error).message}`);
+    }
+  }
+
+  return chapterMemory;
+}
+
+/** Build the durable chapter-memory value before any projection is mutated. */
+export function buildChapterMemoryProjection(
+  input: Pick<CreateChapterMemoryInput, "projectId" | "documentId" | "revisionId" | "narrativeOrder">,
+  output: ChapterMemoryOutput,
+): ChapterMemory {
+  validateChapterMemoryOutput(output);
   const now = Date.now();
   const fingerprintInput = {
     projectId: input.projectId,
@@ -143,21 +170,6 @@ export async function persistChapterMemoryOutput(
     fingerprint,
     createdAt: now,
   };
-
-  // 4. 写入 Postgres
-  await deps.repository.createChapterMemory(chapterMemory);
-  const rollupClaim = await deps.repository.refreshChapterMemoryRollup(input.projectId, input.narrativeOrder);
-
-  // 5. 同步 Qdrant 向量索引（失败不阻塞，只警告）
-  if (deps.memoryIndex) {
-    try {
-      await deps.memoryIndex.upsertClaims(input.projectId, [chapterMemoryAsClaim(chapterMemory), rollupClaim]);
-    } catch (error) {
-      // TODO P2: 接入 learning 闭环，把 Qdrant 索引失败作为 RuntimeLearningAssessment 的 symptom
-      console.warn(`[chapter-memory] Qdrant 索引失败（不阻塞 Postgres 落库）：${(error as Error).message}`);
-    }
-  }
-
   return chapterMemory;
 }
 

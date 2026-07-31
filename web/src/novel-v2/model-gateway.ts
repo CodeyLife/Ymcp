@@ -181,6 +181,11 @@ function finiteToken(value: unknown): number | undefined {
   return typeof number === "number" && Number.isFinite(number) && number >= 0 ? Math.floor(number) : undefined;
 }
 
+function nextApiCandidateIndex(route: ModelRoute, currentIndex: number): number | undefined {
+  const offset = route.candidates.slice(currentIndex + 1).findIndex((candidate) => candidate.executor === "api");
+  return offset < 0 ? undefined : currentIndex + 1 + offset;
+}
+
 function tokenEstimate(text: string): number {
   if (!text.trim()) return 0;
   const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) ?? []).length;
@@ -515,10 +520,15 @@ export class RoutedModelGateway implements ModelGateway {
         return { value: result.response.text, text: result.response.text, usage, provenance: result.provenance };
       } catch (error) {
         if (error instanceof ExternalMcpRequiredError) throw error;
-        // empty-response 是瞬时 LLM 错误（模型返回空内容）：重试可能成功。
-        // 不应回退到 external-mcp——没有外部客户端时会死等。
-        // 让 Temporal activity retry 处理——它会重新调用 LLM。
-        if (error instanceof ModelTransportError && error.category === "empty-response") throw error;
+        // Empty output first exhausts transport retries, then moves only to the
+        // next explicit API candidate. Never turn it into an external-MCP wait.
+        if (error instanceof ModelTransportError && error.category === "empty-response") {
+          const nextApi = nextApiCandidateIndex(route, index);
+          if (nextApi === undefined) throw error;
+          lastError = error;
+          index = nextApi - 1;
+          continue;
+        }
         lastError = error;
       }
     }
@@ -594,8 +604,13 @@ export class RoutedModelGateway implements ModelGateway {
         }
       } catch (error) {
         if (error instanceof ExternalMcpRequiredError) throw error;
-        // empty-response 是瞬时 LLM 错误（同 generateText）：不回退 external-mcp，让 Temporal retry。
-        if (error instanceof ModelTransportError && error.category === "empty-response") throw error;
+        if (error instanceof ModelTransportError && error.category === "empty-response") {
+          const nextApi = nextApiCandidateIndex(route, index);
+          if (nextApi === undefined) throw error;
+          lastError = error;
+          index = nextApi - 1;
+          continue;
+        }
         // schema-validation 是 LLM 已返回内容但形状不匹配 schema——
         // 已在 maxRepairAttempts 内多次修复失败，说明该模型对此 prompt+schema 组合无法稳定产出。
         // 回退 external-mcp 无意义：外部客户端会面对相同的 schema 约束，只会无限等待。

@@ -29,6 +29,31 @@ export async function startStoryArcPlanning(
   return { arcId: arc.id, workflowId, runId: handle.firstExecutionRunId, status: "accepted" };
 }
 
+export async function startStoryArcReview(
+  repository: NovelPostgresRepository,
+  temporal: Client,
+  input: { projectId: string; arcId: string; mode: "web" | "mcp"; reviewPolicy?: "manual" | "auto"; taskQueue?: string },
+) {
+  const arc = await repository.getStoryArc(input.projectId, input.arcId);
+  if (!arc?.blueprintArtifactId || arc.planningStatus !== "awaiting-review") throw new Error("故事弧当前没有可审核的蓝图");
+  const workflowId = `story-arc-review-${randomUUID()}`;
+  const reviewPolicy = input.reviewPolicy ?? (input.mode === "mcp" ? "auto" : "manual");
+  await repository.putWorkflowRun({
+    id: workflowId,
+    workflowType: "story-arc-planning",
+    projectId: input.projectId,
+    temporalWorkflowId: workflowId,
+    status: "accepted",
+    payload: { arcId: input.arcId, mode: input.mode, reviewPolicy, existingArtifactId: arc.blueprintArtifactId },
+  });
+  const handle = await temporal.workflow.start("storyArcPlanningWorkflow", {
+    args: [{ workflowId, projectId: input.projectId, arcId: input.arcId, mode: input.mode, reviewPolicy, existingArtifactId: arc.blueprintArtifactId }],
+    taskQueue: input.taskQueue ?? "novel-v2",
+    workflowId,
+  });
+  return { arcId: input.arcId, workflowId, runId: handle.firstExecutionRunId, status: "accepted" };
+}
+
 export async function startStoryArcBatchPlanning(
   repository: NovelPostgresRepository,
   temporal: Client,

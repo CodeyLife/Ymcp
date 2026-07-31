@@ -22,7 +22,7 @@
  * - 保留 semanticRank/lexicalRank/graphRank 字段供下游可观测。
  *
  * 边界（本方案不覆盖）：
- * - 不实现 graph 轨道本身（GraphMemoryProvider 由后续 Phase 接入），但预留接口。
+ * - graph 轨道由 repository.searchGraphMemory 提供；本层只负责融合与降级。
  * - 不改变各轨道的召回逻辑（Qdrant/Postgres 各自维护自己的过滤与截断）。
  * - 不解决单轨道内部的重排序（rerank 仍在 QdrantMemoryProvider 内完成）。
  */
@@ -38,7 +38,7 @@ export interface FusionMemoryProviderOptions {
   semantic: MemoryProvider;
   /** 词法检索轨道（Postgres ILIKE + lexicalRank）。 */
   lexical: { search(input: { projectId: string; facets: RetrievalFacet[]; narrativeCutoff?: number; povCharacterId?: string }): Promise<MemoryHit[]> };
-  /** 图检索轨道（可选，relations/entities BFS/DFS，未来 Phase 接入）。 */
+  /** 图检索轨道（可选，relations/entities/thread projection）。 */
   graph?: { search(input: { projectId: string; facets: RetrievalFacet[]; narrativeCutoff?: number; povCharacterId?: string }): Promise<MemoryHit[]> };
   /**
    * 轨道权重（归一化后使用，缺失轨道的权重会按比例重分配到其他轨道）。

@@ -39,8 +39,32 @@ describe("Qdrant collection identity", () => {
     expect(upsert).toHaveBeenCalledWith("memory", expect.objectContaining({
       points: [expect.objectContaining({
         id: qdrantPointId("project-a", claim.id),
-        payload: expect.objectContaining({ claim }),
+        payload: expect.objectContaining({ claim, lifecycleStatus: "active" }),
       })],
+    }));
+  });
+
+  it("requires active lifecycle payloads during semantic retrieval", async () => {
+    const query = vi.fn(async () => ({ points: [] }));
+    const client = {
+      getCollection: vi.fn(async () => ({ config: { params: { vectors: { size: 3 } } } })),
+      query,
+    } as unknown as QdrantClient;
+    const gateway = { embed: vi.fn(async () => ({ vectors: [[0.1, 0.2, 0.3]] })) } as unknown as ModelGateway;
+
+    await new QdrantMemoryProvider(client, gateway, "memory", 3).search({
+      projectId: "project-a",
+      narrativeCutoff: 11,
+      facets: [{ kind: "fact", query: "事实", required: true }],
+    });
+
+    expect(query).toHaveBeenCalledWith("memory", expect.objectContaining({
+      filter: expect.objectContaining({
+        must: expect.arrayContaining([
+          { key: "lifecycleStatus", match: { value: "active" } },
+          expect.objectContaining({ should: expect.any(Array) }),
+        ]),
+      }),
     }));
   });
 
@@ -50,6 +74,20 @@ describe("Qdrant collection identity", () => {
     await new QdrantMemoryProvider(client, {} as ModelGateway, "novel-memory-current", 1024).ensureCollection();
     expect(client.getCollection).toHaveBeenCalledWith("novel-memory-current");
     expect(createCollection).not.toHaveBeenCalled();
+  });
+
+  it("deletes obsolete claim points with the same project-scoped id contract", async () => {
+    const remove = vi.fn();
+    const client = {
+      getCollection: vi.fn(async () => ({ config: { params: { vectors: { size: 3 } } } })),
+      delete: remove,
+    } as unknown as QdrantClient;
+    const provider = new QdrantMemoryProvider(client, {} as ModelGateway, "memory", 3);
+    await provider.deleteClaims("project-a", ["old-claim", "old-claim"]);
+    expect(remove).toHaveBeenCalledWith("memory", {
+      wait: true,
+      points: [qdrantPointId("project-a", "old-claim")],
+    });
   });
 
   it("rejects an alias or collection backed by vectors with another dimension", async () => {

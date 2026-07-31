@@ -96,16 +96,16 @@ function extractTaskKey(artifact: Artifact): string {
 }
 
 /**
- * 把 foundation artifacts 转换为全书规划上下文 markdown。
+ * 把 foundation artifacts 转换为全书基础设定与长程方向 markdown。
  *
  * 设计依据:AGENTS.md「root-cause analysis」——v2 重构后 foundation artifacts 未被章节生成
- * 消费,导致章节生成不基于全书规划。此函数把全书规划产出(架构/人物/世界观/plot/章节计划)
+ * 消费,导致章节生成不基于全书规划。此函数把全书基础与长程方向产出(架构/人物/世界观/plot)
  * 渲染为 markdown,注入章节生成 prompt,让 writer 遵守规划约束。
  *
  * 渲染策略:
- * - 必填 taskKey(architecture/characters/worldview/plot-design/chapter-plan)单独成段,标注必读
- * - 其余 taskKey(relations/plot-threads/foreshadowing/timeline/story-control/project-positioning)
- *   合并为"其他规划参考"段,作为软约束
+ * - characters/worldview 是稳定设定基线，但已定稿事实拥有更高权威
+ * - architecture/plot-design/project-positioning 是长程方向，不得覆盖当前故事弧与章节蓝图
+ * - 其余 taskKey 合并为动态规划参考；旧 chapter-plan 不再注入
  * - 每个 artifact 从 structuredData 提取关键信息做防御性解构,避免 schema 演进导致崩溃
  * - 若 structuredData 为空,fallback 到 artifact 的 summary 字段(若存在)
  *
@@ -120,21 +120,20 @@ function buildFoundationContextMarkdown(foundationArtifacts: Artifact[]): string
     byTaskKey.set(extractTaskKey(artifact), artifact);
   }
 
-  const requiredKeys = ["architecture", "characters", "worldview", "plot-design", "chapter-plan"];
-  const referenceKeys = ["project-positioning", "relations", "plot-threads", "foreshadowing", "timeline", "story-control"];
+  const baselineKeys = ["characters", "worldview"];
+  const strategyKeys = ["architecture", "project-positioning", "plot-design"];
+  const referenceKeys = ["relations", "plot-threads", "foreshadowing", "timeline", "story-control"];
 
   const sections: string[] = [];
 
-  // 必填段:单独成段,标注必读
-  for (const key of requiredKeys) {
+  const renderArtifact = (key: string, heading: string) => {
     const artifact = byTaskKey.get(key);
-    if (!artifact) continue; // 缺失项由 workflow 前置检查拦截,此处不重复警告
+    if (!artifact) return;
     const structured = artifact.structuredData as Record<string, unknown> | undefined;
     const summary = typeof structured?.summary === "string" ? structured.summary : undefined;
     const title = typeof structured?.title === "string" ? structured.title : key;
-    // 提取该 taskKey 的核心字段(基于 foundation.ts 的 structuredDataHint)
     const fields = renderFoundationFields(key, structured);
-    sections.push(`### [必读] ${key}：${title}`);
+    sections.push(`### [${heading}] ${key}：${title}`);
     if (summary) sections.push(summary);
     if (fields) sections.push(fields);
     if (structured?.origin === "web-author-edit" && Array.isArray(structured.sections)) {
@@ -151,12 +150,23 @@ function buildFoundationContextMarkdown(foundationArtifacts: Artifact[]): string
       }
     }
     sections.push("");
+  };
+
+  sections.push("宏观产出不得覆盖已定稿事实、当前叙事状态账本、已批准故事弧或目标章蓝图；发生冲突时服从较近且已确认的状态，并把偏差留给下一次故事弧重规划处理。");
+  sections.push("");
+
+  for (const key of baselineKeys) {
+    renderArtifact(key, "稳定设定基线");
+  }
+
+  for (const key of strategyKeys) {
+    renderArtifact(key, "长程方向（软约束）");
   }
 
   // 参考段:合并为"其他规划参考"
   const referenceArtifacts = referenceKeys.map((key) => byTaskKey.get(key)).filter((a): a is Artifact => a !== undefined);
   if (referenceArtifacts.length) {
-    sections.push("### 其他规划参考(软约束,遵守但可灵活处理)");
+    sections.push("### 动态规划参考（软约束，可由实际创作状态校准）");
     for (const artifact of referenceArtifacts) {
       const key = extractTaskKey(artifact);
       const structured = artifact.structuredData as Record<string, unknown> | undefined;
@@ -229,28 +239,15 @@ function renderFoundationFields(taskKey: string, structured: Record<string, unkn
       break;
     }
     case "plot-design": {
-      const plot = structured.plotDesign as Record<string, unknown> | undefined;
-      const opening = plot?.opening as Record<string, unknown> | undefined;
-      const climax = plot?.climax as Record<string, unknown> | undefined;
-      const ending = plot?.ending as Record<string, unknown> | undefined;
-      if (opening && typeof opening.function === "string") lines.push(`- 开篇：${opening.function}`);
-      if (climax && typeof climax.position === "string") lines.push(`- 高潮：${climax.position}`);
-      if (ending && typeof ending.type === "string") lines.push(`- 结局：${ending.type}`);
-      break;
-    }
-    case "chapter-plan": {
-      const chapters = structured.chapters as Array<Record<string, unknown>> | undefined;
-      if (Array.isArray(chapters) && chapters.length) {
-        // 只渲染前 5 章,避免 prompt 过长;完整章节计划在 blueprint 中
-        const top5 = chapters.slice(0, 5);
-        for (const ch of top5) {
-          const index = typeof ch.index === "number" ? ch.index : "?";
-          const title = typeof ch.title === "string" ? ch.title : "";
-          const summary = typeof ch.summary === "string" ? ch.summary : "";
-          const func = typeof ch.function === "string" ? ch.function : "";
-          lines.push(`- 第${index}章 ${title}${func ? `[${func}]` : ""}${summary ? `：${summary}` : ""}`);
-        }
-        if (chapters.length > 5) lines.push(`- ...(共 ${chapters.length} 章,此处只列前 5 章)`);
+      const strategy = (structured.plotStrategy ?? structured.plotDesign) as Record<string, unknown> | undefined;
+      pushArray("叙事承诺", strategy?.narrativePromises);
+      pushArray("不可妥协边界", strategy?.nonNegotiables);
+      pushArray("重评触发器", strategy?.adaptationTriggers);
+      const ending = strategy?.endingEnvelope as Record<string, unknown> | undefined;
+      pushArray("终局必须解决", ending?.mustResolve);
+      if (!strategy?.narrativePromises && !strategy?.endingEnvelope) {
+        const legacyEnding = strategy?.ending as Record<string, unknown> | undefined;
+        if (legacyEnding && typeof legacyEnding.type === "string") lines.push(`- 旧版结局方向：${legacyEnding.type}`);
       }
       break;
     }
@@ -483,12 +480,12 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
     );
   }
 
-  // 全书规划上下文:在已批准蓝图之前注入,让 writer 先理解全书规划再看本章蓝图。
+  // 全书基础与长程方向在蓝图之前提供，但其权威低于已定稿状态和当前故事弧。
   // 设计依据:AGENTS.md「root-cause analysis」——v2 重构后 foundation artifacts 未被章节生成消费,
-  // 导致章节生成不基于全书规划。此段把全书规划产出注入 prompt,让 writer 遵守架构/人物/世界观约束。
+  // 导致章节生成不基于全书规划。此段把全书基础与长程方向注入 prompt,但不把长程战略误当作逐章任务清单。
   if (foundationArtifacts?.length) {
     sections.push(
-      `## 全书规划上下文(必读约束)\n本章基于以下全书规划产出。遵守架构布局、人物档案、世界观规则、plot 设计与章节计划;不得违背已确立的设定。\n\n${buildFoundationContextMarkdown(foundationArtifacts)}`,
+      `## 全书基础与长程方向\n稳定设定用于防止事实漂移；长程战略只规定目的地、承诺与禁止提前消费的边界，不是当前章的事件清单。权威顺序：已定稿事实与叙事状态账本 > 当前故事弧和目标章蓝图 > 全书基础与长程方向。\n\n${buildFoundationContextMarkdown(foundationArtifacts)}`,
       "",
     );
   }
@@ -538,11 +535,30 @@ export function buildChapterDraftPromptPackage(input: DraftPromptInput & { workf
     reservedOutputTokens: input.blueprint.budget.maxOutputTokens,
     sections: [
       { id: "draft-instruction", kind: "goal", title: "章节创作目标与写作契约", text: instruction, priority: "critical", provenanceRefs: [input.intent.id] },
-      ...((input.foundationArtifacts ?? []).map((artifact) => ({ id: `foundation:${artifact.id}`, kind: "planning" as const, title: `全书规划：${extractTaskKey(artifact)}`, text: buildFoundationContextMarkdown([artifact]), priority: "required" as const, provenanceRefs: [artifact.id], sourceArtifactId: artifact.id }))),
+      ...((input.foundationArtifacts ?? []).flatMap((artifact) => {
+        const taskKey = extractTaskKey(artifact);
+        const priority = taskKey === "chapter-plan"
+          ? undefined
+          : taskKey === "characters" || taskKey === "worldview"
+            ? "required" as const
+            : taskKey === "architecture" || taskKey === "project-positioning" || taskKey === "plot-design"
+              ? "normal" as const
+              : "soft" as const;
+        return priority ? [{ id: `foundation:${artifact.id}`, kind: "planning" as const, title: `全书基础/战略：${taskKey}`, text: buildFoundationContextMarkdown([artifact]), priority, provenanceRefs: [artifact.id], sourceArtifactId: artifact.id }] : [];
+      })),
       ...(input.planningContext ? [{ id: "planning-context", kind: "planning" as const, title: "冻结章节规划上下文", text: renderChapterPlanningContext(input.planningContext), priority: "required" as const, provenanceRefs: [input.blueprint.id] }] : []),
       { id: "execution-blueprint", kind: "blueprint", title: "工作流执行编排", text: buildBlueprintSummary(input.blueprint, input.planningContext), priority: "required", provenanceRefs: [input.blueprint.id] },
       ...memory.claims.map((claim) => ({ id: `memory:${claim.id}`, kind: "fact" as const, title: `冻结事实：${claim.title}`, text: claim.content, priority: memoryPriority(claim.authority), provenanceRefs: [claim.id, ...(claim.sourceArtifactId ? [claim.sourceArtifactId] : []), ...claim.sourceRevisionIds] })),
-      ...input.skills.skills.map((skill) => ({ id: `skill:${skill.skillId}`, kind: "skill" as const, title: `写作技能 ${skill.skillId}@${skill.version}`, text: [`gates=${skill.qualityGates.join(",")}`, skill.promptSections.drafting ?? ""].filter(Boolean).join("\n"), priority: "normal" as const, provenanceRefs: [`${skill.skillId}@${skill.version}`] })),
+      ...((memory.selectionReceipts ?? []).filter((item) => item.status === "excluded").map((item) => ({
+        id: `memory-excluded:${item.claimId}`,
+        kind: "fact" as const,
+        title: `冻结事实未注入：${item.claimId}`,
+        text: "",
+        priority: "soft" as const,
+        provenanceRefs: [item.claimId, ...item.sourceRevisionIds],
+        exclusionReason: item.reason === "inactive" || item.reason === "future-cutoff" || item.reason === "budget" || item.reason === "merged-source" ? item.reason : "merged-source" as const,
+      }))),
+      ...input.skills.skills.filter((skill) => !!skill.promptSections.drafting?.trim()).map((skill) => ({ id: `skill:${skill.skillId}`, kind: "skill" as const, title: `写作技能 ${skill.skillId}@${skill.version}`, text: [`gates=${skill.qualityGates.join(",")}`, skill.promptSections.drafting!.trim()].filter(Boolean).join("\n"), priority: "normal" as const, provenanceRefs: [`${skill.skillId}@${skill.version}`] })),
       ...(input.payoffStats ? [{ id: "payoff-stats", kind: "background" as const, title: "前章爽点统计", text: buildPayoffDroughtMarkdown(input.payoffStats), priority: "normal" as const, provenanceRefs: [input.intent.projectId] }] : []),
     ],
   });

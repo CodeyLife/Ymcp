@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { foundationArtifactToMemoryClaim } from "./foundation-memory";
+import { ChapterStateRebuildConflictError } from "./application/chapter-state-rebuild-conflict";
 import {
   PROJECT_PLAN_STAGES,
   REQUIRED_APPROVED_PLAN_TASK_KEYS,
@@ -17,6 +18,7 @@ import {
 import type { FactExtractionOutput } from "./prompts/schemas";
 import type {
   Artifact,
+  ApprovalEvidence,
   CandidateBundle,
   ChapterMemory,
   CommitRequest,
@@ -28,6 +30,7 @@ import type {
   MemoryBundle,
   MemoryClaim,
   MemoryHit,
+  NarrativeStateSnapshot,
   NovelIntent,
   NovelProjectDetail,
   PreflightPlan,
@@ -47,7 +50,9 @@ import type { ModelRoutingConfig, ModelRoutingSnapshot, ModelTaskRecord, ModelWo
 import type { ObjectStoreAdapter } from "./object-store";
 import { countNovelCharacters } from "./word-count";
 import type { ObjectStoreIdentity } from "./object-store";
-import { canGenerateNextStoryArcBatch, planningContextFingerprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type NarrativeArcPlan, type StoryArcBatchRecord, type StoryArcBundle, type StoryArcRecord } from "./application/story-arc";
+import { normalizeManuscriptStructuralReview } from "./application/manuscript-structure";
+import { canGenerateNextStoryArcBatch, compileChapterPlanValidationReport, parseStoryArcBundle, planningContextFingerprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type NarrativeArcPlan, type StoryArcBatchRecord, type StoryArcBundle, type StoryArcRecord } from "./application/story-arc";
+import type { StoryArcReviewOutput } from "./prompts/story-arc";
 import { aggregateChapterReviews, reviewIssueFingerprint, type ChapterReviewIssueStatus } from "./chapter-review-snapshot";
 import {
   bookSynopsisSourceFingerprint,
@@ -57,6 +62,9 @@ import {
   type BookTitleCandidatesRecord,
 } from "./application/book-synopsis";
 import { chapterTitleSourceFingerprint, type ChapterTitleSource } from "./application/chapter-title";
+import { canonicalSha256 } from "./canonical-json";
+import { canonicalizeFactPredicate, normalizeFactToken } from "./fact-extraction/fingerprint";
+import { scopeClaimsToChapter } from "./fact-extraction/narrative-scope";
 
 export interface NovelProjectSnapshot {
   projectId: string;
@@ -74,7 +82,8 @@ export interface NovelProjectSnapshot {
   premise?: string;
 }
 
-export type KnowledgeRecordKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "skills" | "foundation";
+export type MutableKnowledgeRecordKind = "planning" | "worldview" | "characters" | "relations" | "timeline" | "facts" | "claims" | "skills";
+export type KnowledgeRecordKind = MutableKnowledgeRecordKind | "foundation" | "claims" | "chapter-memories" | "project-skills";
 
 type ProjectRow = { id: string; title: string; current_revision: string | number; metadata: Record<string, unknown>; created_at: Date | string; updated_at: Date | string };
 type DocumentRow = { id: string; project_id: string; title: string; narrative_order: string | number; pov_character_id: string | null; current_revision_id: string | null; status: string; created_at: Date | string; updated_at: Date | string; word_count?: string | number | null; latest_revision?: string | number | null; chapter_goal?: string | null; blocking_issue_count?: string | number | null; review_score?: string | number | null; review_verdict?: "passed" | "revise" | "blocked" | null; review_stale?: boolean | null; arc_id?: string | null; arc_title?: string | null; arc_planning_status?: string | null };
@@ -83,7 +92,7 @@ type ArtifactRow = { id: string; project_id: string; task_id: string; attempt_id
 type TaskAttemptRow = { id: string; workflow_run_id: string | null; task_id: string; lease_owner: string | null; lease_expires_at: Date | string | null; heartbeat_at: Date | string | null; status: TaskAttemptRecord["status"]; payload: Record<string, unknown> };
 type ModelTaskRow = { id: string; workflow_run_id: string; task_id: string; purpose: ModelTaskRecord["purpose"]; config_revision: string; candidate_index: number; status: ModelTaskRecord["status"]; work_package: ModelWorkPackage; result: ModelTaskRecord["result"] | null; idempotency_key: string; created_at: Date | string; updated_at: Date | string };
 type ProjectPlanSectionRow = { project_id: string; task_key: string; work_item_id: string | null; source_artifact_id: string | null; status: ProjectPlanStatus; payload: Record<string, unknown>; edit_revision: string | number; approved_at: Date | string | null; created_at: Date | string; updated_at: Date | string };
-type ArcRow = { id: string; volume_id: string; project_id: string; title: string; ordinal: string | number; planning_status: StoryArcRecord["planningStatus"]; execution_status: StoryArcRecord["executionStatus"]; payload: NarrativeArcPlan; source_artifact_id: string | null; blueprint_artifact_id: string | null; context_fingerprint: string | null; edit_revision: string | number; approved_at: Date | string | null; completed_at: Date | string | null; abandoned_at: Date | string | null; updated_at: Date | string };
+type ArcRow = { id: string; volume_id: string; project_id: string; title: string; ordinal: string | number; planning_status: StoryArcRecord["planningStatus"]; execution_status: StoryArcRecord["executionStatus"]; payload: NarrativeArcPlan; source_artifact_id: string | null; blueprint_artifact_id: string | null; context_fingerprint: string | null; review_artifact_id: string | null; review_fingerprint: string | null; edit_revision: string | number; approved_at: Date | string | null; completed_at: Date | string | null; abandoned_at: Date | string | null; updated_at: Date | string };
 type ChapterBlueprintRow = { id: string; arc_id: string; project_id: string; document_id: string | null; title: string; ordinal: string | number; status: string; payload: Record<string, unknown>; source_artifact_id: string | null; blueprint_revision: string | number };
 type StoryArcBatchRow = { id: string; arc_id: string; project_id: string; batch_index: string | number; start_chapter_index: string | number; end_chapter_index: string | number; status: StoryArcBatchRecord["status"]; entry_fingerprint: string; source_artifact_id: string | null; payload: Record<string, unknown>; approved_at: Date | string | null };
 
@@ -127,6 +136,58 @@ function taskAttemptFromRow(row: TaskAttemptRow): TaskAttemptRecord {
 }
 function artifactFromRow(row: ArtifactRow): Artifact {
   return { id: row.id, projectId: row.project_id, taskId: row.task_id, attemptId: row.attempt_id, kind: row.kind, contentHash: row.content_hash, objectKey: row.object_key ?? undefined, baseRevision: Number(row.base_revision), fingerprint: row.fingerprint, structuredData: row.payload ?? {}, createdAt: new Date(row.created_at).getTime() };
+}
+function memoryClaimFromRow(row: any): MemoryClaim {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    kind: row.kind,
+    title: row.title,
+    content: row.content,
+    subjectRefs: row.subject_refs ?? [],
+    narrativeRange: {
+      start: row.narrative_start === null || row.narrative_start === undefined ? undefined : Number(row.narrative_start),
+      end: row.narrative_end === null || row.narrative_end === undefined ? undefined : Number(row.narrative_end),
+    },
+    knowledgeScope: row.knowledge_scope,
+    authority: row.authority,
+    confidence: Number(row.confidence),
+    sourceRevisionIds: row.source_revision_ids ?? [],
+    contentHash: row.content_hash,
+    supersedes: row.supersedes ?? [],
+    predicate: row.predicate ?? undefined,
+    sourceArtifactId: row.source_artifact_id ?? undefined,
+    decidedBy: row.decided_by ?? undefined,
+    decidedAt: row.decided_at ? iso(row.decided_at) : undefined,
+    lifecycleStatus: row.lifecycle_status ?? "active",
+    sourceDocumentId: row.source_document_id ?? undefined,
+    identityHash: row.identity_hash ?? undefined,
+    valueHash: row.value_hash ?? undefined,
+  };
+}
+
+function narrativeClaimRecord(claim: MemoryClaim, source: "fact-extraction" | "manual-claim"): Record<string, unknown> {
+  return {
+    id: claim.id,
+    kind: claim.kind,
+    title: claim.title,
+    name: claim.title,
+    content: claim.content,
+    subjectRefs: claim.subjectRefs,
+    narrativeStart: claim.narrativeRange?.start,
+    narrativeEnd: claim.narrativeRange?.end,
+    knowledgeScope: claim.knowledgeScope,
+    authority: claim.authority,
+    confidence: claim.confidence,
+    sourceRevisionIds: claim.sourceRevisionIds,
+    predicate: claim.predicate,
+    sourceArtifactId: claim.sourceArtifactId,
+    supersedes: claim.supersedes,
+    decidedBy: claim.decidedBy,
+    decidedAt: claim.decidedAt,
+    source,
+    readOnly: false,
+  };
 }
 function modelTaskFromRow(row: ModelTaskRow): ModelTaskRecord {
   return { id: row.id, workflowRunId: row.workflow_run_id, taskId: row.task_id, purpose: row.purpose, configRevision: row.config_revision, candidateIndex: row.candidate_index, status: row.status, workPackage: row.work_package, result: row.result ?? undefined, idempotencyKey: row.idempotency_key, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) };
@@ -544,7 +605,7 @@ export class NovelPostgresRepository {
         const titleParam = 3 + idx * 2;
         return `(CASE WHEN content ILIKE $${contentParam} OR title ILIKE $${titleParam} THEN 1 ELSE 0 END)`;
       }).join(" + ");
-      const sql = `SELECT *, (${lexicalRankSelect})::REAL / ${terms.length} AS lexical_rank FROM memory_claims WHERE project_id = $1 AND authority IN ('approved','author','derived') AND (${orClauses.join(" OR ")}) ${extra} ORDER BY lexical_rank DESC, confidence DESC, created_at DESC LIMIT 32`;
+      const sql = `SELECT *, (${lexicalRankSelect})::REAL / ${terms.length} AS lexical_rank FROM memory_claims WHERE project_id = $1 AND lifecycle_status='active' AND authority IN ('approved','author','derived') AND NOT EXISTS (SELECT 1 FROM memory_claims newer WHERE newer.project_id=memory_claims.project_id AND newer.lifecycle_status='active' AND memory_claims.id=ANY(newer.supersedes)) AND (${orClauses.join(" OR ")}) ${extra} ORDER BY lexical_rank DESC, confidence DESC, created_at DESC LIMIT 32`;
       const rows = await this.pool.query<any>(sql, params);
       for (const row of rows.rows) {
         if (facet.knowledgeCharacterId && row.knowledge_scope?.characterId && row.knowledge_scope.characterId !== facet.knowledgeCharacterId) continue;
@@ -556,7 +617,10 @@ export class NovelPostgresRepository {
           title: row.title,
           content: row.content,
           subjectRefs: row.subject_refs ?? [],
-          narrativeRange: { start: row.narrative_start ?? undefined, end: row.narrative_end ?? undefined },
+          narrativeRange: {
+            start: row.narrative_start === null || row.narrative_start === undefined ? undefined : Number(row.narrative_start),
+            end: row.narrative_end === null || row.narrative_end === undefined ? undefined : Number(row.narrative_end),
+          },
           knowledgeScope: row.knowledge_scope,
           authority: row.authority,
           confidence: Number(row.confidence),
@@ -591,6 +655,80 @@ export class NovelPostgresRepository {
         reason: `${existing.reason} | ${hit.reason}`,
       });
     }
+    return [...merged.values()];
+  }
+
+  async searchGraphMemory(input: { projectId: string; facets: RetrievalFacet[]; narrativeCutoff?: number; povCharacterId?: string }): Promise<MemoryHit[]> {
+    const graphFacets = input.facets.filter((facet) => facet.kind === "entity" || facet.kind === "relation" || facet.kind === "thread");
+    if (!graphFacets.length) return [];
+    const params: unknown[] = [input.projectId];
+    let validity = "";
+    if (input.narrativeCutoff !== undefined) {
+      params.push(input.narrativeCutoff);
+      validity += ` AND (r.valid_from IS NULL OR r.valid_from<=$${params.length}) AND (r.valid_to IS NULL OR r.valid_to>=$${params.length})`;
+    }
+    if (input.povCharacterId) {
+      params.push(input.povCharacterId);
+      validity += ` AND (r.subject_id=$${params.length} OR r.object_id=$${params.length})`;
+    }
+    const relations = await this.pool.query<{
+      id: string; subject_id: string; predicate: string; object_id: string; valid_from: string | number | null; valid_to: string | number | null; source_revision_id: string | null; subject_name: string | null; object_name: string | null;
+    }>(
+      `SELECT r.id,r.subject_id,r.predicate,r.object_id,r.valid_from,r.valid_to,r.source_revision_id,
+         subject.name AS subject_name,object.name AS object_name
+       FROM relations r
+       LEFT JOIN entities subject ON subject.id=r.subject_id AND subject.project_id=r.project_id
+       LEFT JOIN entities object ON object.id=r.object_id AND object.project_id=r.project_id
+       WHERE r.project_id=$1${validity}
+       ORDER BY r.valid_from DESC NULLS LAST,r.id LIMIT 96`,
+      params,
+    );
+    const hits: MemoryHit[] = [];
+    for (const row of relations.rows) {
+      const content = `${row.subject_name ?? row.subject_id} ${row.predicate} ${row.object_name ?? row.object_id}`;
+      for (const facet of graphFacets.filter((item) => item.kind !== "thread")) {
+        const terms = facet.query.split(/\s+/u).filter(Boolean);
+        const matched = terms.filter((term) => content.includes(term)).length;
+        if (!matched && facet.kind !== "relation") continue;
+        const score = terms.length ? Math.max(0.2, matched / terms.length) : 0.2;
+        hits.push({
+          id: `graph:${row.id}`,
+          projectId: input.projectId,
+          kind: "working",
+          title: `关系：${content}`,
+          content,
+          subjectRefs: [row.subject_id, row.object_id],
+          narrativeRange: { start: row.valid_from === null ? undefined : Number(row.valid_from), end: row.valid_to === null ? undefined : Number(row.valid_to) },
+          knowledgeScope: input.povCharacterId ? { characterId: input.povCharacterId } : "author",
+          authority: "derived",
+          confidence: 0.85,
+          sourceRevisionIds: row.source_revision_id ? [row.source_revision_id] : [],
+          contentHash: createHash("sha256").update(`${row.id}:${content}:${row.valid_from ?? ""}:${row.valid_to ?? ""}`).digest("hex"),
+          supersedes: [],
+          predicate: row.predicate,
+          score,
+          graphRank: score,
+          matchedFacet: facet.kind,
+          matchedFacets: ["relation", "entity"],
+          reason: "postgres relation graph",
+        });
+      }
+    }
+    const threadFacets = graphFacets.filter((facet) => facet.kind === "thread");
+    if (threadFacets.length) {
+      const threads = await this.pool.query<{ id: string; title: string; payload: Record<string, unknown> }>(
+        "SELECT id,title,payload FROM plot_threads WHERE project_id=$1 AND status='open' ORDER BY id LIMIT 64",
+        [input.projectId],
+      );
+      for (const row of threads.rows) {
+        const content = `${row.title}\n${JSON.stringify(row.payload)}`;
+        const matched = threadFacets.flatMap((facet) => facet.query.split(/\s+/u).filter(Boolean)).filter((term) => content.includes(term)).length;
+        const score = matched ? Math.min(1, 0.4 + matched * 0.15) : 0.25;
+        hits.push({ id: `graph-thread:${row.id}`, projectId: input.projectId, kind: "hierarchical", title: row.title, content, subjectRefs: [row.id], knowledgeScope: "author", authority: "approved", confidence: 0.9, sourceRevisionIds: [], contentHash: createHash("sha256").update(`${row.id}:${content}`).digest("hex"), supersedes: [], score, graphRank: score, matchedFacet: "thread", reason: "postgres plot-thread graph" });
+      }
+    }
+    const merged = new Map<string, MemoryHit>();
+    for (const hit of hits.sort((a, b) => b.score - a.score)) if (!merged.has(hit.id)) merged.set(hit.id, hit);
     return [...merged.values()];
   }
 
@@ -922,12 +1060,21 @@ export class NovelPostgresRepository {
     return result.rows[0]?.payload ?? null;
   }
 
+  async putSkillBundle(bundle: SkillBundle): Promise<SkillBundle> {
+    await this.pool.query(
+      "INSERT INTO skill_bundles(id,project_id,preflight_id,payload,fingerprint) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload,fingerprint=EXCLUDED.fingerprint",
+      [bundle.id, bundle.projectId, bundle.preflightId, bundle, bundle.fingerprint],
+    );
+    return bundle;
+  }
+
   async listOutbox(projectId?: string, afterId = 0) {
     const result = await this.pool.query("SELECT id,aggregate_type,aggregate_id,event_type,payload,created_at FROM outbox_events WHERE id>$1 AND ($2::text IS NULL OR payload->>'projectId'=$2) ORDER BY id LIMIT 200", [afterId, projectId ?? null]);
     return result.rows;
   }
 
   async putReview(review: Review, options: { refreshChapterSnapshot?: boolean } = {}) {
+    review = normalizeManuscriptStructuralReview(review);
     // pg 对 JS 数组使用 PostgreSQL array literal 序列化（{elem1,elem2}），而非 JSON。
     // issues 是 JS 对象数组，直接传给 jsonb 列会导致 "invalid input syntax for type json" 错误。
     // 修复：显式 JSON.stringify，让 pg 以字符串参数发送，PostgreSQL 再解析为 jsonb。
@@ -940,7 +1087,7 @@ export class NovelPostgresRepository {
   async getReviewsByIds(ids: string[]): Promise<Review[]> {
     if (!ids.length) return [];
     const result = await this.pool.query<any>("SELECT * FROM reviews WHERE id=ANY($1::text[])", [ids]);
-    const byId = new Map<string, Review>(result.rows.map((row) => [row.id, {
+    const byId = new Map<string, Review>(result.rows.map((row) => [row.id, normalizeManuscriptStructuralReview({
       id: row.id,
       projectId: row.project_id,
       artifactId: row.artifact_id,
@@ -954,7 +1101,7 @@ export class NovelPostgresRepository {
       dimensionScores: row.dimension_scores ?? {},
       modelProvenance: row.model_provenance ?? undefined,
       createdAt: new Date(row.created_at).getTime(),
-    }]));
+    })]));
     return ids.flatMap((id) => {
       const review = byId.get(id);
       return review ? [review] : [];
@@ -980,13 +1127,16 @@ export class NovelPostgresRepository {
   async listIndexableMemoryClaims(input: { offset?: number; limit?: number; projectId?: string } = {}): Promise<MemoryClaim[]> {
     const result = await this.pool.query<any>(
       `SELECT * FROM memory_claims
-       WHERE authority IN ('approved','author','derived') AND ($3::text IS NULL OR project_id=$3)
+       WHERE lifecycle_status='active' AND authority IN ('approved','author','derived') AND ($3::text IS NULL OR project_id=$3)
        ORDER BY project_id,created_at,id OFFSET $1 LIMIT $2`,
       [input.offset ?? 0, input.limit ?? 500, input.projectId ?? null],
     );
     return result.rows.map((row: any) => ({
       id: row.id, projectId: row.project_id, kind: row.kind, title: row.title, content: row.content,
-      subjectRefs: row.subject_refs ?? [], narrativeRange: { start: row.narrative_start ?? undefined, end: row.narrative_end ?? undefined },
+      subjectRefs: row.subject_refs ?? [], narrativeRange: {
+        start: row.narrative_start === null || row.narrative_start === undefined ? undefined : Number(row.narrative_start),
+        end: row.narrative_end === null || row.narrative_end === undefined ? undefined : Number(row.narrative_end),
+      },
       knowledgeScope: row.knowledge_scope, authority: row.authority, confidence: Number(row.confidence),
       sourceRevisionIds: row.source_revision_ids ?? [], contentHash: row.content_hash, supersedes: row.supersedes ?? [],
       predicate: row.predicate ?? undefined, sourceArtifactId: row.source_artifact_id ?? undefined,
@@ -994,7 +1144,7 @@ export class NovelPostgresRepository {
   }
 
   async countIndexableMemoryClaims(): Promise<number> {
-    const claims = await this.pool.query<{ count: string }>("SELECT count(*)::text AS count FROM memory_claims WHERE authority IN ('approved','author','derived')");
+    const claims = await this.pool.query<{ count: string }>("SELECT count(*)::text AS count FROM memory_claims WHERE lifecycle_status='active' AND authority IN ('approved','author','derived')");
     const chapters = await this.pool.query<{ count: string }>("SELECT count(*)::text AS count FROM chapter_memories");
     return Number(claims.rows[0]?.count ?? 0) + Number(chapters.rows[0]?.count ?? 0);
   }
@@ -1406,11 +1556,118 @@ export class NovelPostgresRepository {
   }
 
   async listKnowledgeRecords(projectId: string, kind: KnowledgeRecordKind): Promise<Array<Record<string, unknown>>> {
-    if (kind === "foundation") return (await this.listFoundationArtifacts(projectId)).map((artifact) => ({ ...artifact, payload: artifact.structuredData ?? {} }));
+    if (kind === "foundation") {
+      const sections = await this.listProjectPlanSections(projectId);
+      return sections.map((section) => {
+        const stage = PROJECT_PLAN_STAGES.find((candidate) => candidate.taskKey === section.taskKey);
+        const title = typeof section.payload.title === "string" && section.payload.title.trim()
+          ? section.payload.title.trim()
+          : stage?.label ?? section.taskKey;
+        return {
+          id: `plan:${section.taskKey}`,
+          taskKey: section.taskKey,
+          name: title,
+          title,
+          summary: typeof section.payload.summary === "string" ? section.payload.summary : "",
+          payload: section.payload,
+          status: section.status,
+          editRevision: section.editRevision,
+          sourceArtifactId: section.sourceArtifactId,
+          approvedAt: section.approvedAt,
+          updatedAt: section.updatedAt,
+          source: "project-plan",
+          readOnly: true,
+        };
+      });
+    }
+    if (kind === "claims") {
+      const result = await this.pool.query(`
+        SELECT claim.id,claim.kind,claim.title,claim.content,claim.subject_refs,
+               claim.narrative_start,claim.narrative_end,claim.knowledge_scope,
+               claim.authority,claim.confidence,claim.source_revision_ids,claim.predicate,
+               claim.source_artifact_id,claim.supersedes,claim.decided_by,claim.decided_at,
+               claim.created_at,source.kind AS source_kind
+        FROM memory_claims claim
+        LEFT JOIN artifacts source ON source.id=claim.source_artifact_id
+        WHERE claim.project_id=$1
+          AND claim.lifecycle_status='active'
+          AND claim.authority IN ('approved','author','derived')
+          AND claim.predicate IS NOT NULL
+          AND (source.kind='fact-extraction' OR (claim.source_artifact_id IS NULL AND claim.authority='author'))
+          AND NOT EXISTS (
+            SELECT 1 FROM memory_claims newer
+            WHERE newer.project_id=claim.project_id
+              AND newer.lifecycle_status='active'
+              AND newer.authority IN ('approved','author','derived')
+              AND claim.id=ANY(newer.supersedes)
+          )
+        ORDER BY claim.narrative_start NULLS LAST,claim.created_at DESC,claim.id
+      `, [projectId]);
+      return result.rows.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        title: row.title,
+        name: row.title,
+        content: row.content,
+        subjectRefs: row.subject_refs ?? [],
+        narrativeStart: row.narrative_start === null ? undefined : Number(row.narrative_start),
+        narrativeEnd: row.narrative_end === null ? undefined : Number(row.narrative_end),
+        knowledgeScope: row.knowledge_scope,
+        authority: row.authority,
+        confidence: Number(row.confidence),
+        sourceRevisionIds: row.source_revision_ids ?? [],
+        predicate: row.predicate ?? undefined,
+        sourceArtifactId: row.source_artifact_id ?? undefined,
+        supersedes: row.supersedes ?? [],
+        decidedBy: row.decided_by ?? undefined,
+        decidedAt: row.decided_at ? iso(row.decided_at) : undefined,
+        createdAt: iso(row.created_at),
+        source: row.source_kind === "fact-extraction" ? "fact-extraction" : "manual-claim",
+        readOnly: false,
+      }));
+    }
+    if (kind === "chapter-memories") {
+      const memories = await this.getChapterMemories({ projectId, limit: 500 });
+      return memories.map((memory) => ({
+        ...memory,
+        name: `第 ${memory.narrativeRange.start} 章记忆`,
+        narrativeStart: memory.narrativeRange.start,
+        narrativeEnd: memory.narrativeRange.end,
+        source: "chapter-memory",
+        readOnly: true,
+      }));
+    }
+    if (kind === "project-skills") {
+      const result = await this.pool.query<{ id: string; payload: SkillBundle; created_at: Date | string }>(
+        "SELECT id,payload,created_at FROM skill_bundles WHERE project_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1",
+        [projectId],
+      );
+      const bundle = result.rows[0];
+      if (!bundle) return [];
+      return (Array.isArray(bundle.payload.skills) ? bundle.payload.skills : []).map((skill) => ({
+        id: skill.skillId,
+        skillId: skill.skillId,
+        version: skill.version,
+        capabilities: skill.capabilities ?? [],
+        applicableTasks: skill.applicableTasks ?? [],
+        requiredMemoryKinds: skill.requiredMemoryKinds ?? [],
+        conflicts: skill.conflicts ?? [],
+        qualityGates: skill.qualityGates ?? [],
+        promptSections: skill.promptSections ?? {},
+        applicableGenres: skill.applicableGenres ?? [],
+        enabled: skill.enabled !== false,
+        bundleId: bundle.id,
+        bundleCreatedAt: iso(bundle.created_at),
+        bundleMissingCapabilities: bundle.payload.missingCapabilities ?? [],
+        source: "skill-bundle",
+        readOnly: true,
+      }));
+    }
     if (kind === "skills") {
       const result = await this.pool.query("SELECT skill_id AS id, version, capabilities, applicable_tasks, required_memory_kinds, conflicts, quality_gates, prompt_sections, applicable_genres, enabled, updated_at FROM skill_definitions ORDER BY skill_id");
       return result.rows.map((row) => ({
         id: row.id,
+        skillId: row.id,
         version: row.version,
         capabilities: row.capabilities ?? [],
         applicableTasks: row.applicable_tasks ?? [],
@@ -1421,6 +1678,8 @@ export class NovelPostgresRepository {
         applicableGenres: row.applicable_genres ?? [],
         enabled: row.enabled,
         updatedAt: row.updated_at,
+        source: "skill-definition",
+        readOnly: false,
       }));
     }
     if (kind === "planning" || kind === "worldview" || kind === "characters") {
@@ -1440,7 +1699,138 @@ export class NovelPostgresRepository {
     return result.rows.map((row) => ({ id: row.id, subjectId: row.subject_id, predicate: row.predicate, objectValue: row.object_value ?? {}, truthStatus: row.truth_status, confidence: Number(row.confidence), narrativeStart: row.narrative_start === null ? undefined : Number(row.narrative_start), narrativeEnd: row.narrative_end === null ? undefined : Number(row.narrative_end) }));
   }
 
-  async upsertKnowledgeRecord(projectId: string, kind: Exclude<KnowledgeRecordKind, "foundation">, input: Record<string, unknown>) {
+  async upsertNarrativeClaim(projectId: string, input: Record<string, unknown>) {
+    const replacedId = typeof input.id === "string" && input.id.trim() ? input.id.trim() : undefined;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      let previous: MemoryClaim | undefined;
+      if (replacedId) {
+        const existing = await client.query<any>(`
+          SELECT claim.*,source.kind AS source_kind
+          FROM memory_claims claim
+          LEFT JOIN artifacts source ON source.id=claim.source_artifact_id
+          WHERE claim.id=$1 AND claim.project_id=$2
+            AND claim.lifecycle_status='active'
+            AND claim.authority IN ('approved','author','derived')
+            AND claim.predicate IS NOT NULL
+            AND (source.kind='fact-extraction' OR (claim.source_artifact_id IS NULL AND claim.authority='author'))
+          FOR UPDATE OF claim
+        `, [replacedId, projectId]);
+        if (!existing.rowCount) throw new Error(`叙事事实不存在或不可编辑：${replacedId}`);
+        previous = memoryClaimFromRow(existing.rows[0]);
+      }
+
+      const text = (value: unknown) => typeof value === "string" ? value.trim() : "";
+      const rawSubjects = input.subjectRefs ?? (previous?.subjectRefs ?? []);
+      const subjectRefs = [...new Set((Array.isArray(rawSubjects) ? rawSubjects : []).map(text).filter(Boolean))];
+      const predicate = text(input.predicate ?? previous?.predicate);
+      const content = text(input.content ?? previous?.content);
+      const title = text(input.title ?? input.name ?? previous?.title) || content.slice(0, 32);
+      if (!subjectRefs.length) throw new Error("叙事事实至少需要一个明确主体");
+      if (!predicate) throw new Error("叙事事实需要 predicate");
+      if (!content) throw new Error("叙事事实需要 content");
+
+      const numberOrUndefined = (value: unknown, fallback?: number) => {
+        if (value === undefined || value === null || value === "") return fallback;
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed < 1) throw new Error("叙事位置必须是大于等于 1 的整数");
+        return parsed;
+      };
+      const narrativeStart = numberOrUndefined(input.narrativeStart, previous?.narrativeRange?.start);
+      const narrativeEnd = numberOrUndefined(input.narrativeEnd, previous?.narrativeRange?.end);
+      if (narrativeStart !== undefined && narrativeEnd !== undefined && narrativeEnd < narrativeStart) {
+        throw new Error("叙事结束位置不能早于开始位置");
+      }
+
+      const normalizedPredicate = canonicalizeFactPredicate(predicate);
+      const identityHash = canonicalSha256({ subjectRefs: [...subjectRefs].sort(), predicate: normalizedPredicate, knowledgeScope: "author" });
+      const valueHash = canonicalSha256({
+        identityHash,
+        title: normalizeFactToken(title),
+        content: normalizeFactToken(content),
+        narrativeRange: { start: narrativeStart ?? null, end: narrativeEnd ?? null },
+      });
+      if (previous && previous.valueHash === valueHash) {
+        await client.query("COMMIT");
+        return { id: previous.id, kind: "claims" as const, record: narrativeClaimRecord(previous, previous.sourceArtifactId ? "fact-extraction" : "manual-claim"), claim: previous };
+      }
+      const duplicate = await client.query<{ id: string }>(
+        "SELECT id FROM memory_claims WHERE project_id=$1 AND content_hash=$2 AND knowledge_scope='\"author\"'::jsonb AND authority <> 'rejected' LIMIT 1",
+        [projectId, valueHash],
+      );
+      if (duplicate.rowCount) throw new Error(`相同叙事事实已存在：${duplicate.rows[0].id}`);
+
+      const id = `claim:author:${projectId}:${valueHash.slice(0, 16)}:${randomUUID().slice(0, 8)}`;
+      const kindValue = input.kind === "hierarchical" || previous?.kind === "hierarchical" ? "hierarchical" : "episodic";
+      const supersedes = previous ? [...new Set([previous.id, ...previous.supersedes])] : [];
+      const inserted = await client.query<any>(`
+        INSERT INTO memory_claims(
+          id,project_id,kind,title,content,subject_refs,narrative_start,narrative_end,
+          knowledge_scope,authority,confidence,source_revision_ids,content_hash,supersedes,
+          predicate,lifecycle_status,identity_hash,value_hash,decided_by,decided_at
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'"author"'::jsonb,'author',1,'{}',$9,$10,$11,'active',$12,$9,'author',now())
+        RETURNING *
+      `, [id, projectId, kindValue, title, content, subjectRefs, narrativeStart ?? null, narrativeEnd ?? null, valueHash, supersedes, predicate, identityHash]);
+      const claim = memoryClaimFromRow(inserted.rows[0]);
+      await client.query(
+        "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,'author','knowledge.upsert','claims',$2,$3)",
+        [projectId, id, { replacedId, before: previous ? narrativeClaimRecord(previous, previous.sourceArtifactId ? "fact-extraction" : "manual-claim") : null, after: narrativeClaimRecord(claim, "manual-claim") }],
+      );
+      await this.appendOutboxTx(client, "memory-claim", id, "memory-claim.author-upserted", { projectId, claimId: id, replacedId });
+      await client.query("COMMIT");
+      return { id, kind: "claims" as const, replacedId, record: narrativeClaimRecord(claim, "manual-claim"), claim };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteNarrativeClaim(projectId: string, id: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = await client.query<any>(`
+        SELECT claim.*,source.kind AS source_kind
+        FROM memory_claims claim
+        LEFT JOIN artifacts source ON source.id=claim.source_artifact_id
+        WHERE claim.id=$1 AND claim.project_id=$2
+          AND claim.lifecycle_status='active'
+          AND claim.authority IN ('approved','author','derived')
+          AND claim.predicate IS NOT NULL
+          AND (source.kind='fact-extraction' OR (claim.source_artifact_id IS NULL AND claim.authority='author'))
+        FOR UPDATE OF claim
+      `, [id, projectId]);
+      if (!existing.rowCount) {
+        await client.query("COMMIT");
+        return { deleted: false, id, kind: "claims" as const };
+      }
+      const claim = memoryClaimFromRow(existing.rows[0]);
+      const deletedClaimIds = [...new Set([id, ...claim.supersedes])];
+      await client.query("UPDATE memory_claims SET authority='rejected',decided_by='author',decided_at=now() WHERE project_id=$1 AND id=ANY($2::text[])", [projectId, deletedClaimIds]);
+      await client.query(
+        "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,'author','knowledge.delete','claims',$2,$3)",
+        [projectId, id, { deletedClaimIds, before: narrativeClaimRecord(claim, existing.rows[0].source_kind === "fact-extraction" ? "fact-extraction" : "manual-claim") }],
+      );
+      await this.appendOutboxTx(client, "memory-claim", id, "memory-claim.author-rejected", { projectId, claimId: id, deletedClaimIds });
+      await client.query("COMMIT");
+      return { deleted: true, id, kind: "claims" as const, deletedClaimIds };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async upsertKnowledgeRecord(projectId: string, kind: "claims", input: Record<string, unknown>): ReturnType<NovelPostgresRepository["upsertNarrativeClaim"]>;
+  async upsertKnowledgeRecord(projectId: string, kind: MutableKnowledgeRecordKind, input: Record<string, unknown>): Promise<
+    Awaited<ReturnType<NovelPostgresRepository["upsertNarrativeClaim"]>> | { id: string; kind: Exclude<MutableKnowledgeRecordKind, "claims">; record: Record<string, unknown> | null }
+  >;
+  async upsertKnowledgeRecord(projectId: string, kind: MutableKnowledgeRecordKind, input: Record<string, unknown>) {
+    if (kind === "claims") return this.upsertNarrativeClaim(projectId, input);
     const id = typeof input.id === "string" && input.id.trim() ? input.id.trim() : randomUUID();
     if (kind === "skills") {
       const version = typeof input.version === "string" && input.version.trim() ? input.version.trim() : "1.0.0";
@@ -1472,7 +1862,8 @@ export class NovelPostgresRepository {
     return { id, kind, record: (await this.listKnowledgeRecords(projectId, kind)).find((record) => record.id === id) ?? null };
   }
 
-  async deleteKnowledgeRecord(projectId: string, kind: Exclude<KnowledgeRecordKind, "foundation">, id: string) {
+  async deleteKnowledgeRecord(projectId: string, kind: MutableKnowledgeRecordKind, id: string) {
+    if (kind === "claims") return this.deleteNarrativeClaim(projectId, id);
     const table = kind === "skills" ? "skill_definitions" : kind === "planning" || kind === "worldview" || kind === "characters" ? "entities" : kind === "relations" ? "relations" : kind === "timeline" ? "timeline_events" : "facts";
     const idColumn = kind === "skills" ? "skill_id" : "id";
     const projectClause = kind === "skills" ? "" : " AND project_id=$2";
@@ -1498,7 +1889,7 @@ export class NovelPostgresRepository {
     const document = await this.pool.query<{ narrative_order: number; pov_character_id: string | null }>("SELECT narrative_order, pov_character_id FROM manuscript_documents WHERE id = $1 AND project_id = $2", [targetDocumentId, projectId]);
     const row = document.rows[0];
     if (!row) throw new Error("目标章节不存在");
-    return { projectId, currentRevision: Number(project.rows[0].current_revision), targetDocumentId, targetDocumentOrder: row.narrative_order, povCharacterId: row.pov_character_id ?? undefined, genre, premise };
+    return { projectId, currentRevision: Number(project.rows[0].current_revision), targetDocumentId, targetDocumentOrder: Number(row.narrative_order), povCharacterId: row.pov_character_id ?? undefined, genre, premise };
   }
 
   async putIntent(intent: NovelIntent) {
@@ -1523,27 +1914,103 @@ export class NovelPostgresRepository {
     return row;
   }
 
-  async claimHumanDecision(input: { workflowId: string; artifactId: string; decision: "approve" | "reject" | "revise" | "abandon"; authorId: string; feedback?: string; revisionBase?: "current" | "previous" }) {
-    const submittedAt = new Date().toISOString();
-    const claim = {
-      artifactId: input.artifactId,
-      decision: input.decision,
-      authorId: input.authorId,
-      ...(input.feedback ? { feedback: input.feedback } : {}),
-      ...(input.revisionBase ? { revisionBase: input.revisionBase } : {}),
-      submittedAt,
-    };
-    const result = await this.pool.query<WorkflowRunRow>(
-      `UPDATE workflow_runs
-       SET payload=payload || jsonb_build_object('pendingHumanDecision',$3::jsonb),updated_at=now()
-       WHERE temporal_workflow_id=$1
-         AND status='manual-review-required'
-         AND payload->>'artifactId'=$2
-         AND COALESCE(payload->'pendingHumanDecision'->>'artifactId','')<>$2
-       RETURNING id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at`,
-      [input.workflowId, input.artifactId, JSON.stringify(claim)],
+  async claimApprovalEvidence(input: { workflowId: string; artifactId: string; decision: ApprovalEvidence["decision"]; actorSource: ApprovalEvidence["actorSource"]; actorId: string; feedback?: string; revisionBase?: "current" | "previous" }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const runResult = await client.query<WorkflowRunRow>(
+        `SELECT id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at
+         FROM workflow_runs
+         WHERE temporal_workflow_id=$1 AND status='manual-review-required' AND payload->>'artifactId'=$2
+           AND payload->'pendingHumanDecision'->>'artifactId' IS DISTINCT FROM $2
+         FOR UPDATE`,
+        [input.workflowId, input.artifactId],
+      );
+      if (!runResult.rowCount) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      if (input.actorSource === "automation"
+        && input.decision === "approve"
+        && runResult.rows[0].payload.reasonCode !== "fact-approval-pending") {
+        throw new Error("自动化来源不能执行作者覆盖批准");
+      }
+      const reviewRows = await client.query<{ issues: ReviewIssue[] }>("SELECT issues FROM reviews WHERE artifact_id=$1", [input.artifactId]);
+      const unresolvedIssueFingerprints = [...new Set(reviewRows.rows.flatMap((row) => Array.isArray(row.issues) ? row.issues : [])
+        .filter((item) => item.severity === "blocker" || item.severity === "major")
+        .map(reviewIssueFingerprint))];
+      if (input.decision === "approve" && unresolvedIssueFingerprints.length && !input.feedback?.trim()) throw new Error("覆盖严重审校问题时必须填写作者判断理由");
+      const evidence: ApprovalEvidence = {
+        id: randomUUID(),
+        projectId: runResult.rows[0].project_id,
+        workflowId: input.workflowId,
+        artifactId: input.artifactId,
+        decision: input.decision,
+        actorSource: input.actorSource,
+        actorId: input.actorId,
+        unresolvedIssueFingerprints,
+        ...(input.feedback?.trim() ? { feedback: input.feedback.trim() } : {}),
+        ...(input.revisionBase ? { revisionBase: input.revisionBase } : {}),
+        createdAt: new Date().toISOString(),
+      };
+      await client.query(
+        `INSERT INTO approval_evidence(id,project_id,workflow_id,artifact_id,decision,actor_source,actor_id,unresolved_issue_fingerprints,feedback,revision_base,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [evidence.id, evidence.projectId, evidence.workflowId, evidence.artifactId, evidence.decision, evidence.actorSource, evidence.actorId, evidence.unresolvedIssueFingerprints, evidence.feedback ?? null, evidence.revisionBase ?? null, evidence.createdAt],
+      );
+      const claim = { approvalEvidenceId: evidence.id, artifactId: evidence.artifactId, decision: evidence.decision, actorSource: evidence.actorSource, actorId: evidence.actorId, feedback: evidence.feedback, revisionBase: evidence.revisionBase, submittedAt: evidence.createdAt };
+      const updated = await client.query<WorkflowRunRow>(
+        `UPDATE workflow_runs SET payload=payload || jsonb_build_object('pendingHumanDecision',$3::jsonb),updated_at=now()
+         WHERE temporal_workflow_id=$1 AND payload->>'artifactId'=$2
+           AND payload->'pendingHumanDecision'->>'artifactId' IS DISTINCT FROM $2
+         RETURNING id,workflow_type,project_id,temporal_workflow_id,status,payload,created_at,updated_at`,
+        [input.workflowId, input.artifactId, JSON.stringify(claim)],
+      );
+      if (!updated.rowCount) throw new Error("审批候选在证据创建期间发生变化");
+      await client.query("COMMIT");
+      return { evidence, run: workflowFromRow(updated.rows[0]) };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getApprovalEvidence(workflowId: string, evidenceId: string): Promise<ApprovalEvidence | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const evidence = await this.getApprovalEvidenceById(evidenceId, client);
+      if (!evidence || evidence.workflowId !== workflowId) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query(
+        `UPDATE workflow_runs
+         SET status='running',payload=payload-'pendingHumanDecision',updated_at=now()
+         WHERE temporal_workflow_id=$1
+           AND payload->'pendingHumanDecision'->>'approvalEvidenceId'=$2`,
+        [workflowId, evidenceId],
+      );
+      await client.query("COMMIT");
+      return evidence;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getApprovalEvidenceById(evidenceId: string, connection: Pool | PoolClient = this.pool): Promise<ApprovalEvidence | undefined> {
+    const result = await connection.query<{ id: string; project_id: string; workflow_id: string; artifact_id: string; decision: ApprovalEvidence["decision"]; actor_source: ApprovalEvidence["actorSource"]; actor_id: string; unresolved_issue_fingerprints: string[]; feedback: string | null; revision_base: "current" | "previous" | null; created_at: Date | string }>(
+      "SELECT id,project_id,workflow_id,artifact_id,decision,actor_source,actor_id,unresolved_issue_fingerprints,feedback,revision_base,created_at FROM approval_evidence WHERE id=$1",
+      [evidenceId],
     );
-    return result.rows[0] ? workflowFromRow(result.rows[0]) : undefined;
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return { id: row.id, projectId: row.project_id, workflowId: row.workflow_id, artifactId: row.artifact_id, decision: row.decision, actorSource: row.actor_source, actorId: row.actor_id, unresolvedIssueFingerprints: row.unresolved_issue_fingerprints ?? [], ...(row.feedback ? { feedback: row.feedback } : {}), ...(row.revision_base ? { revisionBase: row.revision_base } : {}), createdAt: iso(row.created_at) };
   }
 
   async releaseHumanDecisionClaim(workflowId: string, artifactId: string) {
@@ -1968,7 +2435,7 @@ export class NovelPostgresRepository {
       await client.query("BEGIN");
       const current = await client.query<ArcRow>("SELECT * FROM arcs WHERE id=$1 AND project_id=$2 FOR UPDATE", [input.arcId, input.projectId]);
       if (!current.rowCount) throw new Error("故事弧不存在");
-      if (current.rows[0].execution_status === "completed" || current.rows[0].execution_status === "abandoned") throw new Error("已结束故事弧不可改写");
+      if (current.rows[0].execution_status === "abandoned" || (current.rows[0].execution_status === "completed" && !input.edited)) throw new Error("已结束故事弧不可改写");
       const existing = await client.query<ChapterBlueprintRow>("SELECT id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision FROM chapters WHERE arc_id=$1 ORDER BY ordinal", [input.arcId]);
       const existingBatch = await client.query<StoryArcBatchRow>("SELECT * FROM story_arc_batches WHERE arc_id=$1 AND project_id=$2 AND batch_index=$3 FOR UPDATE", [input.arcId, input.projectId, input.bundle.batch.batchIndex]);
       const existingByLocal = new Map(existing.rows.map((row) => [Number(row.payload?.index ?? 0), row]));
@@ -2020,7 +2487,10 @@ export class NovelPostgresRepository {
         const chapterId = previous?.id ?? chapter.id ?? randomUUID();
         const globalOrder = previous ? Number(previous.ordinal) : baseOrder + chapter.index - 1;
         keptIds.push(chapterId);
-        if (previous && isProtected) continue;
+        // Generated rebases cannot rewrite the plan behind committed prose. An explicit
+        // author edit may update that plan so the formal chapter-review workflow can
+        // repair already-final chapters against the corrected intent.
+        if (previous && isProtected && !input.edited) continue;
         await client.query(
           `INSERT INTO chapters(id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision,batch_id,batch_index,updated_at)
            VALUES($1,$2,$3,$4,$5,$6,'planned',$7,$8,$9,$10,$11,now())
@@ -2089,6 +2559,8 @@ export class NovelPostgresRepository {
       sourceArtifactId: row.source_artifact_id ?? undefined,
       blueprintArtifactId: row.blueprint_artifact_id ?? undefined,
       contextFingerprint: row.context_fingerprint ?? undefined,
+      reviewArtifactId: row.review_artifact_id ?? undefined,
+      reviewFingerprint: row.review_fingerprint ?? undefined,
       editRevision: Number(row.edit_revision),
       approvedAt: row.approved_at ? iso(row.approved_at) : undefined,
       completedAt: row.completed_at ? iso(row.completed_at) : undefined,
@@ -2198,9 +2670,17 @@ export class NovelPostgresRepository {
     return { creates, updates, conflicts, artifactId: arc.blueprintArtifactId };
   }
 
-  async approveStoryArc(projectId: string, arcId: string, artifactId: string, actor: string) {
+  async approveStoryArc(projectId: string, arcId: string, artifactId: string, reviewArtifactId: string, actor: string) {
     const preview = await this.previewStoryArcApproval(projectId, arcId);
     if (preview.artifactId !== artifactId) throw new Error("故事弧蓝图已变化，请刷新后重新确认");
+    const [blueprintArtifact, reviewArtifact] = await Promise.all([this.getArtifact(artifactId), this.getArtifact(reviewArtifactId)]);
+    if (!blueprintArtifact || !reviewArtifact || reviewArtifact.kind !== "review") throw new Error("故事弧缺少有效审核证据");
+    if (reviewArtifact.structuredData?.subjectArtifactId !== artifactId) throw new Error("故事弧审核证据不属于当前蓝图");
+    const review = reviewArtifact.structuredData as unknown as StoryArcReviewOutput;
+    const bundle = parseStoryArcBundle(blueprintArtifact.structuredData);
+    const validation = compileChapterPlanValidationReport(bundle, Array.isArray(review.chapterChecks) ? review.chapterChecks : []);
+    const hasBlockingIssue = Array.isArray(review.issues) && review.issues.some((item) => item.severity === "blocker" || item.severity === "major");
+    if (review.verdict !== "passed" || hasBlockingIssue || !validation.passed) throw new Error("故事弧审核尚未通过，不能批准");
     const macro = await this.listCurrentFoundationArtifacts(projectId);
     const contextFingerprint = createHash("sha256").update(JSON.stringify({ macro: macro.map((item) => [foundationTaskKey(item), item.id, item.fingerprint]), artifactId })).digest("hex");
     const client = await this.pool.connect();
@@ -2226,9 +2706,18 @@ export class NovelPostgresRepository {
           VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(document_id) DO UPDATE SET chapter_goal=EXCLUDED.chapter_goal,blueprint=EXCLUDED.blueprint,blueprint_fingerprint=EXCLUDED.blueprint_fingerprint,source_artifact_id=EXCLUDED.source_artifact_id,updated_at=now()`,
         [item.documentId, projectId, blueprint.chapterPurpose, chapter.rows[0].payload, source.rows[0]?.fingerprint ?? "", blueprint.sourceArtifactId ?? null]);
       }
-      await client.query("UPDATE arcs SET planning_status='approved',execution_status='active',context_fingerprint=$3,approved_at=now(),updated_at=now() WHERE id=$1 AND project_id=$2", [arcId, projectId, contextFingerprint]);
+      for (const item of preview.conflicts) {
+        const chapter = await client.query<ChapterBlueprintRow>("SELECT id,arc_id,project_id,document_id,title,ordinal,status,payload,source_artifact_id,blueprint_revision FROM chapters WHERE id=$1", [item.chapterId]);
+        const blueprint = chapterBlueprintFromRow(chapter.rows[0]);
+        await client.query("UPDATE manuscript_documents SET title=$3,pov_character_id=$4,updated_at=now() WHERE id=$1 AND project_id=$2", [item.documentId, projectId, blueprint.title, blueprint.povCharacterId ?? null]);
+        const source = blueprint.sourceArtifactId ? await client.query<{ fingerprint: string }>("SELECT fingerprint FROM artifacts WHERE id=$1", [blueprint.sourceArtifactId]) : { rows: [] };
+        await client.query(`INSERT INTO chapter_production_specs(document_id,project_id,chapter_goal,blueprint,blueprint_fingerprint,source_artifact_id)
+          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(document_id) DO UPDATE SET chapter_goal=EXCLUDED.chapter_goal,blueprint=EXCLUDED.blueprint,blueprint_fingerprint=EXCLUDED.blueprint_fingerprint,source_artifact_id=EXCLUDED.source_artifact_id,updated_at=now()`,
+        [item.documentId, projectId, blueprint.chapterPurpose, chapter.rows[0].payload, source.rows[0]?.fingerprint ?? "", blueprint.sourceArtifactId ?? null]);
+      }
+      await client.query("UPDATE arcs SET planning_status='approved',execution_status=CASE WHEN execution_status='completed' THEN 'completed' ELSE 'active' END,context_fingerprint=$3,review_artifact_id=$4,review_fingerprint=$5,approved_at=now(),updated_at=now() WHERE id=$1 AND project_id=$2", [arcId, projectId, contextFingerprint, reviewArtifactId, reviewArtifact.fingerprint]);
       await client.query("UPDATE story_arc_batches SET status='approved',approved_at=now(),updated_at=now() WHERE arc_id=$1 AND project_id=$2 AND status='awaiting-review'", [arcId, projectId]);
-      await client.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'story-arc.approved','story-arc',$3,$4)", [projectId, actor, arcId, { artifactId, preview, contextFingerprint }]);
+      await client.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'story-arc.approved','story-arc',$3,$4)", [projectId, actor, arcId, { artifactId, reviewArtifactId, reviewFingerprint: reviewArtifact.fingerprint, preview, contextFingerprint }]);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -2259,11 +2748,12 @@ export class NovelPostgresRepository {
   }
 
   async getStoryArcPlanningInput(projectId: string) {
-    const [project, macro, memories, threads] = await Promise.all([
+    const [project, macro, memories, threads, narrativeState] = await Promise.all([
       this.pool.query<{ title: string }>("SELECT title FROM novel_projects WHERE id=$1", [projectId]),
       this.listCurrentFoundationArtifacts(projectId),
       this.getChapterMemories({ projectId, limit: 6 }),
       this.pool.query<{ id: string; title: string; payload: Record<string, unknown> }>("SELECT id,title,payload FROM plot_threads WHERE project_id=$1 AND status='open' ORDER BY id", [projectId]),
+      this.getLatestNarrativeStateSnapshot(projectId),
     ]);
     if (!project.rowCount) throw new Error("项目不存在");
     return {
@@ -2271,13 +2761,166 @@ export class NovelPostgresRepository {
       macro: macro.map((artifact) => ({ taskKey: foundationTaskKey(artifact) ?? "unknown", title: typeof artifact.structuredData?.title === "string" ? artifact.structuredData.title : "", summary: typeof artifact.structuredData?.summary === "string" ? artifact.structuredData.summary : "" })),
       recentChapters: memories.slice().reverse().map((memory) => ({ order: memory.narrativeRange.end, summary: memory.summary, unresolvedThreads: memory.unresolvedThreads, emotionalArc: memory.emotionalArc })),
       openThreads: threads.rows,
+      narrativeState,
     };
   }
 
+  async recordNarrativeStateSnapshot(input: {
+    projectId: string;
+    documentId: string;
+    revisionId: string;
+    narrativeOrder: number;
+    chapterMemory: ChapterMemory;
+    narrativeElements?: FactExtractionOutput["narrativeElements"];
+  }, connection: Pool | PoolClient = this.pool): Promise<NarrativeStateSnapshot> {
+    const [open, threads, planning, futureChapters, arcPosition, fulfilled] = await Promise.all([
+      this.getOpenForeshadowingAndPromises(input.projectId, input.narrativeOrder, connection),
+      connection.query<{ id: string; title: string; payload: Record<string, unknown> }>(
+        "SELECT id,title,payload FROM plot_threads WHERE project_id=$1 AND status='open' ORDER BY id",
+        [input.projectId],
+      ),
+      this.getChapterPlanningContext(input.projectId, input.documentId, true).catch(() => undefined),
+      connection.query<{ payload: Record<string, unknown> }>(
+        `SELECT c.payload FROM chapters c
+         JOIN chapters current ON current.project_id=c.project_id AND current.arc_id=c.arc_id AND current.document_id=$3
+         WHERE c.project_id=$1 AND c.ordinal>$2
+         ORDER BY c.ordinal ASC LIMIT 24`,
+        [input.projectId, input.narrativeOrder, input.documentId],
+      ),
+      connection.query<{ current_order: string | number; first_order: string | number }>(
+        `SELECT c.ordinal AS current_order,MIN(peer.ordinal) AS first_order
+         FROM chapters c JOIN chapters peer ON peer.arc_id=c.arc_id
+         WHERE c.project_id=$1 AND c.document_id=$2 GROUP BY c.ordinal`,
+        [input.projectId, input.documentId],
+      ),
+      connection.query<{ description: string }>(
+        `SELECT evidence->>'description' AS description FROM payoffs p
+         JOIN manuscript_revisions r ON r.id=p.revision_id AND r.project_id=$1
+         JOIN manuscript_documents d ON d.id=r.document_id AND d.project_id=$1
+         WHERE p.revision_id IS NOT NULL AND d.narrative_order<=$2
+         UNION ALL
+         SELECT payload->>'description' AS description FROM foreshadowing
+         WHERE project_id=$1 AND status='fulfilled' AND narrative_order<=$2`,
+        [input.projectId, input.narrativeOrder],
+      ),
+    ]);
+    const futurePayoffRefs = futureChapters.rows.flatMap((row) =>
+      Array.isArray(row.payload?.payoffRefs) ? row.payload.payoffRefs.filter((item): item is string => typeof item === "string") : [],
+    );
+    const phases = planning?.arc.phases ?? [];
+    const position = arcPosition.rows[0];
+    const localIndex = position && planning?.arc.expectedChapterCount
+      ? Math.max(0, Math.min(planning.arc.expectedChapterCount - 1, Number(position.current_order) - Number(position.first_order)))
+      : 0;
+    const phaseIndex = phases.length && planning?.arc.expectedChapterCount
+      ? Math.min(phases.length - 1, Math.floor((localIndex / planning.arc.expectedChapterCount) * phases.length))
+      : -1;
+    const payloadWithoutFingerprint = {
+      id: `narrative-state:${input.revisionId}`,
+      projectId: input.projectId,
+      documentId: input.documentId,
+      revisionId: input.revisionId,
+      narrativeOrder: input.narrativeOrder,
+      arcId: planning?.arcId,
+      chapterBlueprintId: planning?.chapterBlueprintId,
+      arcPhase: phaseIndex >= 0 ? phases[phaseIndex]?.title : undefined,
+      chapterSummary: input.chapterMemory.summary,
+      keyEvents: input.chapterMemory.keyEvents,
+      characterStates: input.chapterMemory.characterStates,
+      openThreads: [...new Set([
+        ...input.chapterMemory.unresolvedThreads,
+        ...threads.rows.map((thread) => `${thread.id} ${thread.title}`),
+      ])],
+      openForeshadowings: open.foreshadowings.map((item) => ({ id: item.id, description: item.description, expectedPayoffWindow: item.expectedPayoffWindow })),
+      openPromises: open.promises.map((item) => ({ id: item.id, promiser: item.promiser, promisee: item.promisee, statement: item.statement })),
+      fulfilledNodes: [...new Set([
+        ...fulfilled.rows.map((row) => row.description).filter(Boolean),
+        ...(input.narrativeElements?.payoffs ?? []).map((item) => item.description),
+      ])],
+      prohibitedEarlyConsumption: [...new Set([
+        ...futurePayoffRefs,
+        ...(planning?.arc.exitState ? [`故事弧退出状态：${planning.arc.exitState}`] : []),
+      ])],
+      continuityConstraints: planning?.chapter.continuityConstraints ?? [],
+    };
+    const snapshot: NarrativeStateSnapshot = {
+      ...payloadWithoutFingerprint,
+      fingerprint: canonicalSha256(payloadWithoutFingerprint),
+      createdAt: Date.now(),
+    };
+    await connection.query(
+      `INSERT INTO narrative_state_snapshots(id,project_id,document_id,revision_id,narrative_order,payload,fingerprint,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(project_id,revision_id) DO UPDATE SET payload=EXCLUDED.payload,fingerprint=EXCLUDED.fingerprint,created_at=EXCLUDED.created_at`,
+      [snapshot.id, snapshot.projectId, snapshot.documentId, snapshot.revisionId, snapshot.narrativeOrder, snapshot, snapshot.fingerprint, new Date(snapshot.createdAt)],
+    );
+    await connection.query(
+      "INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES('narrative-state',$1,'narrative-state.upserted',$2)",
+      [snapshot.id, { projectId: snapshot.projectId, documentId: snapshot.documentId, revisionId: snapshot.revisionId, narrativeOrder: snapshot.narrativeOrder, fingerprint: snapshot.fingerprint }],
+    );
+    return snapshot;
+  }
+
+  async getLatestNarrativeStateSnapshot(projectId: string, narrativeCutoff?: number): Promise<NarrativeStateSnapshot | undefined> {
+    const result = narrativeCutoff === undefined
+      ? await this.pool.query<{ payload: NarrativeStateSnapshot }>(
+        "SELECT payload FROM narrative_state_snapshots WHERE project_id=$1 ORDER BY narrative_order DESC,created_at DESC LIMIT 1",
+        [projectId],
+      )
+      : await this.pool.query<{ payload: NarrativeStateSnapshot }>(
+        "SELECT payload FROM narrative_state_snapshots WHERE project_id=$1 AND narrative_order<=$2 ORDER BY narrative_order DESC,created_at DESC LIMIT 1",
+        [projectId, narrativeCutoff],
+      );
+    return result.rows[0]?.payload;
+  }
+
+  async getNarrativeStatePinnedClaims(input: { projectId: string; documentId?: string; narrativeCutoff?: number; povCharacterId?: string }): Promise<MemoryHit[]> {
+    const [snapshot, memories, planning] = await Promise.all([
+      this.getLatestNarrativeStateSnapshot(input.projectId, input.narrativeCutoff),
+      this.getChapterMemories({ projectId: input.projectId, narrativeCutoff: input.narrativeCutoff, limit: 4 }),
+      input.documentId ? this.getChapterPlanningContext(input.projectId, input.documentId).catch(() => undefined) : Promise.resolve(undefined),
+    ]);
+    const hits: MemoryHit[] = [];
+    const push = (claim: Omit<MemoryHit, "score" | "reason" | "semanticRank">) => hits.push({ ...claim, score: 1, reason: "pinned-narrative-state", semanticRank: 1 });
+    if (snapshot) {
+      const content = [
+        `当前弧阶段：${snapshot.arcPhase || "未记录"}`,
+        `最近章末状态：${snapshot.chapterSummary}`,
+        `角色状态：${snapshot.characterStates.map((item) => `${item.characterId}=${item.stateSnapshot}`).join("；") || "无"}`,
+        `开放线索：${snapshot.openThreads.join("；") || "无"}`,
+        `开放伏笔：${snapshot.openForeshadowings.map((item) => `${item.id}:${item.description}`).join("；") || "无"}`,
+        `开放承诺：${snapshot.openPromises.map((item) => `${item.id}:${item.statement}`).join("；") || "无"}`,
+        `已兑现：${snapshot.fulfilledNodes.join("；") || "无"}`,
+        `禁止提前消费：${snapshot.prohibitedEarlyConsumption.join("；") || "无"}`,
+      ].join("\n");
+      push({ id: snapshot.id, projectId: input.projectId, kind: "hierarchical", title: `第${snapshot.narrativeOrder}章叙事状态账本`, content, subjectRefs: snapshot.characterStates.map((item) => item.characterId), narrativeRange: { start: snapshot.narrativeOrder, end: snapshot.narrativeOrder }, knowledgeScope: "author", authority: "derived", confidence: 1, sourceRevisionIds: [snapshot.revisionId], contentHash: snapshot.fingerprint, supersedes: [], matchedFacet: "thread", matchedFacets: ["thread", "foreshadowing", "entity", "chapter-memory"] });
+      const povState = snapshot.characterStates.find((item) => item.characterId === input.povCharacterId);
+      if (povState && input.povCharacterId) {
+        push({ id: `${snapshot.id}:pov:${input.povCharacterId}`, projectId: input.projectId, kind: "working", title: `POV角色章末状态：${input.povCharacterId}`, content: povState.stateSnapshot, subjectRefs: [input.povCharacterId], narrativeRange: { start: snapshot.narrativeOrder, end: snapshot.narrativeOrder }, knowledgeScope: { characterId: input.povCharacterId }, authority: "derived", confidence: 1, sourceRevisionIds: [snapshot.revisionId], contentHash: createHash("sha256").update(`${snapshot.fingerprint}:${input.povCharacterId}:${povState.stateSnapshot}`).digest("hex"), supersedes: [], matchedFacet: "entity" });
+      }
+    }
+    for (const memory of memories) {
+      push({ id: `pinned:${memory.id}`, projectId: input.projectId, kind: "episodic", title: `第${memory.narrativeRange.end}章定稿记忆`, content: `${memory.summary}\n关键事件：${memory.keyEvents.join("；")}\n未解线索：${memory.unresolvedThreads.join("；")}`, subjectRefs: memory.characterStates.map((item) => item.characterId), narrativeRange: memory.narrativeRange, knowledgeScope: "author", authority: "derived", confidence: 0.95, sourceRevisionIds: [memory.revisionId], contentHash: memory.fingerprint, supersedes: [], matchedFacet: "chapter-memory" });
+    }
+    if (planning) {
+      const chapter = planning.chapter;
+      const content = [
+        `故事弧：${planning.arc.title}；目标：${planning.arc.objective}；当前冲突：${planning.arc.centralConflict}`,
+        `本章：第${chapter.globalOrder}章 ${chapter.title}；功能：${chapter.chapterPurpose}；戏剧问题：${chapter.dramaticQuestion}`,
+        `状态增量预算：${chapter.stateDeltaBudget}`,
+        `连续性约束：${chapter.continuityConstraints.join("；") || "无"}`,
+        `本章可兑现：${chapter.payoffRefs.join("；") || "无"}`,
+        `邻章：${planning.neighbors.map((item) => `第${item.globalOrder}章 ${item.title}:${item.chapterPurpose}`).join("；") || "无"}`,
+      ].join("\n");
+      push({ id: `planning-context:${planning.fingerprint}`, projectId: input.projectId, kind: "working", title: "当前故事弧与章节生产规格", content, subjectRefs: chapter.povCharacterId ? [chapter.povCharacterId] : [], knowledgeScope: "author", authority: "approved", confidence: 1, sourceRevisionIds: [], contentHash: planning.fingerprint, supersedes: [], matchedFacet: "thread", matchedFacets: ["thread", "fact"] });
+    }
+    return hits;
+  }
+
   async getChapterPlanningContext(projectId: string, documentId: string, allowHistorical = false): Promise<ChapterPlanningContext> {
-    const chapterResult = await this.pool.query<ChapterBlueprintRow & { planning_status: string; context_fingerprint: string | null; arc_payload: NarrativeArcPlan }>(
+    const chapterResult = await this.pool.query<ChapterBlueprintRow & { planning_status: string; context_fingerprint: string | null; review_artifact_id: string | null; review_fingerprint: string | null; arc_payload: NarrativeArcPlan }>(
       `SELECT c.id,c.arc_id,c.project_id,c.document_id,c.title,c.ordinal,c.status,c.payload,c.source_artifact_id,c.blueprint_revision,
-         a.planning_status,a.context_fingerprint,a.payload AS arc_payload
+         a.planning_status,a.context_fingerprint,a.review_artifact_id,a.review_fingerprint,a.payload AS arc_payload
        FROM chapters c JOIN arcs a ON a.id=c.arc_id WHERE c.project_id=$1 AND c.document_id=$2`,
       [projectId, documentId],
     );
@@ -2307,6 +2950,15 @@ export class NovelPostgresRepository {
       if (!row.context_fingerprint || currentArcFingerprint !== row.context_fingerprint) {
         await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=NULL,updated_at=now() WHERE id=$1 AND execution_status<>'completed'", [row.arc_id]);
         throw new Error("故事弧蓝图与当前宏观规划不一致，请先重基线");
+      }
+      if (!row.review_artifact_id || !row.review_fingerprint) {
+        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=NULL,updated_at=now() WHERE id=$1 AND execution_status<>'completed'", [row.arc_id]);
+        throw new Error("故事弧缺少逐章审核证据，请先重新审核");
+      }
+      const reviewArtifact = await this.getArtifact(row.review_artifact_id);
+      if (!reviewArtifact || reviewArtifact.fingerprint !== row.review_fingerprint || reviewArtifact.structuredData?.subjectArtifactId !== row.source_artifact_id) {
+        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=NULL,updated_at=now() WHERE id=$1 AND execution_status<>'completed'", [row.arc_id]);
+        throw new Error("故事弧审核证据已失效，请先重新审核");
       }
     }
     return context;
@@ -2490,12 +3142,12 @@ export class NovelPostgresRepository {
       WHERE r.project_id=$1 AND (a.payload->>'workflowId'=$2 OR a.payload->>'runId'=$2)
       ORDER BY r.created_at ASC,r.id ASC
     `, [run.projectId, temporalWorkflowId]);
-    return result.rows.map((row) => ({
+    return result.rows.map((row) => normalizeManuscriptStructuralReview({
       id: row.id, artifactId: row.artifact_id, reviewerId: row.reviewer_id,
       identity: row.identity, verdict: row.verdict, issues: row.issues ?? [],
       score: row.score === null ? undefined : Number(row.score), role: row.role ?? undefined, dimensionScores: row.dimension_scores ?? {},
       createdAt: new Date(row.created_at).getTime(),
-    }));
+    } as Review));
   }
 
   async listRunOutbox(temporalWorkflowId: string, afterId = 0) {
@@ -2628,9 +3280,9 @@ export class NovelPostgresRepository {
     return result.rows[0] ? { blueprint: result.rows[0].payload, artifactId: result.rows[0].artifact_id } : undefined;
   }
 
-  async getFinalDocumentContentRef(projectId: string, documentId: string): Promise<{ title: string; status: string; revision: number; sourceRevisionId?: string; artifactId?: string; contentHash: string; objectKey: string } | undefined> {
-    const result = await this.pool.query<{ title: string; status: string; revision_id: string | null; revision: string | number | null; artifact_id: string | null; content_hash: string | null; object_key: string | null }>(
-      `SELECT d.title,d.status,mr.id AS revision_id,mr.revision,mr.artifact_id,mr.content_hash,cb.object_key
+  async getFinalDocumentContentRef(projectId: string, documentId: string): Promise<{ title: string; status: string; narrativeOrder: number; revision: number; sourceRevisionId?: string; artifactId?: string; contentHash: string; objectKey: string } | undefined> {
+    const result = await this.pool.query<{ title: string; status: string; narrative_order: string | number; revision_id: string | null; revision: string | number | null; artifact_id: string | null; content_hash: string | null; object_key: string | null }>(
+      `SELECT d.title,d.status,d.narrative_order,mr.id AS revision_id,mr.revision,mr.artifact_id,mr.content_hash,cb.object_key
        FROM manuscript_documents d
        LEFT JOIN manuscript_revisions mr ON mr.id=d.current_revision_id
        LEFT JOIN content_blobs cb ON cb.content_hash=mr.content_hash
@@ -2638,8 +3290,39 @@ export class NovelPostgresRepository {
       [projectId, documentId],
     );
     const row = result.rows[0];
-    if (!row || row.revision === null || !row.revision_id || !row.content_hash || !row.object_key) return row ? { title: row.title, status: row.status, revision: 0, contentHash: "", objectKey: "" } : undefined;
-    return { title: row.title, status: row.status, revision: Number(row.revision), sourceRevisionId: row.revision_id, artifactId: row.artifact_id ?? undefined, contentHash: row.content_hash, objectKey: row.object_key };
+    if (!row || row.revision === null || !row.revision_id || !row.content_hash || !row.object_key) return row ? { title: row.title, status: row.status, narrativeOrder: Number(row.narrative_order), revision: 0, contentHash: "", objectKey: "" } : undefined;
+    return { title: row.title, status: row.status, narrativeOrder: Number(row.narrative_order), revision: Number(row.revision), sourceRevisionId: row.revision_id, artifactId: row.artifact_id ?? undefined, contentHash: row.content_hash, objectKey: row.object_key };
+  }
+
+  private async findLaterFinalDocument(projectId: string, narrativeOrder: number, connection: Pool | PoolClient = this.pool): Promise<{ id: string; narrativeOrder: number } | undefined> {
+    const result = await connection.query<{ id: string; narrative_order: string | number }>(
+      `SELECT id,narrative_order FROM manuscript_documents
+       WHERE project_id=$1 AND status='final' AND current_revision_id IS NOT NULL AND narrative_order>$2
+       ORDER BY narrative_order,id LIMIT 1`,
+      [projectId, narrativeOrder],
+    );
+    const row = result.rows[0];
+    return row ? { id: row.id, narrativeOrder: Number(row.narrative_order) } : undefined;
+  }
+
+  private async assertNoLaterFinalDocument(projectId: string, narrativeOrder: number, connection: Pool | PoolClient = this.pool): Promise<void> {
+    const later = await this.findLaterFinalDocument(projectId, narrativeOrder, connection);
+    if (later) {
+      throw new ChapterStateRebuildConflictError({
+        targetNarrativeOrder: narrativeOrder,
+        laterFinalDocumentId: later.id,
+        laterNarrativeOrder: later.narrativeOrder,
+      });
+    }
+  }
+
+  async assertChapterStateRebuildHead(projectId: string, documentId: string, revisionId: string): Promise<void> {
+    const target = await this.pool.query<{ narrative_order: string | number; current_revision_id: string | null }>(
+      "SELECT narrative_order,current_revision_id FROM manuscript_documents WHERE id=$1 AND project_id=$2",
+      [documentId, projectId],
+    );
+    if (!target.rowCount || target.rows[0].current_revision_id !== revisionId) throw new Error("章节正式 revision 已变化，不能重建过期状态");
+    await this.assertNoLaterFinalDocument(projectId, Number(target.rows[0].narrative_order));
   }
 
   async listCapturedSnapshots(projectId: string): Promise<Record<string, unknown>[]> {
@@ -2768,26 +3451,204 @@ export class NovelPostgresRepository {
     await this.appendOutbox("artifact", artifact.id, `artifact.${artifact.kind}.ready`, { projectId: artifact.projectId, artifactId: artifact.id, taskId: artifact.taskId, fingerprint: artifact.fingerprint });
   }
 
-  async recordFactExtraction(input: { projectId: string; artifact: Artifact; claims: MemoryClaim[] }): Promise<MemoryClaim[]> {
+  async recordFactExtraction(input: {
+    projectId: string;
+    artifact: Artifact;
+    claims: MemoryClaim[];
+    lifecycleStatus?: "staged" | "active";
+    documentId?: string;
+    revisionId?: string;
+    workflowId?: string;
+    narrativeOrder?: number;
+  }): Promise<MemoryClaim[]> {
+    if (!input.documentId || input.narrativeOrder === undefined) {
+      throw new Error("章节事实写入必须同时提供 documentId 和 narrativeOrder");
+    }
     await this.recordArtifact(input.artifact);
-    return this.recordMemoryClaims({ projectId: input.projectId, claims: input.claims, sourceArtifactId: input.artifact.id });
+    return this.recordMemoryClaims({
+      projectId: input.projectId,
+      claims: scopeClaimsToChapter(input.claims, input.narrativeOrder),
+      sourceArtifactId: input.artifact.id,
+      lifecycleStatus: input.lifecycleStatus ?? "staged",
+      documentId: input.documentId,
+      revisionId: input.revisionId,
+      workflowId: input.workflowId,
+    });
   }
 
-  async recordMemoryClaims(input: { projectId: string; claims: MemoryClaim[]; sourceArtifactId?: string }): Promise<MemoryClaim[]> {
+  async replaceCommittedChapterFactSources(input: { projectId: string; documentId: string; revisionId: string; factArtifactId: string; actorId: string }, transactionClient?: PoolClient): Promise<{ removedClaimIds: string[]; activatedClaims: MemoryClaim[] }> {
+    const client = transactionClient ?? await this.pool.connect();
+    const ownsTransaction = !transactionClient;
+    try {
+      if (ownsTransaction) await client.query("BEGIN");
+      const current = await client.query<{ current_revision_id: string | null; narrative_order: string | number }>(
+        "SELECT current_revision_id,narrative_order FROM manuscript_documents WHERE id=$1 AND project_id=$2 FOR UPDATE",
+        [input.documentId, input.projectId],
+      );
+      if (!current.rowCount || current.rows[0].current_revision_id !== input.revisionId) throw new Error("章节正式 revision 已变化，不能应用过期的状态重建结果");
+      await this.assertNoLaterFinalDocument(input.projectId, Number(current.rows[0].narrative_order), client);
+      const artifact = await client.query("SELECT id FROM artifacts WHERE id=$1 AND project_id=$2", [input.factArtifactId, input.projectId]);
+      if (!artifact.rowCount) throw new Error("状态重建 fact artifact 不存在或不属于当前项目");
+
+      const prior = await client.query<{ claim_id: string }>(
+        "SELECT claim_id FROM memory_claim_sources WHERE project_id=$1 AND document_id=$2 AND lifecycle_status='active'",
+        [input.projectId, input.documentId],
+      );
+      await client.query(
+        "UPDATE memory_claim_sources SET lifecycle_status='staged' WHERE project_id=$1 AND document_id=$2",
+        [input.projectId, input.documentId],
+      );
+      const activated = await client.query<{ claim_id: string }>(
+        `UPDATE memory_claim_sources SET document_id=$3,revision_id=$4,lifecycle_status='active'
+         WHERE project_id=$1 AND artifact_id=$2 RETURNING claim_id`,
+        [input.projectId, input.factArtifactId, input.documentId, input.revisionId],
+      );
+      const affectedIds = [...new Set([...prior.rows, ...activated.rows].map((row) => row.claim_id))];
+      if (affectedIds.length) {
+        await client.query(
+          `UPDATE memory_claims claim SET
+             lifecycle_status=CASE WHEN EXISTS (SELECT 1 FROM memory_claim_sources source WHERE source.claim_id=claim.id AND source.lifecycle_status='active') THEN 'active' ELSE 'staged' END,
+             source_revision_ids=COALESCE((SELECT array_agg(DISTINCT source.revision_id) FILTER (WHERE source.revision_id IS NOT NULL) FROM memory_claim_sources source WHERE source.claim_id=claim.id AND source.lifecycle_status='active'),'{}'),
+             narrative_start=(SELECT MIN(document.narrative_order) FROM memory_claim_sources source JOIN manuscript_documents document ON document.id=source.document_id WHERE source.claim_id=claim.id AND source.lifecycle_status='active'),
+             narrative_end=(SELECT MIN(document.narrative_order) FROM memory_claim_sources source JOIN manuscript_documents document ON document.id=source.document_id WHERE source.claim_id=claim.id AND source.lifecycle_status='active')
+           WHERE claim.id=ANY($1::text[])`,
+          [affectedIds],
+        );
+      }
+      const removed = affectedIds.length ? await client.query<{ id: string }>("SELECT id FROM memory_claims WHERE id=ANY($1::text[]) AND lifecycle_status='staged'", [affectedIds]) : { rows: [] };
+      const active = activated.rows.length ? await client.query<any>("SELECT * FROM memory_claims WHERE id=ANY($1::text[]) AND lifecycle_status='active'", [[...new Set(activated.rows.map((row) => row.claim_id))]]) : { rows: [] };
+      await client.query(
+        "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'chapter-state.rebuilt-facts','manuscript-document',$3,$4)",
+        [input.projectId, input.actorId, input.documentId, { revisionId: input.revisionId, factArtifactId: input.factArtifactId, activatedClaimIds: active.rows.map((row: any) => row.id), deactivatedClaimIds: removed.rows.map((row) => row.id) }],
+      );
+      if (ownsTransaction) await client.query("COMMIT");
+      return { removedClaimIds: removed.rows.map((row) => row.id), activatedClaims: active.rows.map(memoryClaimFromRow) };
+    } catch (error) {
+      if (ownsTransaction) await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      if (ownsTransaction) client.release();
+    }
+  }
+
+  async resetCommittedRevisionDerivedState(projectId: string, documentId: string, revisionId: string, transactionClient?: PoolClient): Promise<void> {
+    const client = transactionClient ?? await this.pool.connect();
+    const ownsTransaction = !transactionClient;
+    try {
+      if (ownsTransaction) await client.query("BEGIN");
+      const current = await client.query<{ current_revision_id: string | null; narrative_order: string | number }>("SELECT current_revision_id,narrative_order FROM manuscript_documents WHERE id=$1 AND project_id=$2 FOR UPDATE", [documentId, projectId]);
+      if (!current.rowCount || current.rows[0].current_revision_id !== revisionId) throw new Error("章节正式 revision 已变化，不能重置过期投影");
+      await this.assertNoLaterFinalDocument(projectId, Number(current.rows[0].narrative_order), client);
+      await client.query("UPDATE promises SET status='open' WHERE id IN (SELECT promise_id FROM payoffs WHERE revision_id=$1 AND promise_id IS NOT NULL)", [revisionId]);
+      await client.query("UPDATE foreshadowing SET status='open',payoff_revision_id=NULL WHERE project_id=$1 AND payoff_revision_id=$2", [projectId, revisionId]);
+      await client.query("DELETE FROM payoffs WHERE revision_id=$1", [revisionId]);
+      await client.query("DELETE FROM foreshadowing WHERE project_id=$1 AND planted_revision_id=$2", [projectId, revisionId]);
+      await client.query("DELETE FROM promises WHERE project_id=$1 AND source_revision_id=$2", [projectId, revisionId]);
+      await client.query("DELETE FROM payoff_curve WHERE project_id=$1 AND document_id=$2 AND revision_id=$3", [projectId, documentId, revisionId]);
+      await client.query("DELETE FROM narrative_state_snapshots WHERE project_id=$1 AND document_id=$2 AND revision_id<>$3", [projectId, documentId, revisionId]);
+      if (ownsTransaction) await client.query("COMMIT");
+    } catch (error) {
+      if (ownsTransaction) await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      if (ownsTransaction) client.release();
+    }
+  }
+
+  async applyCommittedChapterStateRebuild(input: {
+    projectId: string;
+    documentId: string;
+    revisionId: string;
+    factArtifactId: string;
+    actorId: string;
+    artifact: Artifact;
+    narrativeOrder: number;
+    narrativeElements?: FactExtractionOutput["narrativeElements"];
+    payoffMoments?: FactExtractionOutput["payoffMoments"];
+    chapterMemory: ChapterMemory;
+  }): Promise<{ removedClaimIds: string[]; activatedClaims: MemoryClaim[]; narrativeState: NarrativeStateSnapshot }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const claimSwap = await this.replaceCommittedChapterFactSources({
+        projectId: input.projectId,
+        documentId: input.documentId,
+        revisionId: input.revisionId,
+        factArtifactId: input.factArtifactId,
+        actorId: input.actorId,
+      }, client);
+      await this.resetCommittedRevisionDerivedState(input.projectId, input.documentId, input.revisionId, client);
+      if (input.narrativeElements) {
+        await this.recordNarrativeElements({
+          projectId: input.projectId,
+          documentId: input.documentId,
+          artifact: input.artifact,
+          revisionId: input.revisionId,
+          narrativeOrder: input.narrativeOrder,
+          narrativeElements: input.narrativeElements,
+        }, client);
+      }
+      if (input.payoffMoments?.length) {
+        await this.recordPayoffCurve({
+          projectId: input.projectId,
+          documentId: input.documentId,
+          revisionId: input.revisionId,
+          narrativeOrder: input.narrativeOrder,
+          payoffMoments: input.payoffMoments,
+        }, client);
+      }
+      await this.createChapterMemory(input.chapterMemory, client);
+      const narrativeState = await this.recordNarrativeStateSnapshot({
+        projectId: input.projectId,
+        documentId: input.documentId,
+        revisionId: input.revisionId,
+        narrativeOrder: input.narrativeOrder,
+        chapterMemory: input.chapterMemory,
+        narrativeElements: input.narrativeElements,
+      }, client);
+      await client.query("COMMIT");
+      return { ...claimSwap, narrativeState };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordMemoryClaims(input: {
+    projectId: string;
+    claims: MemoryClaim[];
+    sourceArtifactId?: string;
+    lifecycleStatus?: "staged" | "active";
+    documentId?: string;
+    revisionId?: string;
+    workflowId?: string;
+    replaceExistingById?: boolean;
+  }): Promise<MemoryClaim[]> {
     if (!input.claims.length) return [];
     const recorded: MemoryClaim[] = [];
+    const lifecycleStatus = input.lifecycleStatus ?? "active";
+    const conflictClause = input.replaceExistingById
+      ? `ON CONFLICT(id) DO UPDATE SET
+           kind=EXCLUDED.kind,title=EXCLUDED.title,content=EXCLUDED.content,subject_refs=EXCLUDED.subject_refs,
+           narrative_start=EXCLUDED.narrative_start,narrative_end=EXCLUDED.narrative_end,
+           knowledge_scope=EXCLUDED.knowledge_scope,authority=EXCLUDED.authority,confidence=EXCLUDED.confidence,
+           source_revision_ids=EXCLUDED.source_revision_ids,content_hash=EXCLUDED.content_hash,supersedes=EXCLUDED.supersedes,
+           source_artifact_id=EXCLUDED.source_artifact_id,predicate=EXCLUDED.predicate,lifecycle_status=EXCLUDED.lifecycle_status,
+           source_document_id=EXCLUDED.source_document_id,source_workflow_id=EXCLUDED.source_workflow_id,
+           identity_hash=EXCLUDED.identity_hash,value_hash=EXCLUDED.value_hash`
+      : "ON CONFLICT DO NOTHING";
     for (const claim of input.claims) {
-      // 二次去重：与数据库中已有 contentHash 比对（避免并发写入重复事实）
-      const existing = await this.pool.query<{ id: string }>("SELECT id FROM memory_claims WHERE project_id=$1 AND content_hash=$2 LIMIT 1", [input.projectId, claim.contentHash]);
-      if (existing.rowCount) continue;
-      // P1-E5: ON CONFLICT 补全所有可变字段，避免 re-extract 时部分字段陈旧。
-      // 设计依据：AGENTS.md「root-cause analysis」——原 ON CONFLICT 只更新
-      // content/content_hash/confidence，导致 title/subject_refs/narrative_start/
-      // narrative_end/knowledge_scope/authority/source_revision_ids/supersedes 在
-      // claim id 冲突时保留旧值。当 character-enrichment 或 fact-extraction 重跑时，
-      // supersedes 字段不更新会让 retrieval 层无法屏蔽被覆盖的旧 claim（P0-A1 修复失效）。
       await this.pool.query(
-        "INSERT INTO memory_claims(id,project_id,kind,title,content,subject_refs,narrative_start,narrative_end,knowledge_scope,authority,confidence,source_revision_ids,content_hash,supersedes,source_artifact_id,predicate) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT(id) DO UPDATE SET kind=EXCLUDED.kind,title=EXCLUDED.title,content=EXCLUDED.content,subject_refs=EXCLUDED.subject_refs,narrative_start=EXCLUDED.narrative_start,narrative_end=EXCLUDED.narrative_end,knowledge_scope=EXCLUDED.knowledge_scope,authority=EXCLUDED.authority,confidence=EXCLUDED.confidence,source_revision_ids=EXCLUDED.source_revision_ids,content_hash=EXCLUDED.content_hash,supersedes=EXCLUDED.supersedes,source_artifact_id=COALESCE(EXCLUDED.source_artifact_id,memory_claims.source_artifact_id),predicate=COALESCE(EXCLUDED.predicate,memory_claims.predicate)",
+        `INSERT INTO memory_claims(
+           id,project_id,kind,title,content,subject_refs,narrative_start,narrative_end,
+           knowledge_scope,authority,confidence,source_revision_ids,content_hash,supersedes,
+           source_artifact_id,predicate,lifecycle_status,source_document_id,source_workflow_id,
+           identity_hash,value_hash
+         ) VALUES(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
+         ) ${conflictClause}`,
         [
           claim.id,
           claim.projectId,
@@ -2808,10 +3669,54 @@ export class NovelPostgresRepository {
           claim.supersedes,
           input.sourceArtifactId ?? claim.sourceArtifactId ?? null,
           claim.predicate ?? null,
+          lifecycleStatus,
+          input.documentId ?? claim.sourceDocumentId ?? null,
+          input.workflowId ?? null,
+          claim.identityHash ?? null,
+          claim.valueHash ?? claim.contentHash,
         ],
       );
-      await this.appendOutbox("memory-claim", claim.id, "memory-claim.upserted", { projectId: claim.projectId, claimId: claim.id, sourceArtifactId: input.sourceArtifactId, novelty: "new" });
-      recorded.push(claim);
+
+      const stored = input.replaceExistingById
+        ? await this.pool.query<any>("SELECT * FROM memory_claims WHERE id=$1 AND project_id=$2", [claim.id, input.projectId])
+        : await this.pool.query<any>(
+          `SELECT * FROM memory_claims
+           WHERE project_id=$1 AND content_hash=$2 AND knowledge_scope=$3::jsonb
+           ORDER BY created_at,id LIMIT 1`,
+          [input.projectId, claim.contentHash, JSON.stringify(claim.knowledgeScope)],
+        );
+      const row = stored.rows[0];
+      if (!row) throw new Error(`事实写入后无法读取：${claim.id}`);
+
+      if (input.sourceArtifactId) {
+        await this.pool.query(
+          `INSERT INTO memory_claim_sources(
+             claim_id,project_id,document_id,revision_id,artifact_id,workflow_id,lifecycle_status
+           ) VALUES($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT(claim_id,artifact_id) DO UPDATE SET
+             document_id=COALESCE(EXCLUDED.document_id,memory_claim_sources.document_id),
+             revision_id=COALESCE(EXCLUDED.revision_id,memory_claim_sources.revision_id),
+             workflow_id=COALESCE(EXCLUDED.workflow_id,memory_claim_sources.workflow_id),
+             lifecycle_status=EXCLUDED.lifecycle_status`,
+          [row.id, input.projectId, input.documentId ?? null, input.revisionId ?? null, input.sourceArtifactId, input.workflowId ?? null, lifecycleStatus],
+        );
+      }
+
+      if (lifecycleStatus === "active") {
+        await this.pool.query(
+          `UPDATE memory_claims SET
+             lifecycle_status='active',
+             source_document_id=COALESCE($3,source_document_id),
+             source_revision_ids=CASE WHEN $4::text IS NULL THEN source_revision_ids ELSE ARRAY(SELECT DISTINCT unnest(source_revision_ids || ARRAY[$4::text])) END
+           WHERE id=$1 AND project_id=$2`,
+          [row.id, input.projectId, input.documentId ?? null, input.revisionId ?? null],
+        );
+      }
+
+      const refreshed = await this.pool.query<any>("SELECT * FROM memory_claims WHERE id=$1", [row.id]);
+      const recordedClaim = memoryClaimFromRow(refreshed.rows[0]);
+      await this.appendOutbox("memory-claim", recordedClaim.id, "memory-claim.upserted", { projectId: claim.projectId, claimId: recordedClaim.id, sourceArtifactId: input.sourceArtifactId, lifecycleStatus });
+      recorded.push(recordedClaim);
     }
     return recorded;
   }
@@ -2827,7 +3732,7 @@ export class NovelPostgresRepository {
    * payoff 关联策略：
    * - payoffType=foreshadowing：用 matchedTriggerKeywords 匹配未兑现 foreshadowing 的 trigger_keywords
    * - payoffType=promise：用 matchedPromiser 匹配未兑现 promise 的 promiser
-   * 匹配不到时 payoff 仍写入（payoff_revision_id 关联当前章节），但不更新 foreshadowing/promise 状态。
+   * 匹配不到时不伪造 promise 外键；兑现证据仍由 narrative snapshot/payoff curve 保留。
    */
   async recordNarrativeElements(input: {
     projectId: string;
@@ -2837,9 +3742,9 @@ export class NovelPostgresRepository {
     narrativeElements: NonNullable<FactExtractionOutput["narrativeElements"]>;
     /** 当前章节的叙事顺序（1-based）。用于让未兑现伏笔按叙事顺序过滤，避免剧透未来章节。 */
     narrativeOrder?: number;
-  }): Promise<{ foreshadowings: number; promises: number; payoffs: number }> {
+  }, connection: Pool | PoolClient = this.pool): Promise<{ foreshadowings: number; promises: number; payoffs: number }> {
     const { projectId, documentId, artifact, revisionId, narrativeElements, narrativeOrder } = input;
-    const revision = await this.pool.query<{ id: string }>(
+    const revision = await connection.query<{ id: string }>(
       "SELECT id FROM manuscript_revisions WHERE id=$1 AND project_id=$2 AND document_id=$3",
       [revisionId, projectId, documentId],
     );
@@ -2851,7 +3756,7 @@ export class NovelPostgresRepository {
     // 1. 写入 foreshadowings
     for (const f of narrativeElements.foreshadowings ?? []) {
       const id = `foreshadowing:${projectId}:${createHash("sha256").update(`${artifact.id}:${f.description}`).digest("hex").slice(0, 12)}`;
-      await this.pool.query(
+      await connection.query(
         "INSERT INTO foreshadowing(id, project_id, planted_revision_id, status, payload, narrative_order) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload, narrative_order=EXCLUDED.narrative_order",
         [id, projectId, revisionId, "open", { description: f.description, triggerKeywords: f.triggerKeywords, expectedPayoffWindow: f.expectedPayoffWindow, evidence: f.evidence, artifactId: artifact.id }, narrativeOrder ?? null],
       );
@@ -2861,12 +3766,12 @@ export class NovelPostgresRepository {
     // 2. 写入 promises
     for (const p of narrativeElements.promises ?? []) {
       const id = `promise:${projectId}:${createHash("sha256").update(`${artifact.id}:${p.promiser}:${p.statement}`).digest("hex").slice(0, 12)}`;
-      await this.pool.query(
-        "INSERT INTO promises(id, project_id, statement, source_revision_id, status) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET statement=EXCLUDED.statement",
-        [id, projectId, p.statement, revisionId, "open"],
+      await connection.query(
+        `INSERT INTO promises(id, project_id, statement, source_revision_id, status, payload, narrative_order)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT(id) DO UPDATE SET statement=EXCLUDED.statement,payload=EXCLUDED.payload,narrative_order=EXCLUDED.narrative_order`,
+        [id, projectId, p.statement, revisionId, "open", { promiser: p.promiser, promisee: p.promisee, evidence: p.evidence, artifactId: artifact.id }, narrativeOrder ?? null],
       );
-      // payload 单独存（promises 表无 payload 列，用 statement 拼接 promiser/promisee）
-      // TODO Phase 3.3: 若后续加 payload 列，再迁移
       promiseCount += 1;
     }
 
@@ -2876,36 +3781,42 @@ export class NovelPostgresRepository {
       let matchedPromiseId: string | null = null;
 
       if (payoff.payoffType === "promise" && payoff.matchedPromiser) {
-        // 查找未兑现的 promise，按 promiser 匹配（promiser 存在 statement 前缀，由步骤 2 写入）
-        // 简化匹配：用 LIKE 模糊匹配 promiser 名字
-        const candidate = await this.pool.query<{ id: string }>(
-          "SELECT id FROM promises WHERE project_id=$1 AND status='open' AND statement ILIKE $2 ORDER BY source_revision_id DESC LIMIT 1",
-          [projectId, `%${payoff.matchedPromiser}%`],
+        const cutoffClause = narrativeOrder === undefined ? "" : " AND narrative_order <= $3";
+        const candidateParams: unknown[] = [projectId, payoff.matchedPromiser];
+        if (narrativeOrder !== undefined) candidateParams.push(narrativeOrder);
+        const candidate = await connection.query<{ id: string }>(
+          `SELECT id FROM promises
+           WHERE project_id=$1 AND status='open' AND payload->>'promiser'=$2${cutoffClause}
+           ORDER BY narrative_order DESC NULLS LAST,source_revision_id DESC LIMIT 1`,
+          candidateParams,
         );
         if (candidate.rowCount) matchedPromiseId = candidate.rows[0].id;
       }
 
-      await this.pool.query(
-        "INSERT INTO payoffs(id, promise_id, revision_id, evidence) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET evidence=EXCLUDED.evidence",
-        [payoffId, matchedPromiseId ?? "unmatched", revisionId, { description: payoff.description, payoffType: payoff.payoffType, matchedTriggerKeywords: payoff.matchedTriggerKeywords, matchedPromiser: payoff.matchedPromiser, intensity: payoff.intensity, artifactId: artifact.id }],
-      );
+      if (matchedPromiseId) {
+        await connection.query(
+          "INSERT INTO payoffs(id, promise_id, revision_id, evidence) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET evidence=EXCLUDED.evidence",
+          [payoffId, matchedPromiseId, revisionId, { description: payoff.description, payoffType: payoff.payoffType, matchedTriggerKeywords: payoff.matchedTriggerKeywords, matchedPromiser: payoff.matchedPromiser, intensity: payoff.intensity, artifactId: artifact.id }],
+        );
+      }
 
       // 若匹配到 promise，更新 promise 状态为 fulfilled
       if (matchedPromiseId) {
-        await this.pool.query("UPDATE promises SET status='fulfilled' WHERE id=$1", [matchedPromiseId]);
+        await connection.query("UPDATE promises SET status='fulfilled' WHERE id=$1", [matchedPromiseId]);
       }
 
       // payoffType=foreshadowing 时，尝试用 matchedTriggerKeywords 关联并更新 foreshadowing 状态
       if (payoff.payoffType === "foreshadowing" && payoff.matchedTriggerKeywords?.length) {
-        const openForeshadowings = await this.pool.query<{ id: string; payload: { triggerKeywords?: string[] } }>(
-          "SELECT id, payload FROM foreshadowing WHERE project_id=$1 AND status='open'",
-          [projectId],
+        const foreshadowingCutoff = narrativeOrder === undefined ? "" : " AND narrative_order <= $2";
+        const openForeshadowings = await connection.query<{ id: string; payload: { triggerKeywords?: string[] } }>(
+          `SELECT id,payload FROM foreshadowing WHERE project_id=$1 AND status='open'${foreshadowingCutoff}`,
+          narrativeOrder === undefined ? [projectId] : [projectId, narrativeOrder],
         );
         for (const row of openForeshadowings.rows) {
           const triggerKeywords = row.payload?.triggerKeywords ?? [];
           const hasMatch = triggerKeywords.some((kw) => payoff.matchedTriggerKeywords!.includes(kw));
           if (hasMatch) {
-            await this.pool.query("UPDATE foreshadowing SET status='fulfilled', payoff_revision_id=$2 WHERE id=$1", [row.id, revisionId]);
+            await connection.query("UPDATE foreshadowing SET status='fulfilled', payoff_revision_id=$2 WHERE id=$1", [row.id, revisionId]);
           }
         }
       }
@@ -3029,7 +3940,7 @@ export class NovelPostgresRepository {
    *
    * 返回结构化数据，由 retrieveMemory activity 包装为 MemoryHit[] 注入 MemoryBundle。
    */
-  async getOpenForeshadowingAndPromises(projectId: string, narrativeCutoff?: number): Promise<{
+  async getOpenForeshadowingAndPromises(projectId: string, narrativeCutoff?: number, connection: Pool | PoolClient = this.pool): Promise<{
     foreshadowings: Array<{ id: string; description: string; triggerKeywords: string[]; expectedPayoffWindow: string; plantedRevisionId: string }>;
     promises: Array<{ id: string; promiser: string; promisee: string; statement: string; sourceRevisionId: string }>;
   }> {
@@ -3042,7 +3953,7 @@ export class NovelPostgresRepository {
       : "SELECT id, planted_revision_id, payload FROM foreshadowing WHERE project_id=$1 AND status='open' AND narrative_order <= $2 ORDER BY narrative_order ASC, planted_revision_id ASC";
     const foreshadowingParams = narrativeCutoff === undefined ? [projectId] : [projectId, narrativeCutoff];
     // 查询未兑现的 foreshadowing
-    const foreshadowingRows = await this.pool.query<{ id: string; planted_revision_id: string; payload: { description?: string; triggerKeywords?: string[]; expectedPayoffWindow?: string } }>(
+    const foreshadowingRows = await connection.query<{ id: string; planted_revision_id: string; payload: { description?: string; triggerKeywords?: string[]; expectedPayoffWindow?: string } }>(
       foreshadowingSql,
       foreshadowingParams,
     );
@@ -3055,16 +3966,17 @@ export class NovelPostgresRepository {
     }));
 
     // 查询未兑现的 promises
-    const promiseRows = await this.pool.query<{ id: string; statement: string; source_revision_id: string }>(
-      "SELECT id, statement, source_revision_id FROM promises WHERE project_id=$1 AND status='open' ORDER BY source_revision_id ASC",
-      [projectId],
+    const promiseSql = narrativeCutoff === undefined
+      ? "SELECT id,statement,source_revision_id,payload FROM promises WHERE project_id=$1 AND status='open' ORDER BY narrative_order ASC NULLS LAST,source_revision_id ASC"
+      : "SELECT id,statement,source_revision_id,payload FROM promises WHERE project_id=$1 AND status='open' AND narrative_order<=$2 ORDER BY narrative_order ASC,source_revision_id ASC";
+    const promiseRows = await connection.query<{ id: string; statement: string; source_revision_id: string; payload: { promiser?: string; promisee?: string } }>(
+      promiseSql,
+      narrativeCutoff === undefined ? [projectId] : [projectId, narrativeCutoff],
     );
-    // promiser/promisee 存在 statement 前缀（由 recordNarrativeElements 步骤 2 写入时拼接）
-    // 简化解析：statement 字段直接返回，promiser/promisee 从 statement 中解析（或留空）
     const promises = promiseRows.rows.map((row) => ({
       id: row.id,
-      promiser: "", // TODO Phase 3.3: promises 表加 payload 列后补充
-      promisee: "",
+      promiser: row.payload?.promiser ?? "",
+      promisee: row.payload?.promisee ?? "",
       statement: row.statement,
       sourceRevisionId: row.source_revision_id,
     }));
@@ -3090,12 +4002,12 @@ export class NovelPostgresRepository {
     revisionId: string;
     narrativeOrder: number;
     payoffMoments: NonNullable<FactExtractionOutput["payoffMoments"]>;
-  }): Promise<number> {
+  }, connection: Pool | PoolClient = this.pool): Promise<number> {
     const { projectId, documentId, revisionId, narrativeOrder, payoffMoments } = input;
     let recorded = 0;
     for (const moment of payoffMoments) {
       const id = `payoff-curve:${projectId}:${createHash("sha256").update(`${revisionId}:${moment.payoffType}:${moment.description}`).digest("hex").slice(0, 12)}`;
-      await this.pool.query(
+      await connection.query(
         `INSERT INTO payoff_curve(id, project_id, document_id, revision_id, narrative_order, payoff_type, intensity, setup_revision_id, payoff_description, evidence, setup_description)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT(id) DO UPDATE SET intensity=EXCLUDED.intensity, payoff_description=EXCLUDED.payoff_description, evidence=COALESCE(EXCLUDED.evidence, payoff_curve.evidence), setup_description=COALESCE(EXCLUDED.setup_description, payoff_curve.setup_description)`,
@@ -3220,8 +4132,8 @@ export class NovelPostgresRepository {
    * 通过 (project_id, document_id) 唯一约束：同一章节只保留最新 chapter memory，
    * revision_id 变化时 UPSERT 覆盖（章节重审后 chapter memory 跟随更新）。
    */
-  async createChapterMemory(input: ChapterMemory): Promise<ChapterMemory> {
-    await this.pool.query(
+  async createChapterMemory(input: ChapterMemory, connection: Pool | PoolClient = this.pool): Promise<ChapterMemory> {
+    await connection.query(
       `INSERT INTO chapter_memories(id,project_id,document_id,revision_id,narrative_start,narrative_end,summary,key_events,character_states,unresolved_threads,emotional_arc,fingerprint,created_at)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        ON CONFLICT (id) DO UPDATE SET
@@ -3251,13 +4163,10 @@ export class NovelPostgresRepository {
         input.createdAt,
       ],
     );
-    await this.appendOutbox("chapter-memory", input.id, "chapter-memory.upserted", {
-      projectId: input.projectId,
-      documentId: input.documentId,
-      revisionId: input.revisionId,
-      narrativeStart: input.narrativeRange.start,
-      narrativeEnd: input.narrativeRange.end,
-    });
+    await connection.query(
+      "INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES('chapter-memory',$1,'chapter-memory.upserted',$2)",
+      [input.id, { projectId: input.projectId, documentId: input.documentId, revisionId: input.revisionId, narrativeStart: input.narrativeRange.start, narrativeEnd: input.narrativeRange.end }],
+    );
     return input;
   }
 
@@ -3295,7 +4204,7 @@ export class NovelPostgresRepository {
       supersedes: [],
       predicate: "chapter-memory-rollup",
     };
-    const [recorded] = await this.recordMemoryClaims({ projectId, claims: [claim] });
+    const [recorded] = await this.recordMemoryClaims({ projectId, claims: [claim], replaceExistingById: true });
     return recorded ?? claim;
   }
 
@@ -3397,10 +4306,11 @@ export class NovelPostgresRepository {
     const result = await this.pool.query<any>(
       `SELECT mc.*
        FROM memory_claims mc
-       LEFT JOIN artifacts fact_artifact ON fact_artifact.id=mc.source_artifact_id
-       LEFT JOIN artifacts source_artifact ON source_artifact.id=fact_artifact.payload->>'sourceArtifactId'
        WHERE mc.project_id=$1 AND mc.authority='candidate'
-         AND ($2::text IS NULL OR source_artifact.payload->>'documentId'=$2)
+          AND ($2::text IS NULL OR mc.source_document_id=$2 OR EXISTS (
+            SELECT 1 FROM memory_claim_sources source
+            WHERE source.claim_id=mc.id AND source.document_id=$2
+          ))
        ORDER BY mc.created_at DESC,mc.id`,
       [projectId, documentId ?? null],
     );
@@ -3411,7 +4321,10 @@ export class NovelPostgresRepository {
       title: row.title,
       content: row.content,
       subjectRefs: row.subject_refs ?? [],
-      narrativeRange: { start: row.narrative_start ?? undefined, end: row.narrative_end ?? undefined },
+      narrativeRange: {
+        start: row.narrative_start === null || row.narrative_start === undefined ? undefined : Number(row.narrative_start),
+        end: row.narrative_end === null || row.narrative_end === undefined ? undefined : Number(row.narrative_end),
+      },
       knowledgeScope: row.knowledge_scope,
       authority: row.authority,
       confidence: Number(row.confidence),
@@ -3449,10 +4362,22 @@ export class NovelPostgresRepository {
     }
   }
 
-  async getFactExtractionContext(projectId: string): Promise<{ contentHashes: Set<string>; claimsIndex: Map<string, string[]> }> {
-    const result = await this.pool.query<{ id: string; content_hash: string; subject_refs: string[] | null; predicate: string | null }>(
-      "SELECT id,content_hash,subject_refs,predicate FROM memory_claims WHERE project_id=$1 AND authority <> 'rejected'",
-      [projectId],
+  async getFactExtractionContext(projectId: string, narrativeCutoff?: number): Promise<{ contentHashes: Set<string>; claimsIndex: Map<string, string[]>; claimsDigest: string }> {
+    const result = await this.pool.query<{ id: string; content_hash: string; subject_refs: string[] | null; predicate: string | null; title: string; content: string }>(
+      `SELECT id,content_hash,subject_refs,predicate,title,content
+       FROM memory_claims
+       WHERE project_id=$1 AND lifecycle_status='active' AND authority <> 'rejected'
+         AND NOT EXISTS (
+           SELECT 1 FROM memory_claims newer
+           WHERE newer.project_id=memory_claims.project_id
+             AND newer.lifecycle_status='active'
+             AND newer.authority <> 'rejected'
+             AND memory_claims.id=ANY(newer.supersedes)
+         )
+         AND ($2::bigint IS NULL OR narrative_start IS NULL OR narrative_start <= $2)
+       ORDER BY narrative_start DESC NULLS LAST,created_at DESC
+       LIMIT 200`,
+      [projectId, narrativeCutoff ?? null],
     );
     const contentHashes = new Set<string>();
     const claimsIndex = new Map<string, string[]>();
@@ -3460,27 +4385,40 @@ export class NovelPostgresRepository {
       contentHashes.add(row.content_hash);
       if (!row.predicate) continue;
       for (const subject of row.subject_refs ?? []) {
-        const key = `${subject}|${row.predicate}`;
+        const key = `${normalizeFactToken(subject)}|${canonicalizeFactPredicate(row.predicate)}`;
         claimsIndex.set(key, [...(claimsIndex.get(key) ?? []), row.id]);
       }
     }
-    return { contentHashes, claimsIndex };
+    const claimsDigest = result.rows.length
+      ? result.rows.map((row) => `- [${row.id}] ${(row.subject_refs ?? []).join("、") || "未指定主体"} ${row.predicate ?? "相关事实"}：${row.content}`).join("\n")
+      : "- 暂无已存在记忆。所有事实 novelty=new。";
+    return { contentHashes, claimsIndex, claimsDigest };
   }
 
   async recordFactApprovalPolicy(input: { projectId: string; artifactId: string; workflowId: string }): Promise<FactApprovalSummary> {
     // P0 #1: 记录自动审批决定——derived 事实视为 runtime 自动批准，写入 decided_by/decided_at 以便审计。
     // 此前该函数仅做统计、不改 authority，导致"审批"形同虚设。
     await this.pool.query(
-      "UPDATE memory_claims SET decided_by='runtime', decided_at=now() WHERE project_id=$1 AND source_artifact_id=$2 AND authority='derived'",
+      `UPDATE memory_claims SET decided_by='runtime',decided_at=now()
+       WHERE project_id=$1 AND authority='derived' AND id IN (
+         SELECT claim_id FROM memory_claim_sources WHERE project_id=$1 AND artifact_id=$2
+       )`,
       [input.projectId, input.artifactId],
     );
     const result = await this.pool.query<{ authority: string; count: string }>(
-      "SELECT authority,count(*)::text AS count FROM memory_claims WHERE project_id=$1 AND source_artifact_id=$2 GROUP BY authority",
+      `SELECT claim.authority,count(*)::text AS count
+       FROM memory_claims claim
+       WHERE claim.project_id=$1 AND claim.id IN (
+         SELECT claim_id FROM memory_claim_sources WHERE project_id=$1 AND artifact_id=$2
+       ) GROUP BY claim.authority`,
       [input.projectId, input.artifactId],
     );
     const counts = new Map(result.rows.map((row) => [row.authority, Number(row.count)]));
     const pendingIds = (await this.pool.query<{ id: string }>(
-      "SELECT id FROM memory_claims WHERE project_id=$1 AND source_artifact_id=$2 AND authority='candidate'",
+      `SELECT claim.id FROM memory_claims claim
+       WHERE claim.project_id=$1 AND claim.authority='candidate' AND claim.id IN (
+         SELECT claim_id FROM memory_claim_sources WHERE project_id=$1 AND artifact_id=$2
+       )`,
       [input.projectId, input.artifactId],
     )).rows.map((row) => row.id);
     const summary: FactApprovalSummary = { autoApproved: counts.get("derived") ?? 0, pending: counts.get("candidate") ?? 0, pendingIds };
@@ -3508,25 +4446,7 @@ export class NovelPostgresRepository {
       "SELECT * FROM memory_claims WHERE project_id=$1 AND id = ANY($2::text[])",
       [input.projectId, input.ids],
     );
-    return result.rows.map((row) => ({
-      id: row.id,
-      projectId: row.project_id,
-      kind: row.kind,
-      title: row.title,
-      content: row.content,
-      subjectRefs: row.subject_refs ?? [],
-      narrativeRange: { start: row.narrative_start ?? undefined, end: row.narrative_end ?? undefined },
-      knowledgeScope: row.knowledge_scope,
-      authority: row.authority,
-      confidence: Number(row.confidence),
-      sourceRevisionIds: row.source_revision_ids ?? [],
-      contentHash: row.content_hash,
-      supersedes: row.supersedes ?? [],
-      predicate: row.predicate ?? undefined,
-      sourceArtifactId: row.source_artifact_id ?? undefined,
-      decidedBy: row.decided_by ?? undefined,
-      decidedAt: row.decided_at ? iso(row.decided_at) : undefined,
-    }));
+    return result.rows.map(memoryClaimFromRow);
   }
 
   async appendCreativeRunEvent(runId: string, eventType: string, payload: Record<string, unknown>): Promise<void> {
@@ -3569,7 +4489,7 @@ export class NovelPostgresRepository {
     return { project, priorArtifacts };
   }
 
-  async commitRevision(input: CommitRequest & { text: string; contentHash: string; objectKey: string; revisionId: string }): Promise<CommitResult> {
+  async commitRevision(input: CommitRequest & { text: string; contentHash: string; objectKey: string; revisionId: string; factArtifactId?: string; narrativeOrder?: number }): Promise<CommitResult> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -3586,10 +4506,92 @@ export class NovelPostgresRepository {
       for (const review of input.reviews) await client.query("INSERT INTO reviews(id,project_id,artifact_id,reviewer_id,identity,verdict,artifact_fingerprint,issues,score,role,model_provenance,dimension_scores) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO NOTHING", [review.id, input.projectId, review.artifactId, review.reviewerId, review.identity, review.verdict, review.artifactFingerprint, JSON.stringify(review.issues), review.score ?? null, review.role ?? null, review.modelProvenance ? JSON.stringify(review.modelProvenance) : null, JSON.stringify(review.dimensionScores ?? {})]);
       const revision = input.baseRevision + 1;
       const currentDocument = await client.query<{ current_revision_id: string | null }>("SELECT current_revision_id FROM manuscript_documents WHERE id=$1 AND project_id=$2 FOR UPDATE", [input.documentId, input.projectId]);
-      if (currentDocument.rows[0]?.current_revision_id) await client.query("UPDATE manuscript_revisions SET retention_class='rolling',expires_at=COALESCE(expires_at,now()+interval '30 days') WHERE id=$1 AND retention_class<>'named'", [currentDocument.rows[0].current_revision_id]);
+      const previousRevisionId = currentDocument.rows[0]?.current_revision_id ?? null;
+      if (previousRevisionId) await client.query("UPDATE manuscript_revisions SET retention_class='rolling',expires_at=COALESCE(expires_at,now()+interval '30 days') WHERE id=$1 AND retention_class<>'named'", [previousRevisionId]);
       await client.query("INSERT INTO manuscript_revisions(id,project_id,document_id,revision,base_revision,content_hash,artifact_id) VALUES($1,$2,$3,$4,$5,$6,$7)", [input.revisionId, input.projectId, input.documentId, revision, input.baseRevision, input.contentHash, input.artifact.id]);
       await this.refreshChapterReviewSnapshotTx(client, input.artifact.id, input.revisionId);
       await client.query("UPDATE manuscript_documents SET current_revision_id=$1,status='final',updated_at=now() WHERE id=$2 AND project_id=$3", [input.revisionId, input.documentId, input.projectId]);
+
+      let removedClaimIds: string[] = [];
+      let activatedClaims: MemoryClaim[] = [];
+      if (input.factArtifactId) {
+        const activatedSources = await client.query<{ claim_id: string }>(
+          `UPDATE memory_claim_sources SET
+             document_id=$3,revision_id=$4,lifecycle_status='active'
+           WHERE project_id=$1 AND artifact_id=$2
+           RETURNING claim_id`,
+          [input.projectId, input.factArtifactId, input.documentId, input.revisionId],
+        );
+        const activatedIds = [...new Set(activatedSources.rows.map((row) => row.claim_id))];
+
+        let priorClaimIds: string[] = [];
+        if (previousRevisionId) {
+          const removedSources = await client.query<{ claim_id: string }>(
+            `DELETE FROM memory_claim_sources
+             WHERE project_id=$1 AND document_id=$2 AND revision_id=$3
+             RETURNING claim_id`,
+            [input.projectId, input.documentId, previousRevisionId],
+          );
+          priorClaimIds = [...new Set(removedSources.rows.map((row) => row.claim_id))];
+        }
+
+        const affectedIds = [...new Set([...activatedIds, ...priorClaimIds])];
+        for (const claimId of affectedIds) {
+          await client.query(
+            `UPDATE memory_claims claim SET
+               lifecycle_status=CASE WHEN EXISTS (
+                 SELECT 1 FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ) THEN 'active' ELSE 'staged' END,
+               source_revision_ids=COALESCE((
+                 SELECT array_agg(DISTINCT source.revision_id) FILTER (WHERE source.revision_id IS NOT NULL)
+                 FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ),'{}'),
+               narrative_start=(
+                 SELECT MIN(document.narrative_order)
+                 FROM memory_claim_sources source
+                 JOIN manuscript_documents document ON document.id=source.document_id
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ),
+               narrative_end=(
+                 SELECT MIN(document.narrative_order)
+                 FROM memory_claim_sources source
+                 JOIN manuscript_documents document ON document.id=source.document_id
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ),
+               source_document_id=COALESCE((
+                 SELECT source.document_id FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active' AND source.document_id IS NOT NULL
+                 ORDER BY source.created_at DESC LIMIT 1
+               ),source_document_id)
+             WHERE claim.id=$1`,
+            [claimId],
+          );
+        }
+
+        if (priorClaimIds.length) {
+          const deleted = await client.query<{ id: string }>(
+            `DELETE FROM memory_claims claim
+             WHERE claim.id=ANY($1::text[])
+               AND NOT EXISTS (
+                 SELECT 1 FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               )
+             RETURNING id`,
+            [priorClaimIds],
+          );
+          removedClaimIds = deleted.rows.map((row) => row.id);
+        }
+
+        if (activatedIds.length) {
+          const activeRows = await client.query<any>(
+            "SELECT * FROM memory_claims WHERE id=ANY($1::text[]) AND lifecycle_status='active'",
+            [activatedIds],
+          );
+          activatedClaims = activeRows.rows.map(memoryClaimFromRow);
+        }
+      }
       await client.query(
         `UPDATE arcs a SET execution_status='completed',completed_at=now(),updated_at=now()
          WHERE a.id=(SELECT arc_id FROM chapters WHERE document_id=$1)
@@ -3615,7 +4617,14 @@ export class NovelPostgresRepository {
         [input.documentId],
       );
       await client.query("UPDATE novel_projects SET current_revision=$1,updated_at=now() WHERE id=$2", [revision, input.projectId]);
-      const result = { revisionId: input.revisionId, revision, contentHash: input.contentHash, outboxEventId: 0 };
+      const result: CommitResult = {
+        revisionId: input.revisionId,
+        revision,
+        contentHash: input.contentHash,
+        outboxEventId: 0,
+        ...(removedClaimIds.length ? { removedClaimIds } : {}),
+        ...(activatedClaims.length ? { activatedClaims } : {}),
+      };
       const event = await this.appendOutboxTx(client, "manuscript-revision", input.revisionId, "manuscript-revision.committed", { projectId: input.projectId, documentId: input.documentId, revision, contentHash: input.contentHash });
       result.outboxEventId = event;
       await client.query("INSERT INTO idempotency_keys(project_id,key,result) VALUES($1,$2,$3)", [input.projectId, input.idempotencyKey, result]);

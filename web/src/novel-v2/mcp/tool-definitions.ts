@@ -433,7 +433,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 
   {
     name: "novel_project_create",
-    description: "一句话创意创建小说项目。premise 作为创意核心,自动派生标题,默认自动启动全书规划(10 个 foundation task + chapter-plan)。autoBootstrap=false 时仅创建项目不启动规划。若需对已存在项目重新启动规划,请使用 novel_bootstrap_run。",
+    description: "一句话创意创建小说项目。premise 作为创意核心,自动派生标题,默认自动启动 10 阶段宏观规划；逐章蓝图由故事弧在创作过程中滚动生成。autoBootstrap=false 时仅创建项目不启动规划。若需对已存在项目重新启动规划,请使用 novel_bootstrap_run。",
     inputSchema: {
       type: "object",
       properties: {
@@ -441,7 +441,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         title: { type: "string", description: "可选,项目标题。未提供则从 premise 自动派生(取第一句前 24 字)" },
         genre: { type: "string", description: "可选,题材标签(如 玄幻/都市/言情/科幻/悬疑),用于 resolveSkillBundle 匹配 applicableGenres" },
         autoBootstrap: { type: "boolean", description: "是否自动启动全书规划,默认 true" },
-        includeChapterPlan: { type: "boolean", description: "bootstrap 是否包含章节计划,默认 true(仅 autoBootstrap=true 时生效)" },
+        includeChapterPlan: { type: "boolean", description: "兼容旧客户端，当前已忽略；宏观规划不再生成固定章节表" },
         objective: { type: "string", description: "可选,bootstrap 目标。未提供则用 premise 作为 objective" },
         reviewGate: {
           type: "string",

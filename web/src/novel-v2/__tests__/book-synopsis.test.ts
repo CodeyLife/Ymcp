@@ -43,8 +43,8 @@ describe("book synopsis planning contract", () => {
 
   it("rejects incomplete planning instead of fabricating across missing stages", () => {
     const sections = completePlan().filter((section) => section.taskKey !== "plot-design");
-    expect(missingSynopsisPlanStages(sections)).toEqual(["情节设计"]);
-    expect(() => buildBookSynopsisPrompt({ projectTitle: "长夜归舟", sections })).toThrow("情节设计");
+    expect(missingSynopsisPlanStages(sections)).toEqual(["长程叙事战略"]);
+    expect(() => buildBookSynopsisPrompt({ projectTitle: "长夜归舟", sections })).toThrow("长程叙事战略");
   });
 
   it("keeps the contract genre-neutral and changes the source fingerprint when planning changes", () => {

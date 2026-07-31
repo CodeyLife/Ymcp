@@ -70,4 +70,50 @@ describe("V2 formal knowledge records", () => {
     const audit = await repository.pool.query("SELECT 1 FROM audit_records WHERE project_id=$1 AND aggregate_id=$2 AND action='fact-candidate.approve'", [projectId, claim.id]);
     expect(audit.rowCount).toBe(1);
   });
+
+  it("creates, supersedes and withdraws canonical narrative claims", async () => {
+    if (!available) return;
+    const created = await repository.upsertKnowledgeRecord(projectId, "claims", {
+      title: "林岚持有密信",
+      content: "林岚持有一封尚未拆开的密信。",
+      subjectRefs: ["林岚"],
+      predicate: "持有",
+      narrativeStart: 3,
+    });
+    expect(created.claim).toMatchObject({ authority: "author", subjectRefs: ["林岚"], predicate: "持有" });
+    expect((await repository.listKnowledgeRecords(projectId, "claims")).find((row) => row.id === created.id)).toMatchObject({
+      source: "manual-claim",
+      readOnly: false,
+    });
+
+    const revised = await repository.upsertKnowledgeRecord(projectId, "claims", {
+      id: created.id,
+      title: "林岚已拆开密信",
+      content: "林岚已经拆开密信，并知晓信中的会面地点。",
+      subjectRefs: ["林岚"],
+      predicate: "知晓",
+      narrativeStart: 4,
+    });
+    expect(revised.id).not.toBe(created.id);
+    expect(revised.claim.supersedes).toContain(created.id);
+    const afterRevision = await repository.listKnowledgeRecords(projectId, "claims");
+    expect(afterRevision.some((row) => row.id === created.id)).toBe(false);
+    expect(afterRevision.some((row) => row.id === revised.id)).toBe(true);
+
+    expect(await repository.deleteKnowledgeRecord(projectId, "claims", revised.id)).toMatchObject({ deleted: true });
+    expect((await repository.listKnowledgeRecords(projectId, "claims")).some((row) => [created.id, revised.id].includes(String(row.id)))).toBe(false);
+    const history = await repository.pool.query<{ id: string; authority: string }>(
+      "SELECT id,authority FROM memory_claims WHERE project_id=$1 AND id=ANY($2::text[]) ORDER BY id",
+      [projectId, [created.id, revised.id]],
+    );
+    expect(history.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: created.id, authority: "rejected" }),
+      expect.objectContaining({ id: revised.id, authority: "rejected" }),
+    ]));
+    const audit = await repository.pool.query(
+      "SELECT action FROM audit_records WHERE project_id=$1 AND aggregate_type='claims' AND aggregate_id=ANY($2::text[])",
+      [projectId, [created.id, revised.id]],
+    );
+    expect(audit.rows.map((row) => row.action)).toEqual(expect.arrayContaining(["knowledge.upsert", "knowledge.delete"]));
+  });
 });

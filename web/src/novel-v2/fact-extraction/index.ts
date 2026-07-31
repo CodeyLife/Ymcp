@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Artifact, MemoryClaim } from "../protocol";
 import type { ModelGateway } from "../model-gateway";
 import type { ModelRoutingSnapshot } from "../model-routing";
@@ -7,6 +6,8 @@ import { buildFactExtractionPrompt } from "./prompt";
 import { dedupeFactCandidates } from "./dedupe";
 import { classifyFactCandidates } from "./classify";
 import { compileStageContext } from "../stage-context";
+import { canonicalSha256 } from "../canonical-json";
+import { scopeClaimsToChapter } from "./narrative-scope";
 
 /**
  * V2 事实提取编排函数。
@@ -39,6 +40,8 @@ export interface ExtractFactsInput {
   candidateStartIndex?: number;
   workflowRunId?: string;
   taskId?: string;
+  /** 正文所属章节的叙事顺序；章节事实必须以此为时间边界，不能使用段落号。 */
+  narrativeOrder?: number;
   /**
    * 可选,激活的 skill bundle(注入到 fact-extraction prompt)。
    *
@@ -138,7 +141,10 @@ export function projectFactExtractionOutput(input: Omit<ExtractFactsInput, "mode
     existingClaimIndex,
   });
 
-  const claims = classified.map((item) => item.claim);
+  const projectedClaims = classified.map((item) => item.claim);
+  const claims = input.narrativeOrder === undefined
+    ? projectedClaims
+    : scopeClaimsToChapter(projectedClaims, input.narrativeOrder);
 
   return {
     claims,
@@ -168,5 +174,10 @@ export function projectFactExtractionOutput(input: Omit<ExtractFactsInput, "mode
  * 确保与 postgres-repository 的 contentHash 列长度匹配。
  */
 export function computeClaimContentHash(claim: MemoryClaim): string {
-  return createHash("sha256").update(`${claim.subjectRefs.join(",")}:${claim.title}:${claim.content}`).digest("hex");
+  return canonicalSha256({
+    subjectRefs: [...claim.subjectRefs].sort(),
+    predicate: claim.predicate ?? null,
+    knowledgeScope: claim.knowledgeScope,
+    content: claim.content.normalize("NFKC").trim().replace(/\s+/gu, " "),
+  });
 }

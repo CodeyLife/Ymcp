@@ -183,6 +183,32 @@ describe("RoutedModelGateway adapters", () => {
     expect(result.provenance).toMatchObject({ candidateIndex: 1, profileId: "good", model: "good-model" });
   });
 
+  it("moves structured calls to the next API candidate after an exhausted empty response", async () => {
+    const profiles = [profile({ id: "empty" }), profile({ id: "good", model: "good-model" })];
+    const empty = () => new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200 });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(empty())
+      .mockResolvedValueOnce(empty())
+      .mockResolvedValueOnce(empty())
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ ok: true }) } }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new RoutedModelGateway(new ModelConfigStore("unused", config(profiles, [
+      { executor: "api", profileId: "empty" },
+      { executor: "external-mcp" },
+      { executor: "api", profileId: "good" },
+    ])));
+
+    const result = await gateway.generateStructured<{ ok: boolean }>({
+      purpose: "facts.extract",
+      prompt: "extract",
+      schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } },
+    });
+
+    expect(result.value).toEqual({ ok: true });
+    expect(result.provenance).toMatchObject({ candidateIndex: 2, profileId: "good", model: "good-model" });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   it("counts the final prompt against the effective context budget and records the failure", async () => {
     const next = config([profile({ contextWindow: 64 })]);
     next.routes["*"] = { candidates: [{ executor: "api", profileId: "primary" }], maxInputTokens: 40, maxOutputTokens: 16 };

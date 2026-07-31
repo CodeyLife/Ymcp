@@ -51,6 +51,16 @@ export function matchedFacetsOf(claim: MemoryBundle["claims"][number]): string[]
   return claim.matchedFacets?.length ? claim.matchedFacets : [claim.matchedFacet];
 }
 
+export function isMemoryClaimVisibleAtCutoff(claim: MemoryBundle["claims"][number], narrativeCutoff?: number): boolean {
+  if (narrativeCutoff === undefined || !claim.narrativeRange) return true;
+  const { start, end } = claim.narrativeRange;
+  if (start !== undefined && start > narrativeCutoff) return false;
+  // A chapter-memory rollup contains prose and outcomes for its entire window,
+  // while an ordinary range can mean that one atomic fact remains valid. Fail
+  // closed only for the aggregate domain type when its content crosses cutoff.
+  return claim.predicate !== "chapter-memory-rollup" || end === undefined || end <= narrativeCutoff;
+}
+
 function terms(value: string): string[] {
   return [...new Set(value.split(/[\s,，。；;、/\\|]+/u).map((item) => item.trim()).filter((item) => item.length >= 2))].slice(0, 24);
 }
@@ -171,20 +181,31 @@ export async function buildMemoryBundle(plan: PreflightPlan, input: { projectId:
   const tokenBudget = input.tokenBudget ?? 24_000;
   const receipts: MemorySelectionReceipt[] = [];
   const visible = claims.filter((claim) => {
-    const allowed = claim.narrativeRange?.start === undefined || plan.narrativeCutoff === undefined || claim.narrativeRange.start <= plan.narrativeCutoff;
+    if (claim.lifecycleStatus === "staged") {
+      receipts.push(selectionReceipt(claim, "excluded", "inactive"));
+      return false;
+    }
+    const allowed = isMemoryClaimVisibleAtCutoff(claim, plan.narrativeCutoff);
     if (!allowed) receipts.push(selectionReceipt(claim, "excluded", "future-cutoff"));
     return allowed;
   });
   const deduplicated = new Map<string, MemoryHit>();
   for (const claim of visible) {
-    const existing = deduplicated.get(claim.id);
+    const semanticKey = claim.identityHash && (claim.valueHash ?? claim.contentHash)
+      ? `value:${claim.identityHash}:${claim.valueHash ?? claim.contentHash}`
+      : `id:${claim.id}`;
+    const existing = deduplicated.get(semanticKey);
     if (!existing) {
-      deduplicated.set(claim.id, claim);
+      deduplicated.set(semanticKey, claim);
       continue;
     }
-    receipts.push(selectionReceipt(claim, "excluded", "duplicate"));
-    const preferred = pinnedIds.has(claim.id) ? (input.pinnedClaims?.find((candidate) => candidate.id === claim.id) ?? existing) : [existing, claim].sort(compareCandidates)[0];
-    deduplicated.set(claim.id, {
+    receipts.push(selectionReceipt(claim, "excluded", claim.id === existing.id ? "duplicate" : "merged-source"));
+    const preferred = pinnedIds.has(existing.id)
+      ? existing
+      : pinnedIds.has(claim.id)
+        ? claim
+        : [existing, claim].sort(compareCandidates)[0];
+    deduplicated.set(semanticKey, {
       ...preferred,
       matchedFacets: [...new Set([...matchedFacetsOf(existing), ...matchedFacetsOf(claim)])],
       sourceRevisionIds: [...new Set([...existing.sourceRevisionIds, ...claim.sourceRevisionIds])],
@@ -201,7 +222,13 @@ export async function buildMemoryBundle(plan: PreflightPlan, input: { projectId:
     selected.set(claim.id, { claim, reason });
     return true;
   };
-  for (const claim of ordered.filter((candidate) => pinnedIds.has(candidate.id))) select(claim, "pinned-narrative");
+  const pinned = ordered.filter((candidate) => pinnedIds.has(candidate.id));
+  for (const claim of pinned) {
+    if (!select(claim, "pinned-narrative")) {
+      const cost = estimateTokens(`${claim.title}\n${claim.content}`);
+      throw new Error(`冻结叙事上下文超过记忆预算：${claim.id} 需要约 ${cost} tokens，已使用 ${spent}/${tokenBudget}。请提高预算或压缩叙事状态账本，不能静默丢弃 pinned 内容。`);
+    }
+  }
   const required = new Set(plan.facets.filter((facet) => facet.required).map((facet) => facet.kind));
   for (const facet of required) {
     if ([...selected.values()].some(({ claim }) => matchedFacetsOf(claim).includes(facet))) continue;
@@ -264,7 +291,8 @@ export function buildContextManifest(plan: PreflightPlan, memory: MemoryBundle, 
 }
 
 export async function resolveSkillBundle(plan: PreflightPlan, memory: MemoryBundle, input: { projectId: string; provider: SkillProvider; requestedCapabilities?: string[]; genre?: string }, now = Date.now()): Promise<SkillBundle> {
-  const available = (await input.provider.list(input.projectId)).filter((skill) => skill.enabled && skill.applicableTasks.includes(plan.taskClass));
+  const available = (await input.provider.list(input.projectId)).filter((skill) => skill.enabled
+    && skill.applicableTasks.includes(plan.taskClass));
   const capabilities = new Set(input.requestedCapabilities ?? []);
   // 选中条件:capabilities OR requiredMemoryKinds OR qualityGates 三选一。
   // 设计依据:AGENTS.md「reusable contracts over case-specific rules」——

@@ -636,14 +636,18 @@ describe("evaluation integration", () => {
       const projectId = `loop-dry-${randomUUID().slice(0, 8)}`;
       const doc = await seedFinalChapter(projectId);
       const regressionMarker = "回归规则标记：按章节功能动态调整具象细节、节奏与信息密度，同时保持人物知识边界和事实连续。";
+      let standaloneCharacterExtractions = 0;
       const closedLoopModel = new InMemoryModelGateway((input) => {
         const properties = input.schema?.properties as Record<string, unknown> | undefined;
         if (properties?.verdict) {
           const passed = input.prompt.includes("现场承载已改善");
+          const scoreSchema = properties.scores as { properties?: Record<string, unknown> } | undefined;
+          const dimensions = Object.keys(scoreSchema?.properties ?? {});
+          const scores = Object.fromEntries(dimensions.map((dimension) => [dimension, passed ? 5 : 3]));
           return {
             verdict: passed ? "passed" : "revise",
-            scores: { plot: passed ? 5 : 3, characterVoice: 5, sceneEmbodiment: passed ? 5 : 3, dialogue: 5, specificity: passed ? 5 : 3, hookPayoff: 5, continuity: 5, readerRetention: 5 },
-            issues: passed ? [] : [{ dimension: "sceneEmbodiment", severity: "major", title: "抽象叙述缺少现场承载", description: "关键体验被概括性表达替代", revisionRanges: [{ start: 1, end: 1 }], rule: "longform-continuity", suggestion: "用动作、感官和因果变化承载信息", rewriteExample: "让人物在现场动作中暴露判断" }],
+            scores,
+            issues: passed ? [] : [{ dimension: dimensions[0], severity: "major", title: "抽象叙述缺少现场承载", description: "关键体验被概括性表达替代", revisionRanges: [{ start: 1, end: 1 }], rule: "longform-continuity", suggestion: "用动作、感官和因果变化承载信息", rewriteExample: "让人物在现场动作中暴露判断" }],
           };
         }
         if (properties?.conclusion) {
@@ -651,8 +655,16 @@ describe("evaluation integration", () => {
           return { conclusion: "propose-improvement", symptom: "抽象叙述削弱沉浸", failingLayer: "共享 skill prompt", underlyingMechanism: "prompt 未要求根据章节功能选择具象承载方式", affectedInputClass: "需要同时处理氛围、心理与信息推进的章节", boundaries: "不要求所有段落堆叠感官细节，只修复承担关键体验的段落", regressionRisks: ["过度具象可能拖慢行动章节"], candidate: { targetKind: "skill", targetId: "longform-continuity", rationale: "补足通用的具象化决策规则", afterText: JSON.stringify({ revision: regressionMarker.repeat(3) }), applicableGenres: [] } };
         }
         if (properties?.iterations) return { iterations: [{ skillId: "longform-continuity", promptSections: { revision: regressionMarker.repeat(3) }, rationale: "让不同章节功能都按证据选择具象承载方式", triggeredByIssueIds: ["抽象叙述缺少现场承载"] }] };
-        if (properties?.characters) return { characters: [] };
-        if (properties?.facts) return { summary: "测试章节事实提取", facts: [] };
+        if (properties?.characters) {
+          standaloneCharacterExtractions += 1;
+          return { characters: [] };
+        }
+        if (properties?.facts) return {
+          summary: "测试章节事实提取",
+          facts: [{ subject: { kind: "entity", id: "night-watchman" }, predicate: "持有", object: { kind: "string", value: "未寄出的信" }, polarity: "affirmed", truthStatus: "objective", humanReadable: "值夜人持有一封未寄出的信", evidence: "值夜人把未寄出的信压在登记册下", confidence: 0.98, novelty: "new", conflict: false }],
+          chapterMemory: { summary: "值夜人在雨夜的废弃车站守着一封未寄出的信，连续两次钟声都没有改变他的等待。信件仍未寄出，人物的克制与隐约紧张被保留下来，形成下一章可以继续追踪的行动、物件和情绪状态。".repeat(2), keyEvents: ["值夜人继续压着未寄出的信"], characterStates: [{ characterId: "night-watchman", stateSnapshot: "仍在废弃车站等待" }], unresolvedThreads: ["信为何没有寄出"], emotionalArc: "由克制转为隐约紧张" },
+          characterDeltas: [{ characterId: "night-watchman", voiceAnchor: { sentenceLength: "短句", vocabulary: "克制", directness: "间接", avoidance: "回避解释信件" }, motivationDelta: "继续等待并保护信件", newKnowledge: [], relationDeltas: [] }],
+        };
         if (properties?.keyEvents) return { summary: "值夜人在废弃车站守着一封未寄出的信，雨水和钟声构成现场压力；他始终没有抬头，纸边却在指腹下发抖，说明平静表面下仍有尚未说出的决定与持续悬念。".repeat(2), keyEvents: ["值夜人在第二声钟响后仍压着未寄出的信"], characterStates: [], unresolvedThreads: ["信为何没有寄出"], emotionalArc: "由克制的平静转为可感知的紧张" };
         if (!input.schema) return input.prompt.includes(regressionMarker)
           ? "雨水沿着裂纹分叉，值夜人用拇指压住信封翘起的角。第二声钟响时，纸边仍在他指腹下发抖。现场承载已改善。"
@@ -672,6 +684,22 @@ describe("evaluation integration", () => {
       expect(result.snapshotId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(result.candidateBundle).toBeDefined();
       expect(result.promotionReceipt).toBeUndefined();
+      expect(result.candidateBundle?.acceptedFacts.length).toBeGreaterThan(0);
+      expect(standaloneCharacterExtractions).toBe(0);
+
+      const workspace = await getExperimentWorkspace(repository, result.experimentId);
+      expect(workspace).not.toBeNull();
+      const schema = workspace!.schemaName;
+      const documentState = await workspace!.query<{ current_revision_id: string; narrative_order: string | number }>(`SELECT current_revision_id,narrative_order FROM ${schema}.manuscript_documents WHERE id=$1`, [doc.id]);
+      const currentRevisionId = documentState.rows[0].current_revision_id;
+      const activeSources = await workspace!.query<{ revision_id: string }>(`SELECT revision_id FROM ${schema}.memory_claim_sources WHERE document_id=$1 AND lifecycle_status='active'`, [doc.id]);
+      const staleActiveSources = await workspace!.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${schema}.memory_claim_sources WHERE document_id=$1 AND lifecycle_status='active' AND revision_id<>$2`, [doc.id, currentRevisionId]);
+      const narrativeState = await workspace!.query<{ narrative_order: string | number }>(`SELECT narrative_order FROM ${schema}.narrative_state_snapshots WHERE document_id=$1 AND revision_id=$2`, [doc.id, currentRevisionId]);
+
+      expect(activeSources.rows.length).toBeGreaterThan(0);
+      expect(activeSources.rows.every((row) => row.revision_id === currentRevisionId)).toBe(true);
+      expect(Number(staleActiveSources.rows[0].count)).toBe(0);
+      expect(Number(narrativeState.rows[0].narrative_order)).toBe(Number(documentState.rows[0].narrative_order));
     });
   });
 });

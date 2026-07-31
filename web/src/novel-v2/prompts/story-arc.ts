@@ -1,4 +1,9 @@
 import type { StoryArcBundle } from "../application/story-arc";
+import { CHAPTER_PLAN_CHECK_DIMENSIONS, type StoryArcReviewOutput } from "../application/story-arc-review-policy";
+import type { NarrativeStateSnapshot } from "../protocol";
+
+export { validateStoryArcReview } from "../application/story-arc-review-policy";
+export type { StoryArcReviewOutput } from "../application/story-arc-review-policy";
 
 export const storyArcBundleSchema = {
   type: "object",
@@ -33,18 +38,13 @@ export const storyArcBundleSchema = {
 } as const;
 
 export const storyArcReviewSchema = {
-  type: "object", additionalProperties: false, required: ["verdict", "summary", "issues"],
+  type: "object", additionalProperties: false, required: ["verdict", "summary", "issues", "chapterChecks"],
   properties: {
     verdict: { enum: ["passed", "revise", "blocked"] }, summary: { type: "string" },
     issues: { type: "array", items: { type: "object", additionalProperties: false, required: ["severity", "title", "evidence", "suggestion"], properties: { severity: { enum: ["blocker", "major", "warning"] }, title: { type: "string" }, evidence: { type: "string" }, suggestion: { type: "string" } } } },
+    chapterChecks: { type: "array", items: { type: "object", additionalProperties: false, required: ["chapterIndex", "dimension", "verdict", "evidence", "reason"], properties: { chapterIndex: { type: "integer", minimum: 1 }, dimension: { enum: CHAPTER_PLAN_CHECK_DIMENSIONS }, verdict: { enum: ["passed", "revise", "blocked"] }, evidence: { type: "string", minLength: 1 }, reason: { type: "string", minLength: 1 } } } },
   },
 } as const;
-
-export interface StoryArcReviewOutput {
-  verdict: "passed" | "revise" | "blocked";
-  summary: string;
-  issues: Array<{ severity: "blocker" | "major" | "warning"; title: string; evidence: string; suggestion: string }>;
-}
 
 /**
  * 故事弧审核维度清单（5 维度 × 1-5 分锚点）。
@@ -93,13 +93,15 @@ const STORY_ARC_REVIEW_DIMENSIONS = [
 const STORY_ARC_OUTPUT_FORMAT_GUARD =
   "只输出符合 schema 的 JSON，不使用 Markdown 代码块，不输出解释性文字，不输出 JSON 前后的任何字符。";
 
-export function buildStoryArcPrompt(input: { projectTitle: string; authorIntent?: string; macro: Array<{ taskKey: string; title: string; summary: string }>; recentChapters: Array<{ order: number; summary: string; unresolvedThreads: string[]; emotionalArc?: string }>; openThreads: Array<{ id: string; title: string; payload: Record<string, unknown> }> }): string {
+export function buildStoryArcPrompt(input: { projectTitle: string; authorIntent?: string; macro: Array<{ taskKey: string; title: string; summary: string }>; recentChapters: Array<{ order: number; summary: string; unresolvedThreads: string[]; emotionalArc?: string }>; openThreads: Array<{ id: string; title: string; payload: Record<string, unknown> }>; narrativeState?: NarrativeStateSnapshot }): string {
   return [
-    "规划下一个顺序故事弧的宏观边界，并只展开第一批连续章节蓝图。",
+    "依据当前叙事状态账本和长程叙事战略，规划下一个顺序故事弧的边界，并只展开第一批连续章节蓝图。",
     "卷/篇章分区不是故事弧：如果作者意图提到「卷一/卷二/卷三」或类似分卷目标，只把它当作长篇位置与主题背景，不要把完整一卷压缩成一个故事弧，也不要把故事弧标题伪装成卷标题。",
-    "故事弧 expectedChapterCount 由当前宏观规划、题材密度、人物关系和冲突复杂度自行判定；第一批章节数也由叙事需要决定，只展开足以自然进入本弧的连续章节，不固定五章，不为了凑节点压缩铺陈、相处、内省和过渡。",
+    "故事弧 expectedChapterCount 由当前叙事状态、长程战略、题材密度、人物关系和冲突复杂度共同估计；第一批章节数也由叙事需要决定，只展开足以自然进入本弧的连续章节，不固定五章，不为了凑节点压缩铺陈、相处、内省和过渡。",
+    "章节没有字数、字符数或段落数约束；只按章节功能和叙事需要自然展开与收束，不输出长度目标或区间。",
     "batchIndex=1；batch.startChapterIndex 表示全书叙事序号起点，需承接最近已定稿/已规划章节。后续批次将基于新定稿状态滚动生成。",
     "章节蓝图是创作边界，不是待办清单。铺陈、相处、内省、情绪积累、文学意象和日常过程可以成为章节主体；optionalBeats 允许作者在正文中灵活取舍。",
+    "权威优先级：已定稿事实与叙事状态账本 > 当前开放剧情线和最近定稿章节 > 已批准故事弧边界 > 全书长程战略。若实际创作改变了旧假设，保留叙事承诺和终局边界，但重新选择抵达路径；不得为了复现旧规划而覆盖已发生的故事。",
     STORY_ARC_OUTPUT_FORMAT_GUARD,
     buildStoryArcContext(input),
   ].join("\n\n");
@@ -109,7 +111,9 @@ function buildStoryArcContext(input: Parameters<typeof buildStoryArcPrompt>[0]):
   return [
     `项目：${input.projectTitle}`,
     `作者本次意图：${input.authorIntent || "无额外指定，由当前状态和宏观规划推导"}`,
-    "## 当前宏观规划",
+    "## 当前叙事状态账本（权威进入状态）",
+    input.narrativeState ? JSON.stringify(input.narrativeState, null, 2) : "- 尚无叙事状态快照，这是第一段故事弧。",
+    "## 当前长程叙事战略（方向与护栏，不是事件清单）",
     ...input.macro.map((item) => `- [${item.taskKey}] ${item.title}：${item.summary}`),
     "## 最近定稿章节",
     ...(input.recentChapters.length ? input.recentChapters.map((item) => `- 第${item.order}章：${item.summary}；未解决：${item.unresolvedThreads.join("、") || "无"}；情绪：${item.emotionalArc || "未记录"}`) : ["- 尚无定稿章节，这是第一个故事弧。"]),
@@ -120,10 +124,11 @@ function buildStoryArcContext(input: Parameters<typeof buildStoryArcPrompt>[0]):
 
 export function buildStoryArcBatchPrompt(input: Parameters<typeof buildStoryArcPrompt>[0] & { arc: StoryArcBundle["arc"]; batchIndex: number; startChapterIndex: number }): string {
   return [
-    "为已批准故事弧生成下一批连续章节蓝图。",
+    "依据最新定稿状态，为已批准故事弧生成下一批连续章节蓝图。",
     `本次 batchIndex=${input.batchIndex}、startChapterIndex=${input.startChapterIndex}。章节数由叙事密度和当前阶段需要决定，不固定五章；chapter.index 从 1 重新编号，batch.startChapterIndex 表示全书叙事序号起点。`,
+    "章节没有字数、字符数或段落数约束；只按章节功能和叙事需要自然展开与收束，不输出长度目标或区间。",
     "arc 必须原样保留既定的 title、objective、entryState、exitState 和 expectedChapterCount，不得借滚动规划改写已经批准的故事弧边界。",
-    "以最近定稿状态、开放剧情线和未兑现伏笔为进入状态；不得改写前序已批准批次。只有确实抵达既定 exitState 且覆盖 expectedChapterCount 所需阶段时 batch.complete=true。",
+    "以叙事状态账本、最近定稿状态、开放剧情线和未兑现伏笔为进入状态；旧批次中的未发生设想不是事实，不得改写前序已批准批次。只有确实抵达既定 exitState 且覆盖 expectedChapterCount 所需阶段时 batch.complete=true。",
     STORY_ARC_OUTPUT_FORMAT_GUARD,
     "## 已批准故事弧边界",
     JSON.stringify(input.arc, null, 2),
@@ -147,6 +152,9 @@ export function buildStoryArcReviewPrompt(bundle: StoryArcBundle, context: strin
     "每个 issue 的 evidence 必须引用 arc 内的章节编号（如「第 3 章」）+ 蓝图逐字片段或 JSON 路径，格式：`第 X 章：<逐字片段或字段路径>`。evidence 不得仅写概括性描述，必须有可定位的原文依据。找不到具体证据时不要报告该 issue。",
     "severity 判定：blocker=整弧功能或连续性被破坏；major=局部因果断裂或状态矛盾，必须修订；warning=可优化但不影响弧功能。",
     "存在任一 blocker/major 时 verdict=revise；只有 warning 或无问题时 verdict=passed。",
+    "## 逐章强制校验矩阵",
+    "对每一章都必须输出 chapterChecks 的四条记录，不得省略：alignment=标题/摘要/场景是否指向同一核心事件；choice-cost=主要人物是否存在符合章节功能的选择及代价；relationship-stage=关系变化是否有前置行动积累且没有跳阶；earned-outcome=场景结果是否由正文可展开的因果链挣得。安静章允许选择与代价非常细微，关系无变化也可通过，但必须说明其停留阶段。",
+    "chapterChecks 中任一 verdict=revise/blocked 时，总 verdict 不得为 passed，并在 issues 中给出对应 blocker/major。",
     "## 规划上下文",
     context,
     "## 待审故事弧",

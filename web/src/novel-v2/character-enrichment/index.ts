@@ -222,6 +222,10 @@ export async function persistCharacterEnrichment(input: { projectId: string; doc
         projectId: input.projectId,
         artifact: input.artifact,
         claims: [claim],
+        lifecycleStatus: "active",
+        documentId: input.documentId,
+        revisionId: input.revisionId,
+        narrativeOrder: input.narrativeOrder,
       });
       if (recorded.length) {
         knowledgeClaims.push(recorded[0]);

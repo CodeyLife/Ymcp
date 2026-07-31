@@ -12,7 +12,7 @@
  * - listExperimentWorkspaces：列出项目的所有工作区
  * - ExperimentWorkspaceHandle：提供 query/close/delete 方法
  *
- * 影子表（无 FK 约束，实验隔离）：novel_projects, manuscript_documents, memory_claims,
+ * 影子表（无 FK 约束，实验隔离）：novel_projects, manuscript_documents, memory_claims, memory_claim_sources,
  * skill_definitions, artifacts, reviews, manuscript_revisions, content_blobs。
  *
  * 安全：schemaName 由 experimentId 派生（exp-<ts>-<random> → experiment_exp_<ts>_<random>），
@@ -78,14 +78,14 @@ type WorkspaceRow = {
 };
 
 export const EXPERIMENT_RUNTIME_TABLES = [
-  "arcs", "artifacts", "audit_records", "books", "chapter_memories", "chapter_planning_contexts", "chapter_production_specs",
+  "approval_evidence", "arcs", "artifacts", "audit_records", "books", "chapter_memories", "chapter_planning_contexts", "chapter_production_specs",
   "chapter_review_snapshot_issues", "chapter_review_snapshots", "chapters",
   "character_knowledge", "commit_records", "content_blobs", "context_manifests",
   "craft_rule_candidates", "creative_reviews", "creative_run_events", "creative_runs",
   "creative_work_items", "entities", "execution_blueprints", "fact_sources", "facts",
   "foreshadowing", "idempotency_keys", "learning_assessments", "manuscript_blocks",
-  "manuscript_documents", "manuscript_revisions", "memory_bundles", "memory_claims", "memory_gate_states",
-  "memory_snapshots", "model_invocations", "model_routes", "model_tasks", "novel_intents",
+  "manuscript_documents", "manuscript_revisions", "memory_bundles", "memory_claim_sources", "memory_claims", "memory_gate_states",
+  "memory_snapshots", "narrative_state_snapshots", "model_invocations", "model_routes", "model_tasks", "novel_intents",
   "novel_projects", "outbox_events", "payoff_curve", "payoffs", "plot_threads",
   "preflight_plans", "project_plan_sections", "projection_failures", "promises", "prompt_executions", "prompt_templates", "provider_configs", "quality_gates",
   "relations", "retrieval_runs", "reviews", "scenes", "skill_bindings", "skill_bundles",
@@ -135,7 +135,7 @@ function createHandle(pool: Pool, workspace: ExperimentWorkspace, repository: No
 /**
  * 在实验 schema 内创建影子表（无 FK 约束，实验隔离）。
  *
- * 影子表列表：novel_projects, manuscript_documents, memory_claims, skill_definitions,
+ * 影子表列表：novel_projects, manuscript_documents, memory_claims, memory_claim_sources, skill_definitions,
  * artifacts, reviews, manuscript_revisions, content_blobs。
  */
 async function createShadowTables(pool: Pool, schemaName: string): Promise<void> {
@@ -272,8 +272,8 @@ async function restoreProjectSnapshot(
   // 7. memory_claims
   for (const claim of bundle.payload.memoryClaims) {
     await pool.query(
-      `INSERT INTO ${s}.memory_claims(id, project_id, kind, title, content, subject_refs, narrative_start, narrative_end, knowledge_scope, authority, confidence, source_revision_ids, content_hash, supersedes, predicate, source_artifact_id, decided_by, decided_at, created_at)
-       VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now())`,
+      `INSERT INTO ${s}.memory_claims(id, project_id, kind, title, content, subject_refs, narrative_start, narrative_end, knowledge_scope, authority, confidence, source_revision_ids, content_hash, supersedes, predicate, source_artifact_id, decided_by, decided_at, lifecycle_status, source_document_id, identity_hash, value_hash, created_at)
+       VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now())`,
       [
         claim.id,
         claim.projectId,
@@ -293,9 +293,26 @@ async function restoreProjectSnapshot(
         claim.sourceArtifactId ?? null,
         claim.decidedBy ?? null,
         claim.decidedAt ?? null,
+        claim.lifecycleStatus ?? "active",
+        claim.sourceDocumentId ?? null,
+        claim.identityHash ?? null,
+        claim.valueHash ?? claim.contentHash,
       ],
     );
   }
+
+  // Restore revision provenance from the cloned artifact/revision graph. Claims
+  // without chapter provenance (for example foundation claims) intentionally remain source-less.
+  await pool.query(`
+    INSERT INTO ${s}.memory_claim_sources(claim_id,project_id,document_id,revision_id,artifact_id,lifecycle_status)
+    SELECT claim.id,claim.project_id,revision.document_id,revision.id,claim.source_artifact_id,'active'
+    FROM ${s}.memory_claims claim
+    JOIN ${s}.artifacts artifact ON artifact.id=claim.source_artifact_id
+    LEFT JOIN ${s}.artifacts source ON source.id=artifact.payload->>'sourceArtifactId'
+    JOIN ${s}.manuscript_revisions revision ON revision.artifact_id=COALESCE(source.id,artifact.id)
+    WHERE claim.source_artifact_id IS NOT NULL
+    ON CONFLICT(claim_id,artifact_id) DO NOTHING
+  `);
 
   // 8. skill_definitions
   for (const skill of bundle.payload.skillDefinitions) {

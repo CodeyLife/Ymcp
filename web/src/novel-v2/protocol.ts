@@ -94,6 +94,10 @@ export interface MemoryClaim {
   sourceArtifactId?: string;
   decidedBy?: string;
   decidedAt?: string;
+  lifecycleStatus?: "staged" | "active";
+  sourceDocumentId?: string;
+  identityHash?: string;
+  valueHash?: string;
 }
 
 export interface MemoryHit extends MemoryClaim {
@@ -118,9 +122,11 @@ export type MemorySelectionReason =
   | "pinned-narrative"
   | "required-facet"
   | "ranked-fill"
+  | "inactive"
   | "future-cutoff"
   | "budget"
-  | "duplicate";
+  | "duplicate"
+  | "merged-source";
 
 export interface MemorySelectionReceipt {
   claimId: string;
@@ -193,6 +199,8 @@ export interface StageContextSection {
   provenanceRefs: string[];
   sourceArtifactId?: string;
   fingerprint?: string;
+  /** Preserve upstream selection decisions in the same prompt manifest without injecting placeholder text. */
+  exclusionReason?: "inactive" | "future-cutoff" | "budget" | "merged-source";
 }
 
 export interface PromptContextSectionReceipt {
@@ -205,7 +213,7 @@ export interface PromptContextSectionReceipt {
   fingerprint: string;
   estimatedTokens: number;
   status: "included" | "excluded" | "truncated";
-  reason: "required" | "ranked-fill" | "duplicate-source" | "duplicate-content" | "budget" | "empty";
+  reason: "required" | "ranked-fill" | "duplicate-source" | "duplicate-content" | "budget" | "empty" | "inactive" | "future-cutoff" | "merged-source";
 }
 
 export interface PromptContextManifest {
@@ -278,6 +286,33 @@ export interface ChapterMemory {
   createdAt: number;
 }
 
+/**
+ * A rebuildable, chapter-bound ledger of the authoritative narrative state.
+ * Unlike ranked memory candidates, this snapshot is deterministically pinned
+ * into planning/drafting/revision contexts up to the active narrative cutoff.
+ */
+export interface NarrativeStateSnapshot {
+  id: string;
+  projectId: string;
+  documentId: string;
+  revisionId: string;
+  narrativeOrder: number;
+  arcId?: string;
+  chapterBlueprintId?: string;
+  arcPhase?: string;
+  chapterSummary: string;
+  keyEvents: string[];
+  characterStates: Array<{ characterId: string; stateSnapshot: string }>;
+  openThreads: string[];
+  openForeshadowings: Array<{ id: string; description: string; expectedPayoffWindow: string }>;
+  openPromises: Array<{ id: string; promiser: string; promisee: string; statement: string }>;
+  fulfilledNodes: string[];
+  prohibitedEarlyConsumption: string[];
+  continuityConstraints: string[];
+  fingerprint: string;
+  createdAt: number;
+}
+
 export interface SkillDescriptor {
   skillId: string;
   version: string;
@@ -304,7 +339,7 @@ export interface SkillBundle {
   id: string;
   projectId: string;
   preflightId: string;
-  skills: Array<Pick<SkillDescriptor, "skillId" | "version" | "qualityGates" | "promptSections"> & Partial<Pick<SkillDescriptor, "capabilities" | "applicableTasks" | "requiredMemoryKinds">>>;
+  skills: Array<Pick<SkillDescriptor, "skillId" | "version" | "qualityGates" | "promptSections"> & Partial<Pick<SkillDescriptor, "capabilities" | "applicableTasks" | "requiredMemoryKinds" | "conflicts" | "applicableGenres" | "enabled">>>;
   conflicts: Array<{ skillId: string; conflictsWith: string }>;
   missingCapabilities: string[];
   fingerprint: string;
@@ -379,16 +414,16 @@ export interface ExecutionBlueprint {
  * artifacts 但未被章节生成消费,导致章节生成不基于全书规划。此清单是章节生成的前置硬约束:
  * 缺失任何一项,novel_chapter_generate handler 与 novelIntentWorkflow 均拒绝启动章节生成。
  *
- * 选择这 5 个 taskKey 的理由(对应 v1 全书规划的核心维度):
+ * 选择这 4 个 taskKey 的理由(对应全书规划的核心维度):
  * - architecture:叙事结构/章节布局,章节生成必须知道章节在全书中的位置
  * - characters:人物档案/动机,章节生成必须知道人物声部与动机
  * - worldview:世界观规则,章节生成必须遵守设定约束
- * - plot-design:plot 设计与章节规划,章节生成必须知道本章在主线/支线中的角色
+ * - plot-design:长程叙事战略,章节生成前必须有全书方向、终局边界与提前消费护栏
  * - 单章直接蓝图由当前已批准 NarrativeArc 的 ChapterBlueprint 提供
  *
  * 其余 taskKey(project-positioning/relations/plot-threads/foreshadowing/timeline/story-control)
  * 不在必填清单:它们是重要参考但非阻塞——例如 foreshadowing 可能在章节生成过程中逐步建立,
- * timeline 可由 plot-design 推导。仍会作为上下文注入,只是不阻塞章节生成启动。
+ * timeline 可由滚动故事弧与已定稿状态继续校准。它们仍会作为软参考注入,只是不阻塞章节生成启动。
  */
 export const REQUIRED_FOUNDATION_TASK_KEYS = [
   "architecture",
@@ -459,6 +494,8 @@ export interface CommitResult {
   revision: number;
   contentHash: string;
   outboxEventId: number;
+  removedClaimIds?: string[];
+  activatedClaims?: MemoryClaim[];
 }
 
 export interface MemoryProvider {
@@ -529,6 +566,20 @@ export interface WorkflowRunRecord {
   payload: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ApprovalEvidence {
+  id: string;
+  projectId: string;
+  workflowId: string;
+  artifactId: string;
+  decision: "approve" | "reject" | "revise" | "abandon";
+  actorSource: "interactive-web" | "automation";
+  actorId: string;
+  unresolvedIssueFingerprints: string[];
+  feedback?: string;
+  revisionBase?: "current" | "previous";
+  createdAt: string;
 }
 
 export interface TaskAttemptRecord {

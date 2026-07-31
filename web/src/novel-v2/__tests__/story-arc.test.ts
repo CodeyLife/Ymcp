@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { canGenerateNextStoryArcBatch, parseStoryArcBundle, planningContextFingerprint, type ChapterPlanningContext } from "../application/story-arc";
-import { startStoryArcPlanning } from "../application/story-arc-workflow";
+import { canGenerateNextStoryArcBatch, compileChapterPlanValidationReport, parseStoryArcBundle, planningContextFingerprint, type ChapterPlanningContext } from "../application/story-arc";
+import { storyArcReviewStrategy } from "../application/story-arc-review-policy";
+import { startStoryArcPlanning, startStoryArcReview } from "../application/story-arc-workflow";
 import { NovelPostgresRepository } from "../postgres-repository";
 import type { Client } from "@temporalio/client";
-import type { Artifact } from "../protocol";
+import type { Artifact, NarrativeStateSnapshot } from "../protocol";
 import { renderChapterPlanningContext } from "../prompts/chapter-planning-context";
-import { buildStoryArcBatchPrompt, buildStoryArcPrompt, buildStoryArcReviewPrompt, storyArcBundleSchema } from "../prompts/story-arc";
+import { buildStoryArcBatchPrompt, buildStoryArcPrompt, buildStoryArcReviewPrompt, storyArcBundleSchema, validateStoryArcReview } from "../prompts/story-arc";
 
 const bundle = parseStoryArcBundle({
   arc: { title: "停电夜", objective: "让彼此戒备的两人建立最低限度信任", entryState: "互相怀疑", centralConflict: "证据与求生选择冲突", development: ["被迫同行", "交换一部分事实"], resolution: "共同保住证据", exitState: "愿意短暂合作", plotThreadRefs: ["main"], foreshadowingRefs: ["f-1"], expectedChapterCount: 20, phases: [{ title: "受困", objective: "共同求生", exitCondition: "取得证据" }, { title: "试探", objective: "建立最低信任", exitCondition: "愿意合作" }] },
@@ -45,14 +46,43 @@ describe("story arc planning contract", () => {
     expect(prompt).not.toContain("batchIndex=1、startChapterIndex=1");
     expect(prompt).not.toContain("只展开第一批");
     expect(prompt).not.toContain("只展开 5–8 章");
+    expect(prompt).toContain("旧批次中的未发生设想不是事实");
   });
 
   it("lets the model choose batch size instead of encoding a fixed five-chapter contract", () => {
-    const prompt = buildStoryArcPrompt({ projectTitle: "Test", macro: [], recentChapters: [], openThreads: [] });
+    const narrativeState = {
+      id: "state-1", projectId: "p", documentId: "doc-7", revisionId: "rev-7", narrativeOrder: 7,
+      chapterSummary: "主角暂时留下来调查旧案", keyEvents: ["决定留下"],
+      characterStates: [{ characterId: "hero", stateSnapshot: "从逃避转为主动调查" }],
+      openThreads: ["main:旧案"], openForeshadowings: [], openPromises: [], fulfilledNodes: [],
+      prohibitedEarlyConsumption: ["幕后身份"], continuityConstraints: [], fingerprint: "state-fp", createdAt: 1,
+    } satisfies NarrativeStateSnapshot;
+    const prompt = buildStoryArcPrompt({ projectTitle: "Test", macro: [], recentChapters: [], openThreads: [], narrativeState });
     expect(prompt).toContain("不固定五章");
     expect(prompt).toContain("卷/篇章分区不是故事弧");
+    expect(prompt).toContain("已定稿事实与叙事状态账本 >");
+    expect(prompt).toContain("全书长程战略");
+    expect(prompt).toContain("幕后身份");
     expect(storyArcBundleSchema.properties.chapters.minItems).toBe(1);
     expect(storyArcBundleSchema.properties.chapters.maxItems).toBe(16);
+  });
+
+  it("has no chapter length contract and ignores legacy length policy data", () => {
+    const prompt = buildStoryArcPrompt({ projectTitle: "Test", macro: [], recentChapters: [], openThreads: [] });
+    const parsed = parseStoryArcBundle({
+      arc: bundle.arc,
+      batch: bundle.batch,
+      chapters: [{
+        ...bundle.chapters[0],
+        lengthPolicy: { minCharacters: 2_000, targetCharacters: 3_000, maxCharacters: 4_000, enforcement: "hard" },
+      }],
+    });
+
+    expect(prompt).toContain("章节没有字数、字符数或段落数约束");
+    expect(prompt).toContain("不输出长度目标或区间");
+    expect("lengthPolicy" in storyArcBundleSchema.properties.chapters.items.properties).toBe(false);
+    expect(parsed.chapters[0]).not.toHaveProperty("lengthPolicy");
+    expect(bundle.chapters[0]).not.toHaveProperty("lengthPolicy");
   });
 
   it("normalizes author chapter indices without truncating chapters after five", () => {
@@ -94,6 +124,20 @@ describe("story arc planning contract", () => {
     expect(prompt).toContain("关系沉淀");
     expect(prompt).toContain("长篇节奏与批次边界");
     expect(prompt).toContain("首批章节像卷级剧情摘要");
+    expect(prompt).toContain("alignment=标题/摘要/场景是否指向同一核心事件");
+  });
+
+  it("requires all four planning checks for every chapter", () => {
+    const oneChapter = parseStoryArcBundle({ ...bundle, chapters: bundle.chapters.slice(0, 1) });
+    const checks = ["alignment", "choice-cost", "relationship-stage", "earned-outcome"].map((dimension) => ({ chapterIndex: 1, dimension, verdict: "passed", evidence: "第 1 章：标题与场景一致", reason: "规划成立" })) as Parameters<typeof compileChapterPlanValidationReport>[1];
+    expect(compileChapterPlanValidationReport(oneChapter, checks).passed).toBe(true);
+    expect(() => validateStoryArcReview(oneChapter, { verdict: "passed", summary: "通过", issues: [], chapterChecks: checks.slice(0, 3) })).toThrow("缺少逐章校验");
+  });
+
+  it("rejects a passed verdict when a chapter alignment check fails", () => {
+    const oneChapter = parseStoryArcBundle({ ...bundle, chapters: bundle.chapters.slice(0, 1) });
+    const checks = ["alignment", "choice-cost", "relationship-stage", "earned-outcome"].map((dimension) => ({ chapterIndex: 1, dimension, verdict: dimension === "alignment" ? "revise" : "passed", evidence: "第 1 章：标题写观棋但场景只安排比剑", reason: "标题与核心事件不一致" })) as Parameters<typeof compileChapterPlanValidationReport>[1];
+    expect(() => validateStoryArcReview(oneChapter, { verdict: "passed", summary: "误判通过", issues: [], chapterChecks: checks })).toThrow("结论与逐章校验不一致");
   });
 
   it("passes the Web auto-review policy into the durable workflow and audit payload", async () => {
@@ -108,6 +152,25 @@ describe("story arc planning contract", () => {
 
     expect(repository.putWorkflowRun).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ mode: "web", reviewPolicy: "auto" }) }));
     expect(start).toHaveBeenCalledWith("storyArcPlanningWorkflow", expect.objectContaining({ args: [expect.objectContaining({ mode: "web", reviewPolicy: "auto" })] }));
+  });
+
+  it("reviews the current edited artifact without regenerating the story arc", async () => {
+    const repository = {
+      getStoryArc: vi.fn(async () => ({ id: "arc-1", planningStatus: "awaiting-review", blueprintArtifactId: "edited-artifact" })),
+      putWorkflowRun: vi.fn(async () => undefined),
+    } as unknown as NovelPostgresRepository;
+    const start = vi.fn(async () => ({ firstExecutionRunId: "run-1" }));
+    const temporal = { workflow: { start } } as unknown as Client;
+
+    await startStoryArcReview(repository, temporal, { projectId: "project-1", arcId: "arc-1", mode: "web", reviewPolicy: "auto" });
+
+    expect(repository.putWorkflowRun).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ existingArtifactId: "edited-artifact" }) }));
+    expect(start).toHaveBeenCalledWith("storyArcPlanningWorkflow", expect.objectContaining({ args: [expect.objectContaining({ existingArtifactId: "edited-artifact" })] }));
+  });
+
+  it("always performs an automatic arc review before manual author approval", () => {
+    expect(storyArcReviewStrategy("manual")).toEqual({ automaticReview: true, automaticRevision: false, humanApproval: true });
+    expect(storyArcReviewStrategy("auto")).toEqual({ automaticReview: true, automaticRevision: true, humanApproval: false });
   });
 
   it("removes trailing unprotected chapters when an edited batch is shortened", async () => {

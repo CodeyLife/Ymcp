@@ -6,10 +6,13 @@ import {
   factFingerprint,
   humanReadableFingerprint,
 } from "../fact-extraction/dedupe";
-import { extractFactsFromText, extractFactsWithStats, computeClaimContentHash } from "../fact-extraction";
+import { extractFactsFromText, extractFactsWithStats, computeClaimContentHash, projectFactExtractionOutput } from "../fact-extraction";
+import { scopeClaimsToChapter } from "../fact-extraction/narrative-scope";
 import { InMemoryModelGateway } from "../model-gateway";
 import type { Artifact, MemoryClaim } from "../protocol";
 import type { ChapterStateDelta, FactExtractionOutput } from "../prompts/schemas";
+import { canonicalizeFactPredicate, factIdentityHash, factValueHash } from "../fact-extraction/fingerprint";
+import { buildFactExtractionPrompt } from "../fact-extraction/prompt";
 
 const artifact: Artifact = { id: "artifact-1", projectId: "p1", taskId: "task-1", attemptId: "attempt-1", kind: "draft", contentHash: "hash", objectKey: "obj", baseRevision: 7, createdAt: 1, fingerprint: "fp-1" };
 
@@ -105,10 +108,31 @@ describe("fact-extraction dedupeFactCandidates covers 11 failure classes", () =>
 
   it("drops facts whose content hash already exists in the store (L11)", () => {
     const candidate = fact();
-    const existingHash = evidenceFingerprint(`${candidate.subject.id}:${candidate.predicate}:${candidate.humanReadable}`);
+    const existingHash = factValueHash(candidate);
     const result = dedupeFactCandidates({ candidates: [candidate], existingContentHashes: new Set([existingHash]) });
     expect(result.kept).toHaveLength(0);
     expect(result.discardedExistingHashCount).toBe(1);
+  });
+
+  it("uses one canonical hash across paraphrases of the same structured fact", () => {
+    const concise = fact({ humanReadable: "主角持有承影剑" });
+    const descriptive = fact({ humanReadable: "承影古剑如今仍在主角手中" });
+    expect(factIdentityHash(concise)).toBe(factIdentityHash(descriptive));
+    expect(factValueHash(concise)).toBe(factValueHash(descriptive));
+  });
+
+  it("uses the preset predicate vocabulary across equivalent relation wording", () => {
+    const held = fact({ predicate: "持有" });
+    const owned = fact({ predicate: "拥有物品" });
+    expect(canonicalizeFactPredicate("拥有物品")).toBe("持有");
+    expect(factIdentityHash(held)).toBe(factIdentityHash(owned));
+    expect(factValueHash(held)).toBe(factValueHash(owned));
+  });
+
+  it("keeps materially different values distinct after predicate normalization", () => {
+    const sword = fact({ predicate: "持有", object: { kind: "entity-ref", value: "sword-1" } });
+    const letter = fact({ predicate: "拥有", object: { kind: "entity-ref", value: "letter-1" } });
+    expect(factValueHash(sword)).not.toBe(factValueHash(letter));
   });
 
   it("reports totalCandidates across mixed accept/discard outcomes", () => {
@@ -122,6 +146,17 @@ describe("fact-extraction dedupeFactCandidates covers 11 failure classes", () =>
     });
     expect(result.totalCandidates).toBe(4);
     expect(result.kept.length + result.discardedLowConfidenceCount + result.discardedDuplicateCount).toBe(4);
+  });
+});
+
+describe("fact-extraction retention contract", () => {
+  it("requires future continuity value and excludes consequence-free scene details", () => {
+    const prompt = buildFactExtractionPrompt({ artifact, text: "她换了一件外衣，随后立誓守住城门。" });
+    expect(prompt).toContain("后续章节");
+    expect(prompt).toContain("持续状态");
+    expect(prompt).toContain("一次性动作");
+    expect(prompt).toContain("服饰");
+    expect(prompt).toContain("承诺");
   });
 });
 
@@ -144,6 +179,18 @@ describe("fact-extraction classifyFactRisk maps to risk tiers", () => {
     expect(claim.authority).toBe("candidate");
     expect(claim.predicate).toBe("持有");
     expect(claim.supersedes).toEqual(["claim-old-location"]);
+  });
+
+  it("keeps low-confidence continuity-changing facts as candidates", () => {
+    const { risk, claim } = classifyFactRisk({ fact: fact({ predicate: "持有", confidence: 0.65 }), projectId: "p1", artifactId: artifact.id, baseRevision: 1 });
+    expect(risk).toBe("medium");
+    expect(claim.authority).toBe("candidate");
+  });
+
+  it("does not escalate low-confidence descriptive details without continuity impact", () => {
+    const { risk, claim } = classifyFactRisk({ fact: fact({ subject: { kind: "scene", id: "scene-1" }, predicate: "光线色调", confidence: 0.65 }), projectId: "p1", artifactId: artifact.id, baseRevision: 1 });
+    expect(risk).toBe("low");
+    expect(claim.authority).toBe("derived");
   });
 
   it("marks objective affirmed new facts as low risk with derived authority", () => {
@@ -187,6 +234,19 @@ describe("fact-extraction classifyFactRisk maps to risk tiers", () => {
 });
 
 describe("fact-extraction extractFactsWithStats orchestration", () => {
+  it("binds chapter facts to narrativeOrder instead of the evidence paragraph", () => {
+    const output: ChapterStateDelta = { summary: "章节事实", facts: [fact({ paragraph: 87 })] };
+    const result = projectFactExtractionOutput({ projectId: "p1", artifact, text: "正文略。", narrativeOrder: 12 }, output);
+
+    expect(result.claims[0].narrativeRange).toEqual({ start: 12, end: 12 });
+  });
+
+  it("rejects invalid chapter orders at the shared scoping boundary", () => {
+    const claim = classifyFactRisk({ fact: fact(), projectId: "p1", artifactId: artifact.id, baseRevision: 1 }).claim;
+    expect(() => scopeClaimsToChapter([claim], 0)).toThrow(/narrativeOrder/);
+    expect(() => scopeClaimsToChapter([claim], 1.5)).toThrow(/narrativeOrder/);
+  });
+
   it("returns chapter memory and character deltas from the same extraction", async () => {
     const output: ChapterStateDelta = {
       summary: "统一提取",

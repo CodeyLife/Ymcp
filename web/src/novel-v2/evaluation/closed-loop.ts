@@ -88,7 +88,9 @@ function regressionPassed(before: ExperimentExecutionResult, after: ExperimentEx
   const beforePatterns = blockingPatterns(before);
   const afterPatterns = blockingPatterns(after);
   const unresolved = [...beforePatterns].filter((pattern) => afterPatterns.has(pattern));
-  return unresolved.length === 0 && after.finalScore >= before.finalScore;
+  const structureImprovedOrHeld = after.structuralReport.passed
+    && after.structuralReport.blockers.length <= before.structuralReport.blockers.length;
+  return structureImprovedOrHeld && unresolved.length === 0 && after.finalScore >= before.finalScore;
 }
 
 // ===== 主入口 =====

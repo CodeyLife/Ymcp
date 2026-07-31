@@ -63,6 +63,18 @@ function renderProduction() {
   return renderToStaticMarkup(<QueryClientProvider client={client}><ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm }}><App><MemoryRouter><NovelProductionWorkspace embedded projectId="p1" documentId="d1" workflowId="wf-review" stage="review" /></MemoryRouter></App></ConfigProvider></QueryClientProvider>);
 }
 
+function renderNonTargetedProduction() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const reviewRun = { ...runs[2], payload: { ...runs[2].payload, reasonCode: "quality-gate-not-passed" } };
+  client.setQueryData(novelKeys.project("p1"), project);
+  client.setQueryData(novelKeys.runs("p1"), [runs[0], runs[1], reviewRun]);
+  client.setQueryData(novelKeys.run("wf-review"), { workflowId: "wf-review", status: "manual-review-required", record: reviewRun });
+  client.setQueryData(novelKeys.runEvents("wf-review"), []);
+  client.setQueryData(novelKeys.runArtifacts("wf-review"), []);
+  client.setQueryData(novelKeys.factCandidates("p1", "d1"), []);
+  return renderToStaticMarkup(<QueryClientProvider client={client}><ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm }}><App><MemoryRouter><NovelProductionWorkspace embedded projectId="p1" documentId="d1" workflowId="wf-review" stage="review" /></MemoryRouter></App></ConfigProvider></QueryClientProvider>);
+}
+
 function renderRunningProduction() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(novelKeys.project("p1"), project);
@@ -264,6 +276,13 @@ describe("Novel command workspace", () => {
     expect(productionHtml).toContain("查看工作流");
     expect(productionHtml).not.toContain("运行详情");
     expect(productionHtml).not.toContain("11 阶段");
+  });
+
+  it("lets a non-targeted quality gate submit review feedback for regeneration", () => {
+    const html = renderNonTargetedProduction();
+    expect(html).toContain("补充修改意见（可选）");
+    expect(html).toContain("提交意见并重新生成");
+    expect(html).toContain("退回上一版继续修订");
   });
 
   it("keeps an explicit cancellation path while a chapter workflow is running", () => {

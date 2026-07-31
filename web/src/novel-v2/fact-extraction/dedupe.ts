@@ -1,4 +1,5 @@
 import type { FactExtractionOutput } from "../prompts/schemas";
+import { factCanonicalValue, factValueHash } from "./fingerprint";
 
 /**
  * V2 事实去重纯函数。
@@ -43,8 +44,7 @@ const PRONOUN_SUBJECTS = new Set([
  * 不包含 evidence/paragraph（同一事实可能在不同段落被多次陈述）。
  */
 export function factFingerprint(fact: FactExtractionOutput["facts"][number]): string {
-  const valueStr = typeof fact.object.value === "string" ? fact.object.value : JSON.stringify(fact.object.value);
-  return `${fact.subject.kind}:${fact.subject.id}|${fact.predicate}|${fact.object.kind}:${valueStr}`;
+  return factCanonicalValue(fact);
 }
 
 /**
@@ -130,7 +130,7 @@ export function dedupeFactCandidates(params: {
       continue;
     }
     // L11: 与既有 contentHash 冲突
-    const contentHash = evidenceFingerprint(`${candidate.subject.id}:${candidate.predicate}:${candidate.humanReadable}`);
+    const contentHash = factValueHash(candidate);
     if (existing.has(contentHash)) {
       discardedExistingHashCount += 1;
       continue;

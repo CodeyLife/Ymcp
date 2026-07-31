@@ -83,6 +83,10 @@ export function compileStageContext(request: StageContextRequest, now = Date.now
   const artifactSeen = new Set<string>();
 
   for (const section of normalized.sort((left, right) => PRIORITY_RANK[right.priority] - PRIORITY_RANK[left.priority])) {
+    if (section.exclusionReason) {
+      receipts.push(receipt(section, "excluded", section.exclusionReason));
+      continue;
+    }
     if (!section.text) {
       receipts.push(receipt(section, "excluded", "empty"));
       continue;

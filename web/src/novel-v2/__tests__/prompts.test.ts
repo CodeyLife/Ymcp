@@ -75,6 +75,61 @@ function makeSkills(overrides: Partial<import("../protocol").SkillBundle> = {}):
 }
 
 describe("prompts buildChapterDraftPrompt", () => {
+  const foundationArtifact = (taskKey: string, structuredData: Record<string, unknown>): Artifact => ({
+    id: `foundation-${taskKey}`,
+    projectId: "p1",
+    taskId: `task-${taskKey}`,
+    attemptId: `attempt-${taskKey}`,
+    kind: "foundation",
+    contentHash: `hash-${taskKey}`,
+    objectKey: `obj-${taskKey}`,
+    baseRevision: 0,
+    createdAt: 1717000000000,
+    fingerprint: `fp-${taskKey}`,
+    structuredData: { taskKey, title: taskKey, summary: `${taskKey} summary`, ...structuredData },
+  });
+
+  it("consumes only the current stage section from a cross-stage skill bundle", () => {
+    const skills = makeSkills({
+      skills: [{
+        skillId: "review-only",
+        version: "1",
+        capabilities: ["review"],
+        applicableTasks: ["drafting"],
+        requiredMemoryKinds: [],
+        qualityGates: [],
+        promptSections: { review: "审校时检查场景因果是否成立" },
+      }],
+    });
+
+    const draftPrompt = buildChapterDraftPrompt({ intent: makeIntent(), blueprint: makeBlueprint(), memory: makeMemory(), skills });
+
+    expect(draftPrompt).not.toContain("审校时检查场景因果是否成立");
+    expect(getReviewFocus("plot-reviewer", skills)).toContain("审校时检查场景因果是否成立");
+  });
+
+  it("treats long-range strategy as soft context and ignores legacy chapter plans", () => {
+    const packageResult = buildChapterDraftPromptPackage({
+      workflowId: "wf-long-range",
+      system: "writer",
+      intent: makeIntent(),
+      blueprint: makeBlueprint({ budget: { maxInputTokens: 20_000, maxOutputTokens: 4_000 } }),
+      memory: makeMemory(),
+      skills: makeSkills(),
+      foundationArtifacts: [
+        foundationArtifact("characters", { characters: [{ id: "hero", name: "主角", role: "protagonist", motivation: "查明旧案" }] }),
+        foundationArtifact("plot-design", { plotStrategy: { narrativePromises: ["真相与选择互相牵动"], nonNegotiables: ["不得覆盖已定稿事实"] } }),
+        foundationArtifact("chapter-plan", { chapters: [{ index: 1, title: "旧版开局", summary: "旧版章节表不应进入正文上下文" }] }),
+      ],
+    });
+    const sections = packageResult.manifest.sections;
+    expect(sections.find((section) => section.id === "foundation:foundation-characters")?.priority).toBe("required");
+    expect(sections.find((section) => section.id === "foundation:foundation-plot-design")?.priority).toBe("normal");
+    expect(sections.some((section) => section.id === "foundation:foundation-chapter-plan")).toBe(false);
+    expect(packageResult.instruction).not.toContain("旧版开局");
+    expect(packageResult.sections.find((section) => section.id === "foundation:foundation-plot-design")?.text).toContain("长程方向（软约束）");
+  });
+
   it("includes hard constraints, blueprint, context and intent sections", () => {
     const prompt = buildChapterDraftPrompt({
       intent: makeIntent(),

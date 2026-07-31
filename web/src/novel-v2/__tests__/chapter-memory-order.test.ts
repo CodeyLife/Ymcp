@@ -63,6 +63,17 @@ describe("chapter memory recency", () => {
     });
     expect(rollup.content).toContain("第7章：chapter-7-latest");
     expect(rollup.sourceRevisionIds).toContain("revision-7-2");
+
+    const refreshedRevisionId = "revision-7-3";
+    const refreshedContentHash = `content-${projectId}-7-3`;
+    await repository.pool.query("INSERT INTO content_blobs(content_hash,object_key,byte_length) VALUES($1,$2,1)", [refreshedContentHash, `test/${refreshedContentHash}`]);
+    await repository.pool.query("INSERT INTO manuscript_revisions(id,project_id,document_id,revision,base_revision,content_hash) VALUES($1,$2,'doc-t-7',3,2,$3)", [refreshedRevisionId, projectId, refreshedContentHash]);
+    await repository.createChapterMemory(memory({ id: "memory-7-3", projectId, documentId: "doc-t-7", revisionId: refreshedRevisionId, order: 7, summary: "chapter-7-refreshed", createdAt: 200 }));
+
+    const refreshed = await repository.refreshChapterMemoryRollup(projectId, 7);
+    expect(refreshed.id).toBe(rollup.id);
+    expect(refreshed.content).toContain("第7章：chapter-7-refreshed");
+    expect(refreshed.contentHash).not.toBe(rollup.contentHash);
   });
 
   it("blocks the third consecutive critical miss and resets only after a completed rebuild", async () => {

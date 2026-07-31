@@ -523,8 +523,11 @@ const KNOWLEDGE_KIND_META: Record<string, { label: string; icon: ReactNode }> = 
   relations: { label: "关系", icon: <ForkOutlined /> },
   timeline: { label: "时间线", icon: <ClockCircleOutlined /> },
   facts: { label: "事实账本", icon: <FileSearchOutlined /> },
-  skills: { label: "Skill 治理", icon: <HighlightOutlined /> },
-  foundation: { label: "Foundation", icon: <ExperimentOutlined /> },
+  skills: { label: "全局 Skill 治理", icon: <HighlightOutlined /> },
+  foundation: { label: "创作契约", icon: <FundProjectionScreenOutlined /> },
+  claims: { label: "叙事事实", icon: <FileSearchOutlined /> },
+  "chapter-memories": { label: "章节记忆", icon: <FileTextOutlined /> },
+  "project-skills": { label: "本项目 Skill", icon: <ExperimentOutlined /> },
 };
 
 export function knowledgeKindMeta(kind: string | undefined): { label: string; icon: ReactNode } {

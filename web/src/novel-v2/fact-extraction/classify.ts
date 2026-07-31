@@ -1,5 +1,6 @@
 import type { FactExtractionOutput } from "../prompts/schemas";
 import type { MemoryClaim, MemoryKind, MemoryAuthority } from "../protocol";
+import { canonicalizeFactPredicate, factIdentityHash, factValueHash, normalizeFactToken } from "./fingerprint";
 
 /**
  * V2 事实风险分类与 MemoryClaim 投影。
@@ -48,6 +49,17 @@ export interface ClassifyFactCandidatesInput {
   existingClaimIndex?: Map<string, string[]>;
 }
 
+const CONTINUITY_PREDICATE_PATTERN = /身份|姓名|年龄|生死|死亡|存活|状态|位置|所在地|持有|拥有|失去|获得|知道|得知|隐瞒|关系|亲属|敌友|承诺|约定|时间|日期|先后|能力|限制|伤势|阵营|职位/u;
+
+/** Facts that can alter later causal/state decisions need stronger evidence. */
+export function isContinuitySensitiveFact(fact: FactExtractionOutput["facts"][number]): boolean {
+  return fact.subject.kind === "relation"
+    || fact.subject.kind === "timeline"
+    || fact.subject.kind === "thread"
+    || fact.subject.kind === "foreshadowing"
+    || CONTINUITY_PREDICATE_PATTERN.test(fact.predicate);
+}
+
 /**
  * 把 LLM 提取的事实投影为 MemoryClaim + 风险等级。
  */
@@ -58,7 +70,7 @@ export function classifyFactRisk(params: {
   baseRevision: number;
   existingClaimIndex?: Map<string, string[]>;
 }): ClassifiedFact {
-  const { fact, projectId, artifactId } = params;
+  const { fact, projectId } = params;
 
   let risk: FactRisk = "low";
   let riskReason = "新增客观事实，自动入库";
@@ -72,6 +84,9 @@ export function classifyFactRisk(params: {
   } else if (fact.novelty === "update") {
     risk = "medium";
     riskReason = "更新既有事实，需审核影响范围";
+  } else if (fact.confidence < 0.75 && isContinuitySensitiveFact(fact)) {
+    risk = "medium";
+    riskReason = "低置信连续性事实可能改变角色、关系、时间线或承诺状态，需人工确认";
   } else if (fact.novelty === "duplicate") {
     risk = "low";
     riskReason = "重复事实，仅记录";
@@ -93,12 +108,15 @@ export function classifyFactRisk(params: {
   // P0-A1: novelty=update 时按 subject.id+predicate 查 existingClaimIndex 填充 supersedes
   let supersedes: string[] = [];
   if (fact.novelty === "update" && params.existingClaimIndex) {
-    const key = `${fact.subject.id}|${fact.predicate}`;
+    const key = `${normalizeFactToken(fact.subject.id)}|${canonicalizeFactPredicate(fact.predicate)}`;
     supersedes = params.existingClaimIndex.get(key) ?? [];
   }
 
+  const identityHash = factIdentityHash(fact);
+  const valueHash = factValueHash(fact);
+
   const claim: MemoryClaim = {
-    id: `claim:${artifactId}:${factFingerprintShort(fact)}`,
+    id: `claim:${projectId}:${valueHash.slice(0, 24)}`,
     projectId,
     kind,
     title: fact.humanReadable.slice(0, 32),
@@ -110,36 +128,14 @@ export function classifyFactRisk(params: {
     authority,
     confidence: fact.confidence,
     sourceRevisionIds: [],
-    contentHash: hashContent(`${fact.subject.id}:${fact.predicate}:${fact.humanReadable}`),
+    contentHash: valueHash,
     supersedes,
     predicate: fact.predicate,
+    identityHash,
+    valueHash,
   };
 
   return { claim, risk, riskReason };
-}
-
-/**
- * 短指纹：用于 claim.id，避免过长。
- */
-function factFingerprintShort(fact: FactExtractionOutput["facts"][number]): string {
-  const valueStr = typeof fact.object.value === "string" ? fact.object.value : JSON.stringify(fact.object.value);
-  const raw = `${fact.subject.kind}:${fact.subject.id}|${fact.predicate}|${fact.object.kind}:${valueStr}`;
-  return hashContent(raw).slice(0, 16);
-}
-
-/**
- * 简单内容哈希：用于 contentHash 字段。
- *
- * 使用 djb2 算法（非加密强度，但足够去重）。
- * 不引入 node:crypto 依赖，便于在浏览器环境复用。
- */
-function hashContent(text: string): string {
-  let hash = 5381;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = ((hash << 5) + hash) + text.charCodeAt(i);
-    hash = hash & 0xffffffff;
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 /**
