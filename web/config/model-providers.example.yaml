@@ -79,6 +79,12 @@ routes:
       - executor: api
         profileId: web-chat
       - executor: external-mcp
+  "review.foundation":
+    conversationPolicy: stateless
+    candidates:
+      - executor: api
+        profileId: web-chat
+      - executor: external-mcp
   "facts.extract":
     conversationPolicy: stateless
     candidates:

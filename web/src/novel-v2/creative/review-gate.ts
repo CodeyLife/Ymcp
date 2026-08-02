@@ -207,6 +207,14 @@ export async function listReviews(
   return result.rows.map(mapReviewRow);
 }
 
+/** A Foundation artifact needs an independent dedicated review before author sign-off can accept it. */
+export function hasPassedIndependentReviewForArtifact(reviews: CreativeReview[], subjectArtifactId: string): boolean {
+  const relevant = reviews.filter((review) => review.reviewer === "independent" && review.subjectArtifactId === subjectArtifactId);
+  const latest = relevant.reduce<CreativeReview | undefined>((selected, review) =>
+    !selected || review.createdAt >= selected.createdAt ? review : selected, undefined);
+  return latest?.verdict === "passed";
+}
+
 /**
  * 纯函数：判定门禁是否通过。
  *
@@ -231,7 +239,12 @@ export function evaluateReviewGate(
   policy: CreativeRunPolicy,
   subjectArtifactId?: string,
 ): CreativeReviewGate {
-  const openIssues = collectOpenIssues(reviews);
+  // A revised artifact must receive a fresh review. Older reviews remain audit history,
+  // but cannot satisfy the current artifact's gate.
+  const relevantReviews = subjectArtifactId
+    ? reviews.filter((review) => review.subjectArtifactId === subjectArtifactId)
+    : reviews;
+  const openIssues = collectOpenIssues(relevantReviews);
 
   if (policy.reviewGate === "none") {
     return {
@@ -248,7 +261,7 @@ export function evaluateReviewGate(
     // external-LLM verdict=passed 仍被无视 → 触发 reviseWork 重生(即便已通过)。
     // reason 必须保留 "manual gate" 子串,workflows.ts:829 用 includes("manual gate")
     // 判定进入 reviewSubmittedSignal 等待循环。
-    const latestExternalReview = [...reviews]
+    const latestExternalReview = [...relevantReviews]
       .reverse()
       .find(
         (review) =>
@@ -272,7 +285,7 @@ export function evaluateReviewGate(
   }
 
   // auto gate
-  if (reviews.length === 0) {
+  if (relevantReviews.length === 0) {
     return {
       passed: false,
       openIssues,
@@ -281,7 +294,7 @@ export function evaluateReviewGate(
   }
 
   // 取最新 review（按 createdAt DESC）
-  const sorted = [...reviews].sort((a, b) => b.createdAt - a.createdAt);
+  const sorted = [...relevantReviews].sort((a, b) => b.createdAt - a.createdAt);
   const latest = sorted[0];
 
   if (latest.verdict !== "passed") {
@@ -304,7 +317,7 @@ export function evaluateReviewGate(
     };
   }
 
-  const score = computeScore(reviews);
+  const score = computeScore(relevantReviews);
   const threshold = policy.autoAcceptThreshold ?? 0;
   if (score < threshold) {
     return {

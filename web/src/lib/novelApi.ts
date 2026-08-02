@@ -57,6 +57,22 @@ export interface NovelProjectDetail {
   latestRuns?: NovelWorkflowRunRecord[];
 }
 
+export interface CreativeBriefSeed {
+  version?: 1;
+  targetReader?: string;
+  corePromise?: string;
+  themeQuestion?: string | { notApplicable: true; rationale: string };
+  protagonistNeed?: string;
+  protagonistContradiction?: string;
+  centralOpposition?: string;
+  emotionalContract?: string | { notApplicable: true; rationale: string };
+  worldAnchor?: string;
+  researchNeeds?: string[];
+  nonNegotiables?: string[];
+  endingEnvelope?: string;
+  stylePreferences?: string;
+}
+
 export interface NovelRunState {
   workflowId: string;
   status: string;
@@ -390,7 +406,7 @@ export function useNovelChapterWorkspace(projectId: string, documentId: string |
 export function useCreateNovelProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { premise: string; title?: string; genre?: string; autoBootstrap: boolean; includeChapterPlan: boolean }) =>
+    mutationFn: (input: { premise: string; title?: string; genre?: string; creativeBrief?: CreativeBriefSeed; autoBootstrap: boolean; includeChapterPlan: boolean }) =>
       novelFetch<{ project: NovelProjectDetail }>("/v2/projects", {
         method: "POST",
         headers: { "content-type": "application/json" },

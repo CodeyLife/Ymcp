@@ -8,7 +8,7 @@ const { Text, Title } = Typography;
 
 const PURPOSES = [
   "planning.foundation", "planning.blueprint", "writing.draft", "writing.revision",
-  "review.style", "review.character", "review.continuity", "review.plot", "review.reader",
+  "review.style", "review.character", "review.continuity", "review.plot", "review.reader", "review.foundation",
   "facts.extract", "learning.assess", "skill.iterate", "memory.embed", "memory.rerank",
 ] as const;
 type Purpose = (typeof PURPOSES)[number];
@@ -23,6 +23,7 @@ const PURPOSE_LABELS: Record<Purpose, string> = {
   "review.continuity": "审校·连贯性",
   "review.plot": "审校·情节",
   "review.reader": "审校·读者视角",
+  "review.foundation": "审校·全书架构",
   "facts.extract": "事实·抽取",
   "learning.assess": "学习·评估",
   "skill.iterate": "技能·迭代",
@@ -41,6 +42,7 @@ const PURPOSE_CAPABILITY: Record<Purpose, Capability> = {
   "review.continuity": "structured",
   "review.plot": "structured",
   "review.reader": "structured",
+  "review.foundation": "structured",
   "facts.extract": "structured",
   "learning.assess": "structured",
   "skill.iterate": "structured",

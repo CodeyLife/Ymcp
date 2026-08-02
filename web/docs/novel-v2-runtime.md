@@ -39,12 +39,14 @@ Use `npm run dev`, `npm run novel:v2:api`, or `npm run novel:v2:worker` so both 
 - `GET /health` checks API/PostgreSQL reachability.
 - `GET /v2/projects` lists V2 projects.
 - `POST /v2/projects` creates or updates a V2 project.
+- `POST /v2/projects` accepts an optional versioned `creativeBrief`; omitted briefs remain compatible with premise-only clients.
+- Foundation bootstrap defaults to `reviewGate=manual`; core planning sections require the current artifact review plus explicit author confirmation before downstream work unlocks. `reviewGate=none` is reserved for tests/debugging.
 - `GET /v2/projects/:projectId` returns project detail plus manuscript document targets.
 - `POST /v2/projects/:projectId/documents` creates a target manuscript document.
 - `POST /v2/intents` submits a durable intent and starts `novelIntentWorkflow`.
 - `GET /v2/runs/:workflowId` returns Temporal plus persisted workflow status.
 - `GET /v2/runs/:workflowId/events` returns project-filtered outbox events; `Accept: text/event-stream` streams the same events.
-- `POST /v2/commits` is guarded by `CommitService` and requires both current internal and independent review evidence for the artifact fingerprint.
+- `POST /v2/commits` is guarded by `CommitService` and requires both current internal and independent review evidence for the artifact fingerprint; chapter workflows also pass applicable blueprint dimensions so missing D1-D5 evidence cannot bypass the final commit check.
 - `GET/PUT /v2/model-config` reads or atomically replaces the masked global provider and purpose routing configuration.
 - `GET /v2/model-tasks` and the claim/heartbeat/submit/fail routes back external MCP execution without calling a model API.
 
@@ -65,6 +67,7 @@ Then create a project and chapter target through Web or HTTP, submit a planning/
 - Outbox contains workflow and blueprint/artifact events for the project.
 - Planning intents produce preflight, memory bundle, skill bundle, and execution blueprint records.
 - Drafting without configured API providers creates durable external MCP tasks and waits without silently producing empty artifacts.
+- A Foundation smoke test must also verify semantic-contract rejection, `review.foundation` evidence with the current artifact fingerprint, and the author-confirmation transition for the five core sections.
 
 ## Direct replacement boundary
 

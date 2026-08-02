@@ -1,6 +1,6 @@
 # Novel MCP V2
 
-The MCP server in `scripts/novel-v2-mcp-server.mjs` calls `executeTool` from `src/novel-v2/mcp/index.ts` directly (no HTTP proxy). It loads 23 tools defined in `src/novel-v2/mcp/tool-definitions.ts`. Start with `pnpm novel:mcp:v2` (requires Postgres + tsx loader).
+The MCP server in `scripts/novel-v2-mcp-server.mjs` calls `executeTool` from `src/novel-v2/mcp/index.ts` directly (no HTTP proxy). It loads 29 tools defined in `src/novel-v2/mcp/tool-definitions.ts`. Start with `pnpm novel:mcp:v2` (requires Postgres + tsx loader).
 
 ## Tools
 
@@ -10,7 +10,9 @@ The MCP server in `scripts/novel-v2-mcp-server.mjs` calls `executeTool` from `sr
 - `novel_catalog_get` / `novel_receipt_get` / `novel_rule_target_get` read catalogs, receipts, rule targets.
 - `novel_rule_candidate_create` / `novel_rule_candidate_get` / `novel_rule_evidence_submit` / `novel_rule_foundation_evaluate` / `novel_rule_review_submit` / `novel_rule_promote` / `novel_rule_rollback` manage craft-rule candidate evolution.
 - `novel_project_create` / `novel_project_list` / `novel_project_delete` manage project lifecycle.
-- `novel_bootstrap_run` / `novel_chapter_review` one-click flows.
+- `novel_bootstrap_run` / `novel_chapter_review` / `novel_chapter_generate` / `novel_chapter_review_decision` one-click flows.
+- `novel_story_arc_start` / `novel_story_arc_get` manage story arc lifecycle.
+- `novel_workflow_get` / `novel_workflow_list` inspect workflow status.
 - `novel_closed_loop_run` evaluation closed-loop.
 
 ## novel_project_create — 一句话创意创建小说项目入口
@@ -23,9 +25,12 @@ The MCP server in `scripts/novel-v2-mcp-server.mjs` calls `executeTool` from `sr
 - `idempotencyKey` (string,必填):幂等键。同时作为 `projectId`(与 v1 行为一致),重复调用同 key 不会重复创建项目或启动 bootstrap。
 - `title` (string,可选):项目标题。未提供则从 `premise` 自动派生(取第一句前 24 字,见 `provisionalTitle`)。`project-positioning` task 会润色生成正式书名,此字段只提供初始标题。
 - `genre` (string,可选):题材标签(如 玄幻/都市/言情/科幻/悬疑),用于 `resolveSkillBundle` 匹配 `applicableGenres`。
-- `autoBootstrap` (boolean,默认 `true`):是否自动启动全书规划。`true` 时调用 `startNovelBootstrap` 创建 CreativeRun + enqueue 10 个 foundation task(+ 可选 chapter-plan)并启动 Temporal `creativeRunWorkflow`。
-- `includeChapterPlan` (boolean,默认 `true`):bootstrap 是否包含章节计划任务。仅 `autoBootstrap=true` 时生效。`chapter-plan` 是 `REQUIRED_FOUNDATION_TASK_KEYS` 必填项,设为 `false` 后续 `novel_chapter_generate` 会被前置检查拒绝。
+- `autoBootstrap` (boolean,默认 `true`):是否自动启动全书规划。`true` 时调用 `startNovelBootstrap` 创建 CreativeRun + enqueue 10 个 foundation task 并启动 Temporal `creativeRunWorkflow`。
+- `includeChapterPlan` (boolean,默认 `true`):旧客户端兼容字段，当前被忽略。章节方案由 Story Arc 按批次滚动生成，不再创建静态 `chapter-plan` foundation task。
 - `objective` (string,可选):bootstrap 目标。未提供则用 `premise` 作为 objective。
+- `creativeBrief` (object,可选):版本 `1` 的创作简报种子，字段包括 `targetReader`、`corePromise`、`themeQuestion`、`protagonistNeed`、`protagonistContradiction`、`centralOpposition`、`emotionalContract`、`worldAnchor`、`researchNeeds[]`、`nonNegotiables[]`、`endingEnvelope`、`stylePreferences`。主题问题或情感契约不适用时使用 `{notApplicable:true,rationale:"..."}`；未知字段会被忽略，旧客户端保持 premise-only 行为。
+- `reviewGate` (string,可选):`manual`、`auto` 或 `none`。默认 `manual`；`none` 仅用于测试/显式调试。核心 Foundation 阶段还必须完成作者确认。
+- `progression` (string,可选):`automatic` 或 `user-driven`，默认 `automatic`。
 
 **返回:**
 
@@ -37,6 +42,8 @@ The MCP server in `scripts/novel-v2-mcp-server.mjs` calls `executeTool` from `sr
 - `novel_project_create(autoBootstrap=true)` 用于**新项目**:一站式创建项目+启动全书规划。
 - `novel_bootstrap_run` 用于**已存在项目**:重新/补充启动规划(如旧项目未做 foundation,或想重做规划)。
 - 两工具底层都调用 `startNovelBootstrap`,任务链 DAG 完全相同。
+
+Foundation 生成完成后会先写入 `foundation` artifact 和 `project_plan_sections`，再以 `review.foundation` 目的执行专属五维审核。审核证据绑定当前 artifact；`project-positioning`、`architecture`、`characters`、`worldview`、`plot-design` 需要作者在规划工作台确认后才会解锁下游。
 
 ## Operating contract
 

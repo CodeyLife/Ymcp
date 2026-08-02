@@ -10,6 +10,16 @@
 - [Novel MCP V2](../novel-mcp.md)：MCP 工具与调用契约。
 - [流程质量审核报告](./pipeline-audit.md)：各阶段提示词、Schema 和产物质量审核；本文不重复其中的质量结论。
 - [质量标准](./quality-standard.md)：创作产物与审校的评价基准。
+- [研究方法矩阵](./research-methods.md)：公开资料、创作机制与 Runtime 契约的对应关系。
+
+## 0.1 当前质量闭环基线（2026-08-02）
+
+- 创建入口仍接受 `premise` 单字段；可选 `creativeBrief` 会以版本化对象写入 `project.metadata`，HTTP、MCP、Web 统一走同一解析器。
+- Foundation 仍是 10 个任务，不增加阶段数量；每个任务先经过语义结构契约，再生成专属 `foundationReview`，审核结果绑定当前 artifact fingerprint。
+- 默认 `reviewGate=manual`。`project-positioning`、`architecture`、`characters`、`worldview`、`plot-design` 必须同时满足专属审核与作者确认；其余五项可按审核策略自动接受，但出现重大问题或上游变化时转人工。
+- `reviewGate=none` 仅供测试和显式调试，不属于正常创建默认值。
+- Story Arc 的章节蓝图现在必须携带 `worldRuleRefs`、`characterFocus`、`romanceTreatment`、`humorTreatment`；感情线、幽默和配角戏份允许明确 `not-applicable`，不强制每章填充。
+- 章节正文仍复用 `review → revise → manuscriptApproval → extractFacts → approveFacts → commit → enrichCharacters`，旧 artifact 的审核证据不能满足新 fingerprint 的门禁。
 
 ## 1. 范围与阅读约定
 
@@ -98,7 +108,8 @@ MCP server 直接调用 `executeTool`，不是 HTTP 代理；HTTP 与 MCP 最终
 
 ```mermaid
 flowchart TD
-  Idea["一句话创意 premise"] --> Create["创建 Project\n写入 metadata.premise"]
+  Idea["一句话创意 premise"] --> Brief["可选创作简报\n读者/主题/人物/研究/结局边界"]
+  Brief --> Create["创建 Project\n写入 metadata.premise + creativeBrief"]
   Create --> Bootstrap["startNovelBootstrap"]
   Bootstrap --> Foundation["10 阶段 Foundation DAG"]
   Foundation --> PlanReview["作者检查、编辑、确认规划 section"]
@@ -184,10 +195,17 @@ flowchart LR
 1. `startNovelBootstrap` 创建一个 `CreativeRun`，按 DAG 建立 `CreativeWorkItem.dependsOn`，并初始化 `project_plan_sections`。
 2. `creativeRunWorkflow` 自动或按用户信号选择可执行 work item；同一层可并行，依赖未满足的阶段保持锁定。
 3. `generateFoundationWork` 使用 `planning.foundation` 模型目的生成结构化 artifact；无内部模型时创建外部任务等待回填。
-4. bootstrap 默认 `reviewGate=none`，CreativeRun 可完成，但 Web 规划 section 仍通过独立的作者确认状态表达正式批准。
-5. 编辑或重生成上游 section 时，`transitivePlanDependents` 界定需要重新检查的下游范围。
-6. 正文创作的最低前置门禁是 `architecture`、`characters`、`worldview`、`plot-design` 全部为 `approved`；其他规划仍会作为可用 Foundation 上下文参与创作。
-7. Foundation artifact 在记忆检索前被投影为 Foundation memory claims；PostgreSQL 写入成功但 Qdrant 更新失败时，索引可后续重建。
+4. 默认 `reviewGate=manual`。Foundation 生成后先执行专属审核；核心五项还必须等待作者确认，非核心阶段可由独立审核结果按策略自动接受。
+5. 每条审核证据绑定当前 artifact 的 `subjectArtifactId`；Foundation review artifact 还记录当前 `artifactFingerprint`，过期证据不能放行新版本。
+6. 编辑或重生成上游 section 时，`transitivePlanDependents` 界定需要重新检查的下游范围，并将相关 section 与故事弧标记为 stale。
+7. 正文创作的最低前置门禁是 `project-positioning`、`architecture`、`characters`、`worldview`、`plot-design` 全部为 `approved`；其他规划仍会作为可用 Foundation 上下文参与创作。
+8. Foundation artifact 在记忆检索前被投影为 Foundation memory claims；PostgreSQL 写入成功但 Qdrant 更新失败时，索引可后续重建。
+
+### 4.3 Foundation 结构与审核契约
+
+`foundationSchema` 保证通用 JSON 外形，`foundation-contract.ts` 再按 taskKey 检查语义必填路径和重复条目字段。十个任务的结构化落点分别覆盖定位承诺、卷级架构、人物欲望与弧光、世界规则与代价、方向性关系、主支线因果、伏笔回收、故事时间、节奏分布、长期终局边界。
+
+`foundation-review.ts` 使用独立的五维架构审核契约：D1 世界观、D2 故事性、D3 群像、D4 感情线、D5 幽默。每个 issue 都要带 evidence path、严重级别和修复建议；一致性检查失败时，即使模型给出 `passed` 也会被规范化为 `revise`。核心阶段的作者确认通过既有 `project_plan_sections` 和审计记录完成，不另建 Foundation 数据表。
 
 ## 5. 滚动故事弧与章节蓝图
 
@@ -221,6 +239,23 @@ flowchart TD
 - 自动策略最多修订两次。通过后才自动批准；被阻塞或达到上限时保留产物并转人工处理。
 - 故事弧 bundle 同时携带批次位置与章节蓝图。外部修订结果不得改写当前 `batchIndex` 或 `startChapterIndex`。
 - `ChapterPlanningContext` 将故事弧的起始状态、长线约束和章节位置冻结到具体 blueprint，供后续 draft/review/revision 使用。
+- 每章蓝图新增 `narrativeScale`：`compact/standard/extended` 表示主导功能需要被读者经历的展开深度，另含 `reason`、`developmentAxes` 和 `stoppingCondition`。`standard` 是普通网文完整章节的软性体量参考（通常约 3000 字上下），不是字数下限；正文可以在同一事件内部通过感知、试错、选择、代价和余波达到规模，不得用第二套主线或灌水填充。
+- 每章蓝图的四个质量字段会被渲染到 `ChapterPlanningContext`：世界规则引用必须对应已批准规则；`characterFocus` 写配角自身欲望、行动和代价；感情线与幽默用 `not-applicable/background/active` 表达适用性和证据，不因安静章缺少二者而误杀。
+- Story Arc 审核还检查 `thematicTreatment` 的处理方式，要求主题通过选择、关系、后果或世界反应呈现，避免直接解释主题结论。
+- rebase（重基线）不是简单的重新生成：审核阶段对 rebase 目标执行**对抗式双轮审核**——首轮以 `balanced` 视角按多维锚点与整弧校验评分，次轮以 `adversarial-authority` 视角从每章 `unresolvedAtClose` 倒推检查所有指定路径，把候选断言当作待证明命题，只要冻结证据不能蕴含就列入 `certaintyUpgrades`。两轮结果经 `mergeStoryArcReviews` 合并后统一校验。
+- 重基线目标按文档是否已有 `revisionId` 分层：已定稿章节以 `committedMemory`、当前修订事实和 author-scope claims 为最高权威；尚未创作章节不是缺失的历史事实，而是沿用最近一次 `story-arc.approved` 产物中的 `plannedBlueprint`，只允许补充缺失的 `narrativeScale` 等执行信号，禁止模型凭空重写未来事件或状态。若未来章节没有可恢复的已批准蓝图，重基线必须阻断并要求先完成正式规划。
+- `authorityChecks`（事实权威检查）为每章输出一条，逐项覆盖运行时指定的候选路径（`checkedPaths`），摘录候选断言（`candidateClaims`）与冻结依据（`frozenEvidence`），判定采用蕴含而非相容：存在一个满足全部冻结事实但候选断言仍可能为假的世界时，该断言写入 `certaintyUpgrades`。观察变原因、可能危险变求助/救援、决定行动变已经行动、身份或来意未知变幕后关系等均属于确定性升级。
+- `certaintyUpgrades`（确定性升级）非空时强制该章 `verdict=revise` 并在 issues 中生成对应 major；即使六维检查全部通过也不能覆盖事实权威失败。这防止 rebase 借"合理剧情"之名覆盖已发生的故事事实。
+- `chapterChecks` 必须覆盖 `longform-function`：逐章只判断章节功能是否在长篇当前位置成立，不要求每章都有新信息、新压力、新爽点或主线推进；余波、等待、恢复、日常、气氛、误判和关系沉淀都可以是合法章节功能。
+- 故事弧审核还要检查 `narrativeScale` 与章节功能是否一致：`standard/extended` 若只完成首个状态变化便收束，应报告 `chapter.premature-closure` 的具体证据；该检查依据 `developmentAxes` 和 `stoppingCondition`，不依据字符数。旧蓝图缺少该字段时由运行时归一化为 `standard` 软信号，不把缺失字段当作短章许可，也不产生字数门槛。
+- `arcChecks` 必须覆盖 `function-rhythm`、`theme-distribution`、`motif-evolution`、`motif-integration`、`longform-hierarchy`、`window-variation` 与 `pressure-trajectory`。其中 `longform-hierarchy` 检查全书/卷级战略、故事弧、批次与章节的职责分层，防止局部蓝图吞掉上层规划；`window-variation` 检查连续章节窗口是否允许重复但产生新的理解、关系、社会质地、信息角度、情绪重量或行动代价；`motif-integration` 检查核心设定/职业/金手指/主题隐喻是否已转写为具体事件、感官压力、人物选择和递进意象；连续标题、场景名或转折描述只贴同一概念标签时，必须进入修订。`pressure-trajectory` 只在弧/批次窗口层判断张力形态变化，不要求每章都新增或加剧压力。
+
+### 5.1 故事弧删除与 force 级联
+
+`deleteStoryArc` 支持两种模式：
+
+- **默认模式（无 force）**：若故事弧下任一章节已关联正文（`current_revision_id` 存在、`revision_count > 0` 或 `document_status !== "planned"`），拒绝删除并提示作者改用"放弃故事弧"保留历史记录。这防止误删已进入创作流程的章节。
+- **force 级联删除**：传 `force=true` 时，在同一事务内级联清理：取消关联的 `workflow_runs`（标记为 `cancelled`）、删除 `manuscript_revisions`、`chapter_memories`、`memory_claims`（含来源指向被删文档/修订的记录）以及关联的伏笔记录。force 删除是破坏性操作，用于彻底清除一个故事弧及其全部下游产物；非 force 路径保留可审计历史，应作为常规选择。
 
 ## 6. 正式章节生成
 
@@ -268,7 +303,7 @@ flowchart TD
 ### 6.2 上下文冻结与传递
 
 1. `PreflightPlan` 根据目标章节、叙事截止点、POV 和任务类别声明检索 facet。
-2. `retrieveMemory` 先修复 Foundation claims，再组合 PostgreSQL 权威叙事状态、开放伏笔/承诺、词法/语义检索结果；token budget 会随任务类别和章节规模调整。
+2. `retrieveMemory` 先修复 Foundation claims，再组合 PostgreSQL 权威叙事状态、开放伏笔/承诺、词法/语义检索结果；token budget 会随任务类别和章节规模调整。此外，`retrieveMemory` 还会加载 `NarrativeRhythmSnapshot`（连续章节叙事节奏快照），该快照由前序已提交章节记忆和已批准蓝图推导而来，包含前序章节的状态摘要、关键事件、情绪弧线、主导叙事功能、主题显隐模式、开放 issue 族，以及禁止提前消费的约束（如未兑现伏笔、未解悬念不得在当前章节越权兑现），使 draft/review 能感知连续叙事节奏而非仅依赖离散事实检索。
 3. `SkillBundle` 在 blueprint 编译前解析，记录实际 skill 版本、能力、冲突和缺失项。
 4. `compileBlueprint` 同时持久化 `PreflightPlan`、`MemoryBundle`、`SkillBundle`、`ExecutionBlueprint`、`ContextManifest` 与路由快照相关引用。
 5. 新工作流优先用 `draftByRefs/reviewByRefs/reviseByRefs` 传递 ID；activity 在执行边界加载不可变快照，减少 Temporal history 载荷并保持同轮上下文一致。
@@ -293,9 +328,51 @@ flowchart TD
 | `MIN_AUTOMATIC_COMMIT_SCORE` | `4.0 / 5` | 自动提交综合分门槛 |
 | `MIN_REVIEWER_SCORE` | `3.5 / 5` | 任一必需 reviewer 的最低分 |
 
-自动提交还要求五个必需 reviewer 都绑定当前 artifact fingerprint、全部 `passed`，并且不存在 blocker/major。若修订降低质量，系统按“无 blocker 优先，其次同类分数更高”回退到本轮最佳稿。
+自动提交还要求五个必需 reviewer 都绑定当前 artifact fingerprint、全部 `passed`，不存在 blocker/major，并覆盖冻结章节蓝图声明的适用质量维度：`plot`/`hookPayoff` 为基础维度，世界规则、群像焦点、感情线或幽默标记为适用时还必须有对应 `dimensionScores` 或 issue evidence。`not-applicable` 不会加入硬门槛。`CommitService` 复用同一集合做最终复核。若修订降低质量，系统按“无 blocker 优先，其次同类分数更高”回退到本轮最佳稿。
 
 `blueprint-approval` 和 `deterministic-check` 仍存在于共享阶段类型/展示元数据中，但当前 `novelIntentWorkflow` 没有独立的人工作流等待点：上游规划/故事弧审批提供 blueprint 的作者控制，writer self-check 已并入当前生成提示词与正式 reviewer 闭环。
+
+### 6.4 主题显隐系统（thematicTreatment）
+
+章节蓝图（`ChapterBlueprint`）携带 `thematicTreatment` 字段，控制主题在正文中的显隐模式，是贯穿 story-arc → draft → review → revision 全链路的权限与边界约束，而非逐章主题任务。
+
+| 字段 | 类型 | 作用 |
+| --- | --- | --- |
+| `mode` | `absent` / `subtext` / `foreground` | `absent`：本章不承担主题推进；`subtext`：只让读者从行动、关系或后果自行推断，不得由作者或人物直接点明；`foreground`：允许人物围绕具体处境争执价值，但仍不得宣布标准答案 |
+| `carrier` | `none` / `choice` / `consequence` / `relationship` / `world-reaction` / `dialogue-conflict` | 主题承载方式，约束主题通过哪类叙事载体显现 |
+| `questionRefs` | `string[]` | 引用故事弧 `thematicQuestions` 中的问题 ID；不得为了填满引用而让每章都碰主题 |
+| `evidenceChange` | `string` | 本章只改变的主题证据，限定主题推进的具体落点 |
+| `expositionBoundary` | `string` | 解释边界，禁止作者或角色直接总结主题结论 |
+
+故事弧同时声明 `thematicQuestions`（`ThematicQuestion`：含 `question`、`opposingPressures`、`resolutionWindow`），为章节 `questionRefs` 提供可引用的稳定主题问题源。
+
+全链路一致性：
+
+1. **story-arc 阶段**：蓝图规划时为每章设定 `mode`/`carrier`/`questionRefs`，确立主题显隐模式与边界。
+2. **draft 阶段**：正文生成时按 `mode` 约束主题表达——`absent` 不碰主题，`subtext` 只产生潜台词，`foreground` 才允许正面争执但不给结论。
+3. **review 阶段**：审核者检查正文是否越权（如 `subtext` 章节出现人物直接宣布主题结论）。
+4. **revision 阶段**：修订时保持主题显隐一致，不得在修复其他问题时引入与 `mode` 冲突的主题表达。
+
+`NarrativeRhythmEntry` 也会携带 `thematicMode` 与 `themeCarrier`，使连续章节的节奏快照能反映主题显隐的分布与衔接，避免主题在错误窗口被过度复述。
+
+### 6.5 修订防退化与输出净化机制
+
+修订阶段在 `decideRevision` 决策与 `reviseByRefs` 执行之间引入多重防退化与净化机制，确保修订在改善目标 issue 时不引入新的事实漂移、指令回显或策略重复。
+
+| 机制 | 作用 | 实现要点 |
+| --- | --- | --- |
+| `RevisionAttempt` | 记录前序修订尝试，避免重复策略 | 每轮修订持久化 `iteration`、`outcome`（`accepted`/`reverted-degradation`/`reverted-no-improvement`）、`targetedIssueTitles`、`baselineScore`、`revisedScore`、`approachSummary`；后续修订 prompt 注入历史尝试，促使 LLM 尝试不同策略而非重复同一方向 |
+| `sanitizeRevisionOutput` | 清理 LLM 输出中的指令回显与元注释 | 基于结构化启发式（`isLikelyMetaAnnotation`）而非精确短语匹配：剥离 Markdown 代码围栏，逐行扫描开头若干行判断是否为元注释（Markdown 标题、冒号结尾短行、冒号分隔的指令前缀、极短确认行），遇到第一个正文行停止；不依赖固定指令文本，因此可跨 prompt 版本、genre 和指令措辞复用 |
+| `detectNamedEntityDrift` | 检测修订前后专有名词漂移 | 提取源文本与修订文本中引号包裹的专有名词（中文引号「」『』""''），比较集合差异：`disappeared`（源有修无，可能被错误替换）、`appeared`（修有源无，可能为幻觉引入）；结果为一次检测信号，由调用方结合审核问题判断是否为预期变更，不自动拒绝修订 |
+
+`revision-policy` 中的最佳稿选择守卫：
+
+| 守卫 | 当前值 | 作用 |
+| --- | --- | --- |
+| `PARTIAL_IMPROVEMENT_THRESHOLD` | `0.2` | 当修订稿综合分数比基线高出此值、最低 reviewer 分数仍达标、且无新 blocker/major 时，即使某维度分数略降也接受修订；防止严格字典序比较丢弃有效的部分改善 |
+| `MAX_REVIEWER_SCORE_DROP` | `0.5` | 单个 reviewer 分数最大允许下降幅度；与 `PARTIAL_IMPROVEMENT_THRESHOLD` 配合，防止局部质量退化被整体改善掩盖 |
+
+这两个守卫共同实现 `isCandidateQualityBetter` 的"无 blocker 优先，其次同类分数更高"回退原则，同时允许"整体改善但某维度略降"的有效修订被接受。
 
 ## 7. 已定稿章节重审与定向修复
 
@@ -303,7 +380,7 @@ flowchart TD
 flowchart TD
   Request["chapterReviewWorkflow 请求"] --> Preflight{"前置条件"}
   Preflight -- "非 final / 有活跃 workflow / 无历史 blueprint" --> Reject["拒绝启动"]
-  Preflight -- "满足" --> Load["并行加载\n历史 blueprint + 当前正文 + routing\nMemoryBundle + PlanningContext"]
+  Preflight -- "满足" --> Load["并行加载\n历史 blueprint + 当前正文 + routing\nMemoryBundle + PlanningContext 快照"]
   Load --> Mode{"mode"}
   Mode -- "full" --> Source{"是否携带 proposedText?"}
   Source -- "是" --> Proposal["作者正文包装为 revision artifact"]
@@ -333,6 +410,7 @@ flowchart TD
 
 - 只处理 `document.status === "final"`，并拒绝与同章节活跃 workflow 并发。
 - 不重新运行 context、blueprint、blueprint-approval 或初次 draft；历史 blueprint 的完整 `structuredData` 与当前定稿正文被包装成新 draft artifact。
+- Load 步骤使用 `loadChapterPlanningContextSnapshot`（按 `blueprintId` 加载 PlanningContext 快照），而非正式生成阶段的 `loadChapterPlanningContext`；这使 review-stage 走 `contextPacketId` 路径，复用历史 blueprint 冻结的起始状态、长线约束和章节位置，跳过 context/blueprint/blueprint-approval/draft 阶段，对齐章节审校工作流复用契约。
 - 完整重审可以从当前正文或作者提交稿开始；定向修复只能基于当前已保存正文和选中的有效 review issues。
 - 保存于审核面板的作者编辑稿会替换本轮 `workflow_runs.payload.artifactId`；后续审批、事实提取和提交都使用替换后的 artifact。
 - 定向修复完成后必经作者 manuscript approval；完整重审若质量门禁直接通过，可以自动提交。

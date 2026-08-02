@@ -1,6 +1,7 @@
 import type { Artifact, CommitResult, FactApprovalSummary, Review, ReviewIssue, RuntimeLearningAssessmentV2 } from "../protocol";
 import type { ManuscriptStructuralReport } from "./manuscript-structure";
 import { candidateQualityKey, DEFAULT_MAX_AUTO_REVISIONS, decideRevision, evaluateCommitGate, isCandidateQualityBetter } from "../temporal/revision-policy";
+import type { ReviewDimension } from "../prompts/schemas";
 
 export type ChapterDraftState = { artifact: Artifact; text: string };
 
@@ -27,14 +28,15 @@ export async function finalizeChapterLifecycle(params: {
   draft: ChapterDraftState;
   reviews: Review[];
   structuralReport: ManuscriptStructuralReport;
-  commit(current: ChapterDraftState, reviews: Review[], factArtifact: Artifact | undefined, structuralReport: ManuscriptStructuralReport): Promise<CommitResult>;
+  commit(current: ChapterDraftState, reviews: Review[], factArtifact: Artifact | undefined, structuralReport: ManuscriptStructuralReport, applicableDimensions?: readonly ReviewDimension[]): Promise<CommitResult>;
   enrich(current: ChapterDraftState, commitResult: CommitResult, factArtifact?: Artifact): Promise<void>;
   assessLearning(current: ChapterDraftState, reviews: Review[]): Promise<RuntimeLearningAssessmentV2>;
   progress(payload: Record<string, unknown>): Promise<unknown>;
   factArtifact?: Artifact;
   assessPostCommitLearning?: boolean;
+  applicableReviewDimensions?: readonly ReviewDimension[];
 }): Promise<{ commitResult: CommitResult; enrichmentError?: string }> {
-  const commitResult = await params.commit(params.draft, params.reviews, params.factArtifact, params.structuralReport);
+  const commitResult = await params.commit(params.draft, params.reviews, params.factArtifact, params.structuralReport, params.applicableReviewDimensions);
   let enrichmentError: string | undefined;
   try {
     await params.enrich(params.draft, commitResult, params.factArtifact);
@@ -72,7 +74,7 @@ export async function runChapterLifecycle(params: {
   assessLearning(current: ChapterDraftState, reviews: Review[]): Promise<RuntimeLearningAssessmentV2>;
   extractFacts(current: ChapterDraftState): Promise<Artifact>;
   approveFacts(factArtifact: Artifact, current: ChapterDraftState): Promise<FactApprovalSummary>;
-  commit(current: ChapterDraftState, reviews: Review[], factArtifact: Artifact, structuralReport: ManuscriptStructuralReport): Promise<CommitResult>;
+  commit(current: ChapterDraftState, reviews: Review[], factArtifact: Artifact, structuralReport: ManuscriptStructuralReport, applicableDimensions?: readonly ReviewDimension[]): Promise<CommitResult>;
   enrich(current: ChapterDraftState, commitResult: CommitResult, factArtifact?: Artifact): Promise<void>;
   progress(payload: Record<string, unknown>): Promise<unknown>;
   beforeRevision?(iteration: number): Promise<void>;
@@ -90,6 +92,8 @@ export async function runChapterLifecycle(params: {
   preserveDirectedRevisionCandidate?: boolean;
   /** P0 #1：为 true 时，若 approveFacts 返回 pending>0，则在 commit 前返回 factApprovalBlocked 交由工作流走人工审批。 */
   requireManualFactApproval?: boolean;
+  /** 当前冻结章节蓝图声明的正式审核维度；缺省以兼容模式运行历史调用。 */
+  applicableReviewDimensions?: readonly ReviewDimension[];
 }): Promise<ChapterLifecycleResult> {
   let draft = params.initialDraft;
   let previousScore: number | undefined;
@@ -130,7 +134,7 @@ export async function runChapterLifecycle(params: {
         iteration: 1,
         finalScore: finalDecision.currentScore,
         structuralReport: evaluated.structuralReport,
-        commitGate: evaluateCommitGate(reviews, draft.artifact.fingerprint, evaluated.structuralReport),
+        commitGate: evaluateCommitGate(reviews, draft.artifact.fingerprint, evaluated.structuralReport, { applicableDimensions: params.applicableReviewDimensions }),
         commitBlocked: { reasonCode: "targeted-manuscript-approval", targetIssueCount: params.directedRevision.issues.length },
       };
     }
@@ -172,7 +176,7 @@ export async function runChapterLifecycle(params: {
       iteration,
       finalScore: finalDecision.currentScore,
       structuralReport: evaluated.structuralReport,
-      commitGate: evaluateCommitGate(reviews, draft.artifact.fingerprint, evaluated.structuralReport),
+      commitGate: evaluateCommitGate(reviews, draft.artifact.fingerprint, evaluated.structuralReport, { applicableDimensions: params.applicableReviewDimensions }),
       commitBlocked: {
         reasonCode: "targeted-manuscript-approval",
         targetIssueCount: params.directedRevision.issues.length,
@@ -230,7 +234,7 @@ export async function runChapterLifecycle(params: {
 
   await params.assessLearning(draft, reviews);
   const finalDecision = decideRevision({ reviews, iteration, maxIterations: DEFAULT_MAX_AUTO_REVISIONS, previousScore });
-  const commitGate = evaluateCommitGate(reviews, draft.artifact.fingerprint, structuralReport);
+  const commitGate = evaluateCommitGate(reviews, draft.artifact.fingerprint, structuralReport, { applicableDimensions: params.applicableReviewDimensions });
   if (params.commitBlocked) return { draft, reviews, iteration, finalScore: finalDecision.currentScore, structuralReport, commitGate, commitBlocked: params.commitBlocked };
   if (!commitGate.passed) return { draft, reviews, iteration, finalScore: finalDecision.currentScore, structuralReport, commitGate };
 
@@ -252,6 +256,7 @@ export async function runChapterLifecycle(params: {
     assessLearning: params.assessLearning,
     progress: params.progress,
     factArtifact,
+    applicableReviewDimensions: params.applicableReviewDimensions,
     assessPostCommitLearning: params.learningMode !== "terminal-candidate",
   });
   return { draft, reviews, iteration, finalScore: finalDecision.currentScore, structuralReport, commitGate, commitResult, enrichmentError };

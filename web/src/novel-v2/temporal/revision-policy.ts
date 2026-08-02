@@ -1,5 +1,7 @@
 import type { Review } from "../protocol";
 import type { ManuscriptStructuralReport } from "../application/manuscript-structure";
+import { buildRevisionBrief } from "../application/revision-brief";
+import type { ReviewDimension } from "../prompts/schemas";
 
 export const REQUIRED_CHAPTER_REVIEWERS = [
   { role: "plot-reviewer", identity: "internal" },
@@ -78,7 +80,25 @@ export function allReviewsPassed(reviews: Review[]): boolean {
   return reviews.length > 0 && reviews.every((review) => review.verdict === "passed");
 }
 
-export function evaluateCommitGate(reviews: Review[], artifactFingerprint: string, structuralReport: ManuscriptStructuralReport) {
+export interface CommitGateOptions {
+  /** 由冻结章节蓝图计算；未提供时兼容旧调用，不增加历史门槛。 */
+  applicableDimensions?: readonly ReviewDimension[];
+}
+
+function missingDimensionEvidence(reviews: Review[], applicableDimensions: readonly ReviewDimension[] | undefined): ReviewDimension[] {
+  if (!applicableDimensions?.length) return [];
+  return [...new Set(applicableDimensions)].filter((dimension) => !reviews.some((review) =>
+    typeof review.dimensionScores?.[dimension] === "number"
+    || review.issues.some((issue) => issue.dimension === dimension),
+  ));
+}
+
+export function evaluateCommitGate(
+  reviews: Review[],
+  artifactFingerprint: string,
+  structuralReport: ManuscriptStructuralReport,
+  options?: CommitGateOptions,
+) {
   const currentReviews = reviews.filter((review) => review.artifactFingerprint === artifactFingerprint);
   const requiredReviews = REQUIRED_CHAPTER_REVIEWERS.map(({ role, identity }) =>
     currentReviews.find((review) => review.role === role && review.identity === identity),
@@ -89,8 +109,11 @@ export function evaluateCommitGate(reviews: Review[], artifactFingerprint: strin
   const overallScore = scoreReviews(requiredReviews.filter((review): review is Review => Boolean(review)));
   const lowReviewer = requiredReviews.find((review) => review && scoreReviews([review]) < MIN_REVIEWER_SCORE);
   const hasBlockingIssue = requiredReviews.some((review) => review?.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major"));
+  const missingDimensions = missingDimensionEvidence(requiredReviews.filter((review): review is Review => Boolean(review)), options?.applicableDimensions);
   const qualityFailure = hasBlockingIssue
     ? "blocking-issue"
+    : missingDimensions.length
+      ? "dimension-coverage"
     : lowReviewer
       ? "reviewer-score"
       : requiredReviews.length > 0 && overallScore < MIN_AUTOMATIC_COMMIT_SCORE
@@ -105,6 +128,7 @@ export function evaluateCommitGate(reviews: Review[], artifactFingerprint: strin
     failedReviewIds: currentReviews.filter((review) => review.verdict !== "passed").map((review) => review.id),
     missingRoles,
     ...(qualityFailure ? { qualityFailure } : {}),
+    ...(missingDimensions.length ? { missingDimensions } : {}),
     ...(!structuralReport.passed ? { structuralFailure: "structural-blocker" as const } : {}),
     overallScore,
   };
@@ -116,26 +140,130 @@ export interface CandidateQualityKey {
   majorCount: number;
   minimumReviewerScore: number;
   overallScore: number;
+  /** Per-reviewer scores let the local degradation guard inspect every role, not just the minimum. */
+  reviewerScores: Record<string, number>;
 }
 
 export function candidateQualityKey(reviews: Review[], structuralReport: ManuscriptStructuralReport): CandidateQualityKey {
   const current = reviews.filter((review) => review.role !== "structural-validator");
   const scores = current.map((review) => scoreReviews([review]));
+  const issueFamilies = buildRevisionBrief(current).clusters.map(({ issue }) => issue);
+  const reviewerScores = Object.fromEntries(current.map((review) => [`${review.role}:${review.identity}`, scoreReviews([review])]));
   return {
     structuralPassed: structuralReport.passed,
-    blockerCount: reviews.flatMap((review) => review.issues).filter((item) => item.severity === "blocker").length,
-    majorCount: reviews.flatMap((review) => review.issues).filter((item) => item.severity === "major").length,
+    blockerCount: issueFamilies.filter((item) => item.severity === "blocker").length,
+    majorCount: issueFamilies.filter((item) => item.severity === "major").length,
     minimumReviewerScore: scores.length ? Math.min(...scores) : 0,
     overallScore: scoreReviews(current),
+    reviewerScores,
   };
 }
+
+/**
+ * 修订质量改善阈值：当修订稿的综合分数比基线高出此值，
+ * 且未引入新 blocker/major、最低 reviewer 分数仍达标时，
+ * 即使某个 reviewer 分数下降也接受修订。
+ *
+ * 根因：严格字典序比较会拒绝"整体改善但某维度略降"的修订，
+ * 导致有效的部分改善被丢弃，修订流程陷入停滞。
+ */
+export const PARTIAL_IMPROVEMENT_THRESHOLD = 0.2;
+
+/**
+ * 单个 reviewer 分数最大允许下降幅度。
+ * 与 PARTIAL_IMPROVEMENT_THRESHOLD 配合使用：即使整体改善达标，
+ * 任何单个 reviewer 的分数下降不得超过此值，防止局部质量退化被整体改善掩盖。
+ * 对齐 workflow-map.md §6.3"同类最高分"回退原则。
+ */
+export const MAX_REVIEWER_SCORE_DROP = 0.5;
 
 export function isCandidateQualityBetter(candidate: CandidateQualityKey, currentBest: CandidateQualityKey): boolean {
   if (candidate.structuralPassed !== currentBest.structuralPassed) return candidate.structuralPassed;
   if (candidate.blockerCount !== currentBest.blockerCount) return candidate.blockerCount < currentBest.blockerCount;
   if (candidate.majorCount !== currentBest.majorCount) return candidate.majorCount < currentBest.majorCount;
+
+  const baselineReviewerScores = Object.keys(currentBest.reviewerScores ?? {});
+  const reviewerScoreDrop = baselineReviewerScores.length
+    ? Math.max(...baselineReviewerScores.map((reviewer) => (currentBest.reviewerScores[reviewer] ?? 0) - (candidate.reviewerScores?.[reviewer] ?? 0)), 0)
+    : currentBest.minimumReviewerScore - candidate.minimumReviewerScore;
+  if (reviewerScoreDrop > MAX_REVIEWER_SCORE_DROP) return false;
+
+  // Partial improvement acceptance: when the candidate has no more blockers/majors
+  // than the current best (guaranteed by checks above), accept it if the overall
+  // score improves meaningfully AND the minimum reviewer score stays above the
+  // commit-gate threshold AND no single reviewer's score drops beyond the guarded
+  // delta. This prevents rejecting revisions that improve overall quality but
+  // slightly lower one reviewer's score, while preventing excessive local regression.
+  const overallImprovement = candidate.overallScore - currentBest.overallScore;
+  if (
+    overallImprovement >= PARTIAL_IMPROVEMENT_THRESHOLD
+    && candidate.minimumReviewerScore >= MIN_REVIEWER_SCORE
+    && reviewerScoreDrop <= MAX_REVIEWER_SCORE_DROP
+  ) {
+    return true;
+  }
+
   if (candidate.minimumReviewerScore !== currentBest.minimumReviewerScore) return candidate.minimumReviewerScore > currentBest.minimumReviewerScore;
   return candidate.overallScore > currentBest.overallScore;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RC5: Named Entity Drift Detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 提取文本中引号包裹的专有名词（角色名、物品名、地名等）。
+ *
+ * 检测中文引号「」、『』、""、'' 中长度 2-10 的内容，
+ * 过滤掉明显不是专有名词的内容（如完整句子、常见词组）。
+ */
+function extractQuotedNames(text: string): Set<string> {
+  const names = new Set<string>();
+  const patterns = [
+    /「([^」]{2,10})」/g,
+    /『([^』]{2,10})』/g,
+    /\u201c([^\u201d]{2,10})\u201d/g, // "..."
+    /\u2018([^\u2019]{2,10})\u2019/g, // '...'
+  ];
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      names.add(match[1].trim());
+    }
+  }
+  return names;
+}
+
+/**
+ * 检测修订前后命名实体的漂移。
+ *
+ * 根因（RC5）：修订 LLM 在修复非一致性问题时，可能顺手改变其他已建立的
+ * 专有名词（如把"枯荣"改成"定风波"）。这种事实漂移不会被质量分数检测到，
+ * 因为分数只反映审核维度的改善，不检测未触及事实是否被保留。
+ *
+ * 检测策略：比较源文本和修订文本中引号包裹的专有名词集合。
+ * - disappeared: 源文本有但修订文本没有的名称（可能被错误替换）
+ * - appeared: 修订文本有但源文本没有的名称（可能是幻觉引入的新名称）
+ *
+ * 注意：这是一次检测，不自动拒绝修订。漂移结果应由调用方结合审核问题
+ * 判断是否为预期变更（如一致性约束要求统一名称）。
+ */
+export interface NamedEntityDrift {
+  disappeared: string[];
+  appeared: string[];
+  hasDrift: boolean;
+}
+
+export function detectNamedEntityDrift(sourceText: string, revisedText: string): NamedEntityDrift {
+  const sourceNames = extractQuotedNames(sourceText);
+  const revisedNames = extractQuotedNames(revisedText);
+  const disappeared = [...sourceNames].filter((name) => !revisedNames.has(name));
+  const appeared = [...revisedNames].filter((name) => !sourceNames.has(name));
+  return {
+    disappeared,
+    appeared,
+    hasDrift: disappeared.length > 0 || appeared.length > 0,
+  };
 }
 
 /**

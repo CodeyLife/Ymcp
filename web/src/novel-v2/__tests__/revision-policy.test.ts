@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   allReviewsPassed,
+  candidateQualityKey,
   decideRevision,
   DEFAULT_MAX_AUTO_REVISIONS,
+  detectNamedEntityDrift,
   evaluateCommitGate,
   hasBlocker,
   hasBlockerOrMajor,
+  isCandidateQualityBetter,
   MIN_IMPROVEMENT_THRESHOLD,
   scoreReviews,
+  type CandidateQualityKey,
   type RevisionDecision,
 } from "../temporal/revision-policy";
 import type { Artifact, Review } from "../protocol";
@@ -68,6 +72,17 @@ describe("revision-policy scoreReviews", () => {
 });
 
 describe("revision-policy classification helpers", () => {
+  it("counts duplicated reviewer findings as one problem family", () => {
+    const shared = { severity: "major" as const, evidence: "访客只负责递交线索", revisionRanges: [{ start: 8, end: 12 }], rule: "character-agency" };
+    const quality = candidateQualityKey([
+      makeReview({ id: "reader", role: "reader-reviewer", issues: [{ ...shared, title: "访客沦为工具人", suggestion: "让访客依照自己的目标取舍" }] }),
+      makeReview({ id: "character", role: "character-reviewer", issues: [{ ...shared, title: "来客缺少自主诉求", suggestion: "让来客依照自己的目标取舍" }] }),
+      makeReview({ id: "style", role: "style-reviewer", issues: [{ ...shared, title: "配角只承担功能", suggestion: "让配角依照自己的目标取舍" }] }),
+    ], structuralReport);
+
+    expect(quality.majorCount).toBe(1);
+  });
+
   it("hasBlocker and hasBlockerOrMajor distinguish severities", () => {
     const onlyWarning = [makeReview({ issues: [issue("warning")] })];
     expect(hasBlocker(onlyWarning)).toBe(false);
@@ -126,6 +141,38 @@ describe("revision-policy classification helpers", () => {
     ];
 
     expect(evaluateCommitGate(reviews, artifact.fingerprint, structuralReport)).toMatchObject({ passed: true, missingRoles: [] });
+  });
+
+  it("rejects a current-artifact commit when an applicable quality dimension has no evidence", () => {
+    const reviews = [
+      makeReview({ id: "plot", role: "plot-reviewer", identity: "internal", score: 4.2, dimensionScores: { plot: 4.2, hookPayoff: 4.2 } }),
+      makeReview({ id: "continuity", role: "continuity-reviewer", identity: "internal", score: 4.2, dimensionScores: { worldbuilding: 4.2 } }),
+      makeReview({ id: "style", role: "style-reviewer", identity: "independent", score: 4.2, dimensionScores: { humor: 4.2 } }),
+      makeReview({ id: "character", role: "character-reviewer", identity: "independent", score: 4.2, dimensionScores: { ensemble: 4.2 } }),
+      makeReview({ id: "reader", role: "reader-reviewer", identity: "independent", score: 4.2, dimensionScores: {} }),
+    ];
+
+    expect(evaluateCommitGate(reviews, artifact.fingerprint, structuralReport, {
+      applicableDimensions: ["plot", "hookPayoff", "worldbuilding", "ensemble", "romance", "humor"],
+    })).toMatchObject({
+      passed: false,
+      qualityFailure: "dimension-coverage",
+      missingDimensions: ["romance"],
+    });
+  });
+
+  it("does not require romance or humor evidence when the chapter marks them not applicable", () => {
+    const reviews = [
+      makeReview({ id: "plot", role: "plot-reviewer", identity: "internal", score: 4.2, dimensionScores: { plot: 4.2, hookPayoff: 4.2 } }),
+      makeReview({ id: "continuity", role: "continuity-reviewer", identity: "internal", score: 4.2, dimensionScores: { worldbuilding: 4.2 } }),
+      makeReview({ id: "style", role: "style-reviewer", identity: "independent", score: 4.2, dimensionScores: { humor: 4.2 } }),
+      makeReview({ id: "character", role: "character-reviewer", identity: "independent", score: 4.2, dimensionScores: { ensemble: 4.2 } }),
+      makeReview({ id: "reader", role: "reader-reviewer", identity: "independent", score: 4.2, dimensionScores: {} }),
+    ];
+
+    expect(evaluateCommitGate(reviews, artifact.fingerprint, structuralReport, {
+      applicableDimensions: ["plot", "hookPayoff", "worldbuilding", "ensemble"],
+    })).toMatchObject({ passed: true, missingRoles: [] });
   });
 
   it("routes a low-scoring all-passed chapter to manual review", () => {
@@ -238,5 +285,125 @@ describe("revision-policy decideRevision branches", () => {
     });
     expect(decision.previousScore).toBe(2);
     expect(decision.improvement).toBeGreaterThan(0);
+  });
+});
+
+describe("revision-policy isCandidateQualityBetter", () => {
+  const makeQuality = (overrides: Partial<CandidateQualityKey> = {}): CandidateQualityKey => ({
+    structuralPassed: true,
+    blockerCount: 0,
+    majorCount: 1,
+    minimumReviewerScore: 4.0,
+    overallScore: 4.25,
+    reviewerScores: {},
+    ...overrides,
+  });
+
+  it("accepts partial improvement: overall score up ≥ threshold, min reviewer down but still ≥ MIN_REVIEWER_SCORE", () => {
+    // Overall quality improves while the lowest reviewer remains at the commit floor.
+    const baseline = makeQuality({ minimumReviewerScore: 3.75, overallScore: 4.25 });
+    const revised = makeQuality({ minimumReviewerScore: 3.50, overallScore: 4.57 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(true);
+  });
+
+  it("rejects partial improvement when overall gain is below threshold", () => {
+    const baseline = makeQuality({ minimumReviewerScore: 3.75, overallScore: 4.25 });
+    const revised = makeQuality({ minimumReviewerScore: 3.50, overallScore: 4.35 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(false);
+  });
+
+  it("rejects partial improvement when min reviewer drops below MIN_REVIEWER_SCORE", () => {
+    const baseline = makeQuality({ minimumReviewerScore: 3.75, overallScore: 4.25 });
+    const revised = makeQuality({ minimumReviewerScore: 3.40, overallScore: 4.57 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(false);
+  });
+
+  it("rejects candidate with more blockers even if overall score is higher", () => {
+    const baseline = makeQuality({ blockerCount: 0, overallScore: 4.25 });
+    const revised = makeQuality({ blockerCount: 1, overallScore: 4.80 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(false);
+  });
+
+  it("rejects candidate with more majors even if overall score is higher", () => {
+    const baseline = makeQuality({ majorCount: 1, overallScore: 4.25 });
+    const revised = makeQuality({ majorCount: 2, overallScore: 4.80 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(false);
+  });
+
+  it("still applies strict lexicographic when overall improvement is marginal", () => {
+    // Same blockers/majors, min reviewer drops, overall improvement < threshold
+    const baseline = makeQuality({ minimumReviewerScore: 4.0, overallScore: 4.25 });
+    const revised = makeQuality({ minimumReviewerScore: 3.8, overallScore: 4.30 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(false);
+  });
+
+  it("accepts when all dimensions are strictly better", () => {
+    const baseline = makeQuality({ minimumReviewerScore: 3.5, overallScore: 4.0 });
+    const revised = makeQuality({ minimumReviewerScore: 4.0, overallScore: 4.5, majorCount: 0 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(true);
+  });
+
+  it("rejects partial improvement when reviewer score drop exceeds MAX_REVIEWER_SCORE_DROP", () => {
+    // Overall improves by 0.3 (>= threshold), min reviewer still >= 3.5,
+    // but the drop from 4.2 to 3.6 = 0.6 > MAX_REVIEWER_SCORE_DROP (0.5)
+    const baseline = makeQuality({ minimumReviewerScore: 4.2, overallScore: 4.0 });
+    const revised = makeQuality({ minimumReviewerScore: 3.6, overallScore: 4.3 });
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(false);
+  });
+
+  it("guards a non-minimum reviewer from excessive local degradation", () => {
+    const baseline = makeQuality({
+      overallScore: 4.0,
+      minimumReviewerScore: 3.8,
+      reviewerScores: { "plot-reviewer:internal": 4.8, "style-reviewer:independent": 3.8 },
+    });
+    const revised = makeQuality({
+      overallScore: 4.3,
+      minimumReviewerScore: 3.8,
+      reviewerScores: { "plot-reviewer:internal": 4.0, "style-reviewer:independent": 3.8 },
+    });
+
+    expect(isCandidateQualityBetter(revised, baseline)).toBe(false);
+  });
+});
+
+describe("revision-policy detectNamedEntityDrift", () => {
+  it("detects no drift when quoted names are preserved", () => {
+    const source = "那把琴叫\u2018枯荣\u2019，断过一次弦。";
+    const revised = "那把琴名为\u2018枯荣\u2019，断过一次弦。";
+    const drift = detectNamedEntityDrift(source, revised);
+    expect(drift.hasDrift).toBe(false);
+  });
+
+  it("detects when a quoted name disappears and a new one appears", () => {
+    const source = "那把琴叫\u2018枯荣\u2019，断过一次弦。";
+    const revised = "这世上有种琴，名为\u2018定风波\u2019。";
+    const drift = detectNamedEntityDrift(source, revised);
+    expect(drift.hasDrift).toBe(true);
+    expect(drift.disappeared).toContain("枯荣");
+    expect(drift.appeared).toContain("定风波");
+  });
+
+  it("detects drift with Chinese angle quotes", () => {
+    const source = "他提到了「枯荣」这个名字。";
+    const revised = "他提到了「定风波」这个名字。";
+    const drift = detectNamedEntityDrift(source, revised);
+    expect(drift.hasDrift).toBe(true);
+    expect(drift.disappeared).toContain("枯荣");
+    expect(drift.appeared).toContain("定风波");
+  });
+
+  it("returns no drift for text without quoted names", () => {
+    const source = "沈郁坐在廊下吃糕点。";
+    const revised = "沈郁坐在回廊下吃着冷糕点。";
+    const drift = detectNamedEntityDrift(source, revised);
+    expect(drift.hasDrift).toBe(false);
+  });
+
+  it("does not flag drift when same names appear in both texts", () => {
+    const source = "沈郁看到\u2018留声\u2019珠子和\u2018枯荣\u2019琴。";
+    const revised = "沈郁看到了\u2018留声\u2019珠子，还有\u2018枯荣\u2019琴。";
+    const drift = detectNamedEntityDrift(source, revised);
+    expect(drift.hasDrift).toBe(false);
   });
 });

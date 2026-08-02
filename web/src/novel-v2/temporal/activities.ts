@@ -1,24 +1,25 @@
 import { createHash, randomUUID } from "node:crypto";
 import Ajv from "ajv";
-import type { Artifact, ContextManifest, CreativeRun, CreativeWorkItem, ExecutionBlueprint, MemoryBundle, MemoryClaim, MemoryHit, MemoryProvider, NovelIntent, PreflightPlan, PreflightProjectSnapshot, PromptContextManifest, Review, ReviewIssue, RuntimeLearningAssessmentV2, SkillBundle, SkillProvider, StageGoalContract, TaskAttemptRecord } from "../protocol";
-import { buildContextManifest, buildMemoryBundle, compileExecutionBlueprint, computeTokenBudget, createPreflightPlan, isMemoryClaimVisibleAtCutoff, matchedFacetsOf, resolveSkillBundle } from "../cognition";
+import type { Artifact, ContextManifest, CreativeReview, CreativeRun, CreativeWorkItem, ExecutionBlueprint, MemoryBundle, MemoryClaim, MemoryHit, MemoryProvider, NovelIntent, PreflightPlan, PreflightProjectSnapshot, PromptContextManifest, Review, ReviewIssue, RuntimeLearningAssessmentV2, SkillBundle, SkillProvider, StageGoalContract, TaskAttemptRecord } from "../protocol";
+import { buildContextManifest, buildMemoryBundle, compileExecutionBlueprint, computeTokenBudget, createPreflightPlan, isMemoryClaimVisibleAtCutoff, matchedFacetsOf, resolveSkillBundle, resolveSkillBundleForTask } from "../cognition";
 import { canonicalSha256 } from "../canonical-json";
 import { NovelPostgresRepository } from "../postgres-repository";
 import type { ModelGateway } from "../model-gateway";
 import { ExternalMcpRequiredError, type ModelExecutionProvenance, type ModelPurpose, type ModelRoutingSnapshot, type ModelTaskRecord, type ModelWorkPackage } from "../model-routing";
 import { ContentObjectStore } from "../object-store";
-import { parseStoryArcBundle, type ChapterPlanningContext, type StoryArcBundle } from "../application/story-arc";
+import { normalizeStoryArcRebaseBundle, normalizeStoryArcStakes, parseStoryArcBundle, validateChapterExecutionContract, validateStoryArcExecutionContracts, validateStoryArcRebaseBundle, type ChapterPlanningContext, type StoryArcBundle } from "../application/story-arc";
+import { mergeStoryArcReviews, normalizeStoryArcReviewAuthority } from "../application/story-arc-review-policy";
 import { inspectManuscript, structuralReviewFromReport, type ManuscriptStructuralReport } from "../application/manuscript-structure";
-import { buildStoryArcBatchPrompt, buildStoryArcPrompt, buildStoryArcReviewPrompt, buildStoryArcRevisionPrompt, storyArcBundleSchema, storyArcReviewSchema, validateStoryArcReview, type StoryArcReviewOutput } from "../prompts/story-arc";
+import { buildStoryArcBatchPrompt, buildStoryArcPrompt, buildStoryArcRebasePrompt, buildStoryArcReviewPrompt, buildStoryArcRevisionPrompt, storyArcBundleSchema, storyArcReviewSchema, validateStoryArcReview, type StoryArcReviewOutput } from "../prompts/story-arc";
 import { foundationArtifactToMemoryClaim } from "../foundation-memory";
 import { CommitService } from "../commit-service";
 import type { MemoryIndex } from "../qdrant-memory";
 import { assessRuntimeLearningWithModel, blockingReviewIssues, buildRuntimeLearningPrompt, parseRuntimeLearningAssessmentV2, runtimeLearningAssessmentSchema } from "../learning-assessment";
 import { buildChapterDraftPromptPackage } from "../prompts/chapter-draft";
-import { buildChapterReviewPromptPackage, getReviewFocus, REVIEWER_DIMENSIONS, selectReviewerMemory, selectReviewerSkills, toReview, type ReviewerRole } from "../prompts/chapter-review";
+import { buildChapterReviewPromptPackage, getReviewFocus, groundReviewForText, groundReviewerIssues, REVIEWER_DIMENSIONS, selectReviewerMemory, selectReviewerSkills, toReview, type ReviewerRole } from "../prompts/chapter-review";
 import { buildChapterReflectionPrompt } from "../prompts/chapter-reflection";
-import { applyRevisionWindows, applyTargetedRevisionReplacements, authorRevisionAlignmentSchema, buildAuthorRevisionRepairPrompt, buildFullChapterRevisionPromptPackage, buildRevisionWindowPrompt, buildTargetedRevisionBatchPrompt, planRevisionWindows, revisionWindowsCoverAllIssues, shouldUseRevisionWindows, splitChapterParagraphs, targetedRevisionBatchSchema, type AuthorRevisionAlignment, type TargetedRevisionReplacement } from "../prompts/chapter-revision";
-import { chapterStateDeltaSchema, foundationSchema, reflectionSchema, reviewerSchemaForDimensions, type ChapterStateDelta, type FactExtractionOutput, type FoundationOutput, type ReflectionOutput, type ReviewerOutput } from "../prompts/schemas";
+import { applyRevisionWindows, applyTargetedRevisionReplacements, authorRevisionAlignmentSchema, buildAuthorRevisionRepairPrompt, buildFullChapterRevisionPromptPackage, buildRevisionWindowPrompt, buildTargetedRevisionBatchPrompt, planRevisionWindows, revisionWindowsCoverAllIssues, sanitizeRevisionOutput, shouldUseRevisionWindows, splitChapterParagraphs, targetedRevisionBatchSchema, type AuthorRevisionAlignment, type RevisionAttempt, type TargetedRevisionReplacement } from "../prompts/chapter-revision";
+import { chapterStateDeltaSchema, reflectionSchema, reviewerSchemaForDimensions, type ChapterStateDelta, type FactExtractionOutput, type FoundationOutput, type ReflectionOutput, type ReviewerOutput } from "../prompts/schemas";
 import { extractFactsWithStats, projectFactExtractionOutput } from "../fact-extraction";
 import { enrichCharactersFromChapter, parseCharacterEnrichmentOutput, persistCharacterEnrichment, validateCharacterEnrichmentOutput } from "../character-enrichment";
 import { characterEnrichmentSchema } from "../prompts/schemas";
@@ -28,6 +29,7 @@ import { countNovelCharacters } from "../word-count";
 import { buildFoundationPrompt, FOUNDATION_SYSTEM_PROMPT } from "../prompts/foundation";
 import { compileStageContext, createStageGoalContract } from "../stage-context";
 import { reviewIssueFingerprint } from "../chapter-review-snapshot";
+import { buildRevisionBrief } from "../application/revision-brief";
 import {
   BOOK_SYNOPSIS_SCHEMA,
   BOOK_TITLE_CANDIDATES_SCHEMA,
@@ -58,7 +60,14 @@ import {
   startWork as creativeStartWork,
   updateRunStatusFromWork,
   failWork as creativeFailWork,
+  listReviews as creativeListReviews,
+  submitReview as creativeSubmitReview,
 } from "../creative";
+import { parseCreativeBrief } from "../application/creative-brief";
+import { assertFoundationTaskContract, foundationSchemaForTask } from "../application/foundation-contract";
+import { hasPassedIndependentReviewForArtifact } from "../creative/review-gate";
+import { requiresFoundationAuthorConfirmation } from "../application/project-plan";
+import { buildFoundationReviewPrompt, foundationReviewSchema, type FoundationReviewOutput } from "../prompts/foundation-review";
 
 function assertStructuredSchema(value: unknown, schema: Record<string, unknown>, label: string): void {
   const validate = new Ajv({ allErrors: true, strict: false }).compile(schema);
@@ -146,6 +155,18 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
     }
     return recorded;
   };
+  const loadNarrativeRhythm = async (projectId: string, documentId: string, narrativeCutoff: number) => {
+    if (typeof deps.repository.getNarrativeRhythmSnapshot !== "function") return undefined;
+    try {
+      return await deps.repository.getNarrativeRhythmSnapshot(projectId, documentId, narrativeCutoff);
+    } catch (error) {
+      console.warn(`[narrative-rhythm] 连续章节节奏快照加载失败，继续使用事实记忆：${(error as Error).message}`);
+      return undefined;
+    }
+  };
+  // TODO P2: 修订 temperature 应可配置——当前 0.3 是创作多样性与指令遵循的折中值，
+  // 未来应由 model routing 配置或 blueprint budget 决定，而非硬编码。
+  const REVISION_TEMPERATURE = 0.3;
   const api = {
     updateWorkflowStatus: (input: { workflowId: string; status: string; payload?: Record<string, unknown> }) => deps.repository.updateWorkflowRunStatus(input.workflowId, input.status, input.payload),
     recordWorkflowSignal: (input: { workflowId: string; taskId: string; signal: string; payload?: Record<string, unknown> }) => deps.repository.recordTaskSignal(input),
@@ -179,6 +200,44 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           narrativeCutoff: input.plan.narrativeCutoff,
           povCharacterId: input.plan.povCharacterId,
         });
+        if (input.plan.replacementRevisionId && input.plan.targetDocumentId) {
+          const replaced = await deps.repository.getChapterMemoryByDocument(input.projectId, input.plan.targetDocumentId);
+          if (replaced?.revisionId === input.plan.replacementRevisionId) {
+            const replacementFacts = (await deps.repository.listActiveMemoryClaimsByRevision(input.projectId, replaced.revisionId))
+              .filter((claim) => claim.knowledgeScope === "author" && claim.kind !== "hierarchical");
+            const eventBoundary = replacementFacts.length
+              ? replacementFacts.map((claim) => `- ${claim.content}`).join("\n")
+              : `- ${replaced.summary}`;
+            const content = [
+              "本次任务替换已有定稿。本段只约束下列已审核原子事实和仍未解决的问题；不得沿用旧对白、解释、主题结论、场景组织、具体措辞或旧摘要中的人物评价。原子事实是完成后的验收结果，不是必须逐句复述的提纲。",
+              "既有事件与结果：",
+              eventBoundary,
+              `替换后仍须保持未解：${replaced.unresolvedThreads.join("；") || "无"}`,
+            ].join("\n");
+            narrativeHits.push({
+              id: `replacement-boundary:${replaced.revisionId}`,
+              projectId: input.projectId,
+              kind: "working",
+              title: "被替换章节的事件结果边界",
+              content,
+              subjectRefs: replaced.characterStates.map((item) => item.characterId),
+              knowledgeScope: "author",
+              authority: "approved",
+              confidence: 1,
+              sourceRevisionIds: [replaced.revisionId],
+              contentHash: canonicalSha256({ revisionId: replaced.revisionId, replacementFacts: replacementFacts.map((claim) => claim.contentHash), unresolvedThreads: replaced.unresolvedThreads }),
+              supersedes: [],
+              score: 1,
+              matchedFacet: "fact",
+              matchedFacets: ["fact", "thread"],
+              reason: "replacement-boundary",
+              semanticRank: 1,
+            });
+          }
+        }
+      }
+      // 开放伏笔/承诺注入（workflow-map.md §6.2：retrieveMemory 须组合开放伏笔/承诺）
+      if (typeof input.plan.narrativeCutoff === "number") {
         try {
           const { foreshadowings, promises } = await deps.repository.getOpenForeshadowingAndPromises(input.projectId, input.plan.narrativeCutoff);
           narrativeHits.push(
@@ -197,6 +256,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
               supersedes: [],
               score: 1.0,
               matchedFacet: "foreshadowing",
+              matchedFacets: ["foreshadowing"],
               reason: "open-foreshadowing-injection",
               semanticRank: 1.0,
             })),
@@ -215,15 +275,19 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
               supersedes: [],
               score: 1.0,
               matchedFacet: "foreshadowing",
+              matchedFacets: ["foreshadowing"],
               reason: "open-promise-injection",
               semanticRank: 1.0,
             })),
           );
-        } catch (narrativeError) {
-          console.warn(`[retrieveMemory] 伏笔/承诺加载失败，仍保留权威叙事账本：${(narrativeError as Error).message}`);
+        } catch (error) {
+          console.warn(`[memory] 开放伏笔/承诺注入失败，继续使用已有记忆：${(error as Error).message}`);
         }
       }
-      return buildMemoryBundle(input.plan, { projectId: input.projectId, provider: deps.memoryProvider, tokenBudget, pinnedClaims: narrativeHits });
+      const bundle = await buildMemoryBundle(input.plan, { projectId: input.projectId, provider: deps.memoryProvider, tokenBudget, pinnedClaims: narrativeHits });
+      if (!input.plan.targetDocumentId || typeof input.plan.narrativeCutoff !== "number") return bundle;
+      const narrativeRhythm = await loadNarrativeRhythm(input.projectId, input.plan.targetDocumentId, input.plan.narrativeCutoff);
+      return narrativeRhythm ? { ...bundle, narrativeRhythm, fingerprint: canonicalSha256({ base: bundle.fingerprint, narrativeRhythm: narrativeRhythm.fingerprint }) } : bundle;
     },
     resolveSkills: (input: { projectId: string; plan: PreflightPlan; memory: MemoryBundle; requestedCapabilities?: string[]; genre?: string }) => resolveSkillBundle(input.plan, input.memory, { projectId: input.projectId, provider: deps.skillProvider, requestedCapabilities: input.requestedCapabilities, genre: input.genre }),
     resolveReviewSkills: async (input: { projectId: string; preflightId: string }): Promise<SkillBundle> => {
@@ -233,6 +297,9 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       return deps.repository.putSkillBundle(bundle);
     },
     compileBlueprint: async (input: { intent: NovelIntent; plan: PreflightPlan; memory: MemoryBundle; skills: SkillBundle; snapshot: PreflightProjectSnapshot; foundationArtifacts?: Artifact[]; planningContext?: ChapterPlanningContext }): Promise<{ blueprint: ExecutionBlueprint; context: ContextManifest; routingSnapshot: ModelRoutingSnapshot }> => {
+      if (input.planningContext && (input.plan.taskClass === "drafting" || input.plan.taskClass === "revision")) {
+        validateChapterExecutionContract(input.planningContext.chapter);
+      }
       const context = buildContextManifest(input.plan, input.memory, { retrievalRunId: `retrieval:${input.plan.id}` });
       const blueprint = compileExecutionBlueprint(input.intent, input.plan, input.memory, input.skills, input.snapshot, context, input.foundationArtifacts, input.planningContext);
       await deps.repository.putCognition(input.plan, input.memory, input.skills, blueprint, context);
@@ -324,7 +391,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
             candidateStartIndex: input.candidateStartIndex,
             promptContext: promptPackage.manifest,
           });
-        const review = { ...toReview({ artifact: input.artifact, identity: input.identity, role: input.role, output: generated.value }), modelProvenance: generated.provenance };
+        const review = { ...toReview({ artifact: input.artifact, identity: input.identity, role: input.role, output: generated.value, text: input.text }), modelProvenance: generated.provenance };
         await deps.repository.putReview(review, { refreshChapterSnapshot: !input.suppressChapterSnapshotPromotion });
         return { kind: "completed", review };
       } catch (error) {
@@ -340,8 +407,19 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       await deps.repository.putReview(review, { refreshChapterSnapshot: false });
       return { report, review };
     },
-    revise: async (input: { workflowId: string; intent: NovelIntent; artifact: Artifact; text: string; reviews: Review[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; memory: MemoryBundle; blueprint: ExecutionBlueprint; skills: SkillBundle; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; planningContext?: ChapterPlanningContext }): Promise<GeneratedTextResult> => {
-      const actionableIssues = input.directedIssues ?? input.reviews.flatMap((review) => review.issues).filter((issue) => issue.severity === "blocker" || issue.severity === "major");
+    revise: async (input: { workflowId: string; intent: NovelIntent; artifact: Artifact; text: string; reviews: Review[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; memory: MemoryBundle; blueprint: ExecutionBlueprint; skills: SkillBundle; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; planningContext?: ChapterPlanningContext; revisionHistory?: RevisionAttempt[] }): Promise<GeneratedTextResult> => {
+      // Reviewer records can outlive the exact candidate text they were written
+      // against. Re-ground them before revision so stale excerpts from an older
+      // candidate cannot drive new revision windows or quality rollback.
+      const groundedReviews = input.text ? input.reviews.map((review) => groundReviewForText(review, input.text)) : input.reviews;
+      const groundedDirectedIssues = input.text && input.directedIssues
+        ? groundReviewerIssues(input.directedIssues, input.text).issues
+        : input.directedIssues;
+      const revisionBrief = buildRevisionBrief(groundedReviews, groundedDirectedIssues);
+      if (revisionBrief.conflicts.length) {
+        throw new Error(`revision-brief-conflict: ${revisionBrief.conflicts.map((conflict) => conflict.mechanism).join("、")}`);
+      }
+      const actionableIssues = revisionBrief.issues;
       const hasAuthorInstruction = Boolean(input.authorInstruction?.trim());
       const stageGoal = actionableIssues.length || hasAuthorInstruction ? createStageGoalContract({
         projectId: input.intent.projectId,
@@ -352,14 +430,14 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         reviewIssueFingerprints: actionableIssues.map(reviewIssueFingerprint),
         acceptanceCriteria: [
           ...(hasAuthorInstruction ? ["修订后的实际阅读效果明确响应作者原始要求"] : []),
-          ...actionableIssues.map((issue) => `${issue.title}：${issue.suggestion ?? issue.description ?? issue.evidence}`),
+          ...actionableIssues.map((issue) => issue.title),
           "未被目标触及的有效事实、人物关系与章节功能保持连续",
         ],
-        allowedChangeScope: input.strictRevisionWindows && !hasAuthorInstruction ? "local" : "chapter",
+        allowedChangeScope: input.strictRevisionWindows ? "local" : "chapter",
       }) : undefined;
       const system = hasAuthorInstruction
         ? "你是长篇小说定向修订编辑。作者原话是本轮任务目标，审核问题是辅助证据，技能是仅在不冲突时使用的背景方法；不得用完成审校问题代替完成作者目标。先理解它们的关系，再让修改结果在正文中明确可见，同时保持冻结事实、章节规划与既定因果。"
-        : "你是长篇小说局部修订编辑。严格依据审核证据修订，不得扩写无关情节或发明冻结上下文之外的事实。";
+        : "你是长篇小说修订编辑。依据审核证据修订正文，保持原作的文风、节奏与叙事质感。修订应聚焦于解决审核指出的问题，同时保持原文已有的文学品质——不因修订而降低文笔质量或丢失原文的有效细节。不得新增冻结上下文之外的事实。";
       const fullRevisionPackage = buildFullChapterRevisionPromptPackage({
         projectId: input.intent.projectId,
         workflowId: input.workflowId,
@@ -374,6 +452,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         skills: input.skills,
         planningContext: input.planningContext,
         authorInstruction: input.authorInstruction,
+        revisionHistory: input.revisionHistory,
       });
       try {
         const windows = planRevisionWindows(input.text, actionableIssues);
@@ -385,7 +464,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         const modelProvenance: ModelExecutionProvenance[] = [];
         for (const window of useRevisionWindows ? windows : []) {
           const source = paragraphs.slice(window.start, window.end + 1).join("\n\n");
-          const windowPrompt = buildRevisionWindowPrompt({ text: input.text, window, memory: input.memory, skills: input.skills, planningContext: input.planningContext, authorInstruction: input.authorInstruction });
+          const windowPrompt = buildRevisionWindowPrompt({ text: input.text, window, memory: input.memory, skills: input.skills, planningContext: input.planningContext, authorInstruction: input.authorInstruction, revisionHistory: input.revisionHistory });
           const windowPackage = compileStageContext({ projectId: input.intent.projectId, workflowId: input.workflowId, purpose: "writing.revision", stage: "revision", system, goal: stageGoal, maxInputTokens: input.blueprint.budget.maxInputTokens, reservedOutputTokens: Math.min(4096, Math.max(1024, source.length * 2)), sections: [{ id: `revision-window:${window.start + 1}-${window.end + 1}`, kind: "manuscript", title: "局部修订任务、约束与正文", text: windowPrompt, priority: "critical", provenanceRefs: [input.artifact.id, input.memory.id, input.skills.id, input.blueprint.id] }] });
           const generated = await model.generateText({
             purpose: "writing.revision",
@@ -400,7 +479,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
             promptContext: windowPackage.manifest,
           });
           if (generated.text.trim() && generated.text.trim() !== source.trim()) {
-            replacements.push({ window, text: generated.text });
+            replacements.push({ window, text: sanitizeRevisionOutput(generated.text) });
             modelProvenance.push(generated.provenance);
           }
         }
@@ -410,8 +489,8 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           return { kind: "completed", artifact: await makeArtifact({ projectId: input.intent.projectId, taskId: `${input.artifact.taskId}:revise`, kind: "revision", baseRevision: input.artifact.baseRevision, text: revisedText, structuredData: { modelProvenance, revisionWindows: replacements.map(({ window }) => ({ start: window.start + 1, end: window.end + 1, issueCount: window.issues.length })), stageGoal, workflowId: input.workflowId } }), text: revisedText };
         }
         if (input.strictRevisionWindows) throw new Error("AI 未实际修改任何目标段落");
-        const generated = await model.generateText({ purpose: "writing.revision", system, prompt: fullRevisionPackage.instruction, maxTokens: input.blueprint.budget.maxOutputTokens, workflowRunId: input.workflowId, taskId: `${input.artifact.taskId}:revise:full`, routingSnapshot: input.routingSnapshot, candidateStartIndex: input.candidateStartIndex, promptContext: fullRevisionPackage.manifest });
-        let revisedText = generated.text;
+        const generated = await model.generateText({ purpose: "writing.revision", system, prompt: fullRevisionPackage.instruction, maxTokens: input.blueprint.budget.maxOutputTokens, temperature: REVISION_TEMPERATURE, workflowRunId: input.workflowId, taskId: `${input.artifact.taskId}:revise:full`, routingSnapshot: input.routingSnapshot, candidateStartIndex: input.candidateStartIndex, promptContext: fullRevisionPackage.manifest });
+        let revisedText = sanitizeRevisionOutput(generated.text);
         const fullRevisionProvenance: ModelExecutionProvenance[] = [generated.provenance];
         let authorAlignment: AuthorRevisionAlignment | undefined;
         const authorAlignmentHistory: AuthorRevisionAlignment[] = [];
@@ -470,13 +549,14 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
                 system,
                 prompt: repairPackage.instruction,
                 maxTokens: input.blueprint.budget.maxOutputTokens,
+                temperature: REVISION_TEMPERATURE,
                 workflowRunId: input.workflowId,
                 taskId: `${input.artifact.taskId}:revise:author-repair`,
                 routingSnapshot: input.routingSnapshot,
                 candidateStartIndex: input.candidateStartIndex,
                 promptContext: repairPackage.manifest,
               });
-              revisedText = repaired.text;
+              revisedText = sanitizeRevisionOutput(repaired.text);
               fullRevisionProvenance.push(repaired.provenance);
               authorAlignmentRepairApplied = true;
               const repairedAlignmentPackage = buildAlignmentPackage(revisedText);
@@ -567,8 +647,9 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const task = await deps.repository.getModelTask(input.modelTaskId);
       if (!task || task.status !== "submitted" || task.result?.text !== input.text) throw new Error("外部文本任务尚未通过 Runtime 验证");
       const stageGoal = task.workPackage.contextRefs.goalContract ? JSON.parse(task.workPackage.contextRefs.goalContract) as StageGoalContract : undefined;
-      const artifact = await makeArtifact({ projectId: input.projectId, taskId: task.taskId, kind: input.kind, baseRevision: input.baseRevision, text: input.text, structuredData: { externalModelTaskId: task.id, modelProvenance: { routeSnapshotId: task.configRevision, purpose: task.purpose, candidateIndex: task.candidateIndex, executor: "external-mcp", model: "external-mcp", promptFingerprint: task.workPackage.inputFingerprint }, stageGoal, workflowId: task.workflowRunId } });
-      return { artifact, text: input.text };
+      const cleanedText = input.kind === "revision" ? sanitizeRevisionOutput(input.text) : input.text;
+      const artifact = await makeArtifact({ projectId: input.projectId, taskId: task.taskId, kind: input.kind, baseRevision: input.baseRevision, text: cleanedText, structuredData: { externalModelTaskId: task.id, modelProvenance: { routeSnapshotId: task.configRevision, purpose: task.purpose, candidateIndex: task.candidateIndex, executor: "external-mcp", model: "external-mcp", promptFingerprint: task.workPackage.inputFingerprint }, stageGoal, workflowId: task.workflowRunId } });
+      return { artifact, text: cleanedText };
     },
     materializeExternalTargetedRevision: async (input: { projectId: string; modelTaskId: string; artifact: Artifact; text: string; issues: ReviewIssue[] }): Promise<{ artifact: Artifact; text: string }> => {
       const task = await deps.repository.getModelTask(input.modelTaskId);
@@ -584,7 +665,8 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const task = await deps.repository.getModelTask(input.modelTaskId);
       const validate = new Ajv({ allErrors: true, strict: false }).compile(reviewerSchemaForDimensions(REVIEWER_DIMENSIONS[input.role]));
       if (!task || task.status !== "submitted" || !validate(input.value)) throw new Error(`外部审核结果无效：${validate.errors?.map((item) => item.message).join("；") ?? "任务未提交"}`);
-      const review = { ...toReview({ artifact: input.artifact, identity: input.identity, role: input.role, output: input.value as ReviewerOutput }), modelProvenance: { routeSnapshotId: task.configRevision, purpose: task.purpose, candidateIndex: task.candidateIndex, executor: "external-mcp" as const, model: "external-mcp", promptFingerprint: task.workPackage.inputFingerprint } };
+      const text = input.artifact.objectKey ? await objects.getText(input.artifact.objectKey) : undefined;
+      const review = { ...toReview({ artifact: input.artifact, identity: input.identity, role: input.role, output: input.value as ReviewerOutput, text }), modelProvenance: { routeSnapshotId: task.configRevision, purpose: task.purpose, candidateIndex: task.candidateIndex, executor: "external-mcp" as const, model: "external-mcp", promptFingerprint: task.workPackage.inputFingerprint } };
       await deps.repository.putReview(review, { refreshChapterSnapshot: !input.suppressChapterSnapshotPromotion });
       return review;
     },
@@ -707,13 +789,13 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const assessment = parseRuntimeLearningAssessmentV2(input.value, { id: `learning:${input.reviewArtifact.id}:story-arc`, projectId: input.projectId, source: { workflowId: input.workflowId, artifactId: input.artifact.id, reviewIds: [reviewId], fingerprint: input.artifact.fingerprint }, createdAt: Date.now() });
       return recordLearning({ ...assessment, source: { ...assessment.source, reviewIds: issues.length ? [reviewId] : [] } });
     },
-    commit: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string }) => commitService.commit({ ...input, factArtifactId: input.factArtifact?.id, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined, chapterMemoryDelta: input.factArtifact?.structuredData?.chapterMemory as ChapterStateDelta["chapterMemory"] }),
+    commit: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string; applicableReviewDimensions?: readonly import("../prompts/schemas").ReviewDimension[] }) => commitService.commit({ ...input, factArtifactId: input.factArtifact?.id, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined, chapterMemoryDelta: input.factArtifact?.structuredData?.chapterMemory as ChapterStateDelta["chapterMemory"] }),
     loadApprovalEvidence: async (input: { workflowId: string; approvalEvidenceId: string }) => {
       const evidence = await deps.repository.getApprovalEvidence(input.workflowId, input.approvalEvidenceId);
       if (!evidence) throw new Error("批准证据不存在或不属于当前工作流");
       return evidence;
     },
-    commitAuthorApproved: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string; approvalEvidenceId: string }) => commitService.commitAuthorApproved({ ...input, factArtifactId: input.factArtifact?.id, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined, chapterMemoryDelta: input.factArtifact?.structuredData?.chapterMemory as ChapterStateDelta["chapterMemory"] }),
+    commitAuthorApproved: (input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string; approvalEvidenceId: string; applicableReviewDimensions?: readonly import("../prompts/schemas").ReviewDimension[] }) => commitService.commitAuthorApproved({ ...input, factArtifactId: input.factArtifact?.id, narrativeElements: input.factArtifact?.structuredData?.narrativeElements as FactExtractionOutput["narrativeElements"] | undefined, payoffMoments: input.factArtifact?.structuredData?.payoffMoments as FactExtractionOutput["payoffMoments"] | undefined, chapterMemoryDelta: input.factArtifact?.structuredData?.chapterMemory as ChapterStateDelta["chapterMemory"] }),
     /** P0 #1: 人工事实审批门通过后，批量批准 pending 事实候选（candidate → approved）。
      *  内部同时写回 Qdrant 向量索引，与 recordFactExtraction 模式一致；
      *  Qdrant 失败不阻塞（PostgreSQL 真源已保留），只警告。 */
@@ -995,11 +1077,16 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       // 否则旧版当前章事实会反向约束重写，形成自我复制。
       const targetNarrativeOrder = await deps.repository.getDocumentNarrativeOrder(input.projectId, input.documentId);
       const narrativeCutoff = targetNarrativeOrder === undefined ? undefined : targetNarrativeOrder - 1;
+      const narrativeRhythm = typeof narrativeCutoff === "number"
+        ? await loadNarrativeRhythm(input.projectId, input.documentId, narrativeCutoff)
+        : undefined;
       const latestBundle = await deps.repository.getLatestMemoryBundle(input.projectId);
       if (!latestBundle) {
-        // 无历史 memory bundle：返回空 bundle（review 仍可进行，只是无冻结事实）
-        return {
-          id: `empty-memory:${input.projectId}:${Date.now()}`,
+        // 即使没有历史记忆，也持久化不可变空快照；按引用执行不能依赖只存在于 workflow 内存的对象。
+        const createdAt = Date.now();
+        const fingerprint = canonicalSha256({ projectId: input.projectId, preflightId: input.blueprint.preflightId, narrativeCutoff, claims: [], narrativeRhythm: narrativeRhythm?.fingerprint });
+        return deps.repository.putMemoryBundle({
+          id: `review-memory:${input.documentId}:${fingerprint.slice(0, 20)}`,
           projectId: input.projectId,
           preflightId: input.blueprint.preflightId,
           claims: [],
@@ -1007,15 +1094,19 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           missingFacets: [],
           tokenBudget: 0,
           sourceRevisionIds: [],
-          fingerprint: "empty",
-          createdAt: Date.now(),
-        };
+          narrativeCutoff,
+          selectionReceipts: [],
+          narrativeRhythm,
+          fingerprint,
+          createdAt,
+        });
       }
       const bundle = latestBundle;
       // P1-D5: 应用 narrativeCutoff 过滤未来章节事实
       // 全局事实和跨章持续事实保持可见；跨 cutoff 的章节汇总包含未来正文，必须整体排除。
-      if (narrativeCutoff === undefined) return bundle;
-      const filteredClaims = bundle.claims.filter((claim) => isMemoryClaimVisibleAtCutoff(claim, narrativeCutoff));
+      const filteredClaims = narrativeCutoff === undefined
+        ? bundle.claims
+        : bundle.claims.filter((claim) => isMemoryClaimVisibleAtCutoff(claim, narrativeCutoff));
 
       // P1-5: 对已兑现伏笔/承诺标记 resolved，而非删除。
       // 设计依据：AGENTS.md「root-cause analysis」——原实现未过滤 narrativeRange.end，
@@ -1026,28 +1117,56 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       // 字段追加 `[resolved-at:${end}]` 标记，让渲染层（buildContextMarkdown/buildReviewerContext）
       // 识别并加"【已兑现于第 X 章】"前缀，与未兑现伏笔区分。
       // 题材无关，覆盖所有 matchedFacets 含 foreshadowing 且 end <= narrativeCutoff 的 claim。
-      let hasResolvedMarker = false;
       const markedClaims = filteredClaims.map((claim) => {
         const end = claim.narrativeRange?.end;
         const isForeshadowing = matchedFacetsOf(claim).includes("foreshadowing");
-        if (isForeshadowing && typeof end === "number" && end <= narrativeCutoff) {
+        if (isForeshadowing && typeof end === "number" && typeof narrativeCutoff === "number" && end <= narrativeCutoff) {
           const resolvedMarker = `[resolved-at:${end}]`;
           const originalReason = claim.reason ?? "";
           // 避免重复标记（多次 retrieve 不会累加）
           if (originalReason.includes(resolvedMarker)) return claim;
-          hasResolvedMarker = true;
           return { ...claim, reason: `${resolvedMarker}${originalReason}` };
         }
         return claim;
       });
 
-      // 若无 start 过滤也无 resolved 标记，直接返回原 bundle（避免无谓的对象重建）
-      if (filteredClaims.length === bundle.claims.length && !hasResolvedMarker) return bundle;
-      return {
+      const includedIds = new Set(markedClaims.map((claim) => claim.id));
+      const previousReceipts = new Map((bundle.selectionReceipts ?? []).map((receipt) => [receipt.claimId, receipt]));
+      const selectionReceipts = bundle.claims.map((claim) => ({
+        claimId: claim.id,
+        matchedFacets: matchedFacetsOf(claim),
+        score: claim.score,
+        authority: claim.authority,
+        tokenCost: Math.ceil((claim.title.length + claim.content.length) / 2),
+        status: includedIds.has(claim.id) ? "included" as const : "excluded" as const,
+        reason: includedIds.has(claim.id) ? (previousReceipts.get(claim.id)?.reason ?? "ranked-fill") : "future-cutoff" as const,
+        sourceRevisionIds: claim.sourceRevisionIds,
+      }));
+      const snapshotShape = {
+        projectId: bundle.projectId,
+        preflightId: bundle.preflightId,
+        sourceBundleId: bundle.id,
+        narrativeCutoff,
+        claims: markedClaims,
+        conflicts: bundle.conflicts,
+        missingFacets: bundle.missingFacets,
+        tokenBudget: bundle.tokenBudget,
+        selectionReceipts,
+        narrativeRhythm: narrativeRhythm?.fingerprint,
+      };
+      const fingerprint = canonicalSha256(snapshotShape);
+      const reviewBundle: MemoryBundle = {
         ...bundle,
+        id: `review-memory:${input.documentId}:${fingerprint.slice(0, 20)}`,
         claims: markedClaims,
         sourceRevisionIds: [...new Set(markedClaims.flatMap((claim) => claim.sourceRevisionIds))],
+        narrativeCutoff,
+        selectionReceipts,
+        narrativeRhythm,
+        fingerprint,
+        createdAt: Date.now(),
       };
+      return deps.repository.putMemoryBundle(reviewBundle);
     },
 
     // ===== CreativeRun Workflow activities（Phase B-2.3）=====
@@ -1080,10 +1199,19 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
     listPendingWork: async (input: { runId: string }): Promise<CreativeWorkItem[]> => {
       const all = await creativeListWorkItems(deps.repository, input.runId);
       const statusById = new Map(all.map((work) => [work.id, work.status]));
+      const run = await getCreativeRun(deps.repository, input.runId);
+      const sections = run ? await deps.repository.listProjectPlanSections(run.projectId) : [];
+      const sectionStatus = new Map(sections.map((section) => [section.taskKey, section.status]));
       return all.filter((work) =>
         work.status === "pending"
         && work.dependsOn.every((dependencyId) => statusById.get(dependencyId) === "accepted"),
-      );
+      ).filter((work) => {
+        if (!run || run.policy.reviewGate === "none" || work.parameters.bootstrap !== true) return true;
+        const dependencyTaskKeys = work.dependsOn
+          .map((dependencyId) => all.find((candidate) => candidate.id === dependencyId)?.taskKey)
+          .filter((taskKey): taskKey is string => Boolean(taskKey));
+        return dependencyTaskKeys.every((taskKey) => sectionStatus.get(taskKey as import("../application/project-plan").ProjectPlanTaskKey) === "approved");
+      });
     },
 
     /**
@@ -1115,12 +1243,21 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         const run = await getCreativeRun(deps.repository, input.runId);
         if (artifactId && run) {
           const section = await deps.repository.getProjectPlanSection(run.projectId, accepted.taskKey as import("../application/project-plan").ProjectPlanTaskKey);
-          if (section?.sourceArtifactId === artifactId && section.status !== "approved") {
+          if (section?.sourceArtifactId === artifactId && section.status !== "approved" && !requiresFoundationAuthorConfirmation(accepted.taskKey)) {
             await deps.repository.approveProjectPlanSection(run.projectId, section.taskKey, artifactId, "runtime");
           }
         }
       }
       return accepted;
+    },
+
+    foundationAuthorApproved: async (input: { runId: string; taskKey: string; artifactId: string }): Promise<boolean> => {
+      const run = await getCreativeRun(deps.repository, input.runId);
+      if (!run) return false;
+      const section = await deps.repository.getProjectPlanSection(run.projectId, input.taskKey as import("../application/project-plan").ProjectPlanTaskKey);
+      if (section?.status !== "approved" || section.sourceArtifactId !== input.artifactId) return false;
+      const reviews = await creativeListReviews(deps.repository, section.workItemId ?? "");
+      return hasPassedIndependentReviewForArtifact(reviews, input.artifactId);
     },
 
     /**
@@ -1363,18 +1500,25 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       return { title };
     },
 
-    generateStoryArcBundle: async (input: { workflowId: string; projectId: string; arcId: string; authorIntent?: string; candidateStartIndex?: number; batchIndex?: number; startChapterIndex?: number }): Promise<GeneratedStoryArcResult> => {
+    generateStoryArcBundle: async (input: { workflowId: string; projectId: string; arcId: string; authorIntent?: string; candidateStartIndex?: number; batchIndex?: number; startChapterIndex?: number; rebase?: boolean }): Promise<GeneratedStoryArcResult> => {
       const planning = await deps.repository.getStoryArcPlanningInput(input.projectId);
+      const rebaseTarget = input.rebase ? await deps.repository.getStoryArcRebaseTarget(input.projectId, input.arcId) : undefined;
       const arc = input.batchIndex ? await deps.repository.getStoryArc(input.projectId, input.arcId) : undefined;
       if (input.batchIndex && !arc) throw new Error("故事弧不存在");
-      const prompt = input.batchIndex && arc
+      const prompt = rebaseTarget
+        ? buildStoryArcRebasePrompt({ ...planning, authorIntent: input.authorIntent, target: rebaseTarget })
+        : input.batchIndex && arc
         ? buildStoryArcBatchPrompt({ ...planning, authorIntent: input.authorIntent, arc: arc.arc, batchIndex: input.batchIndex, startChapterIndex: input.startChapterIndex! })
         : buildStoryArcPrompt({ ...planning, authorIntent: input.authorIntent });
       const system = "你是长篇小说故事弧策划师。只输出符合 schema 的 JSON。";
       const promptPackage = compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "planning.arc", stage: "planning", system, prompt, schema: storyArcBundleSchema as unknown as Record<string, unknown>, reservedOutputTokens: 12_000, provenanceRefs: [input.arcId] });
       try {
         const generated = await model.generateStructured<StoryArcBundle>({ purpose: "planning.arc", system, prompt: promptPackage.instruction, schema: storyArcBundleSchema as unknown as Record<string, unknown>, schemaName: "story-arc-bundle", maxTokens: 12_000, workflowRunId: input.workflowId, taskId: `${input.arcId}:story-arc`, candidateStartIndex: input.candidateStartIndex, promptContext: promptPackage.manifest });
-        const bundle = parseStoryArcBundle(generated.value);
+        let bundle = parseStoryArcBundle(generated.value);
+        if (rebaseTarget) bundle = normalizeStoryArcRebaseBundle(bundle, rebaseTarget);
+        else bundle = normalizeStoryArcStakes(bundle);
+        validateStoryArcExecutionContracts(bundle);
+        if (rebaseTarget) validateStoryArcRebaseBundle(bundle, rebaseTarget);
         if (input.batchIndex && (bundle.batch.batchIndex !== input.batchIndex || bundle.batch.startChapterIndex !== input.startChapterIndex)) throw new Error("生成结果的故事弧批次位置与请求不一致");
         const artifact = await makeArtifact({ projectId: input.projectId, taskId: `${input.arcId}:story-arc`, kind: "chapter-blueprint", baseRevision: 0, text: JSON.stringify(bundle, null, 2), structuredData: { ...bundle, workflowId: input.workflowId, arcId: input.arcId, modelProvenance: generated.provenance } });
         return { kind: "completed", artifact, bundle };
@@ -1385,29 +1529,47 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       }
     },
 
-    materializeExternalStoryArcBundle: async (input: { modelTaskId: string; projectId: string; arcId: string; value: unknown }): Promise<{ artifact: Artifact; bundle: StoryArcBundle }> => {
+    materializeExternalStoryArcBundle: async (input: { modelTaskId: string; projectId: string; arcId: string; value: unknown; rebase?: boolean }): Promise<{ artifact: Artifact; bundle: StoryArcBundle }> => {
       const task = await deps.repository.getModelTask(input.modelTaskId);
       if (!task) throw new Error("外部故事弧任务不存在");
       assertStructuredSchema(input.value, storyArcBundleSchema as unknown as Record<string, unknown>, "外部故事弧结果");
-      const bundle = parseStoryArcBundle(input.value);
+      let bundle = parseStoryArcBundle(input.value);
+      const rebaseTarget = input.rebase ? await deps.repository.getStoryArcRebaseTarget(input.projectId, input.arcId) : undefined;
+      if (rebaseTarget) bundle = normalizeStoryArcRebaseBundle(bundle, rebaseTarget);
+      else bundle = normalizeStoryArcStakes(bundle);
+      validateStoryArcExecutionContracts(bundle);
+      if (rebaseTarget) validateStoryArcRebaseBundle(bundle, rebaseTarget);
       const artifact = await makeArtifact({ projectId: input.projectId, taskId: task.taskId, kind: "chapter-blueprint", baseRevision: 0, text: JSON.stringify(bundle, null, 2), structuredData: { ...bundle, workflowId: task.workflowRunId, arcId: input.arcId, externalModelTaskId: task.id } });
       return { artifact, bundle };
     },
 
     projectStoryArcBundle: async (input: { projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; actor: string; edited?: boolean }) => deps.repository.projectStoryArcBundle(input),
 
-    reviewStoryArcBundle: async (input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; candidateStartIndex?: number }): Promise<GeneratedStoryArcReviewResult> => {
+    reviewStoryArcBundle: async (input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; candidateStartIndex?: number; rebase?: boolean }): Promise<GeneratedStoryArcReviewResult> => {
       const planning = await deps.repository.getStoryArcPlanningInput(input.projectId);
       const context = JSON.stringify(planning, null, 2);
-      const prompt = buildStoryArcReviewPrompt(input.bundle, context);
+      const rebaseTarget = input.rebase ? await deps.repository.getStoryArcRebaseTarget(input.projectId, input.arcId) : undefined;
+      const prompt = buildStoryArcReviewPrompt(input.bundle, context, rebaseTarget);
       const routingSnapshot = model.getRoutingSnapshot();
       const system = "你是独立长篇故事弧审核员。";
       const promptPackage = compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "review.arc", stage: "review", system, prompt, schema: storyArcReviewSchema as unknown as Record<string, unknown>, provenanceRefs: [input.arcId, input.artifact.id] });
       try {
-        const generated = await model.generateStructured<StoryArcReviewOutput>({ purpose: "review.arc", system, prompt: promptPackage.instruction, schema: storyArcReviewSchema as unknown as Record<string, unknown>, schemaName: "story-arc-review", workflowRunId: input.workflowId, taskId: `${input.arcId}:story-arc-review:${input.artifact.id}`, candidateStartIndex: input.candidateStartIndex, promptContext: promptPackage.manifest });
-        const review = generated.value;
+        const prompts = rebaseTarget
+          ? [
+            { suffix: "", lens: "balanced" },
+            { suffix: "\n\n## 对抗式复核\n从每章 unresolvedAtClose 倒推检查所有指定路径。把候选当作待证明命题而非合理剧情；只要冻结证据不能蕴含，就列入 certaintyUpgrades。尤其检查来源归属、内心动机、危险性质、决定与实际行动之间的状态跨越。", lens: "adversarial-authority" },
+          ]
+          : [{ suffix: "", lens: "balanced" }];
+        const generated = await Promise.all(prompts.map((pass, passIndex) => {
+          const passPrompt = `${promptPackage.instruction}${pass.suffix}`;
+          const passPackage = passIndex === 0 ? promptPackage : compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "review.arc", stage: "review", system, prompt: `${prompt}${pass.suffix}`, schema: storyArcReviewSchema as unknown as Record<string, unknown>, provenanceRefs: [input.arcId, input.artifact.id, pass.lens] });
+          return model.generateStructured<StoryArcReviewOutput>({ purpose: "review.arc", system, prompt: passPrompt, schema: storyArcReviewSchema as unknown as Record<string, unknown>, schemaName: "story-arc-review", workflowRunId: input.workflowId, taskId: `${input.arcId}:story-arc-review:${input.artifact.id}:${pass.lens}`, candidateStartIndex: (input.candidateStartIndex ?? 0) + passIndex, promptContext: passPackage.manifest });
+        }));
+        const reviews = generated.map((result) => normalizeStoryArcReviewAuthority(input.bundle, result.value));
+        reviews.forEach((review) => validateStoryArcReview(input.bundle, review));
+        const review = mergeStoryArcReviews(input.bundle, reviews);
         validateStoryArcReview(input.bundle, review);
-        const artifact = await makeArtifact({ projectId: input.projectId, taskId: `${input.arcId}:story-arc-review`, kind: "review", baseRevision: 0, text: JSON.stringify(review, null, 2), structuredData: { ...review, subjectArtifactId: input.artifact.id, workflowId: input.workflowId, modelProvenance: generated.provenance } });
+        const artifact = await makeArtifact({ projectId: input.projectId, taskId: `${input.arcId}:story-arc-review`, kind: "review", baseRevision: 0, text: JSON.stringify(review, null, 2), structuredData: { ...review, subjectArtifactId: input.artifact.id, workflowId: input.workflowId, modelProvenance: generated.map((result) => result.provenance), reviewLenses: prompts.map((pass) => pass.lens) } });
         return { kind: "completed", artifact, review };
       } catch (error) {
         if (!(error instanceof ExternalMcpRequiredError)) throw error;
@@ -1419,22 +1581,28 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const task = await deps.repository.getModelTask(input.modelTaskId);
       if (!task) throw new Error("外部故事弧审核任务不存在");
       assertStructuredSchema(input.value, storyArcReviewSchema as unknown as Record<string, unknown>, "外部故事弧审核结果");
-      const review = input.value as StoryArcReviewOutput;
       const subjectArtifact = await deps.repository.getArtifact(input.subjectArtifactId);
       if (!subjectArtifact) throw new Error("外部故事弧审核对应的蓝图不存在");
-      validateStoryArcReview(parseStoryArcBundle(subjectArtifact.structuredData), review);
+      const bundle = parseStoryArcBundle(subjectArtifact.structuredData);
+      const review = normalizeStoryArcReviewAuthority(bundle, input.value as StoryArcReviewOutput);
+      validateStoryArcReview(bundle, review);
       const artifact = await makeArtifact({ projectId: input.projectId, taskId: task.taskId, kind: "review", baseRevision: 0, text: JSON.stringify(review, null, 2), structuredData: { ...review, subjectArtifactId: input.subjectArtifactId, workflowId: task.workflowRunId, externalModelTaskId: task.id } });
       return { artifact, review };
     },
 
-    reviseStoryArcBundle: async (input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; review: StoryArcReviewOutput; candidateStartIndex?: number }): Promise<GeneratedStoryArcResult> => {
+    reviseStoryArcBundle: async (input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; review: StoryArcReviewOutput; candidateStartIndex?: number; rebase?: boolean }): Promise<GeneratedStoryArcResult> => {
       const planning = await deps.repository.getStoryArcPlanningInput(input.projectId);
-      const prompt = buildStoryArcRevisionPrompt(input.bundle, input.review, JSON.stringify(planning, null, 2));
+      const rebaseTarget = input.rebase ? await deps.repository.getStoryArcRebaseTarget(input.projectId, input.arcId) : undefined;
+      const prompt = buildStoryArcRevisionPrompt(input.bundle, input.review, JSON.stringify(planning, null, 2), rebaseTarget);
       const system = "你是长篇小说故事弧修订策划师。只输出完整 JSON。";
       const promptPackage = compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "planning.arc-revision", stage: "revision", system, prompt, schema: storyArcBundleSchema as unknown as Record<string, unknown>, reservedOutputTokens: 12_000, provenanceRefs: [input.arcId, input.artifact.id] });
       try {
         const generated = await model.generateStructured<StoryArcBundle>({ purpose: "planning.arc-revision", system, prompt: promptPackage.instruction, schema: storyArcBundleSchema as unknown as Record<string, unknown>, schemaName: "story-arc-bundle", maxTokens: 12_000, workflowRunId: input.workflowId, taskId: `${input.arcId}:story-arc-revision`, candidateStartIndex: input.candidateStartIndex, promptContext: promptPackage.manifest });
-        const bundle = parseStoryArcBundle(generated.value);
+        let bundle = parseStoryArcBundle(generated.value);
+        if (rebaseTarget) bundle = normalizeStoryArcRebaseBundle(bundle, rebaseTarget);
+        else bundle = normalizeStoryArcStakes(bundle);
+        validateStoryArcExecutionContracts(bundle);
+        if (rebaseTarget) validateStoryArcRebaseBundle(bundle, rebaseTarget);
         if (bundle.batch.batchIndex !== input.bundle.batch.batchIndex || bundle.batch.startChapterIndex !== input.bundle.batch.startChapterIndex) throw new Error("故事弧修订不得改写批次位置");
         const artifact = await makeArtifact({ projectId: input.projectId, taskId: `${input.arcId}:story-arc-revision`, kind: "chapter-blueprint", baseRevision: 0, text: JSON.stringify(bundle, null, 2), structuredData: { ...bundle, workflowId: input.workflowId, arcId: input.arcId, sourceArtifactId: input.artifact.id, modelProvenance: generated.provenance } });
         return { kind: "completed", artifact, bundle };
@@ -1473,6 +1641,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const work = await creativeGetWorkItem(deps.repository, input.workItemId);
       if (!work) throw new Error(`CreativeWorkItem 不存在：${input.workItemId}`);
       if (!work.taskKey) throw new Error(`work item 缺少 taskKey：${input.workItemId}`);
+      const taskSchema = foundationSchemaForTask(work.taskKey);
 
       const run = await getCreativeRun(deps.repository, input.runId);
       if (!run) throw new Error(`CreativeRun 不存在：${input.runId}`);
@@ -1483,20 +1652,19 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         work.parameters.focusedPlanRegeneration === true ? work.taskKey as import("../application/project-plan").ProjectPlanTaskKey : undefined,
       );
 
-      // Skill 注入(对齐 chapter-draft.ts 的 skill 消费方式):
-      // 从 skillProvider 查询 applicableTasks 含 foundation 或 planning 的 skill,
-      // 让 v1 迁移的 long-form-master-craft/hierarchical-outline/chapter-blueprint/
-      // plot-segment-design/premise-pressure-test 等 skill 的 promptSections 真正进入 LLM。
-      // 设计依据:AGENTS.md「reusable contracts」——不针对特定 skill 加规则,
-      // 而是让所有声明 foundation/planning taskClass 的 skill 都有机会注入 prompt。
-      // TODO P2: 当前未走 resolveSkillBundle(因 foundation 阶段无 PreflightPlan),
-      // 未来若 cognition 层支持 foundation 阶段的 plan,可切换到 resolveSkillBundle 统一选中逻辑。
-      const allSkills = await deps.skillProvider.list(run.projectId);
-      const foundationSkills = allSkills
-        .filter((skill) => skill.enabled && (skill.applicableTasks.includes("foundation") || skill.applicableTasks.includes("planning")))
-        .map((skill) => ({ skillId: skill.skillId, promptSections: skill.promptSections }));
+      // Foundation 与章节生成共享同一套技能选择、题材匹配、冲突和 fingerprint 契约。
+      const foundationSkillBundle = await resolveSkillBundleForTask({
+        projectId: run.projectId,
+        provider: deps.skillProvider,
+        taskClasses: ["foundation", "planning"],
+        genre: typeof project.metadata?.genre === "string" ? project.metadata.genre : undefined,
+        preflightId: `foundation:${input.runId}`,
+      });
+      if (foundationSkillBundle.conflicts.length) throw new Error(`Foundation skill 冲突：${foundationSkillBundle.conflicts.map((item) => `${item.skillId}/${item.conflictsWith}`).join(", ")}`);
+      const foundationSkills = foundationSkillBundle.skills.map((skill) => ({ skillId: skill.skillId, promptSections: skill.promptSections }));
 
       // 3. 构建 prompt
+      const creativeBrief = parseCreativeBrief(project.metadata?.creativeBrief);
       const prompt = buildFoundationPrompt({
         taskKey: work.taskKey,
         instruction: work.instruction,
@@ -1506,11 +1674,12 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         objective: typeof run.payload?.objective === "string" ? run.payload.objective : undefined,
         priorArtifacts,
         skills: foundationSkills,
+        creativeBrief,
       });
 
       const routingSnapshot = model.getRoutingSnapshot();
       const taskId = `${input.workItemId}:foundation`;
-      const promptPackage = compileSinglePrompt({ projectId: run.projectId, workflowId: input.runId, purpose: "planning.foundation", stage: "foundation", system: FOUNDATION_SYSTEM_PROMPT, prompt, schema: foundationSchema as Record<string, unknown>, reservedOutputTokens: 4096, provenanceRefs: [input.workItemId, ...work.dependsOn] });
+      const promptPackage = compileSinglePrompt({ projectId: run.projectId, workflowId: input.runId, purpose: "planning.foundation", stage: "foundation", system: FOUNDATION_SYSTEM_PROMPT, prompt, schema: taskSchema, reservedOutputTokens: 4096, provenanceRefs: [input.workItemId, ...work.dependsOn] });
 
       // 4. 调用 LLM 生成（支持 external-mcp 双路径）
       try {
@@ -1518,7 +1687,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           purpose: "planning.foundation",
           system: FOUNDATION_SYSTEM_PROMPT,
           prompt: promptPackage.instruction,
-          schema: foundationSchema as Record<string, unknown>,
+          schema: taskSchema,
           schemaName: "foundation-output",
           maxTokens: 4096,
           workflowRunId: input.runId,
@@ -1527,6 +1696,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           candidateStartIndex: input.candidateStartIndex,
           promptContext: promptPackage.manifest,
         });
+        assertFoundationTaskContract(generated.value, work.taskKey);
 
         const artifact = await makeArtifact({
           projectId: run.projectId,
@@ -1540,6 +1710,9 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
             workItemId: input.workItemId,
             taskKey: work.taskKey,
             runId: input.runId,
+            ...(work.taskKey === "project-positioning" && creativeBrief ? { creativeBrief } : {}),
+            skillBundleId: foundationSkillBundle.id,
+            skillBundleFingerprint: foundationSkillBundle.fingerprint,
           },
         });
         await deps.repository.projectFoundationArtifact(artifact);
@@ -1576,7 +1749,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           outputKind: "structured",
           system: FOUNDATION_SYSTEM_PROMPT,
           instruction: promptPackage.instruction,
-          schema: foundationSchema as Record<string, unknown>,
+          schema: taskSchema,
           schemaName: "foundation-output",
           baseRevision: 0,
           contextRefs: { workItemId: input.workItemId, taskKey: work.taskKey },
@@ -1589,7 +1762,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           kind: "foundation",
           baseRevision: 0,
           text: "",
-          structuredData: { workItemId: input.workItemId, taskKey: work.taskKey, runId: input.runId, pendingExternalTaskId: task.id },
+          structuredData: { workItemId: input.workItemId, taskKey: work.taskKey, runId: input.runId, pendingExternalTaskId: task.id, skillBundleId: foundationSkillBundle.id, skillBundleFingerprint: foundationSkillBundle.fingerprint },
         });
         await creativeAttachArtifact(deps.repository, input.workItemId, stubArtifact.id);
         return { kind: "external", task, artifact: stubArtifact };
@@ -1611,6 +1784,12 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       if (!work) throw new Error(`CreativeWorkItem 不存在：${input.workItemId}`);
       const run = await getCreativeRun(deps.repository, work.runId);
       if (!run) throw new Error(`CreativeRun 不存在：${work.runId}`);
+      const project = await deps.repository.getProjectDetail(run.projectId);
+      const creativeBrief = parseCreativeBrief(project.metadata?.creativeBrief);
+      const stubArtifact = work.artifactRefs.at(-1) ? await deps.repository.getArtifact(work.artifactRefs.at(-1)!) : undefined;
+      const taskSchema = foundationSchemaForTask(work.taskKey ?? "");
+      assertStructuredSchema(input.value, taskSchema, "外部 foundation 结果");
+      assertFoundationTaskContract(input.value as FoundationOutput, work.taskKey ?? "");
 
       const artifact = await makeArtifact({
         projectId: run.projectId,
@@ -1623,7 +1802,10 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
           workItemId: input.workItemId,
           taskKey: work.taskKey,
           runId: work.runId,
+          ...(work.taskKey === "project-positioning" && creativeBrief ? { creativeBrief } : {}),
           materializedFromTask: input.modelTaskId,
+          skillBundleId: typeof stubArtifact?.structuredData?.skillBundleId === "string" ? stubArtifact.structuredData.skillBundleId : undefined,
+          skillBundleFingerprint: typeof stubArtifact?.structuredData?.skillBundleFingerprint === "string" ? stubArtifact.structuredData.skillBundleFingerprint : undefined,
         },
       });
       await deps.repository.projectFoundationArtifact(artifact);
@@ -1645,6 +1827,129 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       await creativeAttachArtifact(deps.repository, input.workItemId, artifact.id);
       return artifact;
     },
+
+    reviewFoundationWork: async (input: {
+      runId: string;
+      workItemId: string;
+      candidateStartIndex?: number;
+    }): Promise<{ kind: "completed"; review: CreativeReview } | { kind: "external"; task: ModelTaskRecord }> => {
+      const work = await creativeGetWorkItem(deps.repository, input.workItemId);
+      if (!work) throw new Error(`CreativeWorkItem 不存在：${input.workItemId}`);
+      const artifactId = work.artifactRefs.at(-1);
+      if (!artifactId) throw new Error(`Foundation work item 尚无 artifact：${input.workItemId}`);
+      const artifact = await deps.repository.getArtifact(artifactId);
+      if (!artifact) throw new Error(`Foundation artifact 不存在：${artifactId}`);
+      const existing = (await creativeListReviews(deps.repository, input.workItemId)).find((review) => review.subjectArtifactId === artifact.id);
+      if (existing) return { kind: "completed", review: existing };
+      const run = await getCreativeRun(deps.repository, input.runId);
+      if (!run) throw new Error(`CreativeRun 不存在：${input.runId}`);
+      const project = await deps.repository.getProjectDetail(run.projectId);
+      const prompt = buildFoundationReviewPrompt({
+        taskKey: work.taskKey ?? "",
+        artifact,
+        premise: typeof project.metadata?.premise === "string" ? project.metadata.premise : undefined,
+        genre: typeof project.metadata?.genre === "string" ? project.metadata.genre : undefined,
+      });
+      const system = "你是独立的长篇小说 Foundation 规划审核编辑。只输出符合 foundationReviewSchema 的 JSON。";
+      const routingSnapshot = model.getRoutingSnapshot();
+      const taskId = `${input.workItemId}:foundation-review:${artifact.id}`;
+      const promptPackage = compileSinglePrompt({ projectId: run.projectId, workflowId: input.runId, purpose: "review.foundation", stage: "review", system, prompt, schema: foundationReviewSchema as unknown as Record<string, unknown>, reservedOutputTokens: 4096, provenanceRefs: [input.workItemId, artifact.id] });
+      try {
+        const generated = await model.generateStructured<FoundationReviewOutput>({
+          purpose: "review.foundation",
+          system,
+          prompt: promptPackage.instruction,
+          schema: foundationReviewSchema as unknown as Record<string, unknown>,
+          schemaName: "foundation-review",
+          maxTokens: 4096,
+          workflowRunId: input.runId,
+          taskId,
+          routingSnapshot,
+          candidateStartIndex: input.candidateStartIndex,
+          promptContext: promptPackage.manifest,
+        });
+        assertStructuredSchema(generated.value, foundationReviewSchema as unknown as Record<string, unknown>, "foundation 审核结果");
+        if (generated.value.artifactFingerprint !== artifact.fingerprint) throw new Error("foundation 审核结果与当前 artifact fingerprint 不一致");
+        const hasBlockingIssue = generated.value.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major")
+          || generated.value.consistencyChecks.some((check) => check.verdict !== "passed");
+        await makeArtifact({
+          projectId: run.projectId,
+          taskId: `${input.workItemId}:foundation-review`,
+          kind: "review",
+          baseRevision: artifact.baseRevision,
+          text: JSON.stringify(generated.value, null, 2),
+          structuredData: { ...generated.value, subjectArtifactId: artifact.id, artifactFingerprint: artifact.fingerprint, workflowId: input.runId },
+        });
+        const review: CreativeReview = await creativeSubmitReview(deps.repository, input.workItemId, {
+          subjectArtifactId: artifact.id,
+          reviewer: "independent",
+          verdict: hasBlockingIssue && generated.value.verdict === "passed" ? "revise" : generated.value.verdict,
+          issues: generated.value.issues.map((issue) => ({
+            severity: issue.severity,
+            title: issue.title,
+            description: issue.description,
+            evidence: issue.evidence,
+            dimension: issue.dimension,
+            suggestion: issue.suggestion,
+          })),
+          summary: generated.value.summary,
+        });
+        return { kind: "completed", review };
+      } catch (error) {
+        if (!(error instanceof ExternalMcpRequiredError)) throw error;
+        return {
+          kind: "external",
+          task: await externalTask({
+            workflowId: input.runId,
+            taskId,
+            purpose: "review.foundation",
+            candidateIndex: error.candidateIndex,
+            routingSnapshot,
+            outputKind: "review",
+            system,
+            instruction: promptPackage.instruction,
+            schema: foundationReviewSchema as unknown as Record<string, unknown>,
+            schemaName: "foundation-review",
+            baseRevision: artifact.baseRevision,
+            contextRefs: { workItemId: input.workItemId, artifactId: artifact.id, taskKey: work.taskKey },
+            promptContext: promptPackage.manifest,
+          }),
+        };
+      }
+    },
+
+    materializeExternalFoundationReview: async (input: { modelTaskId: string; workItemId: string; value: unknown }): Promise<CreativeReview> => {
+      const task = await deps.repository.getModelTask(input.modelTaskId);
+      if (!task) throw new Error(`外部 foundation 审核任务不存在：${input.modelTaskId}`);
+      const work = await creativeGetWorkItem(deps.repository, input.workItemId);
+      if (!work) throw new Error(`CreativeWorkItem 不存在：${input.workItemId}`);
+      const artifactId = work.artifactRefs.at(-1);
+      if (!artifactId) throw new Error(`Foundation work item 尚无 artifact：${input.workItemId}`);
+      const artifact = await deps.repository.getArtifact(artifactId);
+      if (!artifact) throw new Error(`Foundation artifact 不存在：${artifactId}`);
+      assertStructuredSchema(input.value, foundationReviewSchema as unknown as Record<string, unknown>, "外部 foundation 审核结果");
+      const result = input.value as FoundationReviewOutput;
+      if (result.artifactFingerprint !== artifact.fingerprint) throw new Error("外部 foundation 审核结果与当前 artifact fingerprint 不一致");
+      const hasBlockingIssue = result.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major")
+        || result.consistencyChecks.some((check) => check.verdict !== "passed");
+      const run = await getCreativeRun(deps.repository, work.runId);
+      if (!run) throw new Error(`CreativeRun 不存在：${work.runId}`);
+      await makeArtifact({
+        projectId: run.projectId,
+        taskId: `${input.workItemId}:foundation-review`,
+        kind: "review",
+        baseRevision: artifact.baseRevision,
+        text: JSON.stringify(result, null, 2),
+        structuredData: { ...result, subjectArtifactId: artifact.id, artifactFingerprint: artifact.fingerprint, workflowId: task.workflowRunId, externalModelTaskId: task.id },
+      });
+      return creativeSubmitReview(deps.repository, input.workItemId, {
+        subjectArtifactId: artifactId,
+        reviewer: "independent",
+        verdict: hasBlockingIssue && result.verdict === "passed" ? "revise" : result.verdict,
+        issues: result.issues.map((issue) => ({ severity: issue.severity, title: issue.title, description: issue.description, evidence: issue.evidence, dimension: issue.dimension, suggestion: issue.suggestion })),
+        summary: result.summary,
+      });
+    },
   };
 
   const loadRecord = async <T>(table: "memory_bundles" | "skill_bundles" | "execution_blueprints", id: string, label: string): Promise<T> => {
@@ -1657,6 +1962,13 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
     if (!artifact) throw new Error(`产物不存在：${artifactId}`);
     if (!artifact.objectKey) throw new Error(`产物缺少正文对象：${artifactId}`);
     return { artifact, text: await objects.getText(artifact.objectKey) };
+  };
+  const assertReviewMemoryCutoff = (memory: MemoryBundle): void => {
+    if (typeof memory.narrativeCutoff !== "number") return;
+    const futureClaims = memory.claims.filter((claim) => !isMemoryClaimVisibleAtCutoff(claim, memory.narrativeCutoff));
+    if (futureClaims.length) {
+      throw new Error(`review-memory-cutoff-violation: cutoff=${memory.narrativeCutoff} claims=${futureClaims.map((claim) => claim.id).join(",")}`);
+    }
   };
 
   return {
@@ -1682,10 +1994,11 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         loadRecord<MemoryBundle>("memory_bundles", input.memoryBundleId, "记忆包"),
         loadRecord<SkillBundle>("skill_bundles", input.skillBundleId, "技能包"),
       ]);
+      assertReviewMemoryCutoff(memory);
       const planningContext = await deps.repository.getChapterPlanningContextSnapshot(blueprint.id);
       return api.review({ ...input, artifact, text, blueprint, memory, skills, planningContext });
     },
-    reviseByRefs: async (input: { workflowId: string; intent: NovelIntent; artifactId: string; reviewIds: string[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; blueprintId: string; memoryBundleId: string; skillBundleId: string; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<GeneratedTextResult> => {
+    reviseByRefs: async (input: { workflowId: string; intent: NovelIntent; artifactId: string; reviewIds: string[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; blueprintId: string; memoryBundleId: string; skillBundleId: string; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; revisionHistory?: RevisionAttempt[] }): Promise<GeneratedTextResult> => {
       const [{ artifact, text }, reviews, blueprint, memory, skills] = await Promise.all([
         loadArtifactText(input.artifactId),
         deps.repository.getReviewsByIds(input.reviewIds),
@@ -1693,6 +2006,7 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
         loadRecord<MemoryBundle>("memory_bundles", input.memoryBundleId, "记忆包"),
         loadRecord<SkillBundle>("skill_bundles", input.skillBundleId, "技能包"),
       ]);
+      assertReviewMemoryCutoff(memory);
       const planningContext = await deps.repository.getChapterPlanningContextSnapshot(blueprint.id);
       return api.revise({ ...input, artifact, text, reviews, blueprint, memory, skills, planningContext });
     },

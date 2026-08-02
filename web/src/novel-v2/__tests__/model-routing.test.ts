@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ModelConfigStore, applyRuntimeModelOverrides } from "../model-config-store";
-import { RoutedModelGateway } from "../model-gateway";
+import { normalizeProviderJsonSchema, RoutedModelGateway } from "../model-gateway";
 import { NovelPostgresRepository } from "../postgres-repository";
-import { ExternalMcpRequiredError, ModelRoutingConfigError, createRoutingSnapshot, validateModelRoutingConfig, type ModelProviderProfile, type ModelRoutingConfig } from "../model-routing";
+import { ExternalMcpRequiredError, ModelRoutingConfigError, createRoutingSnapshot, resolveRoute, validateModelRoutingConfig, type ModelProviderProfile, type ModelRoutingConfig } from "../model-routing";
 
 function profile(overrides: Partial<ModelProviderProfile> = {}): ModelProviderProfile {
   return {
@@ -108,6 +108,14 @@ describe("model routing config", () => {
     invalid.routes = { "review.*": { candidates: [{ executor: "api", profileId: "primary" }], conversationPolicy: "task-chain" }, "*": { candidates: [{ executor: "api", profileId: "primary" }] } };
     expect(() => validateModelRoutingConfig(invalid)).toThrow(ModelRoutingConfigError);
   });
+
+  it("allows Foundation review to use a dedicated structured route", () => {
+    const next = config([profile()]);
+    next.routes["review.*"] = { candidates: [{ executor: "external-mcp" }], conversationPolicy: "stateless" };
+    next.routes["review.foundation"] = { candidates: [{ executor: "api", profileId: "primary" }], conversationPolicy: "stateless" };
+    expect(resolveRoute(next, "review.foundation")).toEqual(next.routes["review.foundation"]);
+    expect(() => validateModelRoutingConfig(next)).not.toThrow();
+  });
 });
 
 describe("model routing persistence", () => {
@@ -137,9 +145,45 @@ describe("model routing persistence", () => {
     const result = await repository.pool.query("SELECT candidates FROM model_routes WHERE task_class = $1", ["*"]);
     expect(result.rows[0].candidates).toEqual([{ executor: "external-mcp" }]);
   });
+
+  it("serializes concurrent API and worker routing refreshes", async () => {
+    if (!postgresAvailable) return;
+    const next = config([profile()]);
+    const snapshot = createRoutingSnapshot(next);
+    await expect(Promise.all([
+      repository.projectModelRoutingConfig(next, snapshot),
+      repository.projectModelRoutingConfig(next, snapshot),
+    ])).resolves.toHaveLength(2);
+    const providers = await repository.pool.query("SELECT id FROM provider_configs WHERE config_revision=$1", [snapshot.id]);
+    expect(providers.rows).toHaveLength(snapshot.profiles.length);
+  });
 });
 
 describe("RoutedModelGateway adapters", () => {
+  it("adds inferable primitive types for enum and const schema nodes at transport time", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ verdict: "passed", enabled: true }) } }] }), { status: 200 });
+    }));
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["verdict", "enabled"],
+      properties: { verdict: { enum: ["passed"] }, enabled: { const: true } },
+    };
+    await expect(new RoutedModelGateway(new ModelConfigStore("unused", config())).generateStructured({ purpose: "review.arc", prompt: "输出审核结果", schema })).resolves.toMatchObject({ value: { verdict: "passed", enabled: true } });
+    const sent = (requestBody?.response_format as Record<string, unknown>)?.json_schema as Record<string, unknown>;
+    expect(sent.schema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["verdict", "enabled"],
+      properties: { verdict: { enum: ["passed"], type: "string" }, enabled: { const: true, type: "boolean" } },
+    });
+    expect(normalizeProviderJsonSchema(schema)).toEqual(sent.schema);
+    expect(schema.properties.verdict).toEqual({ enum: ["passed"] });
+  });
+
   it("aggregates one stateless Chat Completions SSE request", async () => {
     const encoder = new TextEncoder();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {

@@ -57,6 +57,7 @@ export {
 export {
   submitReview,
   listReviews,
+  hasPassedIndependentReviewForArtifact,
   evaluateReviewGate,
   checkGate,
 } from "./review-gate";

@@ -38,7 +38,21 @@ export const PROJECT_PLAN_STAGES = [
 export type ProjectPlanStageTaskKey = (typeof PROJECT_PLAN_STAGES)[number]["taskKey"];
 export type ProjectPlanTaskKey = ProjectPlanStageTaskKey | "chapter-plan";
 
+/** Foundation 阶段中必须由作者确认的方向性契约。 */
+export const FOUNDATION_AUTHOR_CONFIRMATION_TASK_KEYS = [
+  "project-positioning",
+  "architecture",
+  "characters",
+  "worldview",
+  "plot-design",
+] as const satisfies readonly ProjectPlanStageTaskKey[];
+
+export function requiresFoundationAuthorConfirmation(taskKey: string | undefined): boolean {
+  return Boolean(taskKey && FOUNDATION_AUTHOR_CONFIRMATION_TASK_KEYS.includes(taskKey as (typeof FOUNDATION_AUTHOR_CONFIRMATION_TASK_KEYS)[number]));
+}
+
 export const REQUIRED_APPROVED_PLAN_TASK_KEYS = [
+  "project-positioning",
   "architecture",
   "characters",
   "worldview",

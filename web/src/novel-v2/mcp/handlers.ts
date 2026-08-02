@@ -1,10 +1,10 @@
 /**
- * V2 MCP 工具处理函数（23 个工具的 handler 实现）。
+ * V2 MCP 工具处理函数（29 个工具的 handler 实现）。
  *
  * 设计依据：AGENTS.md 架构阶段 + Phase B-2 MCP 工具网关。
  *
  * 职责：
- * - 实现 23 个工具的具体调用逻辑
+ * - 实现 29 个工具的具体调用逻辑
  * - 路由到 creative/ + evaluation/ + postgres-repository 模块
  * - 返回标准 JSON-serializable 结果（executeTool 包装为 McpToolResponse）
  *
@@ -32,6 +32,7 @@ import type {
 import { startNovelBootstrap } from "../application/bootstrap";
 import { provisionalTitle } from "../application/provisional-title";
 import { startStoryArcPlanning } from "../application/story-arc-workflow";
+import { parseCreativeBrief } from "../application/creative-brief";
 import {
   createCreativeRun,
   executeCreativeCommand,
@@ -608,8 +609,9 @@ const novel_project_create: ToolHandler = async (args, ctx) => {
   const autoBootstrap = asBoolean(args.autoBootstrap) ?? true;
   const includeChapterPlan = asBoolean(args.includeChapterPlan) ?? true;
   const objective = asString(args.objective) || premise;
+  const creativeBrief = parseCreativeBrief(args.creativeBrief);
   // 解析 reviewGate/progression,使 foundation 10 阶段支持人工审核门禁(架构阶段必备)。
-  // 未提供时为 undefined,由 startNovelBootstrap 兜底为 "none" / "automatic"(向后兼容)。
+  // 未提供时由 startNovelBootstrap 兜底为质量优先的 manual / automatic。
   const { reviewGate, progression } = parseBootstrapPolicy(args);
 
   // 使用 idempotencyKey 作为 projectId(与 v1 行为一致)
@@ -620,6 +622,7 @@ const novel_project_create: ToolHandler = async (args, ctx) => {
   // premise 作为创作上下文提示,由 craft rule 决定如何使用。
   const metadata: Record<string, unknown> = { premise };
   if (genre) metadata.genre = genre;
+  if (creativeBrief) metadata.creativeBrief = creativeBrief;
   await ctx.repository.ensureProject(projectId, title, metadata);
 
   const project = await ctx.repository.getProjectDetail(projectId);
@@ -669,7 +672,7 @@ const novel_bootstrap_run: ToolHandler = async (args, ctx) => {
   // includeChapterPlan 仅保留旧客户端兼容，startNovelBootstrap 会忽略该值。
   const includeChapterPlan = asBoolean(args.includeChapterPlan) ?? true;
   // 解析 reviewGate/progression,使 foundation 10 阶段支持人工审核门禁(架构阶段必备)。
-  // 未提供时为 undefined,由 startNovelBootstrap 兜底为 "none" / "automatic"(向后兼容)。
+  // 未提供时由 startNovelBootstrap 兜底为质量优先的 manual / automatic。
   const { reviewGate, progression } = parseBootstrapPolicy(args);
 
   if (!ctx.temporal) throw new Error("novel_bootstrap_run 需要 ToolContext.temporal 才能启动 Temporal 工作流");
@@ -873,6 +876,67 @@ const novel_workflow_list: ToolHandler = async (args, ctx) => {
   return { runs };
 };
 
+// ===== Workflow 决策（1，新增）=====
+
+/**
+ * 向 chapter-review 工作流提交人工决策。
+ *
+ * 设计依据：findings.md Process Issue — MCP 工具不提供提交人工决策的途径，
+ * 导致 manual-review-required 状态的工作流无法通过 MCP 推进。
+ * 此 handler 复用 HTTP API `POST /v2/workflows/:id/tasks/:taskId/human-decision`
+ * 的逻辑：claimApprovalEvidence → signal(humanSignal) → updateWorkflowRunStatus。
+ */
+const novel_chapter_review_decision: ToolHandler = async (args, ctx) => {
+  const workflowId = asString(args.workflowId);
+  const artifactId = asString(args.artifactId);
+  const decision = asString(args.decision);
+  if (!workflowId || !artifactId) throw new Error("workflowId/artifactId 必填且非空");
+  if (decision !== "approve" && decision !== "reject" && decision !== "revise" && decision !== "abandon") {
+    throw new Error("decision 必须是 approve/reject/revise/abandon");
+  }
+  if (!ctx.temporal) throw new Error("novel_chapter_review_decision 需要 ToolContext.temporal 才能发送工作流信号");
+
+  const feedback = asString(args.feedback) || undefined;
+  const revisionBase = args.revisionBase === "previous" ? "previous" : args.revisionBase === "current" ? "current" : undefined;
+
+  // 1. 创建 approval evidence 并抢占决策锁（同一 artifact 只能提交一次决策）
+  const claimed = await ctx.repository.claimApprovalEvidence({
+    workflowId,
+    artifactId,
+    decision,
+    actorSource: "interactive-web",
+    actorId: "web-author",
+    feedback,
+    revisionBase,
+  });
+  if (!claimed) throw new Error("该候选稿的审批已提交，或运行已离开当前审批阶段。调用 novel_workflow_get 确认当前状态");
+
+  // 2. 发送 humanSignal 到 Temporal 工作流
+  const signalPayload = { approvalEvidenceId: claimed.evidence.id, taskId: artifactId };
+  try {
+    await ctx.repository.recordTaskSignal({ workflowId, taskId: artifactId, signal: "humanSignal", payload: signalPayload });
+    await ctx.temporal.workflow.getHandle(workflowId).signal("humanSignal", signalPayload);
+
+    // 3. 更新工作流状态为 running
+    const stage = decision === "approve" ? "fact-extraction" : decision === "revise" ? "revision" : "manuscript-approval";
+    await ctx.repository.updateWorkflowRunStatus(workflowId, "running", { stage, decision, pendingHumanDecisionSubmitted: true });
+
+    return {
+      accepted: true,
+      workflowId,
+      artifactId,
+      decision,
+      approvalEvidenceId: claimed.evidence.id,
+      stage,
+      nextAction: `调用 novel_workflow_get({ workflowId: "${workflowId}" }) 查询${decision === "approve" ? "定稿提交" : decision === "revise" ? "修订" : "处理"}进度`,
+    };
+  } catch (error) {
+    // 信号发送失败时释放决策锁，允许重试
+    await ctx.repository.releaseHumanDecisionClaim(workflowId, artifactId).catch(() => undefined);
+    throw error;
+  }
+};
+
 // ===== Handler 注册表 =====
 
 export const TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -917,4 +981,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   // Workflow 查询（2）
   novel_workflow_get,
   novel_workflow_list,
+
+  // Workflow 决策（1，新增）
+  novel_chapter_review_decision,
 };

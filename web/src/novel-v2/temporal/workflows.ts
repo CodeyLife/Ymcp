@@ -1,13 +1,18 @@
 import { defineSignal, proxyActivities, setHandler, condition, patched } from "@temporalio/workflow";
-import type { ApprovalEvidence, Artifact, CommitResult, ContextManifest, CreativeRun, CreativeReviewGate, CreativeWorkItem, ExecutionBlueprint, FactApprovalSummary, MemoryBundle, MemoryClaim, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, ReviewIssue, RuntimeLearningAssessmentV2, SkillBundle, TaskAttemptRecord } from "../protocol";
+import type { ApprovalEvidence, Artifact, CommitResult, ContextManifest, CreativeReview, CreativeRun, CreativeReviewGate, CreativeWorkItem, ExecutionBlueprint, FactApprovalSummary, MemoryBundle, MemoryClaim, NovelIntent, PreflightPlan, PreflightProjectSnapshot, Review, ReviewIssue, RuntimeLearningAssessmentV2, SkillBundle, TaskAttemptRecord } from "../protocol";
 import type { ChapterPlanningContext, StoryArcBundle } from "../application/story-arc";
+import { getApplicableChapterReviewDimensions } from "../application/chapter-review-dimensions";
 import type { ManuscriptStructuralReport } from "../application/manuscript-structure";
 import { storyArcReviewStrategy, validateStoryArcReview, type StoryArcReviewOutput } from "../application/story-arc-review-policy";
-import type { ReflectionOutput } from "../prompts/schemas";
+import type { ReflectionOutput, ReviewDimension } from "../prompts/schemas";
 import type { ReviewerRole } from "../prompts/chapter-review";
+import type { RevisionAttempt } from "../prompts/chapter-revision";
 import type { ModelRoutingSnapshot, ModelTaskRecord } from "../model-routing";
 import { finalizeChapterLifecycle, runChapterLifecycle } from "../application/chapter-lifecycle";
 import type { BookSynopsisRecord, BookTitleCandidate, BookTitleCandidatesRecord } from "../application/book-synopsis";
+import { buildRevisionDirection } from "../application/revision-brief";
+import { detectNamedEntityDrift } from "./revision-policy";
+import { requiresFoundationAuthorConfirmation } from "../application/project-plan";
 
 function failureMessage(error: unknown): string {
   let current: unknown = error;
@@ -73,13 +78,13 @@ export interface NovelWorkflowActivities {
   materializeExternalChapterTitle(input: { modelTaskId: string; value: unknown }): Promise<{ title: string }>;
   persistGeneratedChapterTitle(input: { projectId: string; documentId: string; sourceFingerprint: string; title: string }): Promise<{ title: string }>;
   getStoryArcRoutingSnapshot(): Promise<ModelRoutingSnapshot>;
-  generateStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; authorIntent?: string; candidateStartIndex?: number; batchIndex?: number; startChapterIndex?: number }): Promise<{ kind: "completed"; artifact: Artifact; bundle: StoryArcBundle } | { kind: "external"; task: ModelTaskRecord }>;
-  materializeExternalStoryArcBundle(input: { modelTaskId: string; projectId: string; arcId: string; value: unknown }): Promise<{ artifact: Artifact; bundle: StoryArcBundle }>;
+  generateStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; authorIntent?: string; candidateStartIndex?: number; batchIndex?: number; startChapterIndex?: number; rebase?: boolean }): Promise<{ kind: "completed"; artifact: Artifact; bundle: StoryArcBundle } | { kind: "external"; task: ModelTaskRecord }>;
+  materializeExternalStoryArcBundle(input: { modelTaskId: string; projectId: string; arcId: string; value: unknown; rebase?: boolean }): Promise<{ artifact: Artifact; bundle: StoryArcBundle }>;
   loadStoryArcBundleArtifact(input: { projectId: string; arcId: string; artifactId: string }): Promise<{ artifact: Artifact; bundle: StoryArcBundle }>;
   projectStoryArcBundle(input: { projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; actor: string; edited?: boolean }): Promise<unknown>;
-  reviewStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; candidateStartIndex?: number }): Promise<{ kind: "completed"; artifact: Artifact; review: StoryArcReviewOutput } | { kind: "external"; task: ModelTaskRecord }>;
+  reviewStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; candidateStartIndex?: number; rebase?: boolean }): Promise<{ kind: "completed"; artifact: Artifact; review: StoryArcReviewOutput } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalStoryArcReview(input: { modelTaskId: string; projectId: string; arcId: string; subjectArtifactId: string; value: unknown }): Promise<{ artifact: Artifact; review: StoryArcReviewOutput }>;
-  reviseStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; review: StoryArcReviewOutput; candidateStartIndex?: number }): Promise<{ kind: "completed"; artifact: Artifact; bundle: StoryArcBundle } | { kind: "external"; task: ModelTaskRecord }>;
+  reviseStoryArcBundle(input: { workflowId: string; projectId: string; arcId: string; artifact: Artifact; bundle: StoryArcBundle; review: StoryArcReviewOutput; candidateStartIndex?: number; rebase?: boolean }): Promise<{ kind: "completed"; artifact: Artifact; bundle: StoryArcBundle } | { kind: "external"; task: ModelTaskRecord }>;
   assessStoryArcLearning(input: { projectId: string; workflowId: string; artifact: Artifact; reviewArtifact: Artifact; review: StoryArcReviewOutput; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; assessment: RuntimeLearningAssessmentV2 } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalStoryArcLearning(input: { modelTaskId: string; projectId: string; workflowId: string; artifact: Artifact; reviewArtifact: Artifact; review: StoryArcReviewOutput; value: unknown }): Promise<RuntimeLearningAssessmentV2>;
   approveStoryArcAutomatically(input: { projectId: string; arcId: string; artifactId: string; reviewArtifactId: string }): Promise<unknown>;
@@ -93,8 +98,8 @@ export interface NovelWorkflowActivities {
   review(input: { workflowId: string; artifact: Artifact; text: string; blueprint: ExecutionBlueprint; memory: MemoryBundle; skills: SkillBundle; role: ReviewerRole; identity: "internal" | "independent"; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; narrativeOrder?: number; planningContext?: ChapterPlanningContext; suppressChapterSnapshotPromotion?: boolean }): Promise<{ kind: "completed"; review: Review } | { kind: "external"; task: ModelTaskRecord }>;
   reviewByRefs(input: { workflowId: string; artifactId: string; blueprintId: string; memoryBundleId: string; skillBundleId: string; role: ReviewerRole; identity: "internal" | "independent"; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; narrativeOrder?: number; suppressChapterSnapshotPromotion?: boolean }): Promise<{ kind: "completed"; review: Review } | { kind: "external"; task: ModelTaskRecord }>;
   inspectManuscript(input: { projectId: string; artifact: Artifact; text: string }): Promise<{ report: ManuscriptStructuralReport; review: Review }>;
-  revise(input: { workflowId: string; intent: NovelIntent; artifact: Artifact; text: string; reviews: Review[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; memory: MemoryBundle; blueprint: ExecutionBlueprint; skills: SkillBundle; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; planningContext?: ChapterPlanningContext }): Promise<{ kind: "completed"; artifact: Artifact; text: string } | { kind: "external"; task: ModelTaskRecord }>;
-  reviseByRefs(input: { workflowId: string; intent: NovelIntent; artifactId: string; reviewIds: string[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; blueprintId: string; memoryBundleId: string; skillBundleId: string; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; artifact: Artifact; text: string } | { kind: "external"; task: ModelTaskRecord }>;
+  revise(input: { workflowId: string; intent: NovelIntent; artifact: Artifact; text: string; reviews: Review[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; memory: MemoryBundle; blueprint: ExecutionBlueprint; skills: SkillBundle; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; planningContext?: ChapterPlanningContext; revisionHistory?: RevisionAttempt[] }): Promise<{ kind: "completed"; artifact: Artifact; text: string } | { kind: "external"; task: ModelTaskRecord }>;
+  reviseByRefs(input: { workflowId: string; intent: NovelIntent; artifactId: string; reviewIds: string[]; directedIssues?: ReviewIssue[]; strictRevisionWindows?: boolean; authorInstruction?: string; blueprintId: string; memoryBundleId: string; skillBundleId: string; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number; revisionHistory?: RevisionAttempt[] }): Promise<{ kind: "completed"; artifact: Artifact; text: string } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalText(input: { projectId: string; modelTaskId: string; text: string; kind: "draft" | "revision"; baseRevision: number }): Promise<{ artifact: Artifact; text: string }>;
   materializeExternalTargetedRevision(input: { projectId: string; modelTaskId: string; artifact: Artifact; text: string; issues: ReviewIssue[] }): Promise<{ artifact: Artifact; text: string }>;
   materializeExternalReview(input: { modelTaskId: string; artifact: Artifact; identity: "internal" | "independent"; role: ReviewerRole; value: unknown; suppressChapterSnapshotPromotion?: boolean }): Promise<Review>;
@@ -105,8 +110,8 @@ export interface NovelWorkflowActivities {
   approveFactClaims(input: { projectId: string; ids: string[] }): Promise<MemoryClaim[]>;
   assessLearning(input: { projectId: string; workflowId: string; assessmentKey: string; artifact: Artifact; reviews: Review[]; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; assessment: RuntimeLearningAssessmentV2 } | { kind: "external"; task: ModelTaskRecord }>;
   materializeExternalLearning(input: { modelTaskId: string; projectId: string; workflowId: string; artifact: Artifact; reviews: Review[] }): Promise<RuntimeLearningAssessmentV2>;
-  commit(input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string }): Promise<CommitResult>;
-  commitAuthorApproved(input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string; approvalEvidenceId: string }): Promise<CommitResult>;
+  commit(input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string; applicableReviewDimensions?: readonly ReviewDimension[] }): Promise<CommitResult>;
+  commitAuthorApproved(input: { projectId: string; documentId: string; artifact: Artifact; factArtifact?: Artifact; narrativeOrder?: number; text: string; reviews: Review[]; structuralReport: ManuscriptStructuralReport; baseRevision: number; idempotencyKey: string; approvalEvidenceId: string; applicableReviewDimensions?: readonly ReviewDimension[] }): Promise<CommitResult>;
   // 角色富化 activity（C-2.5）：commit 之后执行，回写角色档案
   // 设计依据：AGENTS.md「commitStageHandler → characterEnrichmentStageHandler」契约
   enrichCharacters(input: { workflowId: string; projectId: string; documentId: string; revisionId: string; narrativeOrder: number; artifact: Artifact; factArtifact?: Artifact; text: string; routingSnapshot: ModelRoutingSnapshot; candidateStartIndex?: number }): Promise<{ kind: "completed"; result: { entityUpdates: number; knowledgeClaims: number; relationRecords: number } } | { kind: "external"; task: ModelTaskRecord }>;
@@ -269,6 +274,9 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
       await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { blueprintId: blueprint.id, signalCount: signals.length } });
       return blueprint;
     }
+    const applicableReviewDimensions = planningContext
+      ? getApplicableChapterReviewDimensions(planningContext.chapter)
+      : undefined;
 
     const waitForExternal = async (task: ModelTaskRecord): Promise<{ result?: Record<string, unknown>; failed: boolean }> => {
       const completed = await condition(() => externalResults.has(task.id) || externalFailures.has(task.id), "15 minutes");
@@ -497,13 +505,14 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
       assessLearning: runLearning,
       extractFacts: runFactExtraction,
       approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: intent.projectId, artifact: factArtifact }),
-      commit: (current, reviewList, factArtifact, structuralReport) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: intent.idempotencyKey }),
+      commit: (current, reviewList, factArtifact, structuralReport, dimensions) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: intent.idempotencyKey, applicableReviewDimensions: dimensions ?? applicableReviewDimensions }),
       enrich: (current, commitResult, factArtifact) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder, factArtifact),
       progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
       beforeRevision: (revisionIteration) => activities.updateTaskAttempt({ id: `${blueprint.id}:revise:attempt-${revisionIteration}`, workflowRunId: workflowId, taskId: `${blueprint.id}:revise`, status: "running", payload: { taskKind: "revise", iteration: revisionIteration } }).then(() => undefined),
       afterRevision: (current, revisionIteration) => activities.updateTaskAttempt({ id: current.artifact.attemptId, workflowRunId: workflowId, taskId: current.artifact.taskId, status: "submitted", payload: { artifactId: current.artifact.id, iteration: revisionIteration } }).then(() => undefined),
       commitBlocked: blueprint.memoryGate?.status === "manual-review" ? { reasonCode: "memory-coverage-incomplete", missingFacets: blueprint.memoryGate.missingFacets, manualReviewFacets: blueprint.memoryGate.manualReviewFacets } : undefined,
       requireManualFactApproval: blueprint.factApprovalMode === "manual",
+      applicableReviewDimensions,
       learningMode: useConvergedLifecycle ? "terminal-candidate" : "legacy-each-stage",
     });
 
@@ -527,11 +536,12 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
         draft: lifecycle.draft,
         reviews: lifecycle.reviews,
         structuralReport: lifecycle.structuralReport,
-        commit: (current, reviewList, factArtifact, structuralReport) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:fact-approved` }),
+        commit: (current, reviewList, factArtifact, structuralReport, dimensions) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:fact-approved`, applicableReviewDimensions: dimensions ?? applicableReviewDimensions }),
         enrich: (current, commitResult, factArtifact) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder, factArtifact),
         assessLearning: runLearning,
         progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
         factArtifact: lifecycle.factApprovalBlocked.factArtifact,
+        applicableReviewDimensions,
         assessPostCommitLearning: !useConvergedLifecycle,
       });
       await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { blueprintId: blueprint.id, artifactId: lifecycle.draft.artifact.id, finalScore: lifecycle.finalScore, factApproved: true, authorId: humanDecision!.authorId, enrichmentError: finalized.enrichmentError } });
@@ -572,12 +582,13 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
           assessLearning: runLearning,
           extractFacts: runFactExtraction,
           approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: intent.projectId, artifact: factArtifact }),
-          commit: (current, reviewList, factArtifact, structuralReport) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: intent.idempotencyKey }),
+          commit: (current, reviewList, factArtifact, structuralReport, dimensions) => activities.commit({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: intent.idempotencyKey, applicableReviewDimensions: dimensions ?? applicableReviewDimensions }),
           enrich: (current, commitResult, factArtifact) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder, factArtifact),
           progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
           directedRevision: { issues: directedIssues, requireManuscriptApproval: true, baseline: directedBaseline },
           reviewBeforeDirectedRevision: preserveDirectedRevisionCandidate && !directedBaseline,
           preserveDirectedRevisionCandidate,
+          applicableReviewDimensions,
           learningMode: useConvergedLifecycle ? "terminal-candidate" : "legacy-each-stage",
         });
         continue;
@@ -591,11 +602,12 @@ export async function novelIntentWorkflow(intent: NovelIntent, workflowId = `nov
         draft: approvedDraft,
         reviews: lifecycle.reviews,
         structuralReport: lifecycle.structuralReport,
-        commit: (current, reviewList, approvedFactArtifact, structuralReport) => activities.commitAuthorApproved({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact: approvedFactArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:author-approved`, approvalEvidenceId: decision.approvalEvidenceId }),
+        commit: (current, reviewList, approvedFactArtifact, structuralReport, dimensions) => activities.commitAuthorApproved({ projectId: intent.projectId, documentId: intent.target!.id!, artifact: current.artifact, factArtifact: approvedFactArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: blueprint.baseRevision, idempotencyKey: `${intent.idempotencyKey}:author-approved`, approvalEvidenceId: decision.approvalEvidenceId, applicableReviewDimensions: dimensions ?? applicableReviewDimensions }),
         enrich: (current, commitResult, factArtifact) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder, factArtifact),
         assessLearning: runLearning,
         progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
         factArtifact,
+        applicableReviewDimensions,
         assessPostCommitLearning: !useConvergedLifecycle,
       });
       await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { blueprintId: blueprint.id, artifactId: approvedDraft.artifact.id, ...(approvedDraft.artifact.id === lifecycle.draft.artifact.id ? {} : { replacedArtifactId: lifecycle.draft.artifact.id }), finalScore: lifecycle.finalScore, authorApproved: true, authorId: decision.authorId, enrichmentError: finalized.enrichmentError } });
@@ -649,6 +661,8 @@ export interface CreativeWorkflowActivities {
   checkGate(input: { runId: string; workItemId: string }): Promise<CreativeReviewGate>;
   /** 接受 work item（调用 creative.acceptWork） */
   acceptWork(input: { runId: string; workItemId: string }): Promise<CreativeWorkItem>;
+  /** 查询核心 Foundation 是否已由作者确认当前 artifact。 */
+  foundationAuthorApproved(input: { runId: string; taskKey: string; artifactId: string }): Promise<boolean>;
   /** 修订 work item（调用 creative.reviseWork） */
   reviseWork(input: { runId: string; workItemId: string; instruction?: string }): Promise<CreativeWorkItem>;
   /** 重试 work item（调用 creative.retryWork） */
@@ -668,6 +682,9 @@ export interface CreativeWorkflowActivities {
   expireExternalModelTask(input: { modelTaskId: string; reason: string }): Promise<void>;
   /** 物化外部 foundation 任务结果（external-mcp 回填路径） */
   materializeExternalFoundation(input: { modelTaskId: string; workItemId: string; value: unknown }): Promise<Artifact>;
+  /** 生成并持久化当前 Foundation artifact 的专属审核。 */
+  reviewFoundationWork(input: { runId: string; workItemId: string; candidateStartIndex?: number }): Promise<{ kind: "completed"; review: CreativeReview } | { kind: "external"; task: ModelTaskRecord }>;
+  materializeExternalFoundationReview(input: { modelTaskId: string; workItemId: string; value: unknown }): Promise<CreativeReview>;
 }
 
 export const pauseCreativeRunSignal = defineSignal("pauseCreativeRun");
@@ -709,6 +726,7 @@ export interface StoryArcPlanningWorkflowInput {
   batchIndex?: number;
   startChapterIndex?: number;
   existingArtifactId?: string;
+  rebase?: boolean;
 }
 
 export interface BookSynopsisWorkflowInput {
@@ -888,10 +906,10 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
   const generateBundle = async (candidateStartIndex?: number): Promise<{ artifact: Artifact; bundle: StoryArcBundle }> => {
     let nextCandidate = candidateStartIndex;
     while (true) {
-      const generated = await activities.generateStoryArcBundle({ workflowId: params.workflowId, projectId: params.projectId, arcId: params.arcId, authorIntent: params.authorIntent, batchIndex: params.batchIndex, startChapterIndex: params.startChapterIndex, candidateStartIndex: nextCandidate });
+      const generated = await activities.generateStoryArcBundle({ workflowId: params.workflowId, projectId: params.projectId, arcId: params.arcId, authorIntent: params.authorIntent, batchIndex: params.batchIndex, startChapterIndex: params.startChapterIndex, candidateStartIndex: nextCandidate, rebase: params.rebase });
       if (generated.kind === "completed") return { artifact: generated.artifact, bundle: generated.bundle };
       try {
-        const materialized = await activities.materializeExternalStoryArcBundle({ modelTaskId: generated.task.id, projectId: params.projectId, arcId: params.arcId, value: (await waitForExternal(generated.task)).value });
+        const materialized = await activities.materializeExternalStoryArcBundle({ modelTaskId: generated.task.id, projectId: params.projectId, arcId: params.arcId, value: (await waitForExternal(generated.task)).value, rebase: params.rebase });
         if (params.batchIndex && (materialized.bundle.batch.batchIndex !== params.batchIndex || materialized.bundle.batch.startChapterIndex !== params.startChapterIndex)) throw new Error("外部生成结果的故事弧批次位置与请求不一致");
         return materialized;
       } catch (error) {
@@ -904,7 +922,7 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
   const reviewBundle = async (current: { artifact: Artifact; bundle: StoryArcBundle }, candidateStartIndex?: number): Promise<{ artifact: Artifact; review: StoryArcReviewOutput }> => {
     let nextCandidate = candidateStartIndex;
     while (true) {
-      const reviewed = await activities.reviewStoryArcBundle({ workflowId: params.workflowId, projectId: params.projectId, arcId: params.arcId, artifact: current.artifact, bundle: current.bundle, candidateStartIndex: nextCandidate });
+      const reviewed = await activities.reviewStoryArcBundle({ workflowId: params.workflowId, projectId: params.projectId, arcId: params.arcId, artifact: current.artifact, bundle: current.bundle, candidateStartIndex: nextCandidate, rebase: params.rebase });
       if (reviewed.kind === "completed") return { artifact: reviewed.artifact, review: reviewed.review };
       try {
         return await activities.materializeExternalStoryArcReview({ modelTaskId: reviewed.task.id, projectId: params.projectId, arcId: params.arcId, subjectArtifactId: current.artifact.id, value: (await waitForExternal(reviewed.task)).value });
@@ -918,10 +936,10 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
   const reviseBundle = async (current: { artifact: Artifact; bundle: StoryArcBundle }, review: StoryArcReviewOutput, candidateStartIndex?: number): Promise<{ artifact: Artifact; bundle: StoryArcBundle }> => {
     let nextCandidate = candidateStartIndex;
     while (true) {
-      const revised = await activities.reviseStoryArcBundle({ workflowId: params.workflowId, projectId: params.projectId, arcId: params.arcId, artifact: current.artifact, bundle: current.bundle, review, candidateStartIndex: nextCandidate });
+      const revised = await activities.reviseStoryArcBundle({ workflowId: params.workflowId, projectId: params.projectId, arcId: params.arcId, artifact: current.artifact, bundle: current.bundle, review, candidateStartIndex: nextCandidate, rebase: params.rebase });
       if (revised.kind === "completed") return { artifact: revised.artifact, bundle: revised.bundle };
       try {
-        const materialized = await activities.materializeExternalStoryArcBundle({ modelTaskId: revised.task.id, projectId: params.projectId, arcId: params.arcId, value: (await waitForExternal(revised.task)).value });
+        const materialized = await activities.materializeExternalStoryArcBundle({ modelTaskId: revised.task.id, projectId: params.projectId, arcId: params.arcId, value: (await waitForExternal(revised.task)).value, rebase: params.rebase });
         if (materialized.bundle.batch.batchIndex !== current.bundle.batch.batchIndex || materialized.bundle.batch.startChapterIndex !== current.bundle.batch.startChapterIndex) throw new Error("外部修订结果改写了故事弧批次位置");
         return materialized;
       } catch (error) {
@@ -946,7 +964,7 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
       ? await activities.loadStoryArcBundleArtifact({ projectId: params.projectId, arcId: params.arcId, artifactId: params.existingArtifactId })
       : await generateBundle();
     if (!params.existingArtifactId) {
-      await activities.projectStoryArcBundle({ projectId: params.projectId, arcId: params.arcId, artifact: current.artifact, bundle: current.bundle, actor: "runtime" });
+      await activities.projectStoryArcBundle({ projectId: params.projectId, arcId: params.arcId, artifact: current.artifact, bundle: current.bundle, actor: "runtime", edited: params.rebase === true });
     }
 
     if (reviewStrategy.humanApproval) {
@@ -969,12 +987,19 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
     }
 
     const maxRetries = params.maxRetries ?? 2;
+    const requireFinalAuthorApproval = params.mode === "web" && params.rebase === true;
     for (let iteration = 0; iteration <= maxRetries; iteration += 1) {
       const reviewed = await reviewBundle(current);
       const planValidation = validateStoryArcReview(current.bundle, reviewed.review);
       const blocking = reviewed.review.issues.some((issue) => issue.severity === "blocker" || issue.severity === "major") || !planValidation.passed;
       await runStoryArcLearning(current, reviewed);
       if (reviewed.review.verdict === "passed" && !blocking) {
+        if (requireFinalAuthorApproval) {
+          await activities.updateWorkflowStatus({ workflowId: params.workflowId, status: "manual-review-required", payload: { arcId: params.arcId, artifactId: current.artifact.id, reviewArtifactId: reviewed.artifact.id, reviewVerdict: reviewed.review.verdict, reviewSummary: reviewed.review.summary, blockingIssueCount: 0, reviewIssues: [], iterations: iteration, reason: "rebase-final-author-approval" } });
+          await condition(() => approved);
+          await activities.updateWorkflowStatus({ workflowId: params.workflowId, status: "completed", payload: { arcId: params.arcId, artifactId: current.artifact.id, reviewArtifactId: reviewed.artifact.id, iterations: iteration, approvedBy: "web-author" } });
+          return;
+        }
         await activities.approveStoryArcAutomatically({ projectId: params.projectId, arcId: params.arcId, artifactId: current.artifact.id, reviewArtifactId: reviewed.artifact.id });
         await activities.updateWorkflowStatus({ workflowId: params.workflowId, status: "completed", payload: { arcId: params.arcId, artifactId: current.artifact.id, reviewArtifactId: reviewed.artifact.id, iterations: iteration } });
         return;
@@ -992,9 +1017,9 @@ export async function storyArcPlanningWorkflow(params: StoryArcPlanningWorkflowI
         artifact: current.artifact,
         bundle: current.bundle,
         actor: "external-reviewer",
-        // A revision of an explicitly edited historical plan may update the plan
-        // metadata behind committed prose. Fresh generation/rebase remains protected.
-        edited: Boolean(params.existingArtifactId),
+        // An explicit review or rebase may update planning metadata behind
+        // committed prose. The repository still preserves document/revision identity.
+        edited: Boolean(params.existingArtifactId || params.rebase),
       });
     }
   } catch (error) {
@@ -1098,6 +1123,7 @@ export async function creativeRunWorkflow(runId: string): Promise<void> {
           await processWorkItem({
             runId,
             work,
+            reviewFoundation: run.policy.reviewGate !== "none",
             activities,
             reviewedWorkItems,
             retryCount,
@@ -1115,6 +1141,7 @@ export async function creativeRunWorkflow(runId: string): Promise<void> {
         await processWorkItem({
           runId,
           work,
+          reviewFoundation: run.policy.reviewGate !== "none",
           activities,
           reviewedWorkItems,
           retryCount,
@@ -1164,6 +1191,7 @@ export async function creativeRunWorkflow(runId: string): Promise<void> {
 async function processWorkItem(params: {
   runId: string;
   work: CreativeWorkItem;
+  reviewFoundation: boolean;
   activities: ReturnType<typeof proxyActivities<CreativeWorkflowActivities>>;
   reviewedWorkItems: Set<string>;
   retryCount: Map<string, number>;
@@ -1172,7 +1200,7 @@ async function processWorkItem(params: {
   isCancelled: () => boolean;
   isPaused: () => boolean;
 }): Promise<void> {
-  const { runId, work, activities, reviewedWorkItems, retryCount, maxRetries, waitForExternal, isCancelled, isPaused } = params;
+  const { runId, work, reviewFoundation, activities, reviewedWorkItems, retryCount, maxRetries, waitForExternal, isCancelled, isPaused } = params;
 
   // 1. 启动 work item（若已 running 则跳过）
   if (work.status === "pending") {
@@ -1182,7 +1210,7 @@ async function processWorkItem(params: {
   // 2. 生成架构产出（仅 generation kind 且有 taskKey 且无 artifact）
   // 设计依据：AGENTS.md「reusable contracts」——生成步骤在最低共享层，
   // 由 generateFoundationWork activity 根据 taskKey 调用 modelGateway.generateStructured。
-  // foundation 阶段 reviewGate="none"（bootstrap_run 配置），生成后 gate 直接 passed → accept。
+  // 质量优先模式下，核心 Foundation 还必须等作者确认；非核心阶段可由 review gate 自动接受。
   // artifactRefs.length===0 表示首次生成；revise 后的重新生成由 reviseWork 触发状态回退，
   // 下轮 listPendingWork 重新处理时 artifactRefs 非空，跳过生成（保留旧 artifact 供 reviewer 参考）。
   const needsFoundationGeneration = work.artifactRefs.length === 0 || (work.status === "pending" && work.artifactRefs.length > 0);
@@ -1224,10 +1252,32 @@ async function processWorkItem(params: {
     }
   }
 
+  // Foundation 先经过专属架构审核，再进入 run-level gate。审核结果绑定最新 artifact，
+  // 避免修订后继续复用旧 artifact 的通过证据。
+  if (reviewFoundation && work.kind === "generation" && work.taskKey && work.parameters.bootstrap === true) {
+    const foundationReview = await activities.reviewFoundationWork({ runId, workItemId: work.id });
+    if (foundationReview.kind === "external") {
+      await activities.recordEvent({ runId, eventType: "work.foundation-review.external-pending", payload: { workItemId: work.id, modelTaskId: foundationReview.task.id, taskKey: work.taskKey } });
+      const external = await waitForExternal(foundationReview.task);
+      if (external.failed) throw new Error(`外部 foundation 审核任务失败：${foundationReview.task.id}`);
+      await activities.materializeExternalFoundationReview({ modelTaskId: foundationReview.task.id, workItemId: work.id, value: external.result?.value ?? external.result });
+    }
+  }
+
   // 3. 检查 gate
   const gate = await activities.checkGate({ runId, workItemId: work.id });
 
   if (gate.passed) {
+    if (reviewFoundation && work.kind === "generation" && work.taskKey && work.parameters.bootstrap === true && requiresFoundationAuthorConfirmation(work.taskKey)) {
+      const currentWork = await activities.getWorkItem({ workItemId: work.id });
+      const artifactId = currentWork?.artifactRefs.at(-1);
+      if (!artifactId) throw new Error(`Foundation work item 缺少待确认 artifact：${work.id}`);
+      while (!(await activities.foundationAuthorApproved({ runId, taskKey: work.taskKey, artifactId })) && !isCancelled() && !isPaused()) {
+        await condition(() => reviewedWorkItems.has(work.id) || isCancelled() || isPaused());
+        reviewedWorkItems.delete(work.id);
+      }
+      if (isCancelled() || isPaused()) return;
+    }
     // gate 通过 → accept
     await activities.acceptWork({ runId, workItemId: work.id });
     return;
@@ -1398,6 +1448,8 @@ export async function chapterReviewWorkflow(params: {
     //   - blueprint 从历史 draft artifact 反查（review-stage 不重新编译蓝图）
     //   - draft.text = document.plainText（包装为 draft artifact 复用 review/revise activities）
     //   - memory 走 contextPacketId 路径（复用项目最近 memory_bundle，不重新检索）
+    //   - planningContext 走历史 blueprint 快照，不重新校验当前故事弧状态；
+    //     已定稿章节重审必须能在后续故事弧重基线失败后继续使用原冻结上下文。
     const blueprintArtifact = await activities.loadHistoricalBlueprint({
       projectId: params.projectId,
       documentId: params.documentId,
@@ -1407,13 +1459,16 @@ export async function chapterReviewWorkflow(params: {
       activities.getDefaultRoutingSnapshot({ projectId: params.projectId, documentId: params.documentId }),
       activities.retrieveMemoryForReview({ projectId: params.projectId, documentId: params.documentId, blueprint: blueprintArtifact.blueprint }),
       params.proposedArtifactId ? activities.loadProposedDraft({ projectId: params.projectId, artifactId: params.proposedArtifactId }) : Promise.resolve(undefined),
-      activities.loadChapterPlanningContext({ projectId: params.projectId, documentId: params.documentId }),
+      activities.loadChapterPlanningContextSnapshot({ blueprintId: blueprintArtifact.blueprint.id }),
     ]);
     const targetedReview = params.mode === "targeted"
       ? await activities.loadTargetedReviewIssues({ projectId: params.projectId, documentId: params.documentId, issueIds: params.targetIssueIds ?? [] })
       : undefined;
     if (targetedReview && targetedReview.reviewedContentHash !== documentState.contentHash) throw new Error("审核快照与当前正文不一致，请刷新后重试");
     const reviewSkills = await activities.resolveReviewSkills({ projectId: params.projectId, preflightId: blueprintArtifact.blueprint.preflightId });
+    const applicableReviewDimensions = planningContext
+      ? getApplicableChapterReviewDimensions(planningContext.chapter)
+      : undefined;
 
     await activities.updateWorkflowStatus({
       workflowId,
@@ -1451,8 +1506,11 @@ export async function chapterReviewWorkflow(params: {
     let replayLegacyDirectedOrder = Boolean(targetedReview && !patched("chapter-targeted-revision-first-v1"));
     const useConvergedLifecycle = patched("chapter-review-context-convergence-v1");
     const useContextRefs = patched("chapter-review-context-refs-v1");
+    const revisionHistory: RevisionAttempt[] = [];
     while (true) {
       const cycleStartDraft = currentDraft;
+      const cycleStartDirectedIssues = directedIssues;
+      const cycleStartScore = finalScore;
       const comparableDirectedBaseline = directedBaseline?.artifactId === currentDraft.artifact.id
         ? { reviews: directedBaseline.reviews, structuralReport: directedBaseline.structuralReport }
         : undefined;
@@ -1463,22 +1521,53 @@ export async function chapterReviewWorkflow(params: {
         review: (current) => runAllReviewers({ workflowId, blueprintId: blueprintArtifact.blueprint.id, runReview: (role, identity) => runReview(current, role, identity) }),
         revise: async (current, reviewList, revisionIteration, issues) => {
           iteration = revisionIteration;
-          return runRevision(current, reviewList, issues, revisionInstruction);
+          const result = await runRevision(current, reviewList, issues, revisionInstruction, revisionHistory);
+          // RC5: Named entity drift detection — warns when revision changes
+          // proper nouns that weren't part of the revision issues.
+          const drift = detectNamedEntityDrift(current.text, result.text);
+          if (drift.hasDrift) {
+            await activities.updateWorkflowStatus({ workflowId, status: "running", payload: {
+              stage: "revision-drift-warning",
+              iteration: revisionIteration,
+              disappearedNames: drift.disappeared,
+              appearedNames: drift.appeared,
+              warning: "检测到命名实体漂移：修订可能改变了未触及的已建立名称。请人工确认。",
+            } });
+          }
+          return result;
         },
         assessLearning: runLearning,
         extractFacts: runFactExtraction,
         approveFacts: (factArtifact) => activities.approveFacts({ workflowId, projectId: params.projectId, artifact: factArtifact }),
-        commit: (current, reviewList, factArtifact, structuralReport) => activities.commit({ projectId: params.projectId, documentId: params.documentId, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: snapshot.currentRevision, idempotencyKey: workflowId }),
+        commit: (current, reviewList, factArtifact, structuralReport, dimensions) => activities.commit({ projectId: params.projectId, documentId: params.documentId, artifact: current.artifact, factArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: snapshot.currentRevision, idempotencyKey: workflowId, applicableReviewDimensions: dimensions ?? applicableReviewDimensions }),
         enrich: (current, commitResult, factArtifact) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder, factArtifact),
         progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
         directedRevision: directedIssues ? { issues: directedIssues, requireManuscriptApproval: true, baseline: compareDirectedRevisionCandidates ? comparableDirectedBaseline : undefined } : undefined,
         reviewBeforeDirectedRevision: replayLegacyDirectedOrder || Boolean(compareDirectedRevisionCandidates && directedIssues && directedBaseline && !comparableDirectedBaseline),
         preserveDirectedRevisionCandidate: compareDirectedRevisionCandidates,
+        applicableReviewDimensions,
         learningMode: useConvergedLifecycle ? "terminal-candidate" : "legacy-each-stage",
       });
       currentDraft = lifecycle.draft;
       iteration = lifecycle.iteration;
       finalScore = lifecycle.finalScore;
+
+      // Track reverted revision attempts for history injection (breaks cache loops).
+      // When a directed revision is reverted (quality degraded), the next iteration
+      // sees the same draft + same issues → same prompt → same LLM response → dead loop.
+      // Injecting revision history changes the prompt content and guides the LLM to
+      // try a different strategy.
+      const wasRevisionReverted = lifecycle.draft.artifact.id === cycleStartDraft.artifact.id;
+      if (wasRevisionReverted && directedIssues?.length) {
+        revisionHistory.push({
+          iteration: revisionHistory.length + 1,
+          outcome: "reverted-degradation",
+          targetedIssueTitles: directedIssues.map((issue) => issue.title),
+          baselineScore: lifecycle.finalScore,
+          revisedScore: lifecycle.finalScore,
+          approachSummary: revisionInstruction?.trim() || "按审核意见逐项修订",
+        });
+      }
 
       if (lifecycle.commitResult) {
         await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { documentId: params.documentId, iteration, finalScore, manualReviewRequired: false, enrichmentError: lifecycle.enrichmentError } });
@@ -1495,17 +1584,43 @@ export async function chapterReviewWorkflow(params: {
       }
       if (decision.decision === "revise") {
         if (!targetedReview && !patched("chapter-full-author-revision-v1")) throw new Error("只有定向修订审批可继续按意见修订");
-        const latestReviewIssues = lifecycle.reviews.flatMap((review) => review.issues);
-        directedIssues = latestReviewIssues;
-        directedBaseline = { artifactId: lifecycle.draft.artifact.id, reviews: lifecycle.reviews, structuralReport: lifecycle.structuralReport };
-        if (!directedIssues.length && !decision.feedback) throw new Error("当前候选稿没有审校问题，也未提供补充修改意见");
-        if (decision.revisionBase === "previous") currentDraft = cycleStartDraft;
-        else currentDraft = await resolveApprovedDraft(currentDraft, decision);
+        if (decision.revisionBase === "previous") {
+          // 用户选择"退回上一版继续修订"：文稿和审核建议都应回退到本轮开始时的状态。
+          // 之前只回退了 currentDraft 但 directedIssues 被设为修订稿的审核意见，
+          // 导致 LLM 收到的 issue 描述与文本不匹配（issue 引用的段落/上下文在原始定稿中不存在），
+          // 且每轮新引入的问题被滚入下轮 acceptanceCriteria，约束越来越多、越来越矛盾。
+          currentDraft = cycleStartDraft;
+          directedIssues = cycleStartDirectedIssues;
+          // 记录用户手动回退，让下一轮 LLM 感知到上轮修订的实际退化幅度。
+          // cycleStartScore 在首轮为 undefined（原始定稿未在本工作流中评分），
+          // 此时仍记录历史（baselineScore 留空），让 LLM 知道前序尝试已被用户回退。
+          if (lifecycle.finalScore !== undefined && cycleStartDirectedIssues?.length) {
+            revisionHistory.push({
+              iteration: revisionHistory.length + 1,
+              outcome: cycleStartScore !== undefined && cycleStartScore > lifecycle.finalScore ? "reverted-degradation" : "reverted-no-improvement",
+              targetedIssueTitles: cycleStartDirectedIssues.map((issue) => issue.title),
+              baselineScore: cycleStartScore,
+              revisedScore: lifecycle.finalScore,
+              approachSummary: revisionInstruction?.trim() || "按审核意见逐项修订",
+            });
+          }
+        } else {
+          // 用户选择"按当前稿继续修订"：使用当前修订稿的审核意见（与当前文本匹配）。
+          const latestReviewIssues = lifecycle.reviews.flatMap((review) => review.issues);
+          directedIssues = latestReviewIssues;
+          currentDraft = await resolveApprovedDraft(currentDraft, decision);
+        }
+        // 用户明确选择"继续修订"时，不设置 directedBaseline。
+        // 否则 runChapterLifecycle 的质量对比会回退修订稿和审核意见到基线值，
+        // 下一轮拿到完全相同的 directedIssues + currentDraft → 提示词哈希相同 → 死循环。
+        // 质量回退仅在初始定向修订（无 directedBaseline）时有意义；
+        // 用户已看到候选稿并主动选择修订，不应被质量检查覆盖。
+        if (!directedIssues?.length && !decision.feedback) throw new Error("当前候选稿没有审校问题，也未提供补充修改意见");
         revisionInstruction = decision.feedback
           ? [params.instruction, decision.feedback].filter(Boolean).join("\n\n作者补充要求：")
           : params.instruction;
         replayLegacyDirectedOrder = false;
-        await activities.updateWorkflowStatus({ workflowId, status: "running", payload: { stage: "revision", decision: "author-revision-requested", revisionBase: decision.revisionBase ?? "current", sourceArtifactId: currentDraft.artifact.id, authorId: decision.authorId, targetIssueCount: directedIssues.length } });
+        await activities.updateWorkflowStatus({ workflowId, status: "running", payload: { stage: "revision", decision: "author-revision-requested", revisionBase: decision.revisionBase ?? "current", sourceArtifactId: currentDraft.artifact.id, authorId: decision.authorId, targetIssueCount: directedIssues?.length ?? 0 } });
         continue;
       }
 
@@ -1518,11 +1633,12 @@ export async function chapterReviewWorkflow(params: {
         draft: approvedDraft,
         reviews: lifecycle.reviews,
         structuralReport: lifecycle.structuralReport,
-        commit: (current, reviewList, approvedFactArtifact, structuralReport) => activities.commitAuthorApproved({ projectId: params.projectId, documentId: params.documentId, artifact: current.artifact, factArtifact: approvedFactArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: snapshot.currentRevision, idempotencyKey: `${workflowId}:author-approved`, approvalEvidenceId: decision.approvalEvidenceId }),
+        commit: (current, reviewList, approvedFactArtifact, structuralReport, dimensions) => activities.commitAuthorApproved({ projectId: params.projectId, documentId: params.documentId, artifact: current.artifact, factArtifact: approvedFactArtifact, narrativeOrder: snapshot.targetDocumentOrder, text: current.text, reviews: reviewList, structuralReport, baseRevision: snapshot.currentRevision, idempotencyKey: `${workflowId}:author-approved`, approvalEvidenceId: decision.approvalEvidenceId, applicableReviewDimensions: dimensions ?? applicableReviewDimensions }),
         enrich: (current, commitResult, factArtifact) => runEnrichCharacters(current, commitResult.revisionId, snapshot.targetDocumentOrder, factArtifact),
         assessLearning: runLearning,
         progress: (payload) => activities.updateWorkflowStatus({ workflowId, status: "running", payload }),
         factArtifact,
+        applicableReviewDimensions,
         assessPostCommitLearning: !useConvergedLifecycle,
       });
       await activities.updateWorkflowStatus({ workflowId, status: "completed", payload: { documentId: params.documentId, artifactId: approvedDraft.artifact.id, ...(approvedDraft.artifact.id === currentDraft.artifact.id ? {} : { replacedArtifactId: currentDraft.artifact.id }), iteration, finalScore, authorApproved: true, authorId: decision.authorId, enrichmentError: finalized.enrichmentError } });
@@ -1571,7 +1687,7 @@ export async function chapterReviewWorkflow(params: {
       }
     }
 
-    async function runRevision(current: { artifact: Artifact; text: string }, reviewList: Review[], directedIssues?: ReviewIssue[], authorInstruction?: string): Promise<{ artifact: Artifact; text: string }> {
+    async function runRevision(current: { artifact: Artifact; text: string }, reviewList: Review[], directedIssues?: ReviewIssue[], authorInstruction?: string, revisionHistory?: RevisionAttempt[]): Promise<{ artifact: Artifact; text: string }> {
       // 构造最小 intent（revise activity 需要 intent.projectId）
       const reviewIntent: NovelIntent = {
         id: workflowId,
@@ -1583,35 +1699,39 @@ export async function chapterReviewWorkflow(params: {
       };
       let candidateStartIndex = 0;
       while (true) {
-        const strictRevisionWindows = Boolean(directedIssues?.length && !authorInstruction?.trim() && directedIssues.every((issue) => issue.revisionRanges?.length));
+        const chapterParagraphCount = current.text.split(/\n\s*\n/u).filter((p) => p.trim()).length;
+        const revisionDirection = buildRevisionDirection({ directedIssues, authorInstruction, chapterParagraphCount });
+        const strictRevisionWindows = revisionDirection.strictRevisionWindows;
         const generated = useContextRefs ? await activities.reviseByRefs({
           workflowId,
           intent: reviewIntent,
           artifactId: current.artifact.id,
           reviewIds: reviewList.map((review) => review.id),
-          directedIssues,
+          directedIssues: revisionDirection.directedIssues,
           strictRevisionWindows,
-          authorInstruction: directedIssues ? authorInstruction : undefined,
+          authorInstruction: revisionDirection.authorInstruction,
           blueprintId: blueprintArtifact.blueprint.id,
           memoryBundleId: memoryBundle.id,
           skillBundleId: reviewSkills.id,
           routingSnapshot,
           candidateStartIndex,
+          revisionHistory,
         }) : await activities.revise({
           workflowId,
           intent: reviewIntent,
           artifact: current.artifact,
           text: current.text,
           reviews: reviewList,
-          directedIssues,
+          directedIssues: revisionDirection.directedIssues,
           strictRevisionWindows,
-          authorInstruction: directedIssues ? authorInstruction : undefined,
+          authorInstruction: revisionDirection.authorInstruction,
           memory: memoryBundle,
           blueprint: blueprintArtifact.blueprint,
           skills: reviewSkills,
           routingSnapshot,
           candidateStartIndex,
           planningContext,
+          revisionHistory,
         });
         if (generated.kind === "completed") return { artifact: generated.artifact, text: generated.text };
         const external = await waitForExternal(generated.task);

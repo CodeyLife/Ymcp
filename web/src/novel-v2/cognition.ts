@@ -139,6 +139,7 @@ export function createPreflightPlan(intent: NovelIntent, snapshot: PreflightProj
     taskClass,
     stage: intent.requestedStage ?? (taskClass === "review" ? "review" : taskClass === "revision" ? "revision" : taskClass === "drafting" ? "drafting" : "planning"),
     targetDocumentId: intent.target?.id ?? snapshot.targetDocumentId,
+    replacementRevisionId: snapshot.targetDocumentStatus === "final" ? snapshot.targetDocumentRevisionId : undefined,
     narrativeCutoff: snapshot.targetDocumentOrder === undefined ? undefined : snapshot.targetDocumentOrder - 1,
     povCharacterId: snapshot.povCharacterId,
     facets,
@@ -290,34 +291,44 @@ export function buildContextManifest(plan: PreflightPlan, memory: MemoryBundle, 
   return manifest;
 }
 
-export async function resolveSkillBundle(plan: PreflightPlan, memory: MemoryBundle, input: { projectId: string; provider: SkillProvider; requestedCapabilities?: string[]; genre?: string }, now = Date.now()): Promise<SkillBundle> {
+export async function resolveSkillBundleForTask(input: {
+  projectId: string;
+  provider: SkillProvider;
+  taskClasses: readonly string[];
+  requestedCapabilities?: string[];
+  genre?: string;
+  preflightId?: string;
+  memory?: MemoryBundle;
+}, now = Date.now()): Promise<SkillBundle> {
   const available = (await input.provider.list(input.projectId)).filter((skill) => skill.enabled
-    && skill.applicableTasks.includes(plan.taskClass));
+    && input.taskClasses.some((taskClass) => skill.applicableTasks.includes(taskClass as never)));
+  const memory = input.memory;
   const capabilities = new Set(input.requestedCapabilities ?? []);
-  // 选中条件:capabilities OR requiredMemoryKinds OR qualityGates 三选一。
-  // 设计依据:AGENTS.md「reusable contracts over case-specific rules」——
-  // 不针对特定 skill 加规则,而是修复"无 quality_gates/capabilities/requiredMemoryKinds
-  // 的 skill(如 v1 迁移的 character-voice-matrix/world-rule-contract 等 7 个)永远选不上"
-  // 这个普遍缺陷。fallback 到 available 让 applicableTasks 匹配的 skill 都有机会入选,
-  // 由后续 craft rule 沉淀决定优劣(而非在选中阶段就静默丢弃)。
-  const selected = available.filter((skill) => skill.capabilities.some((capability) => capabilities.has(capability)) || skill.requiredMemoryKinds.some((kind) => memory.claims.some((claim) => claim.kind === kind)) || skill.qualityGates.length > 0);
+  // qualityGates describe how an already-active skill is verified; they are not
+  // activation signals. Treating them as such injects every quality skill into
+  // every chapter, producing duplicated and sometimes contradictory commands.
+  // A skill activates through an explicitly requested capability, required
+  // memory that is actually present, or by declaring neither (an intentional
+  // task-applicable baseline skill).
+  const selected = available.filter((skill) => skill.capabilities.some((capability) => capabilities.has(capability))
+    || skill.requiredMemoryKinds.some((kind) => memory?.claims.some((claim) => claim.kind === kind))
+    || (skill.capabilities.length === 0 && skill.requiredMemoryKinds.length === 0));
   // Phase 3.3: 题材通用差异化——优先选择 applicableGenres 为空（题材无关）或包含当前 genre 的 skill
   // 设计依据：AGENTS.md「reusable contracts over case-specific rules」——
   // 不内置金手指/系统流特化枚举，只提供 genre 字符串匹配机制。
   // genre 匹配是软偏好：若无匹配 genre 的 skill，仍回退到题材无关的 skill。
-  const genreMatched = selected.length
-    ? selected.filter((skill) => !skill.applicableGenres?.length || (input.genre ? skill.applicableGenres.includes(input.genre) : true))
-    : [];
-  // fallback 链:selected(genre 匹配) → selected(全部) → available(applicableTasks 匹配全选)
-  // 当 selected 为空(无任何 skill 声明 capabilities/requiredMemoryKinds/qualityGates)时,
-  // 回退到 available,避免"taskClass 匹配但无人入选"的盲区。
-  const chosenSource = genreMatched.length ? genreMatched : (selected.length ? selected : available);
-  const chosen = chosenSource.length ? chosenSource : available.slice(0, 3);
+  const genreMatched = selected.filter((skill) => !skill.applicableGenres?.length || (input.genre ? skill.applicableGenres.includes(input.genre) : true));
+  const chosen = genreMatched.length ? genreMatched : selected;
   const ids = new Set(chosen.map((skill) => skill.skillId));
   const conflicts = chosen.flatMap((skill) => skill.conflicts.filter((id) => ids.has(id)).map((id) => ({ skillId: skill.skillId, conflictsWith: id })));
-  const bundle: SkillBundle = { id: `skills:${plan.id}`, projectId: input.projectId, preflightId: plan.id, skills: chosen.map((skill) => ({ skillId: skill.skillId, version: skill.version, capabilities: skill.capabilities, applicableTasks: skill.applicableTasks, requiredMemoryKinds: skill.requiredMemoryKinds, qualityGates: skill.qualityGates, promptSections: skill.promptSections })), conflicts, missingCapabilities: [...capabilities].filter((capability) => !chosen.some((skill) => skill.capabilities.includes(capability))), fingerprint: "", createdAt: now };
+  const preflightId = input.preflightId ?? `stage:${input.taskClasses[0] ?? "unknown"}`;
+  const bundle: SkillBundle = { id: `skills:${preflightId}`, projectId: input.projectId, preflightId, skills: chosen.map((skill) => ({ skillId: skill.skillId, version: skill.version, capabilities: skill.capabilities, applicableTasks: skill.applicableTasks, requiredMemoryKinds: skill.requiredMemoryKinds, qualityGates: skill.qualityGates, promptSections: skill.promptSections })), conflicts, missingCapabilities: [...capabilities].filter((capability) => !chosen.some((skill) => skill.capabilities.includes(capability))), fingerprint: "", createdAt: now };
   bundle.fingerprint = canonicalSha256({ ...bundle, fingerprint: undefined, createdAt: undefined });
   return bundle;
+}
+
+export async function resolveSkillBundle(plan: PreflightPlan, memory: MemoryBundle, input: { projectId: string; provider: SkillProvider; requestedCapabilities?: string[]; genre?: string }, now = Date.now()): Promise<SkillBundle> {
+  return resolveSkillBundleForTask({ ...input, taskClasses: [plan.taskClass], preflightId: plan.id, memory }, now);
 }
 
 export function compileExecutionBlueprint(intent: NovelIntent, plan: PreflightPlan, memory: MemoryBundle, skills: SkillBundle, snapshot: PreflightProjectSnapshot, context?: ContextManifest, foundationArtifacts?: Artifact[], planningContext?: ChapterPlanningContext, now = Date.now()): ExecutionBlueprint {

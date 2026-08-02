@@ -2,7 +2,7 @@ import type { Artifact, ExecutionBlueprint, MemoryBundle, Review, ReviewIssue, S
 import { WRITER_CHAPTER_ENDING_HOOKS } from "./writer-rules";
 import type { ReviewerOutput } from "./schemas";
 import type { ChapterPlanningContext } from "../application/story-arc";
-import { renderChapterPlanningContext } from "./chapter-planning-context";
+import { dedupeNarrativeRhythmMemory, renderChapterPlanningContext, renderNarrativeRhythm } from "./chapter-planning-context";
 import { compileStageContext } from "../stage-context";
 import { reviewerSchemaForDimensions } from "./schemas";
 
@@ -21,13 +21,50 @@ import { reviewerSchemaForDimensions } from "./schemas";
 
 export type ReviewerRole = "style-reviewer" | "character-reviewer" | "continuity-reviewer" | "plot-reviewer" | "reader-reviewer";
 
+function normalizeReviewText(value: string): string {
+  return value.replace(/\s+/gu, "").replace(/[“”]/gu, '"').replace(/[‘’]/gu, "'");
+}
+
+/**
+ * 只让正文中确实存在的证据进入修订与质量门。
+ *
+ * reviewer 偶尔会把蓝图或上一版正文中的句子误当成当前候选证据；
+ * 这类问题若直接进入 revision brief，会把有效修订稿错误回退。证据契约
+ * 要求逐字片段，因此这里按当前文本校验，允许模型用省略号拼接多个原文片段。
+ */
+export function groundReviewerIssues<T extends { excerpt?: string; evidence?: string }>(issues: T[], text: string): { issues: T[]; discardedCount: number } {
+  const normalizedText = normalizeReviewText(text);
+  const grounded = issues.filter((issue) => {
+    const evidence = (issue.excerpt ?? issue.evidence ?? "").trim();
+    if (normalizeReviewText(evidence).length < 4) return false;
+    const fragments = evidence
+      .split(/(?:…{2,}|\.{3,})/gu)
+      .map((fragment) => normalizeReviewText(fragment))
+      .filter((fragment) => fragment.length >= 4);
+    return fragments.length > 0 && fragments.every((fragment) => normalizedText.includes(fragment));
+  });
+  return { issues: grounded, discardedCount: issues.length - grounded.length };
+}
+
+export function groundReviewForText(review: Review, text: string): Review {
+  const grounded = groundReviewerIssues(review.issues, text);
+  if (grounded.discardedCount === 0) return review;
+  return {
+    ...review,
+    issues: grounded.issues,
+    // A verdict based only on discarded evidence cannot block the current text.
+    ...(grounded.issues.length === 0 ? { verdict: "passed" as const, score: undefined } : {}),
+  };
+}
+
 /**
  * 5 reviewer × 评分维度映射。
  *
  * 设计依据：AGENTS.md「Fix the problem at the lowest shared layer」+ pipeline-audit.md F9
- * ——REVIEW_DIMENSIONS 已扩展为 12 维度（8 单章可读性 + 4 长篇文学质量），但若不分配给
- * 具体 reviewer，维度边界约束（buildChapterReviewPrompt L248）会阻止任何 reviewer 报告
- * 这些维度的问题 → 新维度形同虚设。本映射把 4 个长篇文学质量维度分配给职责最匹配的 reviewer。
+ * ——REVIEW_DIMENSIONS 已扩展为 14 维度（8 单章可读性 + 4 个 D1/D3/D4/D5 维度 +
+ * subtext/narrativePacing），但若不分配给
+ * 具体 reviewer，维度边界约束（buildChapterReviewPrompt）会阻止任何 reviewer 报告
+ * 这些维度的问题 → 新维度形同虚设。本映射把新增维度分配给职责最匹配的 reviewer。
  *
  * 分配依据（对照 docs/novel-v2/quality-standard.md D1/D3/D4/D5）：
  * - worldbuilding → continuity-reviewer：W1 规则可内化（规则间无逻辑冲突）是 continuity 的自然延伸；
@@ -40,15 +77,15 @@ export type ReviewerRole = "style-reviewer" | "character-reviewer" | "continuity
  * - humor → style-reviewer：H1 贴合人物声部/H2 时代契合/H3 调节功能是语言风格的延伸；
  *   style-reviewer 已负责"模板化表达、语言质感、时代与叙述距离"。
  *
- * 负载平衡：style(3) / character(3) / continuity(2) / plot(2) / reader(2)，避免单 reviewer 过重。
+ * 负载平衡：style(4) / character(3) / continuity(2) / plot(2) / reader(3)，避免单 reviewer 过重。
  * plot-reviewer 不新增维度：D2 故事性已由 plot/hookPayoff 覆盖（章节功能/章尾驱动力/因果推进）。
  */
 export const REVIEWER_DIMENSIONS: Record<ReviewerRole, ReadonlyArray<keyof ReviewerOutput["scores"]>> = {
-  "style-reviewer": ["sceneEmbodiment", "specificity", "humor"],
+  "style-reviewer": ["sceneEmbodiment", "specificity", "humor", "subtext"],
   "character-reviewer": ["characterVoice", "dialogue", "ensemble"],
   "continuity-reviewer": ["continuity", "worldbuilding"],
   "plot-reviewer": ["plot", "hookPayoff"],
-  "reader-reviewer": ["readerRetention", "romance"],
+  "reader-reviewer": ["readerRetention", "romance", "narrativePacing"],
 };
 
 /**
@@ -59,11 +96,11 @@ export const REVIEWER_DIMENSIONS: Record<ReviewerRole, ReadonlyArray<keyof Revie
  * craft rule 通过 learning 闭环沉淀后，会以 skill 形式注入，覆盖/补充默认职责。
  */
 const DEFAULT_REVIEW_FOCUS: Record<ReviewerRole, string> = {
-  "style-reviewer": "重点检查解释性心理总结、意象替人物说理、可替换的通用细节、段落碎片化、匀速句段和模板化表达。核对语言是否符合项目文风、时代和叙述距离；不要因为全文保持同一种语体就自动降分。环境可以承担氛围、情绪余波、信息或行动功能，只在重复且没有深化体验时报告问题。关键情绪和转折应有足够具体的现场承载，但不要要求固定的动作公式或句式配比。\n\n## 幽默维度（humor）\n检查幽默是否贴合人物声部与时代（不得用现代网络梗冒充古风幽默，不得让严肃角色突然插科打诨破坏声部）、是否承担调节节奏、释放压力或深化人物关系的功能。幽默不是每章必须——铺陈、悲剧、高潮章可以无幽默；但若出现，应服务于人物或情境，不得是无关插科打诨或作者强行抖机灵。若幽默与角色既有声部冲突（如沉默寡言者突然妙语连珠），标为 major。",
+  "style-reviewer": "重点检查解释性心理总结、意象替人物说理、可替换的通用细节、段落碎片化、匀速句段和模板化表达。核对语言是否符合项目文风、时代和叙述距离；不要因为全文保持同一种语体就自动降分。环境可以承担氛围、情绪余波、信息或行动功能，只在重复且没有深化体验时报告问题。关键情绪和转折应有足够具体的现场承载，但不要要求固定的动作公式或句式配比。\n\n## 幽默维度（humor）\n检查幽默是否贴合人物声部与时代（不得用现代网络梗冒充古风幽默，不得让严肃角色突然插科打诨破坏声部）、是否承担调节节奏、释放压力或深化人物关系的功能。幽默不是每章必须——铺陈、悲剧、高潮章可以无幽默；但若出现，应服务于人物或情境，不得是无关插科打诨或作者强行抖机灵。若幽默与角色既有声部冲突（如沉默寡言者突然妙语连珠），标为 major。\n\n## 潜台词维度（subtext）\n依据章节 thematicTreatment 检查主题权限。absent 章不得为了呼应卖点主动讲题；subtext 章只允许读者从行动、关系、世界反应和后果推断；foreground 章可以有价值争执，但台词必须来自当下欲望、风险和私人经验。作者式总结、配角充当主题传声筒、把设定或能力直接解释成抽象立意，均应按其对阅读的损害报告。不得以关键词出现次数判断，也不得把所有哲理对白一律视为问题。",
   "character-reviewer": "重点检查人物是否有符合本章功能的欲望、注意力、选择或情感变化；对白和行为是否符合冻结上下文中的年龄、职业、关系距离、知识边界与既有声音。重要配角应有自己的欲望、抉择与弧光，不应只是主角的陪伴、见证或阻力工具；次要配角可承担日常质地，但不应在关键场景消失或仅作背景。检查配角之间是否形成关系网络（敌友、师徒、恩怨），而非只与主角单线联系。重要器物若被蓝图赋予意义，应参与行动、关系或记忆；普通场景物件无需强行象征化。不要套用固定身份声部，也不要要求蓝图未安排的角色亲自到场或开口。\n\n## 群像维度（ensemble）\n以跨章视角审视群像结构：本章出场的配角是否有独立于主角的欲望与处境（E1）；重要配角是否在多章中呈现可识别的弧光而非固定功能符号（E3）；配角之间是否存在直接关系（E4），而非全部经由主角中转；日常场景是否有配角独立质地（E5）。若本章把配角写成纯工具（无欲望、无抉择、无关系），或群像仅围绕主角单点运转，标为 major。判断需依据冻结上下文与记忆中的角色档案，不得仅凭本章臆断。",
   "continuity-reviewer": "重点检查事实、时间、位置、物品、人物知识边界与选择后果是否连续；不要把审美偏好误报为事实矛盾。检查 POV 越界——叙述是否替视角人物总结他人心理意图（如'各自守着一处不肯越过的距离''谁也不肯先开口''都带着各自的盘算'），这类句子表面是观察，实质是作者借视角人物之口宣告对他人内在状态的判断——若把描述他人状态的句子改写为'视角人物能看到/听到的具体动作'后信息丢失，则该句子越界，标为 major。\n\n## 世界观维度（worldbuilding）\n检查世界观规则是否自洽：已确立的规则（修炼体系/势力结构/关键技术/社会制度）在后续章节是否被违反或临时编造（W1）；随机抽取设定，问「若主角在 X 情境下做 Y，世界规则会如何反应」，答案能否从已确立规则推导。检查核心设定是否承载主题或哲思（W2），而非纯力量体系堆砌。检查世界质地是否有独立于主角的文化、思想、生活细节（W4）——若全书场景只为主角服务、无独立运转的世界纹理，标为 major。规则冲突或设定空洞会破坏长篇可信度，即使文句通顺也不得通过。",
-  "plot-reviewer": "重点检查正文是否尊重目标章功能、状态变化预算、连续性约束与故事弧边界，是否把大纲压缩成当章任务清单，是否提前完成后续秘密、关系跃迁、重大转折或伏笔回收。可选节拍允许调整、合并或省略，不得逐项核对；只有章节功能或蓝图明确规定的结果整体缺失，才报告 chapter.incomplete-blueprint。铺陈、相处、内省和余波章不要求不可逆结果。章尾按目标章的 closingForce 判断，不得强制添加危险、反转或行动命令。",
-  "reader-reviewer": "你是严苛的追更读者，不是编辑。先识别本章承担的是悬疑、行动、关系、生活流、铺陈、余波还是阶段闭合功能，再判断正文是否持续兑现作品承诺，不做文风或事实的技术分析。检查开篇是否建立与本章功能相称的注意力中心，中段是否通过新信息、关系温度、人物认识、状态变化或行动后果深化体验，信息是否在读者需要时抵达，以及正文是否出现真实的跳读区。章尾驱动力不等于强钩子：悬疑与行动章可以依靠未解压力，关系、生活流、余波或阶段闭合章也可以停在未尽交流、状态变化或有功能的情感与意象余韵。不得仅因没有问号、突发事件、强制选择或立即翻页冲动就判为 major；只有章尾没有完成本章功能、重复已知信息、切断既有长线动力或用空泛意象代替实际变化时才报告。项目卖点只在合适兑现窗口检查，不要求每章机械出现。每个问题必须引用正文证据，并说明它如何损害当前章节功能和后续阅读，而不是套用固定字数、钩子密度或章尾公式。\n\n## 感情线维度（romance）\n若作品含感情线，从追更视角检查感情发展是否靠行动累积（R1）——告白、心理宣言、突然亲密若没有前置行动铺垫，读者会感到廉价；是否有清晰的阶段感（R2）——相遇/试探/深化/危机/确认，本章的感情进展是否符合当前阶段，不得跳阶；感情对象（女主或对应角色）是否有独立人格与欲望（R4），而非主角附属或工具；感情线是否有复杂度（R5）——阻碍、误会、牺牲、代价，而非一帆风顺。若本章感情线无进展、靠宣言跳进、或感情对象沦为工具人，标为 major。判断需结合前章感情线记忆与冻结上下文，不得仅凭本章臆断阶段。",
+  "plot-reviewer": "重点检查正文是否尊重目标章功能、状态变化预算、连续性约束与故事弧边界，是否把大纲压缩成当章任务清单，是否提前完成后续秘密、关系跃迁、重大转折或伏笔回收。可选节拍允许调整、合并或省略，不得逐项核对；只有章节功能或蓝图明确规定的结果整体缺失，才报告 chapter.incomplete-blueprint。替换式生成若提供既有事件结果边界，必须逐项核对候选是否保留事件身份、章末状态与未解线索；不得把只有气氛或主题方向相近判为完成。铺陈、相处、内省和余波章不要求不可逆结果。章尾按目标章的 closingForce 判断，不得强制添加危险、反转或行动命令。",
+  "reader-reviewer": "你是严苛的追更读者，不是编辑。先识别本章承担的是悬疑、行动、关系、生活流、铺陈、余波还是阶段闭合功能，再判断正文是否持续兑现作品承诺，不做文风或事实的技术分析。检查开篇是否建立与本章功能相称的注意力中心，中段是否通过新信息、关系温度、人物认识、状态变化或行动后果深化体验，信息是否在读者需要时抵达，以及正文是否出现真实的跳读区。章尾驱动力不等于强钩子：悬疑与行动章可以依靠未解压力，关系、生活流、余波或阶段闭合章也可以停在未尽交流、状态变化或有功能的情感与意象余韵。不得仅因没有问号、突发事件、强制选择或立即翻页冲动就判为 major；只有章尾没有完成本章功能、重复已知信息、切断既有长线动力或用空泛意象代替实际变化时才报告。项目卖点只在合适兑现窗口检查，不要求每章机械出现。每个问题必须引用正文证据，并说明它如何损害当前章节功能和后续阅读，而不是套用固定字数、钩子密度或章尾公式。\n\n## 叙事节奏维度（narrativePacing）\n节奏不是快慢分数。检查 readerExperience 是否通过可经历的场景过程成立：关键接触、选择、误判、反应与后果是否获得与其因果重量相称的篇幅；转折是否由此前动作挣得；正文是否用连续分析、设定说明或结论跳过本应发生的生活过程。铺陈、相处、内省和余波可以很慢且得高分，前提是体验持续变化；行动章可以很快，前提是因果不被摘要代替。结合 narrativeRhythm 判断相邻章节是否重复同一种说明功能。\n\n## 感情线维度（romance）\n若作品含感情线，从追更视角检查感情发展是否靠行动累积（R1）——告白、心理宣言、突然亲密若没有前置行动铺垫，读者会感到廉价；是否有清晰的阶段感（R2）——相遇/试探/深化/危机/确认，本章的感情进展是否符合当前阶段，不得跳阶；感情对象（女主或对应角色）是否有独立人格与欲望（R4），而非主角附属或工具；感情线是否有复杂度（R5）——阻碍、误会、牺牲、代价，而非一帆风顺。若本章感情线无进展、靠宣言跳进、或感情对象沦为工具人，标为 major。判断需结合前章感情线记忆与冻结上下文，不得仅凭本章臆断阶段。",
 };
 
 /**
@@ -180,17 +217,12 @@ function buildReviewerContext(memory: MemoryBundle): string {
  */
 export function buildBlueprintSummary(blueprint: ExecutionBlueprint, planningContext?: ChapterPlanningContext): string {
   const tasks = blueprint.tasks.map((task) => `- [${task.kind}] ${task.role} (queue: ${task.queue})`).join("\n");
-  const chapter = planningContext?.chapter;
   const lines: string[] = [
     `Blueprint ID: ${blueprint.id}`,
     `Base revision: ${blueprint.baseRevision}`,
     `Commit policy: ${blueprint.commitPolicy}`,
   ];
-  if (chapter) {
-    lines.push(`章节功能: ${chapter.chapterPurpose || "（未指定）"}`);
-    lines.push(`章尾驱动力: ${chapter.closingForce || "（未指定）"}`);
-    if (chapter.emotionalMovement) lines.push(`情绪走向: ${chapter.emotionalMovement}`);
-  }
+  if (planningContext) lines.push(`Chapter planning context: ${planningContext.fingerprint}`);
   lines.push(`Tasks:`);
   lines.push(tasks || "（无任务）");
   return lines.join("\n");
@@ -240,7 +272,7 @@ function buildPayoffStatsMarkdown(stats: NonNullable<ReviewPromptInput["payoffSt
  */
 export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
   const { role, artifact, text, blueprint, payoffStats, planningContext, stageGoal } = input;
-  const memory = selectReviewerMemory(input.memory, role);
+  const memory = selectReviewerMemory(dedupeNarrativeRhythmMemory(input.memory), role);
   const skills = selectReviewerSkills(input.skills, role);
   const numberedDraft = buildNumberedDraft(text);
   const reviewerContext = buildReviewerContext(memory);
@@ -273,6 +305,7 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
     "",
     `## 篇幅边界`,
     `字数、字符数、段落数量或是否达到某个目标篇幅，不是审校目标，也不能单独触发降分、verdict=revise/blocked 或 blocker/major issue。只能审查可被正文证据证明的阅读机制：章节功能是否完成、信息是否抵达、情绪/关系/因果是否有承载、是否重复空转或提前消费后续节点。若你认为篇幅相关，必须把问题改写为具体机制（例如"关键转折缺少可观察承载""三段重复同一信息""章尾在结果出现前收束"），并引用正文证据；找不到机制证据时不得报告。`,
+    `若冻结章节规划含 narrativeScale，先按 level 理解本章应有的展开深度：compact 可以短而完整，standard 需要成为完整的普通章节，extended 需要承载更高负载；再检查 developmentAxes 是否在正文中被实际经历，stoppingCondition 是否成立。若正文在首个状态变化或单一场景结果出现后立即收束，且仍有规划中的展开轴没有获得可观察承载，使用通用 rule=chapter.premature-closure 报告具体机制；不得把该规则退化为字符数阈值，也不得因为安静章没有新事件而判错。`,
     "",
     `## 当前职责`,
     `你的完整职责定义见 system prompt（默认职责 + 题材/项目特化补充）。下面仅强调维度边界。`,
@@ -335,7 +368,9 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
     `## 章尾钩子参考`,
     WRITER_CHAPTER_ENDING_HOOKS,
     "",
-    planningContext ? renderChapterPlanningContext(planningContext) : `## 冻结章节规划上下文\n（历史章节未保存该快照，仅按旧执行编排与冻结事实审核。）`,
+    planningContext ? renderChapterPlanningContext(planningContext, { includeMacro: false }) : `## 冻结章节规划上下文\n（历史章节未保存该快照，仅按旧执行编排与冻结事实审核；主题模式按 subtext 兼容。）`,
+    "",
+    `## 连续章节叙事节奏\n${renderNarrativeRhythm(memory.narrativeRhythm)}`,
     "",
     `## 工作流执行编排（不是内容蓝图）`,
     blueprintMarkdown,
@@ -358,7 +393,7 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
 }
 
 export function buildChapterReviewPromptPackage(input: ReviewPromptInput & { workflowId: string; system: string }): StagePromptPackage {
-  const memory = selectReviewerMemory(input.memory, input.role);
+  const memory = selectReviewerMemory(dedupeNarrativeRhythmMemory(input.memory), input.role);
   const skills = selectReviewerSkills(input.skills, input.role);
   const instruction = buildChapterReviewPrompt({ ...input, memory, skills: undefined, payoffStats: undefined, stageGoal: undefined, instructionsOnly: true });
   const goalText = input.stageGoal ? [
@@ -371,9 +406,20 @@ export function buildChapterReviewPromptPackage(input: ReviewPromptInput & { wor
     { id: "review-instruction", kind: "review" as const, title: "审校方法与职责边界", text: instruction, priority: "required" as const, provenanceRefs: [`reviewer:${input.role}`] },
     ...(input.stageGoal ? [{ id: "stage-goal", kind: "goal" as const, title: "本轮阶段目标", text: goalText, priority: "critical" as const, provenanceRefs: [input.stageGoal.id] }] : []),
     { id: "manuscript", kind: "manuscript" as const, title: "正文（段落编号仅用于定位）", text: buildNumberedDraft(input.text), priority: "critical" as const, provenanceRefs: [input.artifact.id], sourceArtifactId: input.artifact.id },
-    ...(input.planningContext ? [{ id: "planning", kind: "planning" as const, title: "冻结章节规划上下文", text: renderChapterPlanningContext(input.planningContext), priority: input.role === "plot-reviewer" ? "required" as const : "normal" as const, provenanceRefs: [input.blueprint.id] }] : []),
+    ...(input.planningContext ? [{ id: "planning", kind: "planning" as const, title: "冻结章节规划上下文", text: renderChapterPlanningContext(input.planningContext, { includeMacro: false }), priority: input.role === "plot-reviewer" ? "required" as const : "normal" as const, provenanceRefs: [input.blueprint.id] }] : []),
+    ...(memory.narrativeRhythm ? [{ id: "narrative-rhythm", kind: "planning" as const, title: "连续章节叙事节奏", text: renderNarrativeRhythm(memory.narrativeRhythm), priority: input.role === "reader-reviewer" || input.role === "style-reviewer" ? "required" as const : "normal" as const, provenanceRefs: [memory.narrativeRhythm.fingerprint] }] : []),
     { id: "blueprint", kind: "blueprint" as const, title: "工作流执行编排", text: buildBlueprintSummary(input.blueprint, input.planningContext), priority: input.role === "plot-reviewer" ? "required" as const : "soft" as const, provenanceRefs: [input.blueprint.id] },
-    ...memory.claims.map((claim) => ({ id: `memory:${claim.id}`, kind: "fact" as const, title: `相关事实：${claim.title}`, text: claim.content, priority: input.role === "continuity-reviewer" || input.role === "character-reviewer" ? "required" as const : "normal" as const, provenanceRefs: [claim.id, ...(claim.sourceArtifactId ? [claim.sourceArtifactId] : []), ...claim.sourceRevisionIds] })),
+    ...memory.claims.map((claim) => {
+      const replacementBoundary = claim.reason === "replacement-boundary";
+      return {
+        id: `memory:${claim.id}`,
+        kind: "fact" as const,
+        title: replacementBoundary ? "替换式生成验收边界" : `相关事实：${claim.title}`,
+        text: claim.content,
+        priority: replacementBoundary || input.role === "continuity-reviewer" || input.role === "character-reviewer" ? "required" as const : "normal" as const,
+        provenanceRefs: [claim.id, ...(claim.sourceArtifactId ? [claim.sourceArtifactId] : []), ...claim.sourceRevisionIds],
+      };
+    }),
     ...((skills?.skills ?? []).map((skill) => ({ id: `skill:${skill.skillId}`, kind: "skill" as const, title: `审校技能 ${skill.skillId}@${skill.version}`, text: skill.promptSections.review ?? "", priority: "normal" as const, provenanceRefs: [`${skill.skillId}@${skill.version}`] }))),
     ...(input.role === "reader-reviewer" && input.payoffStats ? [{ id: "payoff-stats", kind: "background" as const, title: "前章爽点统计", text: buildPayoffStatsMarkdown(input.payoffStats), priority: "normal" as const, provenanceRefs: [input.artifact.projectId] }] : []),
     { id: "artifact-metadata", kind: "background" as const, title: "草稿元数据", text: `artifactId=${input.artifact.id}\nkind=${input.artifact.kind}\nbaseRevision=${input.artifact.baseRevision}\nfingerprint=${input.artifact.fingerprint}`, priority: "soft" as const, provenanceRefs: [input.artifact.id] },
@@ -398,8 +444,11 @@ export function buildChapterReviewPromptPackage(input: ReviewPromptInput & { wor
  * ReviewerOutput 的完整字段（dimension/description/revisionRanges/rule/suggestion/rewriteExample）
  * 都写入 Review.issues（ReviewIssue 类型），便于下游 revision-stage 与 learning-assessment 复用。
  */
-export function toReview(params: { artifact: Artifact; identity: "internal" | "independent"; role: ReviewerRole; output: ReviewerOutput }): Review {
-  const issues: ReviewIssue[] = params.output.issues.map((issue) => ({
+export function toReview(params: { artifact: Artifact; identity: "internal" | "independent"; role: ReviewerRole; output: ReviewerOutput; text?: string }): Review {
+  const grounded = params.text === undefined
+    ? { issues: params.output.issues, discardedCount: 0 }
+    : groundReviewerIssues(params.output.issues, params.text);
+  const issues: ReviewIssue[] = grounded.issues.map((issue) => ({
     severity: issue.severity,
     title: issue.title,
     description: issue.description,
@@ -421,9 +470,11 @@ export function toReview(params: { artifact: Artifact; identity: "internal" | "i
     reviewerId: `${params.identity}-${params.role}`,
     identity: params.identity,
     role: params.role,
-    verdict: params.output.verdict,
+    verdict: grounded.discardedCount > 0 && issues.length === 0 ? "passed" : params.output.verdict,
     issues,
-    score: roleScores.length ? roleScores.reduce((sum, score) => sum + score, 0) / roleScores.length : undefined,
+    score: grounded.discardedCount > 0 && issues.length === 0
+      ? undefined
+      : roleScores.length ? roleScores.reduce((sum, score) => sum + score, 0) / roleScores.length : undefined,
     dimensionScores: params.output.scores,
     createdAt: Date.now(),
     artifactFingerprint: params.artifact.fingerprint,

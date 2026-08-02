@@ -1,7 +1,7 @@
 import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent, SkillBundle, StagePromptPackage } from "../protocol";
 import { matchedFacetsOf } from "../cognition";
 import type { ChapterPlanningContext } from "../application/story-arc";
-import { renderChapterPlanningContext } from "./chapter-planning-context";
+import { dedupeNarrativeRhythmMemory, renderChapterPlanningContext, renderExecutionMemoryClaim, renderNarrativeRhythm } from "./chapter-planning-context";
 import { buildBlueprintSummary } from "./chapter-review";
 import {
   WRITER_DIALOGUE_AND_DETAIL,
@@ -111,7 +111,7 @@ function extractTaskKey(artifact: Artifact): string {
  *
  * AGENTS.md 合规:不内置题材/角色 fixture,只渲染通用结构化数据。
  */
-function buildFoundationContextMarkdown(foundationArtifacts: Artifact[]): string {
+export function buildFoundationContextMarkdown(foundationArtifacts: Artifact[]): string {
   if (!foundationArtifacts.length) return "- 暂无全书规划产出(本项目可能未运行 novel_bootstrap_run)。";
 
   // 按 taskKey 分组(同 taskKey 可能有多条,取最新即最后一条——listFoundationArtifacts 按 created_at ASC 返回)
@@ -153,6 +153,7 @@ function buildFoundationContextMarkdown(foundationArtifacts: Artifact[]): string
   };
 
   sections.push("宏观产出不得覆盖已定稿事实、当前叙事状态账本、已批准故事弧或目标章蓝图；发生冲突时服从较近且已确认的状态，并把偏差留给下一次故事弧重规划处理。");
+  sections.push("宏观主题声明（如核心卖点、核心冲突、世界观规则中的主题性表述）是全书方向，不是逐章必须展示或证明的内容。每章应根据本章叙事功能和蓝图中的 thematicTreatment 决定是否涉及主题，而非自动复述宏观方向。不得因为 foundation artifacts 中反复出现某个主题词就在每章安排角色分析、展示或讨论该主题。");
   sections.push("");
 
   for (const key of baselineKeys) {
@@ -192,6 +193,19 @@ function renderFoundationFields(taskKey: string, structured: Record<string, unkn
   const pushString = (label: string, value: unknown) => {
     if (typeof value === "string" && value.trim()) lines.push(`- ${label}：${value.trim()}`);
   };
+  const pushStructuredValue = (label: string, value: unknown) => {
+    if (typeof value === "string") {
+      pushString(label, value);
+      return;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const record = value as Record<string, unknown>;
+    if (record.notApplicable === true && typeof record.rationale === "string" && record.rationale.trim()) {
+      lines.push(`- ${label}：不适用；理由：${record.rationale.trim()}`);
+      return;
+    }
+    lines.push(`- ${label}：${JSON.stringify(value)}`);
+  };
   const pushArray = (label: string, value: unknown) => {
     if (Array.isArray(value) && value.length) {
       const items = value.map((item) => typeof item === "string" ? item : JSON.stringify(item));
@@ -200,6 +214,24 @@ function renderFoundationFields(taskKey: string, structured: Record<string, unkn
   };
 
   switch (taskKey) {
+    case "project-positioning": {
+      const positioning = structured.positioning as Record<string, unknown> | undefined;
+      pushStructuredValue("目标读者", positioning?.targetReader);
+      pushStructuredValue("核心承诺", positioning?.corePromise);
+      pushStructuredValue("主题问题", positioning?.themeQuestion);
+      pushStructuredValue("主角核心需要", positioning?.protagonistNeed);
+      pushStructuredValue("主角核心矛盾", positioning?.protagonistContradiction);
+      pushString("中央对抗", positioning?.centralOpposition);
+      pushStructuredValue("情感契约", positioning?.emotionalContract);
+      const brief = structured.creativeBrief as Record<string, unknown> | undefined;
+      if (brief && typeof brief === "object" && !Array.isArray(brief)) {
+        pushString("研究世界锚点", brief.worldAnchor);
+        pushArray("研究需求", brief.researchNeeds);
+        pushArray("简报不可违背项", brief.nonNegotiables);
+        pushString("结局边界", brief.endingEnvelope);
+      }
+      break;
+    }
     case "architecture": {
       const arch = structured.architecture as Record<string, unknown> | undefined;
       pushString("叙事结构", arch?.structure);
@@ -222,6 +254,20 @@ function renderFoundationFields(taskKey: string, structured: Record<string, unkn
           const role = typeof char.role === "string" ? char.role : "";
           const motivation = typeof char.motivation === "string" ? char.motivation : "";
           lines.push(`- ${name}${role ? `(${role})` : ""}${motivation ? `：${motivation}` : ""}`);
+          const voiceAnchor = char.voiceAnchor as Record<string, unknown> | undefined;
+          if (voiceAnchor && typeof voiceAnchor === "object" && !Array.isArray(voiceAnchor)) {
+            const voice = ["sentenceLength", "vocabulary", "directness", "avoidance"]
+              .map((key) => typeof voiceAnchor[key] === "string" && voiceAnchor[key].trim() ? `${key}=${voiceAnchor[key].trim()}` : "")
+              .filter(Boolean);
+            if (voice.length) lines.push(`  - 声部锚点：${voice.join("；")}`);
+          }
+          const independentAction = char.independentAction as Record<string, unknown> | undefined;
+          if (independentAction && typeof independentAction === "object" && !Array.isArray(independentAction)) {
+            const action = ["desire", "choice", "cost"]
+              .map((key) => typeof independentAction[key] === "string" && independentAction[key].trim() ? `${key}=${independentAction[key].trim()}` : "")
+              .filter(Boolean);
+            if (action.length) lines.push(`  - 独立行动：${action.join("；")}`);
+          }
         }
       }
       break;
@@ -256,6 +302,47 @@ function renderFoundationFields(taskKey: string, structured: Record<string, unkn
   }
 
   return lines.length ? lines.join("\n") : "";
+}
+
+function buildDraftFoundationContextMarkdown(artifact: Artifact, planningContext?: ChapterPlanningContext): string {
+  const taskKey = extractTaskKey(artifact);
+  if (taskKey !== "project-positioning" && taskKey !== "characters" && taskKey !== "worldview" && taskKey !== "architecture" && taskKey !== "plot-design") return "";
+  const structured = artifact.structuredData as Record<string, unknown> | undefined;
+  if (!structured) return "";
+  let selected = structured;
+  if (taskKey === "characters" && Array.isArray(structured.characters) && planningContext) {
+    const chapter = planningContext.chapter;
+    const refs = new Set([chapter.povCharacterId, ...chapter.scenes.flatMap((scene) => scene.participants)]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim().toLowerCase()));
+    const characters = structured.characters.filter((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const character = value as Record<string, unknown>;
+      return [character.id, character.name].some((candidate) => typeof candidate === "string" && refs.has(candidate.trim().toLowerCase()));
+    });
+    selected = { ...structured, characters: characters.length ? characters : structured.characters };
+  }
+  const fields = renderFoundationFields(taskKey, selected);
+  const titleMap: Record<string, string> = {
+    "project-positioning": "当前创作简报与研究锚点",
+    characters: "当前出场人物事实",
+    worldview: "当前世界规则基线",
+    architecture: "当前叙事架构基线",
+    "plot-design": "当前长程叙事战略",
+  };
+  return fields ? `### ${titleMap[taskKey]}\n${fields}` : "";
+}
+
+function renderIntentObjective(intent: NovelIntent, hasPlanningContext: boolean): string {
+  const isChapterSpecific = intent.target?.kind === "chapter" && Boolean(intent.target.id || intent.target.order);
+  if (!isChapterSpecific) return "- 无独立章级作者覆盖；服从已批准章节叙事契约。";
+  return [
+    `- 章级作者目标：${intent.objective}`,
+    `- 来源：${intent.source}`,
+    hasPlanningContext
+      ? "- 权威边界：可补充本章表达重点，但不得把全局卖点或人物标签提升为逐章必须证明的结论，也不得覆盖冻结事实、章节主导功能和主题显隐模式。"
+      : "- 历史章节缺少规划快照；目标仍不得覆盖冻结事实与人物知识边界。",
+  ].join("\n");
 }
 
 /**
@@ -463,7 +550,7 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
 
   if (input.instructionsOnly) {
     sections.push(
-      `## 本章意图\n- 目标：${intent.objective}\n- 来源：${intent.source}\n- 时间戳：${new Date(intent.createdAt).toISOString()}`,
+      `## 本章意图\n${renderIntentObjective(intent, Boolean(planningContext))}\n- 时间戳：${new Date(intent.createdAt).toISOString()}`,
       "",
       WRITER_GENERATION_SELF_CHECK,
       "",
@@ -484,14 +571,17 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
   // 设计依据:AGENTS.md「root-cause analysis」——v2 重构后 foundation artifacts 未被章节生成消费,
   // 导致章节生成不基于全书规划。此段把全书基础与长程方向注入 prompt,但不把长程战略误当作逐章任务清单。
   if (foundationArtifacts?.length) {
-    sections.push(
-      `## 全书基础与长程方向\n稳定设定用于防止事实漂移；长程战略只规定目的地、承诺与禁止提前消费的边界，不是当前章的事件清单。权威顺序：已定稿事实与叙事状态账本 > 当前故事弧和目标章蓝图 > 全书基础与长程方向。\n\n${buildFoundationContextMarkdown(foundationArtifacts)}`,
-      "",
-    );
+    const factualFoundation = foundationArtifacts.map((artifact) => buildDraftFoundationContextMarkdown(artifact, planningContext)).filter(Boolean);
+    if (factualFoundation.length) {
+      sections.push(
+        `## 当前章节相关的基础事实\n用于人物身份、关系、世界规则、叙事架构和长程战略的连续性校验，不承担项目主题或卖点复述。\n\n${factualFoundation.join("\n\n")}`,
+        "",
+      );
+    }
   }
 
   if (planningContext) {
-    sections.push(renderChapterPlanningContext(planningContext), "");
+    sections.push(renderChapterPlanningContext(planningContext, { includeMacro: false }), "");
   }
 
   sections.push(
@@ -499,9 +589,11 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
     "",
     `## 冻结上下文\n${contextMarkdown}`,
     "",
+    `## 连续章节叙事节奏\n${renderNarrativeRhythm(memory.narrativeRhythm, { execution: true })}`,
+    "",
     `## 激活技能与质量门\n${skillSections}`,
     "",
-    `## 本章意图\n- 目标：${intent.objective}\n- 来源：${intent.source}\n- 时间戳：${new Date(intent.createdAt).toISOString()}`,
+    `## 本章意图\n${renderIntentObjective(intent, Boolean(planningContext))}\n- 时间戳：${new Date(intent.createdAt).toISOString()}`,
     "",
     WRITER_GENERATION_SELF_CHECK,
     "",
@@ -513,17 +605,23 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
 
 export function dedupeDraftMemory(input: DraftPromptInput): MemoryBundle {
   const directArtifactIds = new Set((input.foundationArtifacts ?? []).map((artifact) => artifact.id));
-  if (!directArtifactIds.size) return input.memory;
+  const rhythmMemory = dedupeNarrativeRhythmMemory(input.memory);
+  const claims = rhythmMemory.claims.filter((claim) => {
+    if (claim.sourceArtifactId && directArtifactIds.has(claim.sourceArtifactId)) return false;
+    if (input.planningContext && claim.id.startsWith("planning-context:")) return false;
+    return true;
+  });
+  if (claims.length === input.memory.claims.length) return input.memory;
   return {
-    ...input.memory,
-    id: `${input.memory.id}:without-direct-foundation`,
-    claims: input.memory.claims.filter((claim) => !claim.sourceArtifactId || !directArtifactIds.has(claim.sourceArtifactId)),
+    ...rhythmMemory,
+    id: `${input.memory.id}:draft-projection`,
+    claims,
   };
 }
 
 export function buildChapterDraftPromptPackage(input: DraftPromptInput & { workflowId: string; system: string }): StagePromptPackage {
   const memory = dedupeDraftMemory(input);
-  const instruction = buildChapterDraftPrompt({ ...input, memory, foundationArtifacts: undefined, planningContext: undefined, payoffStats: undefined, instructionsOnly: true });
+  const instruction = buildChapterDraftPrompt({ ...input, memory, foundationArtifacts: undefined, payoffStats: undefined, instructionsOnly: true });
   const memoryPriority = (authority: MemoryBundle["claims"][number]["authority"]) => authority === "author" || authority === "approved" ? "required" as const : authority === "derived" ? "normal" as const : "soft" as const;
   return compileStageContext({
     projectId: input.intent.projectId,
@@ -537,18 +635,26 @@ export function buildChapterDraftPromptPackage(input: DraftPromptInput & { workf
       { id: "draft-instruction", kind: "goal", title: "章节创作目标与写作契约", text: instruction, priority: "critical", provenanceRefs: [input.intent.id] },
       ...((input.foundationArtifacts ?? []).flatMap((artifact) => {
         const taskKey = extractTaskKey(artifact);
-        const priority = taskKey === "chapter-plan"
-          ? undefined
-          : taskKey === "characters" || taskKey === "worldview"
-            ? "required" as const
-            : taskKey === "architecture" || taskKey === "project-positioning" || taskKey === "plot-design"
-              ? "normal" as const
-              : "soft" as const;
-        return priority ? [{ id: `foundation:${artifact.id}`, kind: "planning" as const, title: `全书基础/战略：${taskKey}`, text: buildFoundationContextMarkdown([artifact]), priority, provenanceRefs: [artifact.id], sourceArtifactId: artifact.id }] : [];
+        const text = buildDraftFoundationContextMarkdown(artifact, input.planningContext);
+        return text ? [{ id: `foundation:${artifact.id}`, kind: "planning" as const, title: `章节相关基础事实：${taskKey}`, text, priority: "required" as const, provenanceRefs: [artifact.id], sourceArtifactId: artifact.id }] : [];
       })),
-      ...(input.planningContext ? [{ id: "planning-context", kind: "planning" as const, title: "冻结章节规划上下文", text: renderChapterPlanningContext(input.planningContext), priority: "required" as const, provenanceRefs: [input.blueprint.id] }] : []),
+      ...(input.planningContext ? [{ id: "planning-context", kind: "planning" as const, title: "冻结章节规划上下文", text: renderChapterPlanningContext(input.planningContext, { includeMacro: false }), priority: "required" as const, provenanceRefs: [input.blueprint.id] }] : []),
       { id: "execution-blueprint", kind: "blueprint", title: "工作流执行编排", text: buildBlueprintSummary(input.blueprint, input.planningContext), priority: "required", provenanceRefs: [input.blueprint.id] },
-      ...memory.claims.map((claim) => ({ id: `memory:${claim.id}`, kind: "fact" as const, title: `冻结事实：${claim.title}`, text: claim.content, priority: memoryPriority(claim.authority), provenanceRefs: [claim.id, ...(claim.sourceArtifactId ? [claim.sourceArtifactId] : []), ...claim.sourceRevisionIds] })),
+      ...(memory.narrativeRhythm ? [{ id: "narrative-rhythm", kind: "planning" as const, title: "连续章节叙事节奏", text: renderNarrativeRhythm(memory.narrativeRhythm, { execution: true }), priority: "required" as const, provenanceRefs: [memory.narrativeRhythm.fingerprint] }] : []),
+      ...memory.claims.map((claim) => {
+        const replacementBoundary = claim.reason === "replacement-boundary";
+        const projected = renderExecutionMemoryClaim(claim);
+        return {
+          id: `memory:${claim.id}`,
+          kind: "fact" as const,
+          title: replacementBoundary
+            ? "替换式生成硬边界（必须保留事件结果，不得复述旧表达）"
+            : `连续性事实（不得矛盾，不要求本章提及）：${projected.title}`,
+          text: projected.text,
+          priority: replacementBoundary ? "critical" as const : memoryPriority(claim.authority),
+          provenanceRefs: [claim.id, ...(claim.sourceArtifactId ? [claim.sourceArtifactId] : []), ...claim.sourceRevisionIds],
+        };
+      }),
       ...((memory.selectionReceipts ?? []).filter((item) => item.status === "excluded").map((item) => ({
         id: `memory-excluded:${item.claimId}`,
         kind: "fact" as const,

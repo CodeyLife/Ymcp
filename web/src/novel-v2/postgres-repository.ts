@@ -30,6 +30,7 @@ import type {
   MemoryBundle,
   MemoryClaim,
   MemoryHit,
+  NarrativeRhythmSnapshot,
   NarrativeStateSnapshot,
   NovelIntent,
   NovelProjectDetail,
@@ -51,7 +52,7 @@ import type { ObjectStoreAdapter } from "./object-store";
 import { countNovelCharacters } from "./word-count";
 import type { ObjectStoreIdentity } from "./object-store";
 import { normalizeManuscriptStructuralReview } from "./application/manuscript-structure";
-import { canGenerateNextStoryArcBatch, compileChapterPlanValidationReport, parseStoryArcBundle, planningContextFingerprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type NarrativeArcPlan, type StoryArcBatchRecord, type StoryArcBundle, type StoryArcRecord } from "./application/story-arc";
+import { CHAPTER_NARRATIVE_FUNCTIONS, PLAN_APPLICABILITY, STAKE_KNOWLEDGE_BASES, THEME_CARRIERS, THEME_TREATMENT_MODES, canGenerateNextStoryArcBatch, compileChapterPlanValidationReport, parseChapterNarrativeScale, parseStoryArcBundle, planningContextFingerprint, type ArcPlanningStatus, type ChapterBlueprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type CharacterFocus, type HumorTreatment, type NarrativeArcPlan, type RomanceTreatment, type StakeKnowledgeBasis, type StoryArcBatchRecord, type StoryArcBundle, type StoryArcRebaseTarget, type StoryArcRecord } from "./application/story-arc";
 import type { StoryArcReviewOutput } from "./prompts/story-arc";
 import { aggregateChapterReviews, reviewIssueFingerprint, type ChapterReviewIssueStatus } from "./chapter-review-snapshot";
 import {
@@ -71,6 +72,8 @@ export interface NovelProjectSnapshot {
   currentRevision: number;
   targetDocumentId?: string;
   targetDocumentOrder?: number;
+  targetDocumentStatus?: "planned" | "draft" | "review" | "final";
+  targetDocumentRevisionId?: string;
   povCharacterId?: string;
   /**
    * Phase 3.3 题材与前提（可选）。
@@ -222,10 +225,39 @@ function chapterBlueprintFromRow(row: ChapterBlueprintRow): ChapterBlueprintReco
     title: typeof payload.title === "string" ? payload.title : row.title,
     summary: typeof payload.summary === "string" ? payload.summary : "",
     chapterPurpose: typeof payload.chapterPurpose === "string" ? payload.chapterPurpose : "",
+    stateTransition: (() => {
+      const st = payload.stateTransition;
+      if (!st || typeof st !== "object" || Array.isArray(st)) return undefined;
+      const item = st as Record<string, unknown>;
+      if (typeof item.before !== "string" || typeof item.after !== "string" || typeof item.evidence !== "string") return undefined;
+      return { before: item.before, after: item.after, evidence: item.evidence };
+    })(),
+    narrativeFunction: typeof payload.narrativeFunction === "string" && CHAPTER_NARRATIVE_FUNCTIONS.includes(payload.narrativeFunction as (typeof CHAPTER_NARRATIVE_FUNCTIONS)[number]) ? payload.narrativeFunction as ChapterBlueprintRecord["narrativeFunction"] : undefined,
+    readerExperience: typeof payload.readerExperience === "string" && payload.readerExperience.trim() ? payload.readerExperience : undefined,
+    thematicTreatment: (() => {
+      const treatment = payload.thematicTreatment;
+      if (!treatment || typeof treatment !== "object" || Array.isArray(treatment)) return undefined;
+      const item = treatment as Record<string, unknown>;
+      if (typeof item.mode !== "string" || !THEME_TREATMENT_MODES.includes(item.mode as (typeof THEME_TREATMENT_MODES)[number])) return undefined;
+      if (typeof item.carrier !== "string" || !THEME_CARRIERS.includes(item.carrier as (typeof THEME_CARRIERS)[number])) return undefined;
+      return {
+        mode: item.mode as NonNullable<ChapterBlueprintRecord["thematicTreatment"]>["mode"],
+        questionRefs: Array.isArray(item.questionRefs) ? item.questionRefs.filter((value): value is string => typeof value === "string") : [],
+        carrier: item.carrier as NonNullable<ChapterBlueprintRecord["thematicTreatment"]>["carrier"],
+        evidenceChange: typeof item.evidenceChange === "string" ? item.evidenceChange : "",
+        expositionBoundary: typeof item.expositionBoundary === "string" ? item.expositionBoundary : "",
+      };
+    })(),
+    worldRuleRefs: Array.isArray(payload.worldRuleRefs) ? payload.worldRuleRefs.filter((value): value is string => typeof value === "string") : [],
+    characterFocus: chapterCharacterFocus(payload.characterFocus),
+    romanceTreatment: chapterRomanceTreatment(payload.romanceTreatment),
+    humorTreatment: chapterHumorTreatment(payload.humorTreatment),
+    unresolvedAtClose: Array.isArray(payload.unresolvedAtClose) ? payload.unresolvedAtClose.filter((value): value is string => typeof value === "string") : undefined,
     dramaticQuestion: typeof payload.dramaticQuestion === "string" ? payload.dramaticQuestion : "",
     povCharacterId: typeof payload.povCharacterId === "string" ? payload.povCharacterId : undefined,
     emotionalMovement: typeof payload.emotionalMovement === "string" ? payload.emotionalMovement : "",
     stateDeltaBudget: typeof payload.stateDeltaBudget === "string" ? payload.stateDeltaBudget : "",
+    narrativeScale: parseChapterNarrativeScale(payload.narrativeScale),
     optionalBeats: Array.isArray(payload.optionalBeats) ? payload.optionalBeats.filter((value): value is string => typeof value === "string") : [],
     scenes: Array.isArray(payload.scenes) ? payload.scenes.flatMap<ChapterSceneBlueprint>((value, index) => {
       if (typeof value === "string") return [{ title: value, summary: value, participants: [] as string[] }];
@@ -235,9 +267,27 @@ function chapterBlueprintFromRow(row: ChapterBlueprintRow): ChapterBlueprintReco
         title: typeof scene.title === "string" ? scene.title : `场景 ${index + 1}`,
         summary: typeof scene.summary === "string" ? scene.summary : "",
         goal: typeof scene.goal === "string" ? scene.goal : undefined,
+        opposition: typeof scene.opposition === "string" ? scene.opposition : undefined,
         participants: Array.isArray(scene.participants) ? scene.participants.filter((item): item is string => typeof item === "string") : [],
         turn: typeof scene.turn === "string" ? scene.turn : undefined,
         outcome: typeof scene.outcome === "string" ? scene.outcome : undefined,
+        cost: typeof scene.cost === "string" ? scene.cost : undefined,
+        participantStakes: Array.isArray(scene.participantStakes) ? scene.participantStakes.flatMap<NonNullable<ChapterSceneBlueprint["participantStakes"]>[number]>((stake) => {
+          if (!stake || typeof stake !== "object" || Array.isArray(stake)) return [];
+          const s = stake as Record<string, unknown>;
+          if (typeof s.participant !== "string") return [];
+          const parseBasis = (v: unknown): StakeKnowledgeBasis => typeof v === "string" && (STAKE_KNOWLEDGE_BASES as readonly string[]).includes(v) ? v as StakeKnowledgeBasis : "unknown";
+          const kb = s.knowledgeBasis;
+          const k = kb && typeof kb === "object" && !Array.isArray(kb) ? kb as Record<string, unknown> : {};
+          return [{
+            participant: s.participant,
+            want: typeof s.want === "string" ? s.want : "",
+            leverage: typeof s.leverage === "string" ? s.leverage : "",
+            withholding: typeof s.withholding === "string" ? s.withholding : "",
+            failureCost: typeof s.failureCost === "string" ? s.failureCost : "",
+            knowledgeBasis: { want: parseBasis(k.want), leverage: parseBasis(k.leverage), withholding: parseBasis(k.withholding), failureCost: parseBasis(k.failureCost) },
+          }];
+        }) : undefined,
       }];
     }) : [],
     continuityConstraints: Array.isArray(payload.continuityConstraints) ? payload.continuityConstraints.filter((value): value is string => typeof value === "string") : [],
@@ -246,6 +296,40 @@ function chapterBlueprintFromRow(row: ChapterBlueprintRow): ChapterBlueprintReco
     closingForce: typeof payload.closingForce === "string" ? payload.closingForce : "",
     freedom: typeof payload.freedom === "string" ? payload.freedom : "",
   };
+}
+
+function chapterCharacterFocus(value: unknown): CharacterFocus[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const item = entry as Record<string, unknown>;
+    if (typeof item.characterRef !== "string") return [];
+    return [{
+      characterRef: item.characterRef,
+      function: typeof item.function === "string" ? item.function : "",
+      desire: typeof item.desire === "string" ? item.desire : "",
+      action: typeof item.action === "string" ? item.action : "",
+      cost: typeof item.cost === "string" ? item.cost : "",
+    }];
+  });
+}
+
+function chapterRomanceTreatment(value: unknown): RomanceTreatment {
+  const fallback: RomanceTreatment = { status: "not-applicable", stage: "", actionEvidence: "", boundary: "本章不承担感情线推进" };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const item = value as Record<string, unknown>;
+  const status = typeof item.status === "string" && PLAN_APPLICABILITY.includes(item.status as (typeof PLAN_APPLICABILITY)[number])
+    ? item.status as RomanceTreatment["status"] : fallback.status;
+  return { status, stage: typeof item.stage === "string" ? item.stage : "", actionEvidence: typeof item.actionEvidence === "string" ? item.actionEvidence : "", boundary: typeof item.boundary === "string" ? item.boundary : fallback.boundary };
+}
+
+function chapterHumorTreatment(value: unknown): HumorTreatment {
+  const fallback: HumorTreatment = { status: "not-applicable", opportunity: "", evidence: "", boundary: "本章不强制加入幽默" };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const item = value as Record<string, unknown>;
+  const status = typeof item.status === "string" && PLAN_APPLICABILITY.includes(item.status as (typeof PLAN_APPLICABILITY)[number])
+    ? item.status as HumorTreatment["status"] : fallback.status;
+  return { status, opportunity: typeof item.opportunity === "string" ? item.opportunity : "", evidence: typeof item.evidence === "string" ? item.evidence : "", boundary: typeof item.boundary === "string" ? item.boundary : fallback.boundary };
 }
 
 export class NovelPostgresRepository {
@@ -281,19 +365,36 @@ export class NovelPostgresRepository {
         const applied = await client.query<{ checksum: string }>("SELECT checksum FROM schema_migrations WHERE version=$1", [file]);
         if (applied.rowCount) {
           if (applied.rows[0].checksum !== checksum && applied.rows[0].checksum !== rawChecksum) {
-            const legacyWorkspaceObjects = file === "022_chapter_workspace.sql"
-              ? await client.query<{ object_count: number }>(`
-                  SELECT count(*)::int AS object_count FROM (
-                    SELECT table_name,column_name FROM information_schema.columns
-                    WHERE table_schema=current_schema() AND (
-                      (table_name='workflow_run_summaries' AND column_name IN ('final_status','metrics')) OR
-                      (table_name='chapter_review_snapshots' AND column_name IN ('reviewed_content_hash','dimension_scores')) OR
-                      (table_name='manuscript_revisions' AND column_name IN ('retention_class','expires_at'))
-                    )
-                  ) markers
-                `)
-              : { rows: [{ object_count: 0 }] };
-            if (legacyWorkspaceObjects.rows[0]?.object_count !== 6) throw new Error(`已应用迁移被修改：${file}`);
+            let compatibleAppliedMigration = false;
+            if (file === "022_chapter_workspace.sql") {
+              const markers = await client.query<{ object_count: number }>(`
+                SELECT count(*)::int AS object_count FROM (
+                  SELECT table_name,column_name FROM information_schema.columns
+                  WHERE table_schema=current_schema() AND (
+                    (table_name='workflow_run_summaries' AND column_name IN ('final_status','metrics')) OR
+                    (table_name='chapter_review_snapshots' AND column_name IN ('reviewed_content_hash','dimension_scores')) OR
+                    (table_name='manuscript_revisions' AND column_name IN ('retention_class','expires_at'))
+                  )
+                ) markers
+              `);
+              compatibleAppliedMigration = markers.rows[0]?.object_count === 6;
+            } else if (file === "030_memory_claim_revision_lifecycle.sql") {
+              const markers = await client.query<{ compatible: boolean }>(`
+                SELECT
+                  (SELECT count(*) FROM information_schema.columns
+                   WHERE table_schema=current_schema() AND (
+                     (table_name='memory_claims' AND column_name IN ('lifecycle_status','source_document_id','source_workflow_id','identity_hash','value_hash')) OR
+                     (table_name='memory_claim_sources' AND column_name IN ('claim_id','project_id','document_id','revision_id','artifact_id','workflow_id','lifecycle_status','created_at'))
+                   )) = 13
+                  AND (SELECT count(*) FROM pg_indexes
+                       WHERE schemaname=current_schema() AND indexname IN ('memory_claims_active_project','memory_claims_active_identity','memory_claims_project_content_scope','memory_claim_sources_revision')) = 4
+                  AND (SELECT count(*) FROM pg_constraint
+                       WHERE conname IN ('memory_claims_lifecycle_status_check','memory_claim_sources_lifecycle_status_check','memory_claim_sources_pkey')) = 3
+                  AS compatible
+              `);
+              compatibleAppliedMigration = markers.rows[0]?.compatible === true;
+            }
+            if (!compatibleAppliedMigration) throw new Error(`已应用迁移被修改：${file}`);
             await client.query("UPDATE schema_migrations SET checksum=$2 WHERE version=$1", [file, checksum]);
           }
           continue;
@@ -428,6 +529,10 @@ export class NovelPostgresRepository {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      // API and worker initialize the same routing snapshot concurrently. The
+      // refresh is a delete-and-replace transaction, so serialize writers to
+      // prevent both transactions inserting the same provider primary key.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('novel-v2:model-routing-config'))");
       await client.query("DELETE FROM provider_configs");
       await client.query("DELETE FROM model_routes");
       for (const profile of snapshot.profiles) {
@@ -1068,6 +1173,14 @@ export class NovelPostgresRepository {
     return bundle;
   }
 
+  async putMemoryBundle(bundle: MemoryBundle): Promise<MemoryBundle> {
+    await this.pool.query(
+      "INSERT INTO memory_bundles(id,project_id,preflight_id,payload,fingerprint) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload,fingerprint=EXCLUDED.fingerprint",
+      [bundle.id, bundle.projectId, bundle.preflightId, bundle, bundle.fingerprint],
+    );
+    return bundle;
+  }
+
   async listOutbox(projectId?: string, afterId = 0) {
     const result = await this.pool.query("SELECT id,aggregate_type,aggregate_id,event_type,payload,created_at FROM outbox_events WHERE id>$1 AND ($2::text IS NULL OR payload->>'projectId'=$2) ORDER BY id LIMIT 200", [afterId, projectId ?? null]);
     return result.rows;
@@ -1141,6 +1254,18 @@ export class NovelPostgresRepository {
       sourceRevisionIds: row.source_revision_ids ?? [], contentHash: row.content_hash, supersedes: row.supersedes ?? [],
       predicate: row.predicate ?? undefined, sourceArtifactId: row.source_artifact_id ?? undefined,
     }));
+  }
+
+  async listActiveMemoryClaimsByRevision(projectId: string, revisionId: string): Promise<MemoryClaim[]> {
+    const result = await this.pool.query<any>(
+      `SELECT * FROM memory_claims
+       WHERE project_id=$1 AND lifecycle_status='active'
+         AND authority IN ('approved','author','derived')
+         AND $2=ANY(source_revision_ids)
+       ORDER BY created_at,id`,
+      [projectId, revisionId],
+    );
+    return result.rows.map(memoryClaimFromRow);
   }
 
   async countIndexableMemoryClaims(): Promise<number> {
@@ -1886,10 +2011,10 @@ export class NovelPostgresRepository {
     const genre = typeof metadata.genre === "string" ? metadata.genre : undefined;
     const premise = typeof metadata.premise === "string" ? metadata.premise : undefined;
     if (!targetDocumentId) return { projectId, currentRevision: Number(project.rows[0].current_revision), genre, premise };
-    const document = await this.pool.query<{ narrative_order: number; pov_character_id: string | null }>("SELECT narrative_order, pov_character_id FROM manuscript_documents WHERE id = $1 AND project_id = $2", [targetDocumentId, projectId]);
+    const document = await this.pool.query<{ narrative_order: number; pov_character_id: string | null; status: "planned" | "draft" | "review" | "final"; current_revision_id: string | null }>("SELECT narrative_order, pov_character_id, status, current_revision_id FROM manuscript_documents WHERE id = $1 AND project_id = $2", [targetDocumentId, projectId]);
     const row = document.rows[0];
     if (!row) throw new Error("目标章节不存在");
-    return { projectId, currentRevision: Number(project.rows[0].current_revision), targetDocumentId, targetDocumentOrder: Number(row.narrative_order), povCharacterId: row.pov_character_id ?? undefined, genre, premise };
+    return { projectId, currentRevision: Number(project.rows[0].current_revision), targetDocumentId, targetDocumentOrder: Number(row.narrative_order), targetDocumentStatus: row.status, targetDocumentRevisionId: row.current_revision_id ?? undefined, povCharacterId: row.pov_character_id ?? undefined, genre, premise };
   }
 
   async putIntent(intent: NovelIntent) {
@@ -2465,7 +2590,10 @@ export class NovelPostgresRepository {
       const batchPayload = { ...input.bundle.batch, startChapterIndex: batchStartChapterIndex };
       const batchId = `batch:${input.arcId}:${input.bundle.batch.batchIndex}`;
       const isInitialBatch = input.bundle.batch.batchIndex === 1;
-      if (!isInitialBatch && current.rows[0].planning_status !== "approved") throw new Error("上一故事弧批次尚未批准");
+      const editingCurrentAwaitingReviewBatch = input.edited === true
+        && (existingBatch.rowCount ?? 0) > 0
+        && existingBatch.rows[0].status === "awaiting-review";
+      if (!isInitialBatch && current.rows[0].planning_status !== "approved" && !editingCurrentAwaitingReviewBatch) throw new Error("上一故事弧批次尚未批准");
       if (!isInitialBatch) {
         const approvedArc = current.rows[0].payload as NarrativeArcPlan;
         for (const field of ["title", "objective", "entryState", "exitState", "expectedChapterCount"] as const) {
@@ -2569,35 +2697,201 @@ export class NovelPostgresRepository {
     };
   }
 
-  async deleteStoryArc(projectId: string, arcId: string, actor: string) {
+  async deleteStoryArc(projectId: string, arcId: string, actor: string, options: { force?: boolean } = {}) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const arc = await client.query<ArcRow>("SELECT * FROM arcs WHERE id=$1 AND project_id=$2 FOR UPDATE", [arcId, projectId]);
       if (!arc.rowCount) throw new Error("故事弧不存在");
-      const chapters = await client.query<{ id: string; document_id: string | null; document_status: string | null; current_revision_id: string | null; revision_count: string }>(
+      const chapters = await client.query<{ id: string; document_id: string | null; document_status: string | null; current_revision_id: string | null; revision_count: string; narrative_order: string | number | null }>(
         "WITH locked_chapters AS (SELECT * FROM chapters WHERE arc_id=$1 AND project_id=$2 FOR UPDATE) " +
-        "SELECT c.id,c.document_id,d.status AS document_status,d.current_revision_id,COUNT(mr.id)::text AS revision_count " +
+        "SELECT c.id,c.document_id,d.status AS document_status,d.current_revision_id,d.narrative_order,COUNT(mr.id)::text AS revision_count " +
         "FROM locked_chapters c " +
         "LEFT JOIN manuscript_documents d ON d.id=c.document_id AND d.project_id=c.project_id " +
         "LEFT JOIN manuscript_revisions mr ON mr.document_id=d.id " +
-        "GROUP BY c.id,c.document_id,d.status,d.current_revision_id ",
+        "GROUP BY c.id,c.document_id,d.status,d.current_revision_id,d.narrative_order ",
         [arcId, projectId],
       );
       const protectedChapter = chapters.rows.find((chapter) => chapter.current_revision_id || Number(chapter.revision_count) > 0 || (chapter.document_id && chapter.document_status !== "planned"));
-      if (protectedChapter) throw new Error("故事弧已关联进入创作或已有正文的章节，不能删除；请使用放弃故事弧保留历史");
-      const documentIds = chapters.rows.flatMap((chapter) => chapter.document_id ? [chapter.document_id] : []);
+      if (protectedChapter && !options.force) throw new Error("故事弧已关联进入创作或已有正文的章节，不能删除；请使用放弃故事弧保留历史");
+      const documentIds = [...new Set(chapters.rows.flatMap((chapter) => chapter.document_id ? [chapter.document_id] : []))];
+      const chapterIds = chapters.rows.map((chapter) => chapter.id);
+      const narrativeOrders = chapters.rows.flatMap((chapter) => chapter.narrative_order === null || chapter.narrative_order === undefined ? [] : [Number(chapter.narrative_order)]);
+      const minNarrativeOrder = narrativeOrders.length ? Math.min(...narrativeOrders) : null;
+      const maxNarrativeOrder = narrativeOrders.length ? Math.max(...narrativeOrders) : null;
+      let removedRevisionIds: string[] = [];
+      let removedMemoryClaimIds: string[] = [];
+      let removedChapterMemoryIds: string[] = [];
+      let cancelledWorkflowIds: string[] = [];
+
+      if (options.force) {
+        const workflows = await client.query<{ id: string; temporal_workflow_id: string }>(
+          `SELECT id,temporal_workflow_id
+           FROM workflow_runs
+           WHERE project_id=$1
+             AND (
+               payload->>'arcId'=$2
+               OR payload->>'documentId'=ANY($3::text[])
+               OR payload #>> '{intent,target,id}' = ANY($3::text[])
+             )
+           FOR UPDATE`,
+          [projectId, arcId, documentIds],
+        );
+        cancelledWorkflowIds = workflows.rows.map((row) => row.temporal_workflow_id);
+        if (workflows.rowCount) {
+          await client.query(
+            `UPDATE workflow_runs
+             SET status='cancelled',
+                 payload=payload || $3::jsonb,
+                 updated_at=now()
+             WHERE project_id=$1 AND id=ANY($2::text[])`,
+            [projectId, workflows.rows.map((row) => row.id), JSON.stringify({ cancelledBy: "story-arc.force-delete", arcId, documentIds })],
+          );
+        }
+      }
+
+      if (options.force && documentIds.length) {
+        const revisionRows = await client.query<{ id: string; content_hash: string }>(
+          "SELECT id,content_hash FROM manuscript_revisions WHERE project_id=$1 AND document_id=ANY($2::text[]) FOR UPDATE",
+          [projectId, documentIds],
+        );
+        removedRevisionIds = revisionRows.rows.map((row) => row.id);
+        const contentHashes = [...new Set(revisionRows.rows.map((row) => row.content_hash))];
+
+        const chapterMemoryRows = await client.query<{ id: string }>(
+          `SELECT id FROM chapter_memories
+           WHERE project_id=$1
+             AND (document_id=ANY($2::text[]) OR revision_id=ANY($3::text[]))`,
+          [projectId, documentIds, removedRevisionIds],
+        );
+        removedChapterMemoryIds = chapterMemoryRows.rows.map((row) => row.id);
+
+        const directClaimRows = await client.query<{ id: string }>(
+          `SELECT id FROM memory_claims
+           WHERE project_id=$1
+             AND (
+               source_document_id=ANY($2::text[])
+               OR source_revision_ids && $3::text[]
+             )`,
+          [projectId, documentIds, removedRevisionIds],
+        );
+        const rollupClaimRows = await client.query<{ id: string }>(
+          `SELECT id FROM memory_claims
+           WHERE project_id=$1
+             AND predicate='chapter-memory-rollup'
+             AND (
+               source_revision_ids && $2::text[]
+               OR ($3::bigint IS NOT NULL AND narrative_start <= $4::bigint AND COALESCE(narrative_end,narrative_start) >= $3::bigint)
+             )`,
+          [projectId, removedRevisionIds, minNarrativeOrder, maxNarrativeOrder],
+        );
+        const removedSourceRows = await client.query<{ claim_id: string }>(
+          `DELETE FROM memory_claim_sources
+           WHERE project_id=$1
+             AND (document_id=ANY($2::text[]) OR revision_id=ANY($3::text[]))
+           RETURNING claim_id`,
+          [projectId, documentIds, removedRevisionIds],
+        );
+        const affectedClaimIds = [...new Set([...directClaimRows.rows.map((row) => row.id), ...removedSourceRows.rows.map((row) => row.claim_id)])];
+        if (affectedClaimIds.length) {
+          await client.query(
+            `UPDATE memory_claims claim SET
+               lifecycle_status=CASE WHEN EXISTS (
+                 SELECT 1 FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ) THEN 'active' ELSE 'staged' END,
+               source_revision_ids=COALESCE((
+                 SELECT array_agg(DISTINCT source.revision_id) FILTER (WHERE source.revision_id IS NOT NULL)
+                 FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ),'{}'::text[]),
+               narrative_start=(
+                 SELECT MIN(document.narrative_order)
+                 FROM memory_claim_sources source
+                 JOIN manuscript_documents document ON document.id=source.document_id
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ),
+               narrative_end=(
+                 SELECT MAX(document.narrative_order)
+                 FROM memory_claim_sources source
+                 JOIN manuscript_documents document ON document.id=source.document_id
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               ),
+               source_document_id=(
+                 SELECT source.document_id FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active' AND source.document_id IS NOT NULL
+                 ORDER BY source.created_at DESC LIMIT 1
+               )
+             WHERE claim.project_id=$1 AND claim.id=ANY($2::text[])`,
+            [projectId, affectedClaimIds],
+          );
+          const deletedClaims = await client.query<{ id: string }>(
+            `DELETE FROM memory_claims claim
+             WHERE claim.project_id=$1
+               AND claim.id=ANY($2::text[])
+               AND NOT EXISTS (
+                 SELECT 1 FROM memory_claim_sources source
+                 WHERE source.claim_id=claim.id AND source.lifecycle_status='active'
+               )
+             RETURNING id`,
+            [projectId, affectedClaimIds],
+          );
+          removedMemoryClaimIds.push(...deletedClaims.rows.map((row) => row.id));
+        }
+        const rollupClaimIds = rollupClaimRows.rows.map((row) => row.id);
+        if (rollupClaimIds.length) {
+          await client.query("DELETE FROM memory_claim_sources WHERE project_id=$1 AND claim_id=ANY($2::text[])", [projectId, rollupClaimIds]);
+          const deletedRollups = await client.query<{ id: string }>("DELETE FROM memory_claims WHERE project_id=$1 AND id=ANY($2::text[]) RETURNING id", [projectId, rollupClaimIds]);
+          removedMemoryClaimIds.push(...deletedRollups.rows.map((row) => row.id));
+        }
+
+        if (removedRevisionIds.length) {
+          const legacyFactSources = await client.query<{ fact_id: string }>("DELETE FROM fact_sources WHERE revision_id=ANY($1::text[]) RETURNING fact_id", [removedRevisionIds]);
+          const legacyFactIds = [...new Set(legacyFactSources.rows.map((row) => row.fact_id))];
+          if (legacyFactIds.length) {
+            await client.query(
+              `DELETE FROM facts fact
+               WHERE fact.project_id=$1 AND fact.id=ANY($2::text[])
+                 AND NOT EXISTS (SELECT 1 FROM fact_sources source WHERE source.fact_id=fact.id)`,
+              [projectId, legacyFactIds],
+            );
+          }
+          await client.query("UPDATE promises SET status='open' WHERE id IN (SELECT promise_id FROM payoffs WHERE revision_id=ANY($1::text[]) AND promise_id IS NOT NULL)", [removedRevisionIds]);
+          await client.query("UPDATE foreshadowing SET status='open',payoff_revision_id=NULL WHERE project_id=$1 AND payoff_revision_id=ANY($2::text[])", [projectId, removedRevisionIds]);
+          await client.query("DELETE FROM payoffs WHERE revision_id=ANY($1::text[])", [removedRevisionIds]);
+          await client.query("DELETE FROM payoff_curve WHERE project_id=$1 AND (document_id=ANY($2::text[]) OR revision_id=ANY($3::text[]))", [projectId, documentIds, removedRevisionIds]);
+          await client.query("DELETE FROM foreshadowing WHERE project_id=$1 AND planted_revision_id=ANY($2::text[])", [projectId, removedRevisionIds]);
+          await client.query("DELETE FROM promises WHERE project_id=$1 AND source_revision_id=ANY($2::text[])", [projectId, removedRevisionIds]);
+          await client.query("DELETE FROM timeline_events WHERE project_id=$1 AND source_revision_id=ANY($2::text[])", [projectId, removedRevisionIds]);
+          await client.query("DELETE FROM relations WHERE project_id=$1 AND source_revision_id=ANY($2::text[])", [projectId, removedRevisionIds]);
+          await client.query("DELETE FROM narrative_state_snapshots WHERE project_id=$1 AND (document_id=ANY($2::text[]) OR revision_id=ANY($3::text[]))", [projectId, documentIds, removedRevisionIds]);
+        }
+        await client.query("DELETE FROM chapter_memories WHERE project_id=$1 AND (document_id=ANY($2::text[]) OR revision_id=ANY($3::text[]))", [projectId, documentIds, removedRevisionIds]);
+        await client.query("DELETE FROM chapter_review_snapshot_issues WHERE snapshot_id IN (SELECT id FROM chapter_review_snapshots WHERE project_id=$1 AND document_id=ANY($2::text[]))", [projectId, documentIds]);
+        await client.query("DELETE FROM chapter_review_snapshots WHERE project_id=$1 AND document_id=ANY($2::text[])", [projectId, documentIds]);
+        await client.query("DELETE FROM chapter_production_specs WHERE project_id=$1 AND document_id=ANY($2::text[])", [projectId, documentIds]);
+        await client.query("DELETE FROM chapter_planning_contexts WHERE project_id=$1 AND (arc_id=$2 OR document_id=ANY($3::text[]) OR chapter_blueprint_id=ANY($4::text[]))", [projectId, arcId, documentIds, chapterIds]);
+        if (removedRevisionIds.length) await client.query("DELETE FROM manuscript_revisions WHERE project_id=$1 AND id=ANY($2::text[])", [projectId, removedRevisionIds]);
+        if (contentHashes.length) await client.query("DELETE FROM content_blobs cb WHERE cb.content_hash=ANY($1::text[]) AND NOT EXISTS (SELECT 1 FROM manuscript_revisions mr WHERE mr.content_hash=cb.content_hash)", [contentHashes]);
+      }
       await client.query("DELETE FROM scenes WHERE chapter_id IN (SELECT id FROM chapters WHERE arc_id=$1 AND project_id=$2)", [arcId, projectId]);
       await client.query("DELETE FROM chapters WHERE arc_id=$1 AND project_id=$2", [arcId, projectId]);
-      if (documentIds.length) await client.query("DELETE FROM manuscript_documents WHERE project_id=$1 AND id=ANY($2::text[]) AND status='planned' AND current_revision_id IS NULL", [projectId, documentIds]);
+      if (documentIds.length) {
+        const documentDeleteClause = options.force ? "" : " AND status='planned' AND current_revision_id IS NULL";
+        await client.query(`DELETE FROM manuscript_documents WHERE project_id=$1 AND id=ANY($2::text[])${documentDeleteClause}`, [projectId, documentIds]);
+      }
       await client.query("DELETE FROM story_arc_batches WHERE arc_id=$1 AND project_id=$2", [arcId, projectId]);
       const deleted = await client.query("DELETE FROM arcs WHERE id=$1 AND project_id=$2 RETURNING id", [arcId, projectId]);
+      removedMemoryClaimIds = [...new Set(removedMemoryClaimIds)];
+      removedChapterMemoryIds = [...new Set(removedChapterMemoryIds)];
+      removedRevisionIds = [...new Set(removedRevisionIds)];
+      cancelledWorkflowIds = [...new Set(cancelledWorkflowIds)];
       await client.query(
         "INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'story-arc.deleted','story-arc',$3,$4)",
-        [projectId, actor, arcId, { title: arc.rows[0].title, chapterCount: chapters.rowCount, documentIds }],
+        [projectId, actor, arcId, { title: arc.rows[0].title, force: options.force === true, chapterCount: chapters.rowCount, documentIds, revisionIds: removedRevisionIds, memoryClaimIds: removedMemoryClaimIds, chapterMemoryIds: removedChapterMemoryIds, cancelledWorkflowIds }],
       );
       await client.query("COMMIT");
-      return { deleted: Boolean(deleted.rowCount), projectId, arcId, removedDocumentIds: documentIds };
+      return { deleted: Boolean(deleted.rowCount), projectId, arcId, force: options.force === true, removedDocumentIds: documentIds, removedRevisionIds, removedMemoryClaimIds, removedChapterMemoryIds, cancelledWorkflowIds };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -2678,7 +2972,7 @@ export class NovelPostgresRepository {
     if (reviewArtifact.structuredData?.subjectArtifactId !== artifactId) throw new Error("故事弧审核证据不属于当前蓝图");
     const review = reviewArtifact.structuredData as unknown as StoryArcReviewOutput;
     const bundle = parseStoryArcBundle(blueprintArtifact.structuredData);
-    const validation = compileChapterPlanValidationReport(bundle, Array.isArray(review.chapterChecks) ? review.chapterChecks : []);
+    const validation = compileChapterPlanValidationReport(bundle, Array.isArray(review.chapterChecks) ? review.chapterChecks : [], Array.isArray(review.arcChecks) ? review.arcChecks : []);
     const hasBlockingIssue = Array.isArray(review.issues) && review.issues.some((item) => item.severity === "blocker" || item.severity === "major");
     if (review.verdict !== "passed" || hasBlockingIssue || !validation.passed) throw new Error("故事弧审核尚未通过，不能批准");
     const macro = await this.listCurrentFoundationArtifacts(projectId);
@@ -2736,15 +3030,54 @@ export class NovelPostgresRepository {
   }
 
   async markStoryArcGenerating(projectId: string, arcId: string, actor: string) {
-    const result = await this.pool.query("UPDATE arcs SET planning_status='generating',approved_at=NULL,context_fingerprint=NULL,updated_at=now() WHERE id=$1 AND project_id=$2 AND execution_status NOT IN ('completed','abandoned') RETURNING id", [arcId, projectId]);
+    const result = await this.pool.query(`
+      UPDATE arcs SET
+        planning_status='generating',
+        approved_at=CASE WHEN execution_status='completed' THEN approved_at ELSE NULL END,
+        context_fingerprint=CASE WHEN execution_status='completed' THEN context_fingerprint ELSE NULL END,
+        updated_at=now()
+      WHERE id=$1 AND project_id=$2 AND execution_status<>'abandoned'
+      RETURNING id,execution_status
+    `, [arcId, projectId]);
     if (!result.rowCount) throw new Error("故事弧当前不可重基线");
-    await this.pool.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'story-arc.rebase-started','story-arc',$3,'{}')", [projectId, actor, arcId]);
+    await this.pool.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,$2,'story-arc.rebase-started','story-arc',$3,$4)", [projectId, actor, arcId, { preserveExecutionStatus: result.rows[0]?.execution_status === "completed" }]);
     return this.getStoryArc(projectId, arcId);
   }
 
   async failStoryArc(projectId: string, arcId: string, reason: string) {
-    await this.pool.query("UPDATE arcs SET planning_status='failed',updated_at=now(),payload=payload || $3 WHERE id=$1 AND project_id=$2 AND execution_status NOT IN ('completed','abandoned')", [arcId, projectId, { failureReason: reason }]);
+    await this.pool.query(`
+      UPDATE arcs SET
+        planning_status=CASE
+          WHEN execution_status='completed' THEN 'approved'
+          ELSE 'failed'
+        END,
+        updated_at=now(),
+        payload=payload || $3
+      WHERE id=$1 AND project_id=$2 AND execution_status<>'abandoned'
+    `, [arcId, projectId, { failureReason: reason }]);
     await this.pool.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,'runtime','story-arc.failed','story-arc',$2,$3)", [projectId, arcId, { reason }]);
+  }
+
+  async recoverStoryArcAfterWorkflowCancellation(projectId: string, arcId: string) {
+    const result = await this.pool.query<{ planning_status: ArcPlanningStatus }>(`
+      UPDATE arcs a SET
+        planning_status=CASE
+          WHEN EXISTS (
+            SELECT 1 FROM story_arc_batches b
+            WHERE b.arc_id=a.id AND b.project_id=a.project_id
+              AND b.status='awaiting-review' AND b.source_artifact_id=a.blueprint_artifact_id
+          ) THEN 'awaiting-review'
+          WHEN a.execution_status='completed' THEN 'approved'
+          ELSE 'failed'
+        END,
+        updated_at=now()
+      WHERE a.id=$1 AND a.project_id=$2 AND a.planning_status='generating'
+      RETURNING planning_status
+    `, [arcId, projectId]);
+    if (result.rowCount) {
+      await this.pool.query("INSERT INTO audit_records(project_id,actor,action,aggregate_type,aggregate_id,payload) VALUES($1,'runtime','story-arc.cancelled','story-arc',$2,$3)", [projectId, arcId, { restoredPlanningStatus: result.rows[0].planning_status }]);
+    }
+    return this.getStoryArc(projectId, arcId);
   }
 
   async getStoryArcPlanningInput(projectId: string) {
@@ -2762,6 +3095,111 @@ export class NovelPostgresRepository {
       recentChapters: memories.slice().reverse().map((memory) => ({ order: memory.narrativeRange.end, summary: memory.summary, unresolvedThreads: memory.unresolvedThreads, emotionalArc: memory.emotionalArc })),
       openThreads: threads.rows,
       narrativeState,
+    };
+  }
+
+  async getStoryArcRebaseTarget(projectId: string, arcId: string): Promise<StoryArcRebaseTarget> {
+    const arc = await this.getStoryArc(projectId, arcId);
+    if (!arc) throw new Error("故事弧不存在");
+    const rows = await this.pool.query<{
+      chapter_id: string;
+      document_id: string;
+      global_order: string | number;
+      document_title: string;
+      current_revision_id: string | null;
+      approved_blueprint: Record<string, unknown> | null;
+    }>(
+      `SELECT c.id AS chapter_id,c.document_id,c.ordinal AS global_order,d.title AS document_title,
+              d.current_revision_id,cps.blueprint AS approved_blueprint
+       FROM chapters c
+       JOIN manuscript_documents d ON d.id=c.document_id AND d.project_id=c.project_id
+       LEFT JOIN chapter_production_specs cps ON cps.document_id=d.id AND cps.project_id=d.project_id
+       WHERE c.project_id=$1 AND c.arc_id=$2
+       ORDER BY c.ordinal`,
+      [projectId, arcId],
+    );
+    if (!rows.rowCount) throw new Error("故事弧没有可重基线的已关联章节");
+    if (rows.rows.length > 16) throw new Error("单次重基线最多处理 16 个已关联章节；更长故事弧需要按批次重基线");
+
+    const approvals = await this.pool.query<{ artifact_id: string | null }>(
+      `SELECT payload->>'artifactId' AS artifact_id
+       FROM audit_records
+       WHERE project_id=$1 AND aggregate_type='story-arc' AND aggregate_id=$2 AND action='story-arc.approved'
+       ORDER BY created_at ASC,id ASC`,
+      [projectId, arcId],
+    );
+    // A rebase may cover several approved batches. Reconstruct the last
+    // approved forward blueprint per global chapter position so uncreated
+    // chapters are not mistaken for committed history.
+    const approvedChapterByOrder = new Map<number, ChapterBlueprint>();
+    for (const approval of approvals.rows) {
+      if (!approval.artifact_id) continue;
+      const artifact = await this.getArtifact(approval.artifact_id);
+      if (!artifact?.structuredData) continue;
+      const bundle = parseStoryArcBundle(artifact.structuredData);
+      bundle.chapters.forEach((chapter, index) => {
+        approvedChapterByOrder.set(bundle.batch.startChapterIndex + index, chapter);
+      });
+    }
+    const approvedArtifactId = approvals.rows[approvals.rows.length - 1]?.artifact_id ?? arc.blueprintArtifactId;
+    const approvedArtifact = approvedArtifactId ? await this.getArtifact(approvedArtifactId) : undefined;
+    const approvedArc = approvedArtifact?.structuredData
+      ? parseStoryArcBundle(approvedArtifact.structuredData).arc
+      : arc.arc;
+    const batch = arc.batches[0];
+    const startChapterIndex = batch?.startChapterIndex ?? Number(rows.rows[0].global_order);
+
+    const chapters = await Promise.all(rows.rows.map(async (row) => {
+      const memory = await this.getChapterMemoryByDocument(projectId, row.document_id);
+      const currentMemory = memory && (!row.current_revision_id || memory.revisionId === row.current_revision_id) ? memory : undefined;
+      const claims = row.current_revision_id ? await this.listActiveMemoryClaimsByRevision(projectId, row.current_revision_id) : [];
+      const plannedBlueprint = !row.current_revision_id ? approvedChapterByOrder.get(Number(row.global_order)) : undefined;
+      const blueprint = plannedBlueprint ?? row.approved_blueprint ?? {};
+      const scenes = Array.isArray(blueprint.scenes) ? blueprint.scenes : [];
+      const thematicTreatment = blueprint.thematicTreatment && typeof blueprint.thematicTreatment === "object" && !Array.isArray(blueprint.thematicTreatment)
+        ? blueprint.thematicTreatment as Record<string, unknown>
+        : undefined;
+      return {
+        chapterId: row.chapter_id,
+        documentId: row.document_id,
+        globalOrder: Number(row.global_order),
+        title: row.document_title,
+        revisionId: row.current_revision_id ?? undefined,
+        plannedBlueprint,
+        approvedPlan: {
+          summary: typeof blueprint.summary === "string" ? blueprint.summary : undefined,
+          sceneEvents: scenes.flatMap((scene) => {
+            if (!scene || typeof scene !== "object" || Array.isArray(scene)) return [];
+            const item = scene as Record<string, unknown>;
+            return [item.summary, item.turn, item.outcome].filter((value): value is string => typeof value === "string" && Boolean(value.trim()));
+          }),
+          continuityConstraints: Array.isArray(blueprint.continuityConstraints) ? blueprint.continuityConstraints.filter((value): value is string => typeof value === "string") : [],
+          setupRefs: Array.isArray(blueprint.setupRefs) ? blueprint.setupRefs.filter((value): value is string => typeof value === "string") : [],
+          payoffRefs: Array.isArray(blueprint.payoffRefs) ? blueprint.payoffRefs.filter((value): value is string => typeof value === "string") : [],
+          thematicMode: typeof thematicTreatment?.mode === "string" && THEME_TREATMENT_MODES.includes(thematicTreatment.mode as (typeof THEME_TREATMENT_MODES)[number])
+            ? thematicTreatment.mode as NonNullable<ChapterBlueprintRecord["thematicTreatment"]>["mode"]
+            : undefined,
+        },
+        committedMemory: currentMemory ? {
+          summary: currentMemory.summary,
+          keyEvents: currentMemory.keyEvents,
+          characterStates: currentMemory.characterStates,
+          unresolvedThreads: currentMemory.unresolvedThreads,
+          emotionalArc: currentMemory.emotionalArc,
+        } : undefined,
+        authoritativeFacts: claims
+          .filter((claim) => claim.knowledgeScope === "author" && claim.predicate !== "character-knows")
+          .map((claim) => ({ title: claim.title, content: claim.content, predicate: claim.predicate, subjectRefs: claim.subjectRefs })),
+      };
+    }));
+
+    return {
+      arcId,
+      executionStatus: arc.executionStatus,
+      approvedArc,
+      batchIndex: batch?.batchIndex ?? 1,
+      startChapterIndex,
+      chapters,
     };
   }
 
@@ -2875,25 +3313,21 @@ export class NovelPostgresRepository {
   }
 
   async getNarrativeStatePinnedClaims(input: { projectId: string; documentId?: string; narrativeCutoff?: number; povCharacterId?: string }): Promise<MemoryHit[]> {
-    const [snapshot, memories, planning] = await Promise.all([
+    const [snapshot, memories] = await Promise.all([
       this.getLatestNarrativeStateSnapshot(input.projectId, input.narrativeCutoff),
       this.getChapterMemories({ projectId: input.projectId, narrativeCutoff: input.narrativeCutoff, limit: 4 }),
-      input.documentId ? this.getChapterPlanningContext(input.projectId, input.documentId).catch(() => undefined) : Promise.resolve(undefined),
     ]);
     const hits: MemoryHit[] = [];
     const push = (claim: Omit<MemoryHit, "score" | "reason" | "semanticRank">) => hits.push({ ...claim, score: 1, reason: "pinned-narrative-state", semanticRank: 1 });
     if (snapshot) {
       const content = [
         `当前弧阶段：${snapshot.arcPhase || "未记录"}`,
-        `最近章末状态：${snapshot.chapterSummary}`,
         `角色状态：${snapshot.characterStates.map((item) => `${item.characterId}=${item.stateSnapshot}`).join("；") || "无"}`,
         `开放线索：${snapshot.openThreads.join("；") || "无"}`,
-        `开放伏笔：${snapshot.openForeshadowings.map((item) => `${item.id}:${item.description}`).join("；") || "无"}`,
-        `开放承诺：${snapshot.openPromises.map((item) => `${item.id}:${item.statement}`).join("；") || "无"}`,
         `已兑现：${snapshot.fulfilledNodes.join("；") || "无"}`,
-        `禁止提前消费：${snapshot.prohibitedEarlyConsumption.join("；") || "无"}`,
+        `禁止提前消费：${snapshot.prohibitedEarlyConsumption.filter((item) => !item.startsWith("故事弧退出状态：")).join("；") || "无"}`,
       ].join("\n");
-      push({ id: snapshot.id, projectId: input.projectId, kind: "hierarchical", title: `第${snapshot.narrativeOrder}章叙事状态账本`, content, subjectRefs: snapshot.characterStates.map((item) => item.characterId), narrativeRange: { start: snapshot.narrativeOrder, end: snapshot.narrativeOrder }, knowledgeScope: "author", authority: "derived", confidence: 1, sourceRevisionIds: [snapshot.revisionId], contentHash: snapshot.fingerprint, supersedes: [], matchedFacet: "thread", matchedFacets: ["thread", "foreshadowing", "entity", "chapter-memory"] });
+      push({ id: snapshot.id, projectId: input.projectId, kind: "hierarchical", title: `第${snapshot.narrativeOrder}章叙事状态账本`, content, subjectRefs: snapshot.characterStates.map((item) => item.characterId), narrativeRange: { start: snapshot.narrativeOrder, end: snapshot.narrativeOrder }, knowledgeScope: "author", authority: "derived", confidence: 1, sourceRevisionIds: [snapshot.revisionId], contentHash: snapshot.fingerprint, supersedes: [], matchedFacet: "thread", matchedFacets: ["thread", "entity"] });
       const povState = snapshot.characterStates.find((item) => item.characterId === input.povCharacterId);
       if (povState && input.povCharacterId) {
         push({ id: `${snapshot.id}:pov:${input.povCharacterId}`, projectId: input.projectId, kind: "working", title: `POV角色章末状态：${input.povCharacterId}`, content: povState.stateSnapshot, subjectRefs: [input.povCharacterId], narrativeRange: { start: snapshot.narrativeOrder, end: snapshot.narrativeOrder }, knowledgeScope: { characterId: input.povCharacterId }, authority: "derived", confidence: 1, sourceRevisionIds: [snapshot.revisionId], contentHash: createHash("sha256").update(`${snapshot.fingerprint}:${input.povCharacterId}:${povState.stateSnapshot}`).digest("hex"), supersedes: [], matchedFacet: "entity" });
@@ -2901,18 +3335,6 @@ export class NovelPostgresRepository {
     }
     for (const memory of memories) {
       push({ id: `pinned:${memory.id}`, projectId: input.projectId, kind: "episodic", title: `第${memory.narrativeRange.end}章定稿记忆`, content: `${memory.summary}\n关键事件：${memory.keyEvents.join("；")}\n未解线索：${memory.unresolvedThreads.join("；")}`, subjectRefs: memory.characterStates.map((item) => item.characterId), narrativeRange: memory.narrativeRange, knowledgeScope: "author", authority: "derived", confidence: 0.95, sourceRevisionIds: [memory.revisionId], contentHash: memory.fingerprint, supersedes: [], matchedFacet: "chapter-memory" });
-    }
-    if (planning) {
-      const chapter = planning.chapter;
-      const content = [
-        `故事弧：${planning.arc.title}；目标：${planning.arc.objective}；当前冲突：${planning.arc.centralConflict}`,
-        `本章：第${chapter.globalOrder}章 ${chapter.title}；功能：${chapter.chapterPurpose}；戏剧问题：${chapter.dramaticQuestion}`,
-        `状态增量预算：${chapter.stateDeltaBudget}`,
-        `连续性约束：${chapter.continuityConstraints.join("；") || "无"}`,
-        `本章可兑现：${chapter.payoffRefs.join("；") || "无"}`,
-        `邻章：${planning.neighbors.map((item) => `第${item.globalOrder}章 ${item.title}:${item.chapterPurpose}`).join("；") || "无"}`,
-      ].join("\n");
-      push({ id: `planning-context:${planning.fingerprint}`, projectId: input.projectId, kind: "working", title: "当前故事弧与章节生产规格", content, subjectRefs: chapter.povCharacterId ? [chapter.povCharacterId] : [], knowledgeScope: "author", authority: "approved", confidence: 1, sourceRevisionIds: [], contentHash: planning.fingerprint, supersedes: [], matchedFacet: "thread", matchedFacets: ["thread", "fact"] });
     }
     return hits;
   }
@@ -2941,27 +3363,86 @@ export class NovelPostgresRepository {
       macroPlanArtifacts,
       arc: row.arc_payload,
       chapter,
-      neighbors: neighborsResult.rows.map(chapterBlueprintFromRow).map(({ id, globalOrder, title, summary, chapterPurpose }) => ({ id, globalOrder, title, summary, chapterPurpose })),
+      neighbors: neighborsResult.rows.map(chapterBlueprintFromRow).map(({ id, globalOrder, title, summary, chapterPurpose, narrativeFunction, readerExperience, thematicTreatment, worldRuleRefs, characterFocus, romanceTreatment, humorTreatment }) => ({ id, globalOrder, title, summary, chapterPurpose, narrativeFunction, readerExperience, thematicTreatment, worldRuleRefs, characterFocus, romanceTreatment, humorTreatment })),
       sourceArtifactIds,
     };
     const context = { ...withoutFingerprint, fingerprint: planningContextFingerprint(withoutFingerprint) };
     if (!allowHistorical) {
       const currentArcFingerprint = createHash("sha256").update(JSON.stringify({ macro: macro.map((item) => [foundationTaskKey(item), item.id, item.fingerprint]), artifactId: row.source_artifact_id })).digest("hex");
       if (!row.context_fingerprint || currentArcFingerprint !== row.context_fingerprint) {
-        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=NULL,updated_at=now() WHERE id=$1 AND execution_status<>'completed'", [row.arc_id]);
+        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=CASE WHEN execution_status='completed' THEN approved_at ELSE NULL END,updated_at=now() WHERE id=$1", [row.arc_id]);
         throw new Error("故事弧蓝图与当前宏观规划不一致，请先重基线");
       }
       if (!row.review_artifact_id || !row.review_fingerprint) {
-        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=NULL,updated_at=now() WHERE id=$1 AND execution_status<>'completed'", [row.arc_id]);
+        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=CASE WHEN execution_status='completed' THEN approved_at ELSE NULL END,updated_at=now() WHERE id=$1", [row.arc_id]);
         throw new Error("故事弧缺少逐章审核证据，请先重新审核");
       }
       const reviewArtifact = await this.getArtifact(row.review_artifact_id);
       if (!reviewArtifact || reviewArtifact.fingerprint !== row.review_fingerprint || reviewArtifact.structuredData?.subjectArtifactId !== row.source_artifact_id) {
-        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=NULL,updated_at=now() WHERE id=$1 AND execution_status<>'completed'", [row.arc_id]);
+        await this.pool.query("UPDATE arcs SET planning_status='stale',approved_at=CASE WHEN execution_status='completed' THEN approved_at ELSE NULL END,updated_at=now() WHERE id=$1", [row.arc_id]);
         throw new Error("故事弧审核证据已失效，请先重新审核");
       }
     }
     return context;
+  }
+
+  async getNarrativeRhythmSnapshot(projectId: string, documentId: string, narrativeCutoff: number): Promise<NarrativeRhythmSnapshot | undefined> {
+    const result = await this.pool.query<{
+      document_id: string;
+      revision_id: string;
+      narrative_order: string | number;
+      title: string;
+      arc_id: string;
+      chapter_payload: Record<string, unknown>;
+      summary: string | null;
+      key_events: string[] | null;
+      emotional_arc: string | null;
+      issue_families: string[] | null;
+    }>(
+      `SELECT d.id AS document_id,d.current_revision_id AS revision_id,d.narrative_order,d.title,c.arc_id,c.payload AS chapter_payload,
+              cm.summary,cm.key_events,cm.emotional_arc,
+              COALESCE(array_agg(DISTINCT concat_ws(':',issue.dimension,issue.rule,issue.title))
+                FILTER (WHERE issue.id IS NOT NULL),'{}') AS issue_families
+       FROM chapters target
+       JOIN chapters c ON c.arc_id=target.arc_id AND c.project_id=target.project_id
+       JOIN manuscript_documents d ON d.id=c.document_id AND d.project_id=c.project_id
+       LEFT JOIN chapter_memories cm ON cm.document_id=d.id AND cm.revision_id=d.current_revision_id
+       LEFT JOIN chapter_review_snapshots review ON review.document_id=d.id AND review.revision_id=d.current_revision_id
+       LEFT JOIN chapter_review_snapshot_issues issue ON issue.snapshot_id=review.id AND issue.status<>'resolved'
+       WHERE target.project_id=$1 AND target.document_id=$2
+         AND d.status='final' AND d.current_revision_id IS NOT NULL AND d.narrative_order<=$3
+       GROUP BY d.id,d.current_revision_id,d.narrative_order,d.title,c.arc_id,c.payload,cm.summary,cm.key_events,cm.emotional_arc
+       ORDER BY d.narrative_order`,
+      [projectId, documentId, narrativeCutoff],
+    );
+    if (!result.rowCount) return undefined;
+    const chapters = result.rows.map((row) => {
+      const payload = row.chapter_payload ?? {};
+      const treatment = payload.thematicTreatment && typeof payload.thematicTreatment === "object" && !Array.isArray(payload.thematicTreatment)
+        ? payload.thematicTreatment as Record<string, unknown>
+        : undefined;
+      return {
+        documentId: row.document_id,
+        revisionId: row.revision_id,
+        narrativeOrder: Number(row.narrative_order),
+        title: row.title,
+        summary: row.summary ?? (typeof payload.summary === "string" ? payload.summary : ""),
+        keyEvents: Array.isArray(row.key_events) ? row.key_events.filter((value): value is string => typeof value === "string") : [],
+        emotionalArc: row.emotional_arc ?? (typeof payload.emotionalMovement === "string" ? payload.emotionalMovement : undefined),
+        narrativeFunction: typeof payload.narrativeFunction === "string" && CHAPTER_NARRATIVE_FUNCTIONS.includes(payload.narrativeFunction as (typeof CHAPTER_NARRATIVE_FUNCTIONS)[number])
+          ? payload.narrativeFunction as NonNullable<ChapterBlueprintRecord["narrativeFunction"]>
+          : undefined,
+        thematicMode: typeof treatment?.mode === "string" && THEME_TREATMENT_MODES.includes(treatment.mode as (typeof THEME_TREATMENT_MODES)[number])
+          ? treatment.mode as NonNullable<ChapterBlueprintRecord["thematicTreatment"]>["mode"]
+          : "subtext" as const,
+        themeCarrier: typeof treatment?.carrier === "string" && THEME_CARRIERS.includes(treatment.carrier as (typeof THEME_CARRIERS)[number])
+          ? treatment.carrier as NonNullable<ChapterBlueprintRecord["thematicTreatment"]>["carrier"]
+          : undefined,
+        issueFamilies: (row.issue_families ?? []).filter(Boolean),
+      };
+    });
+    const arcId = result.rows[0].arc_id;
+    return { arcId, chapters, fingerprint: canonicalSha256({ arcId, chapters }) };
   }
 
   async findNextPlannedArcDocument(projectId: string): Promise<ManuscriptDocumentSummary | undefined> {

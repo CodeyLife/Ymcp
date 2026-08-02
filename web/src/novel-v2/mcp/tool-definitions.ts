@@ -1,5 +1,5 @@
 /**
- * V2 MCP 工具定义：23 个工具的 inputSchema（JSON Schema draft-07）。
+ * V2 MCP 工具定义：29 个工具的 inputSchema（JSON Schema draft-07）。
  *
  * 设计依据：AGENTS.md 架构阶段和 V2 MCP 工具契约。
  *
@@ -7,12 +7,12 @@
  * - v1 含 novel_foundation_export，v2 替换为 novel_closed_loop_run（评估闭环）
  * - v2 全部基于 Postgres，inputSchema 严格校验入参
  *
- * 工具分组（23 个）：
+ * 工具分组（29 个）：
  * - Run / Action 主体（7）
  * - Catalog / Receipt（3）
  * - Craft Rule 候选演进（7）
  * - 项目生命周期（3）
- * - 一键流程（2）
+ * - 一键流程（5）
  * - 评估闭环（1，v2 新增）
  */
 import type { ToolDefinition } from "./types";
@@ -87,6 +87,26 @@ const policySchema: Record<string, unknown> = {
   additionalProperties: false,
 };
 
+const creativeBriefSchema: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    version: { type: "integer", enum: [1] },
+    targetReader: { type: "string" },
+    corePromise: { type: "string" },
+    themeQuestion: { anyOf: [{ type: "string" }, { type: "object", additionalProperties: false, required: ["notApplicable", "rationale"], properties: { notApplicable: { const: true }, rationale: { type: "string", minLength: 1 } } }] },
+    protagonistNeed: { type: "string" },
+    protagonistContradiction: { type: "string" },
+    centralOpposition: { type: "string" },
+    emotionalContract: { anyOf: [{ type: "string" }, { type: "object", additionalProperties: false, required: ["notApplicable", "rationale"], properties: { notApplicable: { const: true }, rationale: { type: "string", minLength: 1 } } }] },
+    worldAnchor: { type: "string" },
+    researchNeeds: { type: "array", items: { type: "string" } },
+    nonNegotiables: { type: "array", items: { type: "string" } },
+    endingEnvelope: { type: "string" },
+    stylePreferences: { type: "string" },
+  },
+};
+
 // ===== 工具名常量 =====
 
 export const TOOL_NAMES = [
@@ -125,6 +145,8 @@ export const TOOL_NAMES = [
   // Workflow 查询（2，新增）
   "novel_workflow_get",
   "novel_workflow_list",
+  // Workflow 决策（1，新增）
+  "novel_chapter_review_decision",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -440,13 +462,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         premise: { type: "string", minLength: 1, description: "一句话创意/故事梗概(必填,作为创作核心)" },
         title: { type: "string", description: "可选,项目标题。未提供则从 premise 自动派生(取第一句前 24 字)" },
         genre: { type: "string", description: "可选,题材标签(如 玄幻/都市/言情/科幻/悬疑),用于 resolveSkillBundle 匹配 applicableGenres" },
+        creativeBrief: { ...creativeBriefSchema, description: "可选,创作简报种子。用于明确读者承诺、人物核心、主题、研究与结局边界" },
         autoBootstrap: { type: "boolean", description: "是否自动启动全书规划,默认 true" },
         includeChapterPlan: { type: "boolean", description: "兼容旧客户端，当前已忽略；宏观规划不再生成固定章节表" },
         objective: { type: "string", description: "可选,bootstrap 目标。未提供则用 premise 作为 objective" },
         reviewGate: {
           type: "string",
           enum: ["manual", "auto", "none"],
-          description: "可选,foundation 10 阶段审核门禁。none=无门禁(默认,生成即接受);manual=每阶段生成后暂停,等待人工审核(reviewer=human 且 verdict=passed 才通过,期间可用 review.submit 提交独立审核 + work.revise 修订);auto=按最新 review 与 openIssues/score 自动判定(需先有 review)。架构阶段推荐 manual,由外部 LLM 逐阶段审核。",
+          description: "可选,foundation 10 阶段审核门禁。manual=质量优先，生成后等待人工或独立审核；auto=按专属 foundation review 与 openIssues/score 自动判定；none=仅测试/调试使用，跳过质量门。未提供时默认 manual。",
         },
         progression: {
           type: "string",
@@ -497,7 +520,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         reviewGate: {
           type: "string",
           enum: ["manual", "auto", "none"],
-          description: "可选,foundation 10 阶段审核门禁。none=无门禁(默认,生成即接受);manual=每阶段生成后暂停,等待人工审核(reviewer=human 且 verdict=passed 才通过,期间可用 review.submit 提交独立审核 + work.revise 修订);auto=按最新 review 与 openIssues/score 自动判定。架构阶段推荐 manual,由外部 LLM 逐阶段审核。",
+          description: "可选,foundation 10 阶段审核门禁。manual=质量优先，生成后等待人工或独立审核；auto=按专属 foundation review 与 openIssues/score 自动判定；none=仅测试/调试使用。未提供时默认 manual。",
         },
         progression: {
           type: "string",
@@ -599,6 +622,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         workflowType: { type: "string", description: "可选。常见值: novel-intent(章节生成)、chapter-review(章节审校)、story-arc-planning(故事弧规划)" },
       },
       required: ["projectId"],
+      additionalProperties: false,
+    },
+  },
+
+  // ===== Workflow 决策（1，新增）=====
+
+  {
+    name: "novel_chapter_review_decision",
+    description: "向 chapter-review 工作流提交人工决策（approve/revise/reject/abandon），解除 manual-review-required 阻塞。工作流必须在 manual-review-required 状态，artifactId 来自 workflow payload 的 artifactId 字段。approve 需 interactive-web 来源且覆盖严重审校问题时须提供 feedback。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workflowId: { type: "string", minLength: 1, description: "Temporal workflow ID（来自 novel_chapter_review / novel_chapter_generate 的返回值）" },
+        artifactId: { type: "string", minLength: 1, description: "候选稿 artifact ID（来自 workflow payload 的 artifactId 字段）" },
+        decision: { type: "string", enum: ["approve", "revise", "reject", "abandon"], description: "approve=定稿提交(需 interactive-web)、revise=按审核意见继续修订、reject=拒绝并保留原稿、abandon=放弃本轮修订" },
+        feedback: { type: "string", description: "作者判断理由。approve 覆盖严重审校问题时必填；revise 时作为补充修订指令" },
+        revisionBase: { type: "string", enum: ["current", "previous"], description: "revise 时选择修订基础：current=从当前候选稿修订、previous=从修订前原稿修订" },
+      },
+      required: ["workflowId", "artifactId", "decision"],
       additionalProperties: false,
     },
   },

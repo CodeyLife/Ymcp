@@ -67,6 +67,8 @@ export interface PreflightPlan {
   taskClass: "foundation" | "planning" | "drafting" | "review" | "revision" | "memory-maintenance";
   stage: NovelStage;
   targetDocumentId?: string;
+  /** Existing committed revision being replaced by a fresh draft. */
+  replacementRevisionId?: string;
   narrativeCutoff?: number;
   povCharacterId?: string;
   facets: RetrievalFacet[];
@@ -139,6 +141,27 @@ export interface MemorySelectionReceipt {
   sourceRevisionIds: string[];
 }
 
+export interface NarrativeRhythmEntry {
+  documentId: string;
+  /** Current committed revision represented by this rhythm entry. */
+  revisionId?: string;
+  narrativeOrder: number;
+  title: string;
+  summary: string;
+  keyEvents: string[];
+  emotionalArc?: string;
+  narrativeFunction?: import("./application/story-arc").ChapterNarrativeFunction;
+  thematicMode?: import("./application/story-arc").ThemeTreatmentMode;
+  themeCarrier?: import("./application/story-arc").ThemeCarrier;
+  issueFamilies: string[];
+}
+
+export interface NarrativeRhythmSnapshot {
+  arcId?: string;
+  chapters: NarrativeRhythmEntry[];
+  fingerprint: string;
+}
+
 export interface MemoryBundle {
   id: string;
   projectId: string;
@@ -151,6 +174,8 @@ export interface MemoryBundle {
   narrativeCutoff?: number;
   /** Optional for historical persisted bundles created before selection receipts existed. */
   selectionReceipts?: MemorySelectionReceipt[];
+  /** Frozen prior-chapter rhythm for drafting/review; derived from committed chapter memories and approved blueprints. */
+  narrativeRhythm?: NarrativeRhythmSnapshot;
   fingerprint: string;
   createdAt: number;
 }
@@ -414,18 +439,20 @@ export interface ExecutionBlueprint {
  * artifacts 但未被章节生成消费,导致章节生成不基于全书规划。此清单是章节生成的前置硬约束:
  * 缺失任何一项,novel_chapter_generate handler 与 novelIntentWorkflow 均拒绝启动章节生成。
  *
- * 选择这 4 个 taskKey 的理由(对应全书规划的核心维度):
+ * 选择这 5 个 taskKey 的理由(对应全书规划的核心方向):
+ * - project-positioning:读者承诺、主题问题与主角核心矛盾是后续所有规划的解释边界
  * - architecture:叙事结构/章节布局,章节生成必须知道章节在全书中的位置
  * - characters:人物档案/动机,章节生成必须知道人物声部与动机
  * - worldview:世界观规则,章节生成必须遵守设定约束
  * - plot-design:长程叙事战略,章节生成前必须有全书方向、终局边界与提前消费护栏
  * - 单章直接蓝图由当前已批准 NarrativeArc 的 ChapterBlueprint 提供
  *
- * 其余 taskKey(project-positioning/relations/plot-threads/foreshadowing/timeline/story-control)
+ * 其余 taskKey(relations/plot-threads/foreshadowing/timeline/story-control)
  * 不在必填清单:它们是重要参考但非阻塞——例如 foreshadowing 可能在章节生成过程中逐步建立,
  * timeline 可由滚动故事弧与已定稿状态继续校准。它们仍会作为软参考注入,只是不阻塞章节生成启动。
  */
 export const REQUIRED_FOUNDATION_TASK_KEYS = [
+  "project-positioning",
   "architecture",
   "characters",
   "worldview",
@@ -511,6 +538,8 @@ export interface PreflightProjectSnapshot {
   currentRevision: number;
   targetDocumentId?: string;
   targetDocumentOrder?: number;
+  targetDocumentStatus?: "planned" | "draft" | "review" | "final";
+  targetDocumentRevisionId?: string;
   povCharacterId?: string;
   /**
    * Phase 3.3 题材与前提（可选）。

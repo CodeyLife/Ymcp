@@ -13,8 +13,9 @@
 /**
  * 审核 issue 维度枚举。
  *
- * 前 8 维度是"单章可读性"维度（v1 继承）；后 4 维度是"长篇文学质量"维度
- * （对照 docs/novel-v2/quality-standard.md 的 D1/D3/D4/D5）。
+ * 前 8 维度是"单章可读性"维度（v1 继承）；后 6 维度是长篇质量辅助维度，
+ * 其中 worldbuilding/ensemble/romance/humor 对应 quality-standard.md 的 D1/D3/D4/D5，
+ * subtext/narrativePacing 用于主题显隐与长篇节奏。
  *
  * 设计依据：AGENTS.md「Fix the problem at the lowest shared layer」+ pipeline-audit.md F9
  * ——REVIEW_DIMENSIONS 是全流程审核的共享契约层，原 8 维度完全不覆盖世界观/群像/感情线/幽默，
@@ -41,6 +42,8 @@ export const REVIEW_DIMENSIONS = [
   "ensemble",
   "romance",
   "humor",
+  "subtext",
+  "narrativePacing",
 ] as const;
 
 export type ReviewDimension = (typeof REVIEW_DIMENSIONS)[number];
@@ -69,7 +72,7 @@ export const reviewerSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion", "rewriteExample"],
+        required: ["dimension", "severity", "title", "description", "excerpt", "revisionRanges", "rule", "suggestion", "rewriteExample"],
         properties: {
           dimension: { enum: REVIEW_DIMENSIONS },
           severity: { enum: ["blocker", "major", "warning"] },
@@ -118,7 +121,7 @@ export function reviewerSchemaForDimensions(dimensions: readonly ReviewDimension
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["dimension", "severity", "title", "description", "revisionRanges", "rule", "suggestion", "rewriteExample"],
+          required: ["dimension", "severity", "title", "description", "excerpt", "revisionRanges", "rule", "suggestion", "rewriteExample"],
           properties: {
             dimension: { enum: allowed },
             severity: { enum: ["blocker", "major", "warning"] },
@@ -559,7 +562,7 @@ export const chapterStateDeltaSchema = {
 } as const;
 
 /**
- * 章节反思维度枚举：8 维度，与 reviewerSchema 的 REVIEW_DIMENSIONS 区分。
+ * 章节反思维度枚举：14 维度，与 reviewerSchema 的 REVIEW_DIMENSIONS 区分。
  *
  * reflection 关注「读者体验层面的直觉批评」，维度是读者感受维度（节奏/情感/悬念/...），
  * 而非 reviewer 的技术维度（plot/characterVoice/...）。两者互补：reflection 做前置自检，
@@ -574,6 +577,12 @@ export const REFLECTION_DIMENSIONS = [
   "trope",
   "language",
   "blueprint",
+  "subtext",
+  "narrativePacing",
+  "worldbuilding",
+  "ensemble",
+  "romance",
+  "humor",
 ] as const;
 
 export type ReflectionDimension = (typeof REFLECTION_DIMENSIONS)[number];
@@ -586,7 +595,7 @@ export type ReflectionDimension = (typeof REFLECTION_DIMENSIONS)[number];
  * reviewerSchema 不一致（缺 dimension/rule/revisionRanges/rewriteExample），导致
  * reflection→revision 复用链用 suggestion 顶替 rewriteExample、rule 固定
  * "reflection-critique"，revise 阶段"按 issue.rule 命中 skill"机制失效。
- * 现对齐 reviewerSchema 字段集，但保留 reflection 特有的 8 维度枚举。
+ * 现对齐 reviewerSchema 字段集，但保留 reflection 特有的 14 维度枚举。
  *
  * 与 reviewerSchema 的区别：
  * - reviewerSchema 用于正式 5 reviewer 审核（产生 commit 证据），dimension 用 REVIEW_DIMENSIONS

@@ -20,7 +20,7 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { NovelPostgresRepository } from "../postgres-repository";
-import { evaluateReviewGate } from "../creative/review-gate";
+import { evaluateReviewGate, hasPassedIndependentReviewForArtifact } from "../creative/review-gate";
 import {
   createCreativeRun,
   getCreativeRun,
@@ -101,6 +101,16 @@ describe("evaluateReviewGate pure function", () => {
     expect(result.passed).toBe(false);
   });
 
+  it("auto gate ignores a passed review for a superseded artifact", () => {
+    const result = evaluateReviewGate(
+      [makeReview({ subjectArtifactId: "old-artifact", verdict: "passed" })],
+      basePolicy,
+      "current-artifact",
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain("no reviews");
+  });
+
   // 修复:外部 LLM(independent)审核必须能驱动 manual gate 放行。
   // 根因:此前 manual 分支仅认 reviewer==="human",导致 independent verdict=passed 被无视,
   // 触发 reviseWork 重生——"架构 10 阶段外部 LLM 审核无法放行"的底层机制。
@@ -121,6 +131,18 @@ describe("evaluateReviewGate pure function", () => {
     );
     expect(result.passed).toBe(false);
     expect(result.reason).toContain("manual gate");
+  });
+
+  it("Foundation author sign-off cannot replace a missing independent review", () => {
+    expect(hasPassedIndependentReviewForArtifact([makeReview({ reviewer: "human", verdict: "passed" })], "a-1")).toBe(false);
+    expect(hasPassedIndependentReviewForArtifact([makeReview({ reviewer: "independent", verdict: "revise" })], "a-1")).toBe(false);
+    expect(hasPassedIndependentReviewForArtifact([makeReview({ reviewer: "independent", verdict: "passed" })], "a-1")).toBe(true);
+  });
+
+  it("Foundation author sign-off follows the latest independent verdict", () => {
+    const passed = makeReview({ reviewer: "independent", verdict: "passed", createdAt: 1 });
+    const revised = makeReview({ reviewer: "independent", verdict: "revise", createdAt: 2 });
+    expect(hasPassedIndependentReviewForArtifact([passed, revised], "a-1")).toBe(false);
   });
 
   it("auto gate + no reviews → passed=false, reason contains 'no reviews'", () => {

@@ -24,6 +24,8 @@
  *
  * AGENTS.md 合规：guidance 描述通用维度，不识别特定题材/作品/角色。
  */
+import { creativeBriefPrompt, type CreativeBriefSeed } from "../application/creative-brief";
+
 const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; structuredDataHint: string; priority: { required: string[]; optional: string[] }; lengthHint: string }> = {
   "project-positioning": {
     dimension: "确立全书的题材定位、目标读者与核心卖点，为后续所有架构决策提供基线。",
@@ -34,10 +36,12 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "基调与情绪曲线：整体情绪走向（如先抑后扬、悲壮、诙谐）",
       "差异化策略：与同类作品相比，本作品在哪些维度上做了不同选择",
       "核心冲突预设：贯穿全书的核心矛盾（不展开具体事件）",
+      "创作简报承接：明确 corePromise、protagonistNeed、centralOpposition 与 emotionalContract；未知项必须标记为待作者确认，不得默认为已确定",
+      "活跃压力源预设：故事开篇即对主角施加压力的具体外部力量（追杀者/时间限制/资源争夺/社会地位威胁/道德困境/关系危机等），而非只规划宏观冲突。宏观冲突是全书矛盾，活跃压力源是开篇就在推动主角行动的具体力量——主角从第一章就面临「如果不做X就会Y」的处境",
     ],
-    structuredDataHint: "positioning: { bookTitle: string, namingRationale: string, sellingPoints: string[], targetReader: {...}, tone: string, differentiation: string[], coreConflict: string }",
-    priority: { required: ["bookTitle", "sellingPoints", "targetReader", "coreConflict"], optional: ["namingRationale", "tone", "differentiation"] },
-    lengthHint: "summary 200-400 字；sellingPoints 不超过 3 条；targetReader 一段话概括",
+    structuredDataHint: "positioning: { bookTitle: string, namingRationale: string, sellingPoints: string[], targetReader: {...}, tone: string, differentiation: string[], coreConflict: string, activePressureSource: string, corePromise: string, themeQuestion: string|{notApplicable: true, rationale: string}, protagonistNeed: string, protagonistContradiction: string, centralOpposition: string, emotionalContract: string }",
+    priority: { required: ["bookTitle", "sellingPoints", "targetReader", "coreConflict", "activePressureSource"], optional: ["namingRationale", "tone", "differentiation"] },
+    lengthHint: "summary 200-400 字；sellingPoints 不超过 3 条；targetReader 一段话概括；activePressureSource 50-100 字描述具体力量及其对主角的即时威胁",
   },
   architecture: {
     dimension: "设计全书的叙事结构与章节布局，确定故事的骨架。",
@@ -56,13 +60,13 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
     dimension: "设计主要人物档案，每个人物需有清晰的动机、秘密与成长弧。",
     focus: [
       "主角：身份、外貌、性格、核心动机、隐藏秘密、成长弧起点与终点",
-      "重要配角（3-7人）：与主角的关系、各自动机、在故事中的功能",
+      "重要配角（3-7人）：各自的欲望、恐惧、与主角不一致的独立行动、选择代价和变化方向，不得只写在故事中的功能",
       "反派/对立面：动机层次（不写成纯粹的恶）、与主角的冲突维度",
-      "人物声部锚点：每个主要人物的说话方式差异（句长、用词、直接度）",
+      "人物声部锚点：每个主要人物的说话方式差异（句长、用词、直接度、回避方式），并说明该声部如何服务人物处境",
       "人物网络：谁与谁有羁绊、谁与谁有冲突（为 relations task 预留）",
     ],
-    structuredDataHint: "characters: [{id, name, alias, role, faction, motivation, secret, voiceAnchor: {...}, arc: {start, end}}]",
-    priority: { required: ["id", "name", "role", "motivation", "arc"], optional: ["alias", "faction", "secret", "voiceAnchor"] },
+    structuredDataHint: "characters: [{id, name, alias, role, faction, motivation, fear, secret, voiceAnchor: {sentenceLength, vocabulary, directness, avoidance}, arc: {start, end}, independentAction: {desire, choice, cost}}]",
+    priority: { required: ["id", "name", "role", "motivation", "fear", "voiceAnchor", "arc", "independentAction"], optional: ["alias", "faction", "secret"] },
     lengthHint: "主角档案 250-400 字；重要配角 100-200 字/人；反派 150-300 字",
   },
   relations: {
@@ -74,8 +78,8 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "关系三角/多角：识别关键的关系结构（如三角恋、权力三角）",
       "关系网络中心：哪些人物是关系网络的枢纽",
     ],
-    structuredDataHint: "relations: [{from, to, type, strength, evolution: {from, to, trigger}}]",
-    priority: { required: ["from", "to", "type", "strength"], optional: ["evolution"] },
+    structuredDataHint: "relations: [{from, to, type, strength, evolution: {from, to, trigger}, choiceConsequence}]",
+    priority: { required: ["from", "to", "type", "strength", "evolution", "choiceConsequence"], optional: [] },
     lengthHint: "summary 200-400 字；每对关系 30-60 字",
   },
   worldview: {
@@ -87,20 +91,20 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
       "规则与禁忌：世界观内的法则（武功体系/科技水平/魔法规则等）与禁忌",
       "外忧内患：外部威胁与内部矛盾的具体形态",
     ],
-    structuredDataHint: "worldview: { geography: {...}, politics: {...}, factions: [{name, interest, relation}], rules: [...], threats: {external: [...], internal: [...]} }",
+    structuredDataHint: "worldview: { geography: {...}, politics: {...}, factions: [{name, interest, relation}], rules: [{statement, cost, boundary}], threats: {external: [...], internal: [...]} }",
     priority: { required: ["geography", "politics", "factions", "rules"], optional: ["threats"] },
     lengthHint: "summary 300-600 字；每势力 50-100 字；rules 3-7 条",
   },
   "plot-threads": {
     dimension: "设计主线与支线剧情，确保多线交织但不混乱。",
     focus: [
-      "主线：贯穿全书的核心剧情（一句话概括 + 三段式起承转合）",
+      "主线：贯穿全书的核心剧情（一句话概括 + 三段式起承转合）。三段式的第一段（起）必须有活跃的外部驱动力推动主角行动，而非主角被动观察或仅凭好奇心探索。起段的外部驱动力应与 project-positioning 的 activePressureSource 呼应",
       "支线（3-5条）：每条支线的主题、与主线的交汇点、独立价值",
       "情感线：主要人物的情感发展轨迹（多女主感情线需明确每个女主的线）",
       "权力线：势力博弈的剧情线（朝堂/江湖/外忧）",
       "线交织规则：支线如何切入主线、何时回收，避免支线失控",
     ],
-    structuredDataHint: "plotThreads: { main: {summary, threeAct: {...}}, subplots: [{id, theme, intersection, value}], emotionalLines: [...], powerLines: [...] }",
+    structuredDataHint: "plotThreads: { main: {summary, threeAct: {act1: {summary, activeDriver}, act2: {...}, act3: {...}}}, subplots: [{id, theme, intersection, value}], emotionalLines: [...], powerLines: [...] }",
     priority: { required: ["main", "subplots"], optional: ["emotionalLines", "powerLines"] },
     lengthHint: "summary 300-500 字；主线 threeAct 三段各 50-100 字；每支线 50-100 字",
   },
@@ -172,6 +176,19 @@ const TASK_KEY_GUIDANCE: Record<string, { dimension: string; focus: string[]; st
   },
 };
 
+const STRUCTURED_DATA_ROOTS: Record<string, string> = {
+  "project-positioning": "positioning",
+  architecture: "architecture",
+  characters: "characters",
+  worldview: "worldview",
+  relations: "relations",
+  "plot-threads": "plotThreads",
+  foreshadowing: "foreshadowings",
+  timeline: "timeline",
+  "story-control": "storyControl",
+  "plot-design": "plotStrategy",
+};
+
 /**
  * 构建 foundation 生成提示词。
  *
@@ -205,6 +222,7 @@ export function buildFoundationPrompt(input: {
   objective?: string;
   priorArtifacts: Array<{ taskKey: string; title: string; summary: string }>;
   skills?: Array<{ skillId: string; promptSections: Partial<Record<string, string>> }>;
+  creativeBrief?: CreativeBriefSeed;
 }): string {
   const guidance = TASK_KEY_GUIDANCE[input.taskKey];
   const taskKeyLabel = guidance ? input.taskKey : "通用架构产出";
@@ -260,6 +278,9 @@ export function buildFoundationPrompt(input: {
   if (input.premise) lines.push(`- 设定前提：${input.premise}`);
   if (input.objective) lines.push(`- 创作目标：${input.objective}`);
   lines.push(`- 当前指令：${input.instruction}`);
+  lines.push("\n## 创作简报种子");
+  lines.push(creativeBriefPrompt(input.creativeBrief));
+  lines.push("简报是作者意图的输入，不是替代正文的主题结论；必须在定位产出中区分已确认决策、推导判断和待作者确认项。");
   lines.push("");
 
   if (input.priorArtifacts.length > 0) {
@@ -280,6 +301,8 @@ export function buildFoundationPrompt(input: {
   lines.push("- summary：200-800字摘要，概括核心决策与设计意图");
   lines.push("- sections：人类可读的分节内容，每节含 heading + content + 可选 items");
   lines.push("- structuredData：可机读的结构化数据，便于后续 task 引用；必须覆盖当前 taskKey 的 required 字段，optional 字段在无内容时省略而非填空字符串占位");
+  const dataRoot = STRUCTURED_DATA_ROOTS[input.taskKey];
+  if (dataRoot) lines.push(`- structuredData 顶层必须包含 "${dataRoot}" 数据容器；required 字段写在该容器内，不要把它们平铺到 structuredData 根级`);
   lines.push("- 所有决策需有内在逻辑一致性，与前序产出不冲突");
   lines.push("");
 
@@ -298,7 +321,9 @@ export function buildFoundationPrompt(input: {
           name: "（角色名，正文中可指认）",
           role: "protagonist",
           motivation: "（核心动机：一句话概括角色最深的欲求，驱动全书行动）",
+          fear: "（核心恐惧：角色最害怕失去或面对的东西）",
           arc: { start: "（起点状态：角色开篇的认知/处境/情感）", end: "（终点状态：角色最终的转变）" },
+          independentAction: { desire: "（不依赖主角的自身欲望）", choice: "（会主动做出的选择）", cost: "（选择承担的代价）" },
           alias: "（可选：别名/称号，无则省略该字段）",
           voiceAnchor: { sentenceLength: "（句长特征）", vocabulary: "（词汇特征）", directness: "（直率度）", avoidance: "（回避方式）" },
         },
@@ -306,7 +331,7 @@ export function buildFoundationPrompt(input: {
     }, null, 2));
     lines.push("```");
     lines.push("");
-    lines.push("注意：voiceAnchor 是 optional 字段，若该角色本章无声部表现可省略；但 id/name/role/motivation/arc 是 required，必须覆盖。");
+    lines.push("注意：人物档案必须覆盖 id/name/role/motivation/fear/voiceAnchor/arc/independentAction；没有声部或独立行动依据时，应标记待作者确认，而不是省略关键字段。");
     lines.push("");
   }
 

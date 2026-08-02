@@ -23,6 +23,8 @@ import { randomUUID } from "node:crypto";
 import type { CreativeWorkItem, CreativeWorkKind, CreativeWorkStatus } from "../protocol";
 import type { NovelPostgresRepository } from "../postgres-repository";
 import { getCreativeRun, updateRunStatusFromWork } from "./run-manager";
+import { hasPassedIndependentReviewForArtifact, listReviews } from "./review-gate";
+import { requiresFoundationAuthorConfirmation } from "../application/project-plan";
 
 // ===== 行类型映射 =====
 
@@ -211,6 +213,22 @@ export async function startWork(
     }
   }
 
+  // Foundation DAG dependencies are not considered authorically complete until the
+  // upstream project-plan sections are approved. This closes the direct command path
+  // as well as the Temporal pending-list path.
+  if (before.parameters.bootstrap === true && before.dependsOn.length > 0) {
+    const run = await getCreativeRun(repository, before.runId);
+    if (run && run.policy.reviewGate !== "none") {
+      const [dependencyTasks, sections] = await Promise.all([
+        repository.pool.query<{ task_key: string | null }>("SELECT task_key FROM creative_work_items WHERE id = ANY($1::text[])", [before.dependsOn]),
+        repository.listProjectPlanSections(run.projectId),
+      ]);
+      const approved = new Set<string>(sections.filter((section) => section.status === "approved").map((section) => section.taskKey));
+      const unapproved = dependencyTasks.rows.map((row) => row.task_key).filter((taskKey): taskKey is string => Boolean(taskKey)).filter((taskKey) => !approved.has(taskKey));
+      if (unapproved.length) throw new Error(`Foundation 上游规划尚未作者确认：${unapproved.join(", ")}`);
+    }
+  }
+
   const result = await repository.pool.query<WorkItemRow>(
     `UPDATE creative_work_items SET status = 'running', updated_at = now()
      WHERE id = $1 AND status = 'pending'
@@ -240,11 +258,23 @@ export async function acceptWork(
 ): Promise<CreativeWorkItem> {
   const before = await getWorkItem(repository, workItemId);
   if (!before) throw new Error(`CreativeWorkItem 不存在：${workItemId}`);
-  // 幂等：已 accepted 的 work item 直接返回，不重复写事件。
-  // 场景：外部 work.accept 命令已将状态改为 accepted，
-  // workflow 从 manual gate 唤醒后再次调 acceptWork 不会崩溃。
+  // 幂等：已 accepted 的 work item 直接返回，不重新要求当前 section 状态。
   if (before.status === "accepted") {
     return before;
+  }
+  if (before.parameters.bootstrap === true && requiresFoundationAuthorConfirmation(before.taskKey)) {
+    const run = await getCreativeRun(repository, before.runId);
+    if (run && run.policy.reviewGate !== "none") {
+      const currentArtifactId = before.artifactRefs.at(-1);
+      const reviews = currentArtifactId ? await listReviews(repository, before.id) : [];
+      if (!currentArtifactId || !hasPassedIndependentReviewForArtifact(reviews, currentArtifactId)) {
+        throw new Error(`Foundation 阶段 ${before.taskKey} 必须先通过当前 artifact 的专属 independent 审核`);
+      }
+      const section = await repository.getProjectPlanSection(run.projectId, before.taskKey as import("../application/project-plan").ProjectPlanTaskKey);
+      if (section?.status !== "approved" || section.sourceArtifactId !== currentArtifactId) {
+        throw new Error(`Foundation 阶段 ${before.taskKey} 必须先完成当前 artifact 的作者确认`);
+      }
+    }
   }
   if (before.status !== "running") {
     throw new Error(`CreativeWorkItem 状态非法，无法接受（当前状态：${before.status}，要求 running）`);

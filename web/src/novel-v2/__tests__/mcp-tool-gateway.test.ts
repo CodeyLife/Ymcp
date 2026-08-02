@@ -37,12 +37,12 @@ const mockCtx = {
 // ===== A. 纯函数：validateToolArgs（无 Postgres 依赖）=====
 
 describe("validateToolArgs pure function", () => {
-  it("TOOL_NAMES has exactly 28 tools", () => {
-    expect(TOOL_NAMES).toHaveLength(28);
+  it("TOOL_NAMES has exactly 29 tools", () => {
+    expect(TOOL_NAMES).toHaveLength(29);
   });
 
-  it("TOOL_DEFINITIONS has 28 defs, each with name/description/inputSchema", () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(28);
+  it("TOOL_DEFINITIONS has 29 defs, each with name/description/inputSchema", () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(29);
     for (const def of TOOL_DEFINITIONS) {
       expect(typeof def.name).toBe("string");
       expect(def.name.length).toBeGreaterThan(0);
@@ -87,6 +87,39 @@ describe("validateToolArgs pure function", () => {
         idempotencyKey: "k-1",
       });
       expect(result.valid).toBe(true);
+    });
+
+    it("accepts an optional versioned creative brief", () => {
+      const result = validateToolArgs("novel_project_create", {
+        premise: "一位失忆法医追查旧案",
+        idempotencyKey: "k-brief",
+        creativeBrief: {
+          targetReader: "悬疑读者",
+          corePromise: "真相会改变关系",
+          themeQuestion: { notApplicable: true, rationale: "本作不直接回答价值问题" },
+          researchNeeds: ["法医流程"],
+          nonNegotiables: ["不提前揭示结局"],
+        },
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects a known creative brief field with the wrong type", () => {
+      const result = validateToolArgs("novel_project_create", {
+        premise: "一位失忆法医追查旧案",
+        idempotencyKey: "k-bad-brief-type",
+        creativeBrief: { targetReader: 3 },
+      });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects a non-object creative brief at schema validation", () => {
+      const result = validateToolArgs("novel_project_create", {
+        premise: "一位失忆法医追查旧案",
+        idempotencyKey: "k-bad-brief",
+        creativeBrief: "not-an-object",
+      });
+      expect(result.valid).toBe(false);
     });
 
     it("missing premise → valid=false", () => {

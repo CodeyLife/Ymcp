@@ -1,7 +1,7 @@
 import type { Artifact, ExecutionBlueprint, MemoryBundle } from "../protocol";
 import { matchedFacetsOf } from "../cognition";
 import type { ChapterPlanningContext } from "../application/story-arc";
-import { renderChapterPlanningContext } from "./chapter-planning-context";
+import { renderChapterPlanningContext, renderNarrativeRhythm } from "./chapter-planning-context";
 import { buildBlueprintSummary } from "./chapter-review";
 
 /**
@@ -18,7 +18,7 @@ import { buildBlueprintSummary } from "./chapter-review";
  * 与 chapter-review.ts buildChapterReviewPrompt 的区别：
  * - chapter-review 是正式 5 reviewer 审核（产生 commit 证据），dimension 用 REVIEW_DIMENSIONS
  * - chapter-reflection 是 draft 后的前置自我反思（不产生 commit 证据，只优化 draft），dimension 用 REFLECTION_DIMENSIONS
- * - reflection 关注「读者体验层面的直觉批评」，8 维度是读者感受维度
+ * - reflection 关注「读者体验层面的直觉批评」，14 维度覆盖读者感受 + 文学质量（D1/D3/D4/D5）
  *
  * 与 chapter-draft.ts WRITER_GENERATION_SELF_CHECK 的区别：
  * - WRITER_GENERATION_SELF_CHECK 是草稿生成时的内嵌自检（同一次 LLM 调用内）
@@ -34,10 +34,13 @@ export interface ReflectionPromptInput {
 }
 
 /**
- * 8 维度判定锚点（与 REFLECTION_DIMENSIONS 枚举对齐）。
+ * 14 维度判定锚点（与 REFLECTION_DIMENSIONS 枚举对齐）。
  *
  * 设计依据：AGENTS.md「Prompt examples are illustrative, not normative」——
  * 锚点描述通用判定标准，不嵌入题材/类型/角色 fixture。
+ * 维度覆盖：读者体验（pace/emotion/suspense/dialogue/density/trope/language/blueprint）
+ * + 主题显隐（subtext/narrativePacing）
+ * + 文学质量 D1/D3/D4/D5（worldbuilding/ensemble/romance/humor）。
  */
 const REFLECTION_DIMENSION_ANCHORS: Array<{ dimension: string; name: string; anchor: string }> = [
   { dimension: "pace", name: "节奏与拖沓", anchor: "段落是否推进缓慢、读者会跳读？是否有冗余铺垫？" },
@@ -48,6 +51,12 @@ const REFLECTION_DIMENSION_ANCHORS: Array<{ dimension: string; name: string; anc
   { dimension: "trope", name: "套路与刻板", anchor: "是否有明显套路化描写？是否有刻板印象？" },
   { dimension: "language", name: "语言与质感", anchor: "是否有 AI 味浓重的句式（排比、过度比喻、空洞抒情）？" },
   { dimension: "blueprint", name: "蓝图执行", anchor: "草稿是否偏离本章应有的功能（章节功能/章尾驱动力见蓝图摘要）？" },
+  { dimension: "subtext", name: "主题显隐与潜台词", anchor: "正文是否越过 thematicTreatment 权限，用总结、说教、传声筒或能力说明替读者宣布主题？foreground 争执是否仍来自具体处境？" },
+  { dimension: "narrativePacing", name: "叙事过程与铺陈", anchor: "关键过程是否真正发生并获得相称篇幅？是否用分析、设定说明或结论跳过人物接触、选择、反应与后果？" },
+  { dimension: "worldbuilding", name: "世界观一致性", anchor: "正文是否违反已建立的世界规则？设定细节是否前后矛盾？本章是否体现了世界观的独特质感？" },
+  { dimension: "ensemble", name: "群像深度", anchor: "配角是否有独立欲望和选择？是否只是工具人？配角之间的互动是否通过可观察行为展示？" },
+  { dimension: "romance", name: "感情线结构", anchor: "感情发展是否有行动承载？是否过于直白或缺乏阶段感？人物关系变化是否有不可逆性？" },
+  { dimension: "humor", name: "幽默调节", anchor: "是否有适合题材的幽默调节？严肃段落是否过于密集导致阅读疲劳？幽默是否自然不刻意？" },
 ];
 
 /**
@@ -56,7 +65,7 @@ const REFLECTION_DIMENSION_ANCHORS: Array<{ dimension: string; name: string; anc
  * prompt 结构：
  * 1. 角色：严苛读者 + 资深网文编辑
  * 2. 任务：审视草稿，找出会让读者出戏、弃书、感觉平淡的问题
- * 3. 评判维度与锚点（8 维度，按草稿实际选择相关维度）
+ * 3. 评判维度与锚点（14 维度，按草稿实际选择相关维度）
  * 4. 蓝图摘要（公共函数，含章节功能/章尾驱动力）
  * 5. 草稿正文
  * 6. 输出要求：符合 reflectionSchema 的 JSON（含完整 issue 正例 + 空 issues 合法形态）
@@ -88,7 +97,11 @@ ${dimensionLines}
 
 ${blueprintDigest}
 
-${input.planningContext ? renderChapterPlanningContext(input.planningContext) : "# 冻结章节规划上下文\n\n（历史章节无规划快照。）"}
+${input.planningContext ? renderChapterPlanningContext(input.planningContext, { includeMacro: false }) : "# 冻结章节规划上下文\n\n（历史章节无规划快照；主题模式按 subtext 兼容。）"}
+
+# 连续章节叙事节奏
+
+${renderNarrativeRhythm(input.memory.narrativeRhythm)}
 
 # 上下文约束
 
@@ -104,7 +117,7 @@ ${input.text}
 
 ## issue 字段说明
 
-- dimension：上述 8 维度之一（pace/emotion/suspense/dialogue/density/trope/language/blueprint）
+- dimension：上述 14 维度之一（pace/emotion/suspense/dialogue/density/trope/language/blueprint/subtext/narrativePacing/worldbuilding/ensemble/romance/humor）
 - severity：blocker / major / warning
 - title：问题标题
 - description：问题具体描述，必须引用草稿原文片段佐证

@@ -9,6 +9,8 @@
 - **非目标**：不替代工程可靠性审核；不针对单一题材/角色名/段落做 case-specific 规则；不要求每章机械出现某维度。
 - **使用方式**：每一步审核对照本标准的维度与判据，缺口按根因层（shared contract / schema / prompt / skill / validation hook）分类，按 AGENTS.md 修复。
 
+> **实现基线（2026-08-03）**：章节 reviewer 的共享 `REVIEW_DIMENSIONS` 已覆盖 14 个维度；Foundation 使用独立的 D1-D5 `foundationReview` 契约；Story Arc 使用独立的章节计划检查矩阵；commit gate 按冻结蓝图的适用维度检查 `dimensionScores`/issue evidence，并由 `CommitService` 二次复核。下文早期“缺少评分维度”的描述仅保留为问题演进记录，不代表当前代码状态。
+
 ---
 
 ## 0. 范例小说研究结论（标准推导依据）
@@ -95,7 +97,7 @@
 - S1 **章节功能成立**：每章可识别承担的功能（开篇/过渡/冲突升级/高潮/余波/铺陈/相处/内省/阶段闭合），且正文实际完成该功能。判据：plot-reviewer 的 `plot`/`hookPayoff` 维度 + chapter.incomplete-blueprint 检查。
 - S2 **伏笔闭环可追溯**：伏笔有埋设点与兑现点，兑现时有"原来如此"的回响而非突兀。判据：foreshadowing 记录含 setup_chapter + payoff_chapter + payoff 时引用 setup 证据。
 - S3 **因果由人物驱动**：关键转折由人物选择/欲望/局限推动，而非外部新线索或巧合。判据：抽取章节转折点，追溯其因果链至人物选择而非"恰好出现"。
-- S4 **节奏随功能波动**：铺陈/余波/相处章允许无爽点或低强度；行动/转折/闭合章需密集爽点。判据：reader-reviewer 的 payoff 曲线统计 + 章节功能匹配判断（已部分实现）。
+- S4 **节奏随功能波动**：铺陈/余波/相处章允许无爽点或低强度；行动/转折/闭合章需密集爽点。章节蓝图可用 `narrativeScale=compact/standard/extended` 表达主导功能的展开深度，`standard` 作为普通完整章节体量参考而非字数下限；审核检查 `developmentAxes` 是否被实际经历以及是否过早收束，不用字符数替代叙事判断。判据：reader-reviewer 的 payoff 曲线统计 + 章节功能匹配判断（已部分实现）。
 - S5 **多线可收束**：支线数量在可控范围（如同时活跃 ≤ 5 条），且有明确收束计划。判据：plot-threads 记录含 status + 预期收束窗口。
 
 ### 维度 D3：群像塑造（Ensemble Cast）
@@ -165,19 +167,23 @@
 
 ---
 
-## 2. 维度与现有 reviewer 的映射与缺口
+## 2. 维度与现有 reviewer 的映射与契约
 
-> 对照 `src/novel-v2/prompts/chapter-review.ts` 的 `REVIEWER_DIMENSIONS`。
+> 对照 `src/novel-v2/prompts/chapter-review.ts` 的 `REVIEWER_DIMENSIONS`、`src/novel-v2/prompts/foundation-review.ts` 和 `src/novel-v2/application/story-arc-review-policy.ts`。
+
+当前落点：D1 使用 Foundation `worldbuilding`、Story Arc `worldbuilding-fit` 和章节 `worldbuilding`；D2 使用 Foundation `story`、章节 `plot/hookPayoff/narrativePacing`；D3 使用 Foundation `ensemble`、Story Arc `ensemble-agency` 和章节 `ensemble`；D4 使用 Foundation `romance`、Story Arc `romance-arc` 和章节 `romance`；D5 使用 Foundation `humor`、Story Arc `humor-fit` 和章节 `humor`。章节蓝图的 `worldRuleRefs`、`characterFocus`、`romanceTreatment`、`humorTreatment` 是这些维度的结构化输入。
+
+适用性是质量契约的一部分：感情线或幽默不适用时，必须记录 `not-applicable` 与边界；安静、余波、铺陈章节可以没有主动感情线或幽默，不得因此误杀。总分不能替代 evidence path、当前 artifact fingerprint、局部退化上限和同类最高质量候选回退。
 
 | 质量维度 | 现有 reviewer 覆盖 | 缺口 |
 |---|---|---|
-| D1 世界观 | continuity-reviewer（world/rule 术语）部分覆盖 | **无专门世界观评分维度**；规则可内化性/文化承载/独立质地未评估 |
-| D2 故事性 | plot-reviewer (plot, hookPayoff) + reader-reviewer (readerRetention) | 伏笔闭环可追溯/多线可收束未作为评分维度；S2/S5 缺 |
-| D3 群像 | character-reviewer (characterVoice, dialogue) 覆盖单角色 | **无群像维度**；配角独立欲望/弧光/关系网络复杂度未评估；E1/E3/E4/E5 缺 |
-| D4 感情线 | character-reviewer 术语含 "romance" 但 **未进 REVIEWER_DIMENSIONS** | **感情线无评分维度**；R1-R5 全缺 |
-| D5 幽默 | **完全无覆盖** | **幽默无评分维度**；H1-H4 全缺 |
+| D1 世界观 | Foundation `worldbuilding`；Story Arc `worldbuilding-fit`；章节 `worldbuilding` | 无世界规则时必须写 `worldRuleRefs=[]`；不因本章未调用新规则扣分 |
+| D2 故事性 | Foundation `story`；Story Arc 故事性矩阵；章节 `plot` / `hookPayoff` / `narrativePacing` | 余波、铺陈、关系和安静章节可成立，但必须完成自身章节功能 |
+| D3 群像 | Foundation `ensemble`；Story Arc `ensemble-agency`；章节 `ensemble` | `characterFocus` 必须有欲望、行动、代价；只列真正影响本章的配角 |
+| D4 感情线 | Foundation `romance`；Story Arc `romance-arc`；章节 `romance` | 不适用时使用 `not-applicable` 并给出边界，不强迫每章出现感情线 |
+| D5 幽默 | Foundation `humor`；Story Arc `humor-fit`；章节 `humor` | 幽默须来自人物、关系或情境；严肃余波章不因缺少笑点扣分 |
 
-**关键发现（Loop 1）**：用户要求的 5 大质量维度中，**3 个（世界观/群像/幽默）无专门评分维度，1 个（感情线）术语存在但未进评分**。这是审核闭环的根因层缺口——即使提示词写得好，审核层无法度量就无法驱动迭代。后续 loop 将评估：(a) 是否应新增评分维度 vs. 通过 skill 的 review 段补充 vs. 通过 craft-rule 沉淀；(b) 哪些维度适合硬门 vs. advisory。
+**历史发现（Loop 1）**：上表记录的是早期审核时的维度缺口，已由当前实现基线中的 Foundation/Story Arc/章节三层契约覆盖。后续迭代应关注证据质量、适用性误杀、局部退化和长程回归，而不是继续堆叠维度名称。
 
 ---
 
@@ -197,6 +203,6 @@
 
 ## 4. 标准版本与迭代
 
-- **v1.0**（本版本）：基于范例研究推导的 5 维度 + 长篇耐久性补充判据；映射现有 reviewer 并识别缺口。
+- **v1.1**（2026-08-02）：补充 Foundation/Story Arc 专属契约、适用性状态与当前 reviewer 映射；保留历史缺口作为演进记录。
 - **迭代触发**：当审核中发现本标准无法判定某类问题，或当范例研究扩展（新增范例小说）时，更新本标准并提升版本号。
 - **与 skill/craft-rule 的关系**：本标准是**审核锚点**，不是 skill 本身；skill/craft-rule 是**生成与审核的实现**。本标准用于评估 skill/craft-rule 是否覆盖了应有维度。

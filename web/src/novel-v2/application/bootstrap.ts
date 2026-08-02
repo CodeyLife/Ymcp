@@ -46,7 +46,9 @@ export async function startNovelBootstrap(
     projectId: input.projectId,
     mode: "chapter",
     policy: {
-      reviewGate: input.reviewGate ?? "none",
+      // Quality-first default: every foundation artifact receives a dedicated review;
+      // explicit reviewGate=none remains available only for tests/debugging.
+      reviewGate: input.reviewGate ?? "manual",
       progression: input.progression ?? "automatic",
     },
     payload: {

@@ -19,6 +19,7 @@ import {
   useNovelProjects,
   useUpdateNovelProject,
   type NovelProjectSummary,
+  type CreativeBriefSeed,
 } from "@/lib/novelApi";
 import "./novel-v2.css";
 import "./novel-v2/workspace-command.css";
@@ -30,6 +31,34 @@ function revisionOf(project: NovelProjectSummary) {
 
 function updatedOf(project: NovelProjectSummary) {
   return project.updatedAt ?? project.updated_at ?? "";
+}
+
+type CreativeBriefFormValues = Omit<CreativeBriefSeed, "version" | "themeQuestion" | "emotionalContract"> & {
+  themeQuestion?: string;
+  themeQuestionMode?: "active" | "notApplicable";
+  themeQuestionRationale?: string;
+  emotionalContract?: string;
+  emotionalContractMode?: "active" | "notApplicable";
+  emotionalContractRationale?: string;
+};
+
+function normalizeCreativeBriefForm(value: CreativeBriefFormValues | undefined): CreativeBriefSeed | undefined {
+  if (!value) return undefined;
+  const {
+    themeQuestionMode,
+    themeQuestionRationale,
+    emotionalContractMode,
+    emotionalContractRationale,
+    ...fields
+  } = value;
+  const brief: CreativeBriefSeed = { version: 1, ...fields };
+  if (themeQuestionMode === "notApplicable") {
+    brief.themeQuestion = { notApplicable: true, rationale: themeQuestionRationale?.trim() ?? "" };
+  }
+  if (emotionalContractMode === "notApplicable") {
+    brief.emotionalContract = { notApplicable: true, rationale: emotionalContractRationale?.trim() ?? "" };
+  }
+  return brief;
 }
 
 type ProjectState = "idle" | "running" | "review" | "done" | "failed";
@@ -66,8 +95,13 @@ export default function NovelV2Projects() {
   const navigate = useNavigate();
   const projects = projectsQ.data ?? [];
 
-  async function create(values: { premise: string; title?: string; genre?: string; autoBootstrap: boolean; includeChapterPlan: boolean }) {
-    const body = await createProject.mutateAsync(values);
+  async function create(values: { premise: string; title?: string; genre?: string; creativeBrief?: CreativeBriefFormValues; autoBootstrap: boolean }) {
+    const body = await createProject.mutateAsync({
+      ...values,
+      creativeBrief: normalizeCreativeBriefForm(values.creativeBrief),
+      // Kept in the request for older API clients; the runtime ignores the static chapter-plan flag.
+      includeChapterPlan: true,
+    });
     setOpen(false);
     form.resetFields();
     message.success(values.autoBootstrap ? "项目已创建，全书规划已启动" : "项目已创建");
@@ -184,13 +218,34 @@ export default function NovelV2Projects() {
         </div>
       </section>
 
-      <Modal title="新建作品 · 一句话创意" open={open} onCancel={() => setOpen(false)} footer={null} destroyOnHidden width={520}>
-        <Form form={form} layout="vertical" initialValues={{ autoBootstrap: true, includeChapterPlan: true }} onFinish={(values) => void create(values)}>
+      <Modal title="新建作品 · 创作简报" open={open} onCancel={() => setOpen(false)} footer={null} destroyOnHidden width={680}>
+        <Form form={form} layout="vertical" initialValues={{ autoBootstrap: true, creativeBrief: { themeQuestionMode: "active", emotionalContractMode: "active" } }} onFinish={(values) => void create(values)}>
           <Form.Item name="premise" label="一句话创意" rules={[{ required: true, message: "请输入一句话创意" }]}><Input.TextArea placeholder="描述作品的核心人物、冲突与叙事承诺" autoSize={{ minRows: 3, maxRows: 6 }} autoFocus /></Form.Item>
           <Form.Item name="title" label="标题（可选）"><Input placeholder="留空则自动派生" /></Form.Item>
           <Form.Item name="genre" label="题材（可选）"><Input placeholder="如玄幻、都市、言情、科幻或悬疑" /></Form.Item>
+          <Form.Item name={["creativeBrief", "targetReader"]} label="目标读者"><Input placeholder="希望谁持续阅读这部作品" /></Form.Item>
+          <Form.Item name={["creativeBrief", "corePromise"]} label="核心叙事承诺"><Input.TextArea placeholder="读者持续追更时会获得什么核心体验" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
+          <Form.Item name={["creativeBrief", "themeQuestionMode"]} label="主题问题适用性"><Select options={[{ value: "active", label: "填写主题问题" }, { value: "notApplicable", label: "不适用" }]} /></Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.creativeBrief?.themeQuestionMode !== current.creativeBrief?.themeQuestionMode}>
+            {({ getFieldValue }) => getFieldValue(["creativeBrief", "themeQuestionMode"]) === "notApplicable"
+              ? <Form.Item name={["creativeBrief", "themeQuestionRationale"]} label="主题问题不适用理由" rules={[{ required: true, whitespace: true, message: "请填写不适用理由" }]}><Input.TextArea placeholder="说明本作为什么不直接处理主题问题" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
+              : <Form.Item name={["creativeBrief", "themeQuestion"]} label="主题问题"><Input.TextArea placeholder="作品持续追问的矛盾，不要填写结论" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>}
+          </Form.Item>
+          <Form.Item name={["creativeBrief", "protagonistNeed"]} label="主角核心需要"><Input placeholder="主角真正想得到或改变什么" /></Form.Item>
+          <Form.Item name={["creativeBrief", "protagonistContradiction"]} label="主角核心矛盾"><Input placeholder="主角的欲望、恐惧或价值冲突" /></Form.Item>
+          <Form.Item name={["creativeBrief", "centralOpposition"]} label="中央对抗"><Input.TextArea placeholder="持续阻碍主角的力量、制度、关系或选择代价" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
+          <Form.Item name={["creativeBrief", "emotionalContractMode"]} label="情感契约适用性"><Select options={[{ value: "active", label: "填写情感契约" }, { value: "notApplicable", label: "不适用" }]} /></Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.creativeBrief?.emotionalContractMode !== current.creativeBrief?.emotionalContractMode}>
+            {({ getFieldValue }) => getFieldValue(["creativeBrief", "emotionalContractMode"]) === "notApplicable"
+              ? <Form.Item name={["creativeBrief", "emotionalContractRationale"]} label="情感契约不适用理由" rules={[{ required: true, whitespace: true, message: "请填写不适用理由" }]}><Input.TextArea placeholder="说明本作为什么不设置该类情感契约" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
+              : <Form.Item name={["creativeBrief", "emotionalContract"]} label="情感契约"><Input.TextArea placeholder="作品希望读者在人物关系和结局中经历的情绪" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>}
+          </Form.Item>
+          <Form.Item name={["creativeBrief", "worldAnchor"]} label="世界锚点"><Input.TextArea placeholder="需要被具体研究或呈现的时代、地域、行业或社会纹理" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
+          <Form.Item name={["creativeBrief", "researchNeeds"]} label="研究需求"><Select mode="tags" placeholder="输入后回车，可留空" /></Form.Item>
+          <Form.Item name={["creativeBrief", "nonNegotiables"]} label="不可违背项"><Select mode="tags" placeholder="输入后回车，可留空" /></Form.Item>
+          <Form.Item name={["creativeBrief", "endingEnvelope"]} label="结局边界"><Input.TextArea placeholder="允许的终局方向与不能提前消费的边界" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
+          <Form.Item name={["creativeBrief", "stylePreferences"]} label="风格偏好"><Input.TextArea placeholder="叙述距离、语言质感、节奏偏好等，不填写作家姓名" autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
           <Form.Item name="autoBootstrap" label="自动启动全书规划" valuePropName="checked"><Switch /></Form.Item>
-          <Form.Item name="includeChapterPlan" label="包含章节计划" valuePropName="checked"><Switch /></Form.Item>
           <Button type="primary" htmlType="submit" block loading={createProject.isPending}>创建并打开</Button>
         </Form>
       </Modal>

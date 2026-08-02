@@ -20,13 +20,15 @@ import {
   executeCreativeCommand,
   attachArtifact,
   submitReview,
+  hasPassedIndependentReviewForArtifact,
+  listReviews,
 } from "../src/novel-v2/creative";
 import type { CreativeCommand, CreativeRunMode, CreativeRunPolicy } from "../src/novel-v2/protocol";
 import { startNovelBootstrap } from "../src/novel-v2/application/bootstrap";
 import { provisionalTitle } from "../src/novel-v2/application/provisional-title";
 import { ContentObjectStore } from "../src/novel-v2/object-store";
 import { bindRuntimeObjectStore } from "../src/novel-v2/runtime-object-store";
-import { PROJECT_PLAN_STAGES, isProjectPlanTaskKey } from "../src/novel-v2/application/project-plan";
+import { PROJECT_PLAN_STAGES, isProjectPlanTaskKey, requiresFoundationAuthorConfirmation } from "../src/novel-v2/application/project-plan";
 import {
   bookSynopsisSourceFingerprint,
   bookTitleSourceFingerprint,
@@ -43,6 +45,7 @@ import { chapterMemoryAsClaim } from "../src/novel-v2/chapter-memory";
 import { countNovelCharacters } from "../src/novel-v2/word-count";
 import { ChapterStateRebuildConflictError, ChapterStateRebuildService } from "../src/novel-v2/application/chapter-state-rebuild";
 import { inspectManuscript } from "../src/novel-v2/application/manuscript-structure";
+import { parseCreativeBrief } from "../src/novel-v2/application/creative-brief";
 
 // 通过 Extract 从 CreativeCommand 联合类型中派生 review.submit 的 review 字段类型，
 // 避免新增 CreativeReviewInput / ReviewIssue 的直接导入。
@@ -115,6 +118,15 @@ function send(response: import("node:http").ServerResponse, status: number, valu
 function asString(value: unknown) { return typeof value === "string" && value.trim() ? value.trim() : undefined; }
 function asNumber(value: unknown) { return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
 function asRecord(value: unknown) { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
+function asBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "force"].includes(normalized)) return true;
+    if (["0", "false", "no"].includes(normalized)) return false;
+  }
+  return undefined;
+}
 
 // ===== 创意执行路由（Phase B-2）辅助：从 unknown 构造强类型 CreativeCommand =====
 
@@ -489,6 +501,14 @@ const server = createServer(async (request, response) => {
       const autoBootstrap = typeof input.autoBootstrap === "boolean" ? input.autoBootstrap : true;
       const includeChapterPlan = typeof input.includeChapterPlan === "boolean" ? input.includeChapterPlan : true;
       const objective = asString(input.objective) || premise;
+      const reviewGate = input.reviewGate === "auto" || input.reviewGate === "manual" || input.reviewGate === "none" ? input.reviewGate : undefined;
+      const progression = input.progression === "automatic" || input.progression === "user-driven" ? input.progression : undefined;
+      let creativeBrief;
+      try {
+        creativeBrief = parseCreativeBrief(input.creativeBrief);
+      } catch (error) {
+        return send(response, 400, { error: error instanceof Error ? error.message : "creativeBrief 格式非法" });
+      }
 
       // 使用 idempotencyKey 作为 projectId(与 MCP novel_project_create 行为一致)
       const projectId = idempotencyKey;
@@ -496,6 +516,7 @@ const server = createServer(async (request, response) => {
       // premise/genre 写入 metadata,与 MCP handler 保持同构
       const metadata: Record<string, unknown> = { premise };
       if (genre) metadata.genre = genre;
+      if (creativeBrief) metadata.creativeBrief = creativeBrief;
       await repository.ensureProject(projectId, title, metadata);
 
       const project = await repository.getProjectDetail(projectId);
@@ -508,6 +529,8 @@ const server = createServer(async (request, response) => {
           objective,
           idempotencyKey,
           includeChapterPlan,
+          reviewGate,
+          progression,
           taskQueue,
         });
         return send(response, 201, { project, bootstrapRun });
@@ -835,6 +858,12 @@ const server = createServer(async (request, response) => {
       if (!section?.workItemId || !section.sourceArtifactId || section.status !== "awaiting-confirmation") {
         return send(response, 409, { error: "该规划阶段当前不可确认" });
       }
+      if (requiresFoundationAuthorConfirmation(taskKeyValue)) {
+        const reviews = await listReviews(repository, section.workItemId);
+        if (!hasPassedIndependentReviewForArtifact(reviews, section.sourceArtifactId)) {
+          return send(response, 409, { error: "请先完成当前 Foundation artifact 的专属 independent 审核" });
+        }
+      }
       await submitReview(repository, section.workItemId, {
         subjectArtifactId: section.sourceArtifactId,
         reviewer: "human",
@@ -856,7 +885,9 @@ const server = createServer(async (request, response) => {
       if (input.confirm !== true) return send(response, 200, { preview: await repository.previewChapterPlanApplication(projectId) });
       return send(response, 200, { result: await repository.applyChapterPlan(projectId) });
     }
-    const storyArcListMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs$/);
+    const requestPath = request.url?.split("?")[0] ?? "/";
+    const requestQuery = new URL(request.url ?? "/", "http://localhost").searchParams;
+    const storyArcListMatch = requestPath.match(/^\/v2\/projects\/([^/?]+)\/story-arcs$/);
     const memoryRebuildMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/memory\/rebuild$/);
     if (request.method === "POST" && memoryRebuildMatch) {
       const projectId = decodeURIComponent(memoryRebuildMatch[1]);
@@ -873,7 +904,7 @@ const server = createServer(async (request, response) => {
       const projectId = decodeURIComponent(storyArcListMatch[1]);
       return send(response, 200, { arcs: await repository.listStoryArcs(projectId) });
     }
-    const storyArcNextMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/next$/);
+    const storyArcNextMatch = requestPath.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/next$/);
     if (request.method === "POST" && storyArcNextMatch) {
       const projectId = decodeURIComponent(storyArcNextMatch[1]);
       const input = await readJson(request);
@@ -881,21 +912,21 @@ const server = createServer(async (request, response) => {
       const result = await startStoryArcPlanning(repository, temporal, { projectId, mode: "web", reviewPolicy, authorIntent: asString(input.authorIntent), taskQueue });
       return send(response, 202, result);
     }
-    const storyArcItemMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)$/);
+    const storyArcItemMatch = requestPath.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)$/);
     if (request.method === "GET" && storyArcItemMatch) {
       const projectId = decodeURIComponent(storyArcItemMatch[1]);
       const arcId = decodeURIComponent(storyArcItemMatch[2]);
       const arc = await repository.getStoryArc(projectId, arcId);
       return arc ? send(response, 200, { arc }) : send(response, 404, { error: "故事弧不存在" });
     }
-    const storyArcBatchListMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/batches$/);
+    const storyArcBatchListMatch = requestPath.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/batches$/);
     if (request.method === "GET" && storyArcBatchListMatch) {
       const projectId = decodeURIComponent(storyArcBatchListMatch[1]);
       const arcId = decodeURIComponent(storyArcBatchListMatch[2]);
       const arc = await repository.getStoryArc(projectId, arcId);
       return arc ? send(response, 200, { batches: arc.batches }) : send(response, 404, { error: "故事弧不存在" });
     }
-    const storyArcBatchNextMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/batches\/next$/);
+    const storyArcBatchNextMatch = requestPath.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/batches\/next$/);
     if (request.method === "POST" && storyArcBatchNextMatch) {
       const projectId = decodeURIComponent(storyArcBatchNextMatch[1]);
       const arcId = decodeURIComponent(storyArcBatchNextMatch[2]);
@@ -914,9 +945,31 @@ const server = createServer(async (request, response) => {
     if (request.method === "DELETE" && storyArcItemMatch) {
       const projectId = decodeURIComponent(storyArcItemMatch[1]);
       const arcId = decodeURIComponent(storyArcItemMatch[2]);
-      return send(response, 200, await repository.deleteStoryArc(projectId, arcId, "web-author"));
+      const input = await readJson(request);
+      const force = asBoolean(input.force) ?? asBoolean(requestQuery.get("force")) ?? asBoolean(request.headers["x-force-delete"]);
+      const result = await repository.deleteStoryArc(projectId, arcId, "web-author", { force: force === true });
+      const warnings: string[] = [];
+      const indexClaimIds = [...result.removedMemoryClaimIds, ...result.removedChapterMemoryIds];
+      if (indexClaimIds.length) {
+        try {
+          await qdrantMemory.deleteClaims(projectId, indexClaimIds);
+        } catch (error) {
+          warnings.push("向量索引清理失败，已标记项目记忆需要重建");
+          await repository.requestMemoryRebuild(projectId).catch(() => undefined);
+          console.warn("[story-arc-delete] qdrant cleanup failed", error);
+        }
+      }
+      for (const workflowId of result.cancelledWorkflowIds) {
+        try {
+          await temporal.workflow.getHandle(workflowId).terminate("story arc force deleted");
+        } catch (error) {
+          warnings.push(`Temporal 工作流 ${workflowId} 终止失败，运行时状态已标记为 cancelled`);
+          console.warn("[story-arc-delete] temporal terminate failed", workflowId, error);
+        }
+      }
+      return send(response, 200, warnings.length ? { ...result, warnings } : result);
     }
-    const storyArcActionMatch = request.url?.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/(approve|review|rebase|abandon)$/);
+    const storyArcActionMatch = requestPath.match(/^\/v2\/projects\/([^/?]+)\/story-arcs\/([^/?]+)\/(approve|review|rebase|abandon)$/);
     if (request.method === "POST" && storyArcActionMatch) {
       const projectId = decodeURIComponent(storyArcActionMatch[1]);
       const arcId = decodeURIComponent(storyArcActionMatch[2]);
@@ -1490,6 +1543,9 @@ const server = createServer(async (request, response) => {
       if (!record) return send(response, 404, { error: "运行不存在" });
       if (record.status === "cancelled") {
         const expiredModelTasks = await repository.expireWorkflowModelTasks(workflowId, "所属运行已取消");
+        if (record.workflowType === "story-arc-planning" && typeof record.payload.arcId === "string") {
+          await repository.recoverStoryArcAfterWorkflowCancellation(record.projectId, record.payload.arcId);
+        }
         return send(response, 200, { workflowId, status: "cancelled", record, expiredModelTasks });
       }
       if (["completed", "abandoned", "failed", "rejected", "terminated"].includes(record.status)) {
@@ -1506,6 +1562,9 @@ const server = createServer(async (request, response) => {
         cancelledAt: new Date().toISOString(),
       });
       const expiredModelTasks = await repository.expireWorkflowModelTasks(workflowId, "所属运行已取消");
+      if (record.workflowType === "story-arc-planning" && typeof record.payload.arcId === "string") {
+        await repository.recoverStoryArcAfterWorkflowCancellation(record.projectId, record.payload.arcId);
+      }
       return send(response, 200, { workflowId, status: "cancelled", record: cancelled, expiredModelTasks });
     }
 

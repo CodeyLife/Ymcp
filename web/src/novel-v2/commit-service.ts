@@ -9,6 +9,7 @@ import { createChapterMemoryFromRevision, persistChapterMemoryOutput, validateCh
 import { evaluateCommitGate } from "./temporal/revision-policy";
 import type { ChapterStateDelta, FactExtractionOutput } from "./prompts/schemas";
 import { inspectManuscript, type ManuscriptStructuralReport } from "./application/manuscript-structure";
+import type { ReviewDimension } from "./prompts/schemas";
 
 type CommitDerivedData = {
   structuralReport: ManuscriptStructuralReport;
@@ -17,6 +18,7 @@ type CommitDerivedData = {
   narrativeOrder?: number;
   chapterMemoryDelta?: ChapterStateDelta["chapterMemory"];
   factArtifactId?: string;
+  applicableReviewDimensions?: readonly ReviewDimension[];
 };
 
 /**
@@ -55,7 +57,7 @@ export class CommitService {
   ) {}
 
   async commit(input: CommitRequest & { text: string } & CommitDerivedData): Promise<CommitResult & { chapterMemory?: ChapterMemory }> {
-    const gate = evaluateCommitGate(input.reviews, input.artifact.fingerprint, input.structuralReport);
+    const gate = evaluateCommitGate(input.reviews, input.artifact.fingerprint, input.structuralReport, { applicableDimensions: input.applicableReviewDimensions });
     if (!gate.passed) throw new Error(`正式提交必须具备当前 artifact 的完整五角色通过证据；缺失角色：${gate.missingRoles.join("、") || "无"}`);
     if (!inspectManuscript({ text: input.text }).passed) throw new Error("正式提交正文未通过确定性结构复检");
     return this.persistApprovedRevision(input);
