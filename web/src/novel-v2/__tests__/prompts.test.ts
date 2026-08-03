@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildChapterDraftPrompt, buildChapterDraftPromptPackage } from "../prompts/chapter-draft";
+import { buildChapterDraftPrompt, buildChapterDraftPromptPackage, dedupeDraftMemory } from "../prompts/chapter-draft";
 import { buildChapterReflectionPrompt } from "../prompts/chapter-reflection";
-import { buildChapterReviewPrompt, buildChapterReviewPromptPackage, getReviewFocus, toReview, type ReviewerRole } from "../prompts/chapter-review";
-import { REVIEW_DIMENSIONS, type ReviewerOutput } from "../prompts/schemas";
+import { buildChapterReviewPrompt, buildChapterReviewPromptPackage, getReviewFocus, groundReviewForText, groundReviewerIssues, toReview, type ReviewerRole } from "../prompts/chapter-review";
+import { REVIEW_DIMENSIONS, reviewerSchemaForDimensions, type ReviewerOutput } from "../prompts/schemas";
 import type { Artifact, ExecutionBlueprint, MemoryBundle, NovelIntent } from "../protocol";
 
 const artifact: Artifact = { id: "artifact-1", projectId: "p1", taskId: "task-1", attemptId: "attempt-1", kind: "draft", contentHash: "hash", objectKey: "obj", baseRevision: 7, createdAt: 1717000000000, fingerprint: "fp-1" };
@@ -108,7 +108,7 @@ describe("prompts buildChapterDraftPrompt", () => {
     expect(getReviewFocus("plot-reviewer", skills)).toContain("审校时检查场景因果是否成立");
   });
 
-  it("treats long-range strategy as soft context and ignores legacy chapter plans", () => {
+  it("keeps chapter-relevant foundations (characters/worldview/architecture/plot-design) and excludes chapter-plan from the draft package", () => {
     const packageResult = buildChapterDraftPromptPackage({
       workflowId: "wf-long-range",
       system: "writer",
@@ -124,10 +124,11 @@ describe("prompts buildChapterDraftPrompt", () => {
     });
     const sections = packageResult.manifest.sections;
     expect(sections.find((section) => section.id === "foundation:foundation-characters")?.priority).toBe("required");
-    expect(sections.find((section) => section.id === "foundation:foundation-plot-design")?.priority).toBe("normal");
+    expect(sections.some((section) => section.id === "foundation:foundation-plot-design")).toBe(true);
     expect(sections.some((section) => section.id === "foundation:foundation-chapter-plan")).toBe(false);
     expect(packageResult.instruction).not.toContain("旧版开局");
-    expect(packageResult.sections.find((section) => section.id === "foundation:foundation-plot-design")?.text).toContain("长程方向（软约束）");
+    expect(packageResult.instruction).toContain("真相与选择互相牵动");
+    expect(packageResult.sections.find((section) => section.id === "foundation:foundation-characters")?.text).toContain("查明旧案");
   });
 
   it("includes hard constraints, blueprint, context and intent sections", () => {
@@ -141,9 +142,43 @@ describe("prompts buildChapterDraftPrompt", () => {
     expect(prompt).toContain("## 工作流执行编排（不是内容蓝图）");
     expect(prompt).toContain("## 冻结上下文");
     expect(prompt).toContain("## 本章意图");
+    expect(prompt).toContain("职业或专业背景是观察、判断与取舍的来源");
+    expect(prompt).toContain("外部压力也必须有自己的可观察行动逻辑");
+    expect(prompt).toContain("narrativeScale");
+    expect(prompt).toContain("沿着 developmentAxes");
+    expect(prompt).toContain("不是字数下限");
     expect(prompt).toContain("续写第 12 章");
     expect(prompt).toContain("在场景中呈现旧铁铺招牌");
     expect(prompt).toContain("揭示师父真实身份");
+  });
+
+  it("freezes prior chapter rhythm for drafting without turning issue words into quotas", () => {
+    const packageResult = buildChapterDraftPromptPackage({
+      workflowId: "wf-rhythm",
+      system: "writer",
+      intent: makeIntent(),
+      blueprint: makeBlueprint({ budget: { maxInputTokens: 20_000, maxOutputTokens: 4_000 } }),
+      memory: makeMemory({ narrativeRhythm: { arcId: "arc-1", fingerprint: "rhythm-fp", chapters: [{ documentId: "doc-11", narrativeOrder: 11, title: "余波", summary: "两人清理现场但没有谈论争执", keyEvents: ["归还钥匙"], emotionalArc: "紧绷转为克制", narrativeFunction: "aftermath", thematicMode: "absent", themeCarrier: "none", issueFamilies: ["subtext:author-summary"] }] } }),
+      skills: makeSkills(),
+    });
+    const rhythm = packageResult.sections.find((section) => section.id === "narrative-rhythm");
+    expect(rhythm?.priority).toBe("required");
+    expect(rhythm?.text).toContain("[aftermath/absent/none]");
+    expect(rhythm?.text).toContain("归还钥匙");
+  });
+
+  it("deduplicates direct planning and episodic chapter history while preserving atomic facts", () => {
+    const episodic = { id: "pinned:chapter-11", projectId: "p1", kind: "episodic" as const, title: "第11章定稿记忆", content: "重复的章节摘要", subjectRefs: [], knowledgeScope: "author" as const, authority: "derived" as const, confidence: 1, sourceRevisionIds: ["rev-11"], contentHash: "episodic", supersedes: [], score: 1, matchedFacet: "chapter-memory", reason: "pinned" };
+    const fact = { ...episodic, id: "fact:key", kind: "canonical" as const, title: "钥匙归属", content: "钥匙仍由甲保管", contentHash: "fact", matchedFacet: "fact" };
+    const planningClaim = { ...episodic, id: "planning-context:fp", kind: "working" as const, title: "重复规划", contentHash: "planning" };
+    const foundationClaim = { ...episodic, id: "foundation:macro", kind: "hierarchical" as const, title: "全局主题定位", contentHash: "foundation", sourceRevisionIds: [] };
+    const memory = makeMemory({
+      claims: [episodic, fact, planningClaim, foundationClaim],
+      narrativeRhythm: { arcId: "arc-1", fingerprint: "rhythm-fp", chapters: [{ documentId: "doc-11", revisionId: "rev-11", narrativeOrder: 11, title: "前章", summary: "重复的章节摘要", keyEvents: [], issueFamilies: [] }] },
+    });
+
+    const projected = dedupeDraftMemory({ intent: makeIntent(), blueprint: makeBlueprint(), memory, skills: makeSkills(), planningContext: {} as never });
+    expect(projected.claims.map((claim) => claim.id)).toEqual(["fact:key"]);
   });
 
   it("extracts mustHappen/forbidden from intent.constraints via Chinese prefixes", () => {
@@ -216,6 +251,39 @@ describe("prompts buildChapterDraftPrompt", () => {
     expect(packageResult.manifest.sections.map((section) => section.id)).toEqual(expect.arrayContaining(["draft-instruction", "execution-blueprint", "memory:claim-1", "skill:dialogue"]));
     expect(packageResult.instruction.match(/对白以行动和停顿承载潜台词。/g)).toHaveLength(1);
   });
+
+  it("treats replacement outcomes as critical execution boundaries", () => {
+    const packageResult = buildChapterDraftPromptPackage({
+      workflowId: "wf-replacement-draft",
+      system: "writer",
+      intent: makeIntent(),
+      blueprint: makeBlueprint({ budget: { maxInputTokens: 20_000, maxOutputTokens: 4_000 } }),
+      memory: makeMemory({ claims: [{ id: "replacement-1", projectId: "p1", kind: "episodic", title: "既有章节终态", content: "保留会面发生与章末获得钥匙，不复述旧对白。", subjectRefs: ["hero"], knowledgeScope: "author", authority: "approved", confidence: 1, sourceRevisionIds: ["revision-7"], contentHash: "replacement-hash", supersedes: [], score: 1, matchedFacet: "chapter-memory", reason: "replacement-boundary" }] }),
+      skills: makeSkills(),
+    });
+
+    const boundary = packageResult.manifest.sections.find((section) => section.id === "memory:replacement-1");
+    expect(boundary?.title).toBe("替换式生成硬边界（必须保留事件结果，不得复述旧表达）");
+    expect(boundary?.priority).toBe("critical");
+  });
+
+  it("projects character knowledge as an epistemic boundary instead of reusable prose", () => {
+    const packageResult = buildChapterDraftPromptPackage({
+      workflowId: "wf-knowledge-boundary",
+      system: "writer",
+      intent: makeIntent(),
+      blueprint: makeBlueprint({ budget: { maxInputTokens: 20_000, maxOutputTokens: 4_000 } }),
+      memory: makeMemory({ claims: [{ id: "knowledge-1", projectId: "p1", kind: "episodic", title: "旧标题含作者式解释", content: "主角 在第11章得知：来客声称旧钥匙能打开北门\n证据：来客把钥匙拍在桌上，说这就是北门钥匙。", subjectRefs: ["hero"], knowledgeScope: { characterId: "hero" }, authority: "derived", confidence: 0.85, sourceRevisionIds: ["revision-11"], contentHash: "knowledge-hash", supersedes: [], score: 1, matchedFacet: "entity", reason: "test" }] }),
+      skills: makeSkills(),
+    });
+
+    const knowledge = packageResult.manifest.sections.find((section) => section.id === "memory:knowledge-1");
+    expect(knowledge?.title).toContain("角色知识边界：hero");
+    expect(packageResult.instruction).toContain("可知命题：来客声称旧钥匙能打开北门");
+    expect(packageResult.instruction).toContain("不得照搬为对白、叙述、主题结论或客观世界规则");
+    expect(packageResult.instruction).not.toContain("来客把钥匙拍在桌上");
+    expect(knowledge?.title).not.toContain("旧标题含作者式解释");
+  });
 });
 
 describe("prompts buildChapterReviewPrompt", () => {
@@ -243,6 +311,8 @@ describe("prompts buildChapterReviewPrompt", () => {
     // 测试验证 getReviewFocus 返回值包含职责文案，且 user prompt 不再重复职责定义。
     const styleFocus = getReviewFocus("style-reviewer");
     expect(styleFocus).toContain("解释性心理总结");
+    expect(styleFocus).toContain("不得以关键词出现次数判断");
+    expect(styleFocus).toContain("foreground");
     const stylePrompt = buildChapterReviewPrompt({ role: "style-reviewer", artifact, text: "x", blueprint: makeBlueprint(), memory: makeMemory() });
     expect(stylePrompt).toContain("sceneEmbodiment、specificity、humor"); // 维度边界仍在 user prompt
 
@@ -251,6 +321,8 @@ describe("prompts buildChapterReviewPrompt", () => {
 
     const plotFocus = getReviewFocus("plot-reviewer");
     expect(plotFocus).toContain("chapter.incomplete-blueprint");
+    expect(plotFocus).toContain("必须逐项核对候选是否保留事件身份、章末状态与未解线索");
+    expect(getReviewFocus("reader-reviewer")).toContain("节奏不是快慢分数");
   });
 
   it("renders reviewer context with authority/kind/subject/title", () => {
@@ -286,6 +358,23 @@ describe("prompts buildChapterReviewPrompt", () => {
     expect(packageResult.manifest.sections.filter((section) => section.id === "payoff-stats")).toHaveLength(1);
   });
 
+  it("makes replacement outcomes required for plot review", () => {
+    const packageResult = buildChapterReviewPromptPackage({
+      workflowId: "wf-replacement-review",
+      system: "plot reviewer",
+      role: "plot-reviewer",
+      artifact,
+      text: "主角完成会面，却空手离开。",
+      blueprint: makeBlueprint({ budget: { maxInputTokens: 20_000, maxOutputTokens: 4_000 } }),
+      memory: makeMemory({ claims: [{ id: "replacement-1", projectId: "p1", kind: "episodic", title: "既有章节终态", content: "保留会面发生与章末获得钥匙，不复述旧对白。", subjectRefs: ["hero"], knowledgeScope: "author", authority: "approved", confidence: 1, sourceRevisionIds: ["revision-7"], contentHash: "replacement-hash", supersedes: [], score: 1, matchedFacet: "chapter-memory", reason: "replacement-boundary" }] }),
+      skills: makeSkills(),
+    });
+
+    const boundary = packageResult.manifest.sections.find((section) => section.id === "memory:replacement-1");
+    expect(boundary?.title).toBe("替换式生成验收边界");
+    expect(boundary?.priority).toBe("required");
+  });
+
   it("states that word count is not an audit target", () => {
     const prompt = buildChapterReviewPrompt({
       role: "reader-reviewer",
@@ -298,6 +387,8 @@ describe("prompts buildChapterReviewPrompt", () => {
     expect(prompt).toContain("字数、字符数、段落数量或是否达到某个目标篇幅，不是审校目标");
     expect(prompt).toContain("不能单独触发降分");
     expect(prompt).toContain("必须把问题改写为具体机制");
+    expect(prompt).toContain("chapter.premature-closure");
+    expect(prompt).toContain("developmentAxes 是否在正文中被实际经历");
   });
 });
 
@@ -320,7 +411,7 @@ describe("prompts toReview projection", () => {
   function makeReviewerOutput(overrides: Partial<ReviewerOutput> = {}): ReviewerOutput {
     return {
       verdict: "revise",
-      scores: { plot: 4, characterVoice: 3, sceneEmbodiment: 3, dialogue: 4, specificity: 3, hookPayoff: 4, continuity: 5, readerRetention: 4, worldbuilding: 4, ensemble: 3, romance: 4, humor: 3 },
+      scores: { plot: 4, characterVoice: 3, sceneEmbodiment: 3, dialogue: 4, specificity: 3, hookPayoff: 4, continuity: 5, readerRetention: 4, worldbuilding: 4, ensemble: 3, romance: 4, humor: 3, subtext: 4, narrativePacing: 4 },
       issues: [
         {
           dimension: "characterVoice",
@@ -388,8 +479,72 @@ describe("prompts toReview projection", () => {
     expect(review.issues[0].evidence).toBe("最后节拍只写到开头。");
   });
 
-  it("preserves all 12 REVIEW_DIMENSIONS in the scores object contract", () => {
+  it("drops reviewer issues whose quoted evidence is absent from the current candidate text", () => {
+    const output = makeReviewerOutput({
+      issues: [
+        {
+          dimension: "specificity",
+          severity: "major",
+          title: "旧稿术语残留",
+          description: "引用了上一版正文的技术词。",
+          excerpt: "把身体机能拆解为“呼吸系统”、“运动系统”和“痛觉反馈”三个模块",
+          revisionRanges: [{ start: 4, end: 4 }],
+          rule: "review.evidence-grounding",
+          suggestion: "只处理当前正文真实存在的术语。",
+          rewriteExample: "【原文】旧稿术语。【改写】当前正文没有该句，不应报告。",
+        },
+      ],
+    });
+
+    const review = toReview({
+      artifact,
+      identity: "independent",
+      role: "style-reviewer",
+      output,
+      text: "他把手按在心口，沿着痛楚变弱的一线空隙，极慢地换了一口气。",
+    });
+
+    expect(review).toMatchObject({ verdict: "passed", issues: [] });
+    expect(review.score).toBeUndefined();
+  });
+
+  it("keeps current-text evidence, including multi-fragment excerpts", () => {
+    const issues = [
+      {
+        severity: "major" as const,
+        title: "配角动作工具化",
+        evidence: "那人用剑尖挑开湿重的芦苇……抬起袖子在脸前用力扇了扇",
+      },
+      {
+        severity: "major" as const,
+        title: "旧稿术语残留",
+        evidence: "呼吸系统、运动系统和痛觉反馈三个模块",
+      },
+    ];
+
+    const grounded = groundReviewerIssues(
+      issues,
+      "那人没有说话，只有急促的鼻息喷涌声。接着是一声钝响，那人用剑尖挑开湿重的芦苇，又抬起袖子在脸前用力扇了扇。",
+    );
+
+    expect(grounded.discardedCount).toBe(1);
+    expect(grounded.issues.map((issue) => issue.title)).toEqual(["配角动作工具化"]);
+  });
+
+  it("re-grounds persisted reviews before reuse against a later candidate", () => {
+    const review = toReview({ artifact, identity: "independent", role: "style-reviewer", output: makeReviewerOutput() });
+    const grounded = groundReviewForText(review, "旧铁铺的门半开着，门槛上积着雨水。");
+    expect(grounded.verdict).toBe("passed");
+    expect(grounded.issues).toEqual([]);
+  });
+
+  it("preserves all REVIEW_DIMENSIONS in the scores object contract", () => {
     const output = makeReviewerOutput();
     expect(Object.keys(output.scores).sort()).toEqual([...REVIEW_DIMENSIONS].sort());
+  });
+
+  it("requires issue excerpts in the structured reviewer schema", () => {
+    const issueSchema = ((reviewerSchemaForDimensions(["plot"]) as Record<string, any>).properties.issues.items as Record<string, any>);
+    expect(issueSchema.required).toContain("excerpt");
   });
 });

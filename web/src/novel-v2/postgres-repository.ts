@@ -52,7 +52,7 @@ import type { ObjectStoreAdapter } from "./object-store";
 import { countNovelCharacters } from "./word-count";
 import type { ObjectStoreIdentity } from "./object-store";
 import { normalizeManuscriptStructuralReview } from "./application/manuscript-structure";
-import { CHAPTER_NARRATIVE_FUNCTIONS, PLAN_APPLICABILITY, STAKE_KNOWLEDGE_BASES, THEME_CARRIERS, THEME_TREATMENT_MODES, canGenerateNextStoryArcBatch, compileChapterPlanValidationReport, parseChapterNarrativeScale, parseStoryArcBundle, planningContextFingerprint, type ArcPlanningStatus, type ChapterBlueprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type CharacterFocus, type HumorTreatment, type NarrativeArcPlan, type RomanceTreatment, type StakeKnowledgeBasis, type StoryArcBatchRecord, type StoryArcBundle, type StoryArcRebaseTarget, type StoryArcRecord } from "./application/story-arc";
+import { CHAPTER_NARRATIVE_FUNCTIONS, PLAN_APPLICABILITY, STAKE_KNOWLEDGE_BASES, THEME_CARRIERS, THEME_TREATMENT_MODES, canGenerateNextStoryArcBatch, compileChapterPlanValidationReport, normalizeChapterPlanningContext, parseChapterNarrativeScale, parseStoryArcBundle, planningContextFingerprint, type ArcPlanningStatus, type ChapterBlueprint, type ChapterBlueprintRecord, type ChapterPlanningContext, type ChapterSceneBlueprint, type CharacterFocus, type HumorTreatment, type NarrativeArcPlan, type RomanceTreatment, type StakeKnowledgeBasis, type StoryArcBatchRecord, type StoryArcBundle, type StoryArcRebaseTarget, type StoryArcRecord } from "./application/story-arc";
 import type { StoryArcReviewOutput } from "./prompts/story-arc";
 import { aggregateChapterReviews, reviewIssueFingerprint, type ChapterReviewIssueStatus } from "./chapter-review-snapshot";
 import {
@@ -3154,7 +3154,14 @@ export class NovelPostgresRepository {
       const currentMemory = memory && (!row.current_revision_id || memory.revisionId === row.current_revision_id) ? memory : undefined;
       const claims = row.current_revision_id ? await this.listActiveMemoryClaimsByRevision(projectId, row.current_revision_id) : [];
       const plannedBlueprint = !row.current_revision_id ? approvedChapterByOrder.get(Number(row.global_order)) : undefined;
-      const blueprint = plannedBlueprint ?? row.approved_blueprint ?? {};
+      const committedBlueprint = !plannedBlueprint && row.approved_blueprint
+        ? parseStoryArcBundle({
+          arc: { title: "历史章节重基线", objective: "保留已批准章节蓝图" },
+          batch: { batchIndex: 1, startChapterIndex: Number(row.global_order), complete: false },
+          chapters: [row.approved_blueprint],
+        }).chapters[0]
+        : undefined;
+      const blueprint = plannedBlueprint ?? committedBlueprint ?? row.approved_blueprint ?? {};
       const scenes = Array.isArray(blueprint.scenes) ? blueprint.scenes : [];
       const thematicTreatment = blueprint.thematicTreatment && typeof blueprint.thematicTreatment === "object" && !Array.isArray(blueprint.thematicTreatment)
         ? blueprint.thematicTreatment as Record<string, unknown>
@@ -3166,6 +3173,7 @@ export class NovelPostgresRepository {
         title: row.document_title,
         revisionId: row.current_revision_id ?? undefined,
         plannedBlueprint,
+        committedBlueprint,
         approvedPlan: {
           summary: typeof blueprint.summary === "string" ? blueprint.summary : undefined,
           sceneEvents: scenes.flatMap((scene) => {
@@ -3465,8 +3473,8 @@ export class NovelPostgresRepository {
   }
 
   async getChapterPlanningContextSnapshot(blueprintId: string): Promise<ChapterPlanningContext | undefined> {
-    const result = await this.pool.query<{ payload: ChapterPlanningContext }>("SELECT payload FROM chapter_planning_contexts WHERE id=$1", [blueprintId]);
-    return result.rows[0]?.payload;
+    const result = await this.pool.query<{ payload: unknown }>("SELECT payload FROM chapter_planning_contexts WHERE id=$1", [blueprintId]);
+    return normalizeChapterPlanningContext(result.rows[0]?.payload);
   }
 
   async previewChapterPlanApplication(projectId: string): Promise<{

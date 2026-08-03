@@ -44,6 +44,9 @@ describe("manuscript structural inspection", () => {
 
   it("blocks model-limit truncation and output wrappers", () => {
     expect(inspectManuscript({ text: "```\n正文\n```" }).passed).toBe(false);
+    expect(inspectManuscript({ text: "审核说明：\n真正的正文。" }).passed).toBe(false);
+    expect(inspectManuscript({ text: "顾。根据审核记录完成本轮替换。\n真正的正文。" }).passed).toBe(false);
+    expect(inspectManuscript({ text: "正文\n\n结构如断齿般卡住" }).passed).toBe(true);
     expect(inspectManuscript({ text: "真正的正文", stopReason: "max_tokens" }).blockers).toEqual(expect.arrayContaining([expect.objectContaining({ rule: "manuscript.truncated" })]));
   });
 });

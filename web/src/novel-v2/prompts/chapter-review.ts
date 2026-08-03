@@ -165,7 +165,7 @@ export function selectReviewerSkills(skills: SkillBundle | undefined, role: Revi
   if (!skills) return undefined;
   const terms = REVIEW_ROLE_TERMS[role];
   const ranked = skills.skills.map((skill, index) => {
-    const searchable = [skill.skillId, ...(skill.capabilities ?? []), ...skill.qualityGates, skill.promptSections.review ?? ""].join(" ").toLowerCase();
+    const searchable = [skill.skillId, ...(skill.capabilities ?? []), ...(skill.qualityGates ?? []), skill.promptSections?.review ?? ""].join(" ").toLowerCase();
     const score = terms.reduce((sum, term) => sum + (searchable.includes(term.toLowerCase()) ? 1 : 0), 0);
     return { skill, score, index };
   }).filter((item) => item.score > 0)
@@ -317,7 +317,7 @@ export function buildChapterReviewPrompt(input: ReviewPromptInput): string {
     ] : []),
     "",
     "## 已激活审校技能",
-    skills?.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, skill.promptSections.review ?? ""].filter(Boolean).join("\n")).join("\n\n") || "（无额外审校技能）",
+    skills?.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, skill.promptSections?.review ?? ""].filter(Boolean).join("\n")).join("\n\n") || "（无额外审校技能）",
     "",
     `每个问题都必须提供正文实际存在的逐字证据，并填写解决问题实际允许修订的最小 revisionRanges。blocker/major 的 excerpt 必须引用触发判断的原文，description 必须断言正文已经发生的问题；禁止用"如果后续这样写""若这里直接判断"等假设风险充当问题。找不到实际原文证据时不要报告。持续破坏读者体验且需要重写多个段落的问题标为 major；局部润色才标 warning。结构性问题可以填写多个范围，只用于对照的早期段落不得列入修改范围。无法安全定位时返回空数组，不猜测段号。`,
     "",

@@ -23,6 +23,50 @@ describe("V2 cognition compiler", () => {
     expect(bundle.sourceRevisionIds).toEqual(["r4"]);
   });
 
+  it("marks a final target revision as a replacement boundary without moving the narrative cutoff", () => {
+    const plan = createPreflightPlan(intent, {
+      projectId: "p1",
+      currentRevision: 7,
+      targetDocumentId: "doc-12",
+      targetDocumentOrder: 12,
+      targetDocumentStatus: "final",
+      targetDocumentRevisionId: "rev-12",
+      povCharacterId: "hero",
+    });
+    const newChapter = createPreflightPlan(intent, {
+      projectId: "p1",
+      currentRevision: 7,
+      targetDocumentId: "doc-12",
+      targetDocumentOrder: 12,
+      targetDocumentStatus: "planned",
+      povCharacterId: "hero",
+    });
+
+    expect(plan.replacementRevisionId).toBe("rev-12");
+    expect(plan.narrativeCutoff).toBe(11);
+    expect(newChapter.replacementRevisionId).toBeUndefined();
+  });
+
+  it("honors an explicit revision stage for a chapter target", () => {
+    const revisionIntent: NovelIntent = {
+      ...intent,
+      objective: "重新生成本章完整正文，检查世界观铺陈与人物内心展开",
+      requestedStage: "revision",
+    };
+    const plan = createPreflightPlan(revisionIntent, {
+      projectId: "p1",
+      currentRevision: 7,
+      targetDocumentId: "doc-12",
+      targetDocumentOrder: 12,
+      targetDocumentStatus: "final",
+      targetDocumentRevisionId: "rev-12",
+    });
+
+    expect(plan.taskClass).toBe("revision");
+    expect(plan.stage).toBe("revision");
+    expect(plan.replacementRevisionId).toBe("rev-12");
+  });
+
   it("excludes bounded aggregates that cross the cutoff without dropping open-ended durable facts", async () => {
     const provider: MemoryProvider = { search: async () => [
       { id: "past-rollup", projectId: "p1", kind: "hierarchical", title: "历史汇总", content: "仅包含截止章之前的内容", subjectRefs: [], narrativeRange: { start: 1, end: 11 }, knowledgeScope: "author", authority: "derived", confidence: 1, sourceRevisionIds: ["r1", "r11"], contentHash: "past-rollup", supersedes: [], predicate: "chapter-memory-rollup", score: 1, matchedFacet: "chapter-memory", reason: "pinned" },
@@ -178,5 +222,25 @@ describe("V2 cognition compiler", () => {
     ] }, requestedCapabilities: ["prose"] });
 
     expect(skills.skills.map((skill) => skill.skillId)).toEqual(["review-only", "drafting"]);
+  });
+
+  it("does not use quality gates as skill activation signals", async () => {
+    const plan = createPreflightPlan(intent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 });
+    const memory = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [] } });
+    const shared = { version: "1", applicableTasks: ["drafting" as const], conflicts: [], enabled: true };
+    const skills = await resolveSkillBundle(plan, memory, { projectId: "p1", provider: { list: async () => [
+      { ...shared, skillId: "gate-only", capabilities: ["prose"], requiredMemoryKinds: [], qualityGates: ["readable"], promptSections: { drafting: "不应仅因 gate 激活" } },
+      { ...shared, skillId: "baseline", capabilities: [], requiredMemoryKinds: [], qualityGates: ["baseline-readable"], promptSections: { drafting: "显式基线" } },
+    ] } });
+
+    expect(skills.skills.map((skill) => skill.skillId)).toEqual(["baseline"]);
+  });
+
+  it("still activates a skill when its required memory kind is present", async () => {
+    const plan = createPreflightPlan(intent, { projectId: "p1", currentRevision: 7, targetDocumentOrder: 12 });
+    const memory = await buildMemoryBundle(plan, { projectId: "p1", provider: { search: async () => [{ id: "episode", projectId: "p1", kind: "episodic", title: "已发生事件", content: "主角已经拿到钥匙", subjectRefs: ["hero"], narrativeRange: { start: 11 }, knowledgeScope: "author", authority: "approved", confidence: 1, sourceRevisionIds: ["r11"], contentHash: "episode", supersedes: [], score: 1, matchedFacet: "fact", reason: "test" }] } });
+    const skills = await resolveSkillBundle(plan, memory, { projectId: "p1", provider: { list: async () => [{ skillId: "continuity", version: "1", capabilities: ["memory"], applicableTasks: ["drafting"], requiredMemoryKinds: ["episodic"], conflicts: [], qualityGates: ["continuity"], promptSections: { drafting: "保持连续性" }, enabled: true }] } });
+
+    expect(skills.skills.map((skill) => skill.skillId)).toEqual(["continuity"]);
   });
 });

@@ -23,3 +23,10 @@ src/features/novel/__tests__/bench/fixtures/*.json
 # Novel V2 本地运行与长度契约日志
 .codex-length-contract-*.log
 .codex-novel-v2-*.log
+
+# Novel V2 本地运行日志与一次性诊断脚本
+.logs/
+analyze-revision-*.mjs
+approve-ch9.ts
+scripts/get-chapter-text.ts
+tmp-*.mjs

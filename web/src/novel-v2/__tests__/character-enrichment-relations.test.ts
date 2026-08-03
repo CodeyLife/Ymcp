@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { persistCharacterEnrichment, type CharacterEnrichmentDelta } from "../character-enrichment";
+import { buildCharacterEnrichmentPrompt } from "../character-enrichment/prompt";
 import type { NovelPostgresRepository } from "../postgres-repository";
 import type { Artifact } from "../protocol";
 
@@ -25,11 +26,31 @@ function createDeps() {
   };
   return {
     writes,
-    deps: { repository: { pool } as unknown as NovelPostgresRepository, objects: {} as never },
+    deps: { repository: { pool, recordFactExtraction: async (input: { claims: unknown[] }) => input.claims } as unknown as NovelPostgresRepository, objects: {} as never },
   };
 }
 
 describe("character enrichment relation integrity", () => {
+  it("asks extraction to preserve epistemic status instead of promoting interpretation to fact", () => {
+    const prompt = buildCharacterEnrichmentPrompt({ artifact, text: "来客说北门已经封了，主角没有回答。" });
+    expect(prompt).toContain("观察、听闻、阅读或推断");
+    expect(prompt).toContain("写明“怀疑/推测”，不得升级为客观事实");
+    expect(prompt).toContain("不把能力原理、价值判断、主题解释、因果寓意或人物评价当作知识事实");
+  });
+
+  it("stores knowledge without copying evidence prose into future prompt material", async () => {
+    const { deps } = createDeps();
+    const knowledgeDelta = delta("主角", "门卫");
+    knowledgeDelta.newKnowledge = [{ description: "听闻北门已经封闭", evidence: "来客说北门已经封了，主角没有回答。" }];
+    const result = await persistCharacterEnrichment({ projectId: "p1", documentId: "d1", revisionId: "r3", narrativeOrder: 3, artifact }, deps, [knowledgeDelta]);
+    expect(result.knowledgeClaims[0]).toMatchObject({
+      title: "主角 的信息边界（第3章）",
+      content: "听闻北门已经封闭",
+      predicate: "character-knows",
+    });
+    expect(result.knowledgeClaims[0].content).not.toContain("来客说北门");
+  });
+
   it("creates a stub when a supporting character first appears only as a relation target", async () => {
     const { deps, writes } = createDeps();
     await persistCharacterEnrichment({ projectId: "p1", documentId: "d1", revisionId: "r1", narrativeOrder: 1, artifact }, deps, [delta("主角", "门卫")]);

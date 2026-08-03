@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { ARC_PLAN_CHECK_DIMENSIONS, canGenerateNextStoryArcBatch, CHAPTER_PLAN_CHECK_DIMENSIONS, compileChapterPlanValidationReport, normalizeStoryArcRebaseBundle, normalizeStakeKnowledgeBasis, normalizeStoryArcStakes, parseStoryArcBundle, planningContextFingerprint, validateStoryArcExecutionContracts, validateStoryArcRebaseBundle, type ChapterPlanningContext, type StoryArcRebaseTarget } from "../application/story-arc";
+import { ARC_PLAN_CHECK_DIMENSIONS, canGenerateNextStoryArcBatch, CHAPTER_PLAN_CHECK_DIMENSIONS, compileChapterPlanValidationReport, normalizeChapterPlanningContext, normalizeStoryArcRebaseBundle, normalizeStakeKnowledgeBasis, normalizeStoryArcStakes, parseStoryArcBundle, planningContextFingerprint, validateStoryArcExecutionContracts, validateStoryArcRebaseBundle, type ChapterPlanningContext, type StoryArcRebaseTarget } from "../application/story-arc";
 import { normalizeStoryArcReviewAuthority, storyArcAuthorityPaths, storyArcReviewStrategy } from "../application/story-arc-review-policy";
 import { startStoryArcPlanning, startStoryArcReview } from "../application/story-arc-workflow";
 import { NovelPostgresRepository } from "../postgres-repository";
@@ -182,7 +182,7 @@ describe("story arc planning contract", () => {
     const plannedTarget: StoryArcRebaseTarget = {
       ...baseTarget,
       chapters: baseTarget.chapters.map((chapter, index) => index === 0
-        ? { ...chapter, revisionId: undefined, committedMemory: undefined, plannedBlueprint: bundle.chapters[0] }
+        ? { ...chapter, globalOrder: 1, revisionId: undefined, committedMemory: undefined, plannedBlueprint: bundle.chapters[0] }
         : chapter),
     };
     const candidate = parseStoryArcBundle({
@@ -201,6 +201,42 @@ describe("story arc planning contract", () => {
     expect(normalized.chapters[0].summary).toBe(bundle.chapters[0].summary);
     expect(normalized.chapters[0].unresolvedAtClose).toEqual(bundle.chapters[0].unresolvedAtClose ?? []);
     expect(() => validateStoryArcRebaseBundle(normalized, plannedTarget)).not.toThrow();
+    const futureReview = normalizeStoryArcReviewAuthority(normalized, {
+      verdict: "revise",
+      summary: "未来章节被错误地按历史事实审查",
+      issues: [{ severity: "major", title: "第 1 章事实权威越界", evidence: "找到藏身处不在已定稿记忆", suggestion: "按历史事实回退" }],
+      chapterChecks: [{ chapterIndex: 1, dimension: "theme-restraint", verdict: "revise", evidence: "旧蓝图主题措辞", reason: "旧字段文案可优化" }],
+      arcChecks: [],
+      authorityChecks: [{
+        chapterIndex: 1,
+        verdict: "revise",
+        unresolvedAtClose: [],
+        checkedPaths: [],
+        candidateClaims: [],
+        frozenEvidence: ["历史记忆"],
+        certaintyUpgrades: [{ candidateClaim: "找到藏身处", frozenBoundary: "无", reason: "未来章节不是历史" }],
+        reason: "不应套用历史事实",
+      }],
+    }, plannedTarget);
+    expect(futureReview.authorityChecks[0].verdict).toBe("passed");
+    expect(futureReview.issues).toEqual([]);
+    expect(futureReview.chapterChecks[0]).toMatchObject({ verdict: "passed" });
+    expect(futureReview.authorityChecks[0]).toMatchObject({ verdict: "passed", certaintyUpgrades: [] });
+    expect(futureReview.authorityChecks[0].frozenEvidence.length).toBeGreaterThan(0);
+
+    const committedTarget: StoryArcRebaseTarget = {
+      ...plannedTarget,
+      chapters: plannedTarget.chapters.map((chapter, index) => index === 0
+        ? { ...chapter, revisionId: "revision-1", committedMemory: { summary: "已提交", keyEvents: [], characterStates: [], unresolvedThreads: [] }, committedBlueprint: bundle.chapters[0] }
+        : chapter),
+    };
+    const historicalCandidate = parseStoryArcBundle({
+      ...candidate,
+      chapters: [{ ...candidate.chapters[0], title: "模型改写的历史章节", summary: "模型追加了未批准事实" }, ...candidate.chapters.slice(1)],
+    });
+    const historicalNormalized = normalizeStoryArcRebaseBundle(historicalCandidate, committedTarget);
+    expect(historicalNormalized.chapters[0].title).toBe(bundle.chapters[0].title);
+    expect(historicalNormalized.chapters[0].summary).toBe(bundle.chapters[0].summary);
   });
 
   it("keeps planned scene stakes as the execution contract for future chapters", () => {
@@ -445,6 +481,26 @@ describe("story arc planning contract", () => {
     expect(legacy.chapters[0].narrativeScale?.reason).toContain("旧蓝图未声明");
   });
 
+  it("normalizes persisted legacy planning snapshots before prompt rendering", () => {
+    const context = normalizeChapterPlanningContext({
+      projectId: "p",
+      arcId: "a",
+      chapterBlueprintId: "legacy-blueprint",
+      arc: { title: "旧弧", objective: "先活下来", development: undefined },
+      chapter: { id: "c1", arcId: "a", projectId: "p", globalOrder: 1, index: 1, title: "旧章", summary: "从水中醒来", scenes: [{ title: "水下", participants: ["主角"] }] },
+      neighbors: [{ id: "c2", globalOrder: 2, title: "下一章", summary: "爬上岸" }],
+      macroPlanArtifacts: [],
+      sourceArtifactIds: [],
+    });
+
+    expect(context?.chapter.narrativeScale?.level).toBe("standard");
+    expect(context?.chapter.worldRuleRefs).toEqual([]);
+    expect(context?.chapter.characterFocus).toEqual([]);
+    expect(context?.chapter.romanceTreatment.status).toBe("not-applicable");
+    expect(context?.chapter.humorTreatment.status).toBe("not-applicable");
+    expect(() => renderChapterPlanningContext(context!, { includeMacro: false })).not.toThrow();
+  });
+
   it("projects legacy blueprints as observable material instead of executable theme declarations", () => {
     const legacyChapter = { ...bundle.chapters[0], id: "legacy", arcId: "a", projectId: "p", globalOrder: 1, status: "planned" as const, blueprintRevision: 0 };
     const context: ChapterPlanningContext = {
@@ -556,6 +612,52 @@ describe("story arc planning contract", () => {
     const normalized = normalizeStoryArcReviewAuthority(oneChapter, { verdict: "passed", summary: "通过", issues: [], chapterChecks: checks, arcChecks, authorityChecks: [{ ...authorityChecks[0], checkedPaths: ["漏抄"], candidateClaims: ["漏抄"] }] });
     expect(normalized.authorityChecks[0].checkedPaths).toEqual(checkedPaths);
     expect(normalized.authorityChecks[0].candidateClaims).toHaveLength(checkedPaths.length);
+    expect(() => validateStoryArcReview(oneChapter, normalized)).not.toThrow();
+  });
+
+  it("keeps frozen blueprint evidence valid for the unified rebase validator", () => {
+    const oneChapter = parseStoryArcBundle({ ...bundle, chapters: bundle.chapters.slice(0, 1) });
+    const chapter = oneChapter.chapters[0];
+    const target: StoryArcRebaseTarget = {
+      arcId: "arc-rebase",
+      executionStatus: "active",
+      approvedArc: oneChapter.arc,
+      batchIndex: 1,
+      startChapterIndex: 1,
+      chapters: [{
+        chapterId: "chapter-1",
+        documentId: "document-1",
+        globalOrder: 1,
+        title: chapter.title,
+        approvedPlan: { summary: chapter.summary, sceneEvents: [], continuityConstraints: [], setupRefs: [], payoffRefs: [] },
+        authoritativeFacts: [],
+        plannedBlueprint: chapter,
+      }],
+    };
+    const checks = CHAPTER_PLAN_CHECK_DIMENSIONS.map((dimension) => ({ chapterIndex: 1, dimension, verdict: "passed" as const, evidence: "蓝图字段一致", reason: "冻结字段未变化" }));
+    const arcChecks = ARC_PLAN_CHECK_DIMENSIONS.map((dimension) => ({ dimension, verdict: "passed" as const, evidence: "整弧结构成立", reason: "冻结字段未变化" }));
+    const checkedPaths = storyArcAuthorityPaths(chapter);
+    const review = {
+      verdict: "passed" as const,
+      summary: "冻结重基线通过",
+      issues: [],
+      chapterChecks: checks,
+      arcChecks,
+      authorityChecks: [{
+        chapterIndex: 1,
+        verdict: "passed" as const,
+        unresolvedAtClose: [],
+        checkedPaths,
+        candidateClaims: checkedPaths.map(() => "候选值"),
+        frozenEvidence: ["模型生成的泛化依据"],
+        certaintyUpgrades: [],
+        reason: "候选与冻结蓝图一致",
+      }],
+    };
+
+    const normalized = normalizeStoryArcReviewAuthority(oneChapter, review, target);
+    expect(normalized.authorityChecks[0].frozenEvidence).not.toEqual(["模型生成的泛化依据"]);
+    expect(normalized.authorityChecks[0].frozenEvidence.length).toBeGreaterThan(0);
     expect(() => validateStoryArcReview(oneChapter, normalized)).not.toThrow();
   });
 

@@ -1553,40 +1553,49 @@ export function createNovelWorkflowActivities(deps: { repository: NovelPostgresR
       const routingSnapshot = model.getRoutingSnapshot();
       const system = "你是独立长篇故事弧审核员。";
       const promptPackage = compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "review.arc", stage: "review", system, prompt, schema: storyArcReviewSchema as unknown as Record<string, unknown>, provenanceRefs: [input.arcId, input.artifact.id] });
+      const prompts = rebaseTarget
+        ? [
+          { suffix: "", lens: "balanced" },
+          { suffix: "\n\n## 对抗式复核\n从每章 unresolvedAtClose 倒推检查所有指定路径。把候选当作待证明命题而非合理剧情；只要冻结证据不能蕴含，就列入 certaintyUpgrades。尤其检查来源归属、内心动机、危险性质、决定与实际行动之间的状态跨越。", lens: "adversarial-authority" },
+        ]
+        : [{ suffix: "", lens: "balanced" }];
       try {
-        const prompts = rebaseTarget
-          ? [
-            { suffix: "", lens: "balanced" },
-            { suffix: "\n\n## 对抗式复核\n从每章 unresolvedAtClose 倒推检查所有指定路径。把候选当作待证明命题而非合理剧情；只要冻结证据不能蕴含，就列入 certaintyUpgrades。尤其检查来源归属、内心动机、危险性质、决定与实际行动之间的状态跨越。", lens: "adversarial-authority" },
-          ]
-          : [{ suffix: "", lens: "balanced" }];
-        const generated = await Promise.all(prompts.map((pass, passIndex) => {
-          const passPrompt = `${promptPackage.instruction}${pass.suffix}`;
+        const attempts = await Promise.allSettled(prompts.map((pass, passIndex) => {
           const passPackage = passIndex === 0 ? promptPackage : compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "review.arc", stage: "review", system, prompt: `${prompt}${pass.suffix}`, schema: storyArcReviewSchema as unknown as Record<string, unknown>, provenanceRefs: [input.arcId, input.artifact.id, pass.lens] });
-          return model.generateStructured<StoryArcReviewOutput>({ purpose: "review.arc", system, prompt: passPrompt, schema: storyArcReviewSchema as unknown as Record<string, unknown>, schemaName: "story-arc-review", workflowRunId: input.workflowId, taskId: `${input.arcId}:story-arc-review:${input.artifact.id}:${pass.lens}`, candidateStartIndex: (input.candidateStartIndex ?? 0) + passIndex, promptContext: passPackage.manifest });
+          return model.generateStructured<StoryArcReviewOutput>({ purpose: "review.arc", system, prompt: passPackage.instruction, schema: storyArcReviewSchema as unknown as Record<string, unknown>, schemaName: "story-arc-review", workflowRunId: input.workflowId, taskId: `${input.arcId}:story-arc-review:${input.artifact.id}:${pass.lens}`, candidateStartIndex: (input.candidateStartIndex ?? 0) + passIndex, promptContext: passPackage.manifest });
         }));
-        const reviews = generated.map((result) => normalizeStoryArcReviewAuthority(input.bundle, result.value));
+        const failedPasses = attempts.flatMap((result, index) => result.status === "rejected" ? [{ lens: prompts[index].lens, reason: result.reason }] : []);
+        const externalFailure = failedPasses.find((pass) => pass.reason instanceof ExternalMcpRequiredError);
+        if (externalFailure) throw externalFailure.reason;
+        if (failedPasses.length) throw new Error(`故事弧审核未完成必需轮次：${failedPasses.map((pass) => pass.lens).join("、")}`);
+        const generated = attempts.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof model.generateStructured<StoryArcReviewOutput>>>> => result.status === "fulfilled").map((result) => result.value);
+        if (!generated.length) throw attempts.find((result): result is PromiseRejectedResult => result.status === "rejected")?.reason ?? new Error("故事弧审核没有成功候选");
+        const reviews = generated.map((result) => normalizeStoryArcReviewAuthority(input.bundle, result.value, rebaseTarget));
         reviews.forEach((review) => validateStoryArcReview(input.bundle, review));
-        const review = mergeStoryArcReviews(input.bundle, reviews);
+        const review = mergeStoryArcReviews(input.bundle, reviews, rebaseTarget);
         validateStoryArcReview(input.bundle, review);
         const artifact = await makeArtifact({ projectId: input.projectId, taskId: `${input.arcId}:story-arc-review`, kind: "review", baseRevision: 0, text: JSON.stringify(review, null, 2), structuredData: { ...review, subjectArtifactId: input.artifact.id, workflowId: input.workflowId, modelProvenance: generated.map((result) => result.provenance), reviewLenses: prompts.map((pass) => pass.lens) } });
         return { kind: "completed", artifact, review };
       } catch (error) {
         if (!(error instanceof ExternalMcpRequiredError)) throw error;
-        return { kind: "external", task: await externalTask({ workflowId: input.workflowId, taskId: `${input.arcId}:story-arc-review:${input.artifact.id}`, purpose: "review.arc", candidateIndex: error.candidateIndex, routingSnapshot, outputKind: "review", system, instruction: promptPackage.instruction, schema: storyArcReviewSchema as unknown as Record<string, unknown>, schemaName: "story-arc-review", baseRevision: 0, contextRefs: { arcId: input.arcId, artifactId: input.artifact.id }, promptContext: promptPackage.manifest }) };
+        const externalPromptPackage = rebaseTarget
+          ? compileSinglePrompt({ projectId: input.projectId, workflowId: input.workflowId, purpose: "review.arc", stage: "review", system, prompt: `${prompt}${prompts[1].suffix}`, schema: storyArcReviewSchema as unknown as Record<string, unknown>, provenanceRefs: [input.arcId, input.artifact.id, prompts[1].lens] })
+          : promptPackage;
+        return { kind: "external", task: await externalTask({ workflowId: input.workflowId, taskId: `${input.arcId}:story-arc-review:${input.artifact.id}`, purpose: "review.arc", candidateIndex: error.candidateIndex, routingSnapshot, outputKind: "review", system, instruction: externalPromptPackage.instruction, schema: storyArcReviewSchema as unknown as Record<string, unknown>, schemaName: "story-arc-review", baseRevision: 0, contextRefs: { arcId: input.arcId, artifactId: input.artifact.id }, promptContext: externalPromptPackage.manifest }) };
       }
     },
 
-    materializeExternalStoryArcReview: async (input: { modelTaskId: string; projectId: string; arcId: string; subjectArtifactId: string; value: unknown }): Promise<{ artifact: Artifact; review: StoryArcReviewOutput }> => {
+    materializeExternalStoryArcReview: async (input: { modelTaskId: string; projectId: string; arcId: string; subjectArtifactId: string; value: unknown; rebase?: boolean }): Promise<{ artifact: Artifact; review: StoryArcReviewOutput }> => {
       const task = await deps.repository.getModelTask(input.modelTaskId);
       if (!task) throw new Error("外部故事弧审核任务不存在");
       assertStructuredSchema(input.value, storyArcReviewSchema as unknown as Record<string, unknown>, "外部故事弧审核结果");
       const subjectArtifact = await deps.repository.getArtifact(input.subjectArtifactId);
       if (!subjectArtifact) throw new Error("外部故事弧审核对应的蓝图不存在");
       const bundle = parseStoryArcBundle(subjectArtifact.structuredData);
-      const review = normalizeStoryArcReviewAuthority(bundle, input.value as StoryArcReviewOutput);
+      const rebaseTarget = input.rebase ? await deps.repository.getStoryArcRebaseTarget(input.projectId, input.arcId) : undefined;
+      const review = normalizeStoryArcReviewAuthority(bundle, input.value as StoryArcReviewOutput, rebaseTarget);
       validateStoryArcReview(bundle, review);
-      const artifact = await makeArtifact({ projectId: input.projectId, taskId: task.taskId, kind: "review", baseRevision: 0, text: JSON.stringify(review, null, 2), structuredData: { ...review, subjectArtifactId: input.subjectArtifactId, workflowId: task.workflowRunId, externalModelTaskId: task.id } });
+      const artifact = await makeArtifact({ projectId: input.projectId, taskId: task.taskId, kind: "review", baseRevision: 0, text: JSON.stringify(review, null, 2), structuredData: { ...review, subjectArtifactId: input.subjectArtifactId, workflowId: task.workflowRunId, externalModelTaskId: task.id, rebase: Boolean(input.rebase), reviewLenses: input.rebase ? ["balanced", "adversarial-authority"] : ["balanced"] } });
       return { artifact, review };
     },
 

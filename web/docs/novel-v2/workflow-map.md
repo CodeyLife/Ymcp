@@ -99,6 +99,8 @@ flowchart LR
 | 生成/扩展故事弧 | `POST /v2/projects/:id/story-arcs/next`、`.../batches/next` | `novel_story_arc_start` | `startStoryArcPlanning` → `storyArcPlanningWorkflow` | 故事弧、滚动批次、章节蓝图与规划上下文 |
 | 生成章节 | `POST /v2/intents` | `novel_chapter_generate` | `novelIntentWorkflow` | 定稿正文、事实、修订、章节记忆 |
 | 重审已定稿章节 | `POST /v2/projects/:id/documents/:documentId/review` | `novel_chapter_review` | `chapterReviewWorkflow` | 新修订或保留原稿、更新事实与记忆 |
+
+`POST /v2/intents` 的章节目标默认进入 `drafting`；当调用方明确声明 `requestedStage="revision"` 时，必须进入同一套 `revise → manuscriptApproval → extractFacts → commit → enrichCharacters` 正式生命周期。若目标章节已有定稿修订，`PreflightPlan.replacementRevisionId` 将其作为替换边界；这与“已定稿章节重审”不同，前者用于正式重生成候选，后者用于从已有正文开始的审校与定向优化。
 | 查询运行 | `GET /v2/runs/:workflowId` | `novel_workflow_get/list` | 读取 `workflow_runs`，必要时查询 Temporal | 当前状态、阶段、产物与诊断 |
 | 运行改进闭环 | `POST /v2/projects/:id/closed-loop` | `novel_closed_loop_run` | `runClosedLoop` | 实验、候选、回归、推广或回滚 |
 
@@ -242,9 +244,9 @@ flowchart TD
 - 每章蓝图新增 `narrativeScale`：`compact/standard/extended` 表示主导功能需要被读者经历的展开深度，另含 `reason`、`developmentAxes` 和 `stoppingCondition`。`standard` 是普通网文完整章节的软性体量参考（通常约 3000 字上下），不是字数下限；正文可以在同一事件内部通过感知、试错、选择、代价和余波达到规模，不得用第二套主线或灌水填充。
 - 每章蓝图的四个质量字段会被渲染到 `ChapterPlanningContext`：世界规则引用必须对应已批准规则；`characterFocus` 写配角自身欲望、行动和代价；感情线与幽默用 `not-applicable/background/active` 表达适用性和证据，不因安静章缺少二者而误杀。
 - Story Arc 审核还检查 `thematicTreatment` 的处理方式，要求主题通过选择、关系、后果或世界反应呈现，避免直接解释主题结论。
-- rebase（重基线）不是简单的重新生成：审核阶段对 rebase 目标执行**对抗式双轮审核**——首轮以 `balanced` 视角按多维锚点与整弧校验评分，次轮以 `adversarial-authority` 视角从每章 `unresolvedAtClose` 倒推检查所有指定路径，把候选断言当作待证明命题，只要冻结证据不能蕴含就列入 `certaintyUpgrades`。两轮结果经 `mergeStoryArcReviews` 合并后统一校验。
+- rebase（重基线）不是简单的重新生成：审核阶段对 rebase 目标执行**对抗式双轮审核**——首轮以 `balanced` 视角按多维锚点与整弧校验评分，次轮以 `adversarial-authority` 视角从每章 `unresolvedAtClose` 倒推检查所有指定路径，把候选断言当作待证明命题，只要冻结证据不能蕴含就列入 `certaintyUpgrades`。两轮结果经 `mergeStoryArcReviews` 合并后统一校验；任一必需轮次失败都不得用另一轮结果代替。若本地模型路由转外部 MCP，外部任务在一个完整 instruction 中执行同样的两层检查，回填时仍携带 `rebaseTarget` 做统一归一化和校验。
 - 重基线目标按文档是否已有 `revisionId` 分层：已定稿章节以 `committedMemory`、当前修订事实和 author-scope claims 为最高权威；尚未创作章节不是缺失的历史事实，而是沿用最近一次 `story-arc.approved` 产物中的 `plannedBlueprint`，只允许补充缺失的 `narrativeScale` 等执行信号，禁止模型凭空重写未来事件或状态。若未来章节没有可恢复的已批准蓝图，重基线必须阻断并要求先完成正式规划。
-- `authorityChecks`（事实权威检查）为每章输出一条，逐项覆盖运行时指定的候选路径（`checkedPaths`），摘录候选断言（`candidateClaims`）与冻结依据（`frozenEvidence`），判定采用蕴含而非相容：存在一个满足全部冻结事实但候选断言仍可能为假的世界时，该断言写入 `certaintyUpgrades`。观察变原因、可能危险变求助/救援、决定行动变已经行动、身份或来意未知变幕后关系等均属于确定性升级。
+- `authorityChecks`（事实权威检查）为每章输出一条，逐项覆盖运行时指定的候选路径（`checkedPaths`），摘录候选断言（`candidateClaims`）与冻结依据（`frozenEvidence`），判定采用蕴含而非相容：存在一个满足全部冻结事实但候选断言仍可能为假的世界时，该断言写入 `certaintyUpgrades`。当候选逐项匹配冻结的 `plannedBlueprint`/`committedBlueprint` 时，`frozenEvidence` 仍记录冻结蓝图字段来源，不能清空为缺失证据。观察变原因、可能危险变求助/救援、决定行动变已经行动、身份或来意未知变幕后关系等均属于确定性升级。
 - `certaintyUpgrades`（确定性升级）非空时强制该章 `verdict=revise` 并在 issues 中生成对应 major；即使六维检查全部通过也不能覆盖事实权威失败。这防止 rebase 借"合理剧情"之名覆盖已发生的故事事实。
 - `chapterChecks` 必须覆盖 `longform-function`：逐章只判断章节功能是否在长篇当前位置成立，不要求每章都有新信息、新压力、新爽点或主线推进；余波、等待、恢复、日常、气氛、误判和关系沉淀都可以是合法章节功能。
 - 故事弧审核还要检查 `narrativeScale` 与章节功能是否一致：`standard/extended` 若只完成首个状态变化便收束，应报告 `chapter.premature-closure` 的具体证据；该检查依据 `developmentAxes` 和 `stoppingCondition`，不依据字符数。旧蓝图缺少该字段时由运行时归一化为 `standard` 软信号，不把缺失字段当作短章许可，也不产生字数门槛。

@@ -4,6 +4,10 @@ import { createPreflightPlan } from "../cognition";
 import type { NovelIntent, PreflightProjectSnapshot } from "../protocol";
 
 describe("canonical JSON fingerprints", () => {
+  it("matches the SHA-256 protocol for Unicode canonical JSON", () => {
+    expect(canonicalSha256({ b: [1, true, null], a: "灵枢" })).toBe("7e434897e16bb52a4af1de4204187154a89045f5486a643a56523f2cd2b1da84");
+  });
+
   it("is stable when only nested object key order changes", () => {
     const left = { outer: { beta: 2, alpha: 1 }, list: [{ delta: 4, gamma: 3 }] };
     const right = { list: [{ gamma: 3, delta: 4 }], outer: { alpha: 1, beta: 2 } };

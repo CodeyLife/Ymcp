@@ -94,8 +94,11 @@ describe("foreshadowing narrative visibility", () => {
     const pinned = await repository.getNarrativeStatePinnedClaims({ projectId, narrativeCutoff: 5, povCharacterId: "甲" });
     expect(snapshot.openPromises.map((item) => item.statement)).toEqual(["过去承诺"]);
     expect(pinned).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: snapshot.id, matchedFacets: expect.arrayContaining(["thread", "chapter-memory"]) }),
+      expect.objectContaining({ id: snapshot.id, matchedFacets: expect.arrayContaining(["thread", "entity"]) }),
       expect.objectContaining({ id: `${snapshot.id}:pov:甲`, knowledgeScope: { characterId: "甲" } }),
     ]));
+    const stateClaim = pinned.find((item) => item.id === snapshot.id);
+    expect(stateClaim?.content).not.toContain("测试伏笔");
+    expect(stateClaim?.content).not.toContain("过去承诺");
   });
 });

@@ -511,7 +511,7 @@ export function buildChapterDraftPrompt(input: DraftPromptInput): string {
   const contextMarkdown = buildContextMarkdown(memory);
   const { mustHappen, forbidden } = extractMustHappenAndForbidden(intent);
   const skillSections = skills.skills.length
-    ? skills.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, `gates=${skill.qualityGates.join(",")}`, skill.promptSections.drafting ?? ""].filter(Boolean).join("\n")).join("\n\n")
+    ? skills.skills.map((skill) => [`### ${skill.skillId}@${skill.version}`, `gates=${(skill.qualityGates ?? []).join(",")}`, skill.promptSections?.drafting ?? ""].filter(Boolean).join("\n")).join("\n\n")
     : "- 无激活技能。";
 
   const sections: string[] = [
@@ -664,7 +664,7 @@ export function buildChapterDraftPromptPackage(input: DraftPromptInput & { workf
         provenanceRefs: [item.claimId, ...item.sourceRevisionIds],
         exclusionReason: item.reason === "inactive" || item.reason === "future-cutoff" || item.reason === "budget" || item.reason === "merged-source" ? item.reason : "merged-source" as const,
       }))),
-      ...input.skills.skills.filter((skill) => !!skill.promptSections.drafting?.trim()).map((skill) => ({ id: `skill:${skill.skillId}`, kind: "skill" as const, title: `写作技能 ${skill.skillId}@${skill.version}`, text: [`gates=${skill.qualityGates.join(",")}`, skill.promptSections.drafting!.trim()].filter(Boolean).join("\n"), priority: "normal" as const, provenanceRefs: [`${skill.skillId}@${skill.version}`] })),
+      ...input.skills.skills.filter((skill) => !!skill.promptSections?.drafting?.trim()).map((skill) => ({ id: `skill:${skill.skillId}`, kind: "skill" as const, title: `写作技能 ${skill.skillId}@${skill.version}`, text: [`gates=${(skill.qualityGates ?? []).join(",")}`, skill.promptSections!.drafting!.trim()].filter(Boolean).join("\n"), priority: "normal" as const, provenanceRefs: [`${skill.skillId}@${skill.version}`] })),
       ...(input.payoffStats ? [{ id: "payoff-stats", kind: "background" as const, title: "前章爽点统计", text: buildPayoffDroughtMarkdown(input.payoffStats), priority: "normal" as const, provenanceRefs: [input.intent.projectId] }] : []),
     ],
   });

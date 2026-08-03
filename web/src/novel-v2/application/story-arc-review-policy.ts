@@ -1,4 +1,4 @@
-import type { StoryArcBundle } from "./story-arc";
+import type { StoryArcBundle, StoryArcRebaseTarget } from "./story-arc";
 
 /**
  * 逐章审核维度清单。
@@ -111,16 +111,73 @@ export function storyArcAuthorityClaims(chapter: StoryArcBundle["chapters"][numb
   return claims;
 }
 
-export function normalizeStoryArcReviewAuthority(bundle: StoryArcBundle, review: StoryArcReviewOutput): StoryArcReviewOutput {
+function stablePlannedValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stablePlannedValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key, item]) => key !== "narrativeScale" && !(key === "unresolvedAtClose" && Array.isArray(item) && item.length === 0))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => [key, stablePlannedValue(item)]));
+}
+
+function frozenRebaseBlueprint(targetChapter: StoryArcRebaseTarget["chapters"][number] | undefined): StoryArcBundle["chapters"][number] | undefined {
+  if (!targetChapter) return undefined;
+  if (targetChapter.plannedBlueprint && !targetChapter.revisionId && !targetChapter.committedMemory) return targetChapter.plannedBlueprint;
+  return targetChapter.committedBlueprint;
+}
+
+function matchesFrozenRebaseBlueprint(chapter: StoryArcBundle["chapters"][number], targetChapter: StoryArcRebaseTarget["chapters"][number] | undefined): boolean {
+  const plannedBlueprint = frozenRebaseBlueprint(targetChapter);
+  if (!targetChapter || !plannedBlueprint) return false;
+  const candidateValue = JSON.stringify(stablePlannedValue(chapter));
+  const plannedValue = JSON.stringify(stablePlannedValue(plannedBlueprint));
+  return candidateValue === plannedValue;
+}
+
+function frozenAuthorityEvidence(chapter: StoryArcBundle["chapters"][number], targetChapter: StoryArcRebaseTarget["chapters"][number] | undefined): string[] {
+  const frozenBlueprint = frozenRebaseBlueprint(targetChapter);
+  if (!frozenBlueprint) return [];
+  const paths = storyArcAuthorityPaths(frozenBlueprint);
+  const claims = storyArcAuthorityClaims(frozenBlueprint);
+  const evidence = paths
+    .map((path, index) => `${path}=${claims[index] ?? ""}`)
+    .filter((item) => item.slice(item.indexOf("=") + 1).trim());
+  return evidence.length
+    ? evidence
+    : [`冻结蓝图与第 ${chapter.index} 章候选逐项一致；本轮未新增事实断言。`];
+}
+
+function issueMentionsChapter(issue: StoryArcReviewOutput["issues"][number], chapterIndex: number): boolean {
+  return new RegExp(`第\\s*${chapterIndex}\\s*章`).test(`${issue.title}\n${issue.evidence}\n${issue.suggestion}`);
+}
+
+function isNarrativeScaleConcern(text: string): boolean {
+  return /narrativeScale|scale|展开深度|体量|compact|standard|extended|stoppingCondition|developmentAxes/.test(text);
+}
+
+export function normalizeStoryArcReviewAuthority(bundle: StoryArcBundle, review: StoryArcReviewOutput, rebaseTarget?: StoryArcRebaseTarget): StoryArcReviewOutput {
+  const frozenChapterIndices = new Set(bundle.chapters
+    .filter((chapter) => matchesFrozenRebaseBlueprint(chapter, rebaseTarget?.chapters.find((targetChapter) => targetChapter.globalOrder === chapter.index)))
+    .map((chapter) => chapter.index));
   return {
     ...review,
+    issues: review.issues.filter((issue) => ![...frozenChapterIndices].some((chapterIndex) => issueMentionsChapter(issue, chapterIndex) && !isNarrativeScaleConcern(`${issue.title}\n${issue.evidence}\n${issue.suggestion}`))),
+    chapterChecks: review.chapterChecks.map((check) => frozenChapterIndices.has(check.chapterIndex) && check.verdict !== "passed" && !isNarrativeScaleConcern(`${check.dimension}\n${check.evidence}\n${check.reason}`)
+      ? { ...check, verdict: "passed" as const, reason: "本次重基线冻结既有蓝图字段；该维度未指向 narrativeScale 新增契约，不阻塞重基线。" }
+      : check),
     authorityChecks: review.authorityChecks.map((check) => {
       const chapter = bundle.chapters.find((candidate) => candidate.index === check.chapterIndex);
+      const targetChapter = rebaseTarget?.chapters.find((candidate) => candidate.globalOrder === check.chapterIndex);
+      const rebaseBlueprintIsFrozen = chapter && frozenChapterIndices.has(chapter.index);
       return chapter ? {
         ...check,
         unresolvedAtClose: [...(chapter.unresolvedAtClose ?? [])],
         checkedPaths: storyArcAuthorityPaths(chapter),
         candidateClaims: storyArcAuthorityClaims(chapter),
+        verdict: rebaseBlueprintIsFrozen ? "passed" as const : check.verdict,
+        frozenEvidence: rebaseBlueprintIsFrozen ? frozenAuthorityEvidence(chapter, targetChapter) : check.frozenEvidence,
+        certaintyUpgrades: rebaseBlueprintIsFrozen ? [] : check.certaintyUpgrades,
+        reason: rebaseBlueprintIsFrozen ? "候选与重基线冻结蓝图一致；本次只审核 narrativeScale 新增契约与结构完整性。" : check.reason,
       } : check;
     }),
   };
@@ -128,9 +185,9 @@ export function normalizeStoryArcReviewAuthority(bundle: StoryArcBundle, review:
 
 const VERDICT_RANK = { passed: 0, revise: 1, blocked: 2 } as const;
 
-export function mergeStoryArcReviews(bundle: StoryArcBundle, reviews: StoryArcReviewOutput[]): StoryArcReviewOutput {
+export function mergeStoryArcReviews(bundle: StoryArcBundle, reviews: StoryArcReviewOutput[], rebaseTarget?: StoryArcRebaseTarget): StoryArcReviewOutput {
   if (!reviews.length) throw new Error("故事弧审核合并至少需要一份审核结果");
-  const normalized = reviews.map((review) => normalizeStoryArcReviewAuthority(bundle, review));
+  const normalized = reviews.map((review) => normalizeStoryArcReviewAuthority(bundle, review, rebaseTarget));
   const worst = <T extends { verdict: "passed" | "revise" | "blocked" }>(items: T[]) => items.reduce((selected, item) => VERDICT_RANK[item.verdict] > VERDICT_RANK[selected.verdict] ? item : selected);
   const chapterChecks = bundle.chapters.flatMap((chapter) => CHAPTER_PLAN_CHECK_DIMENSIONS.map((dimension) => worst(normalized.map((review) => review.chapterChecks.find((check) => check.chapterIndex === chapter.index && check.dimension === dimension)).filter((check): check is ChapterPlanValidationCheck => Boolean(check)))));
   const arcChecks = ARC_PLAN_CHECK_DIMENSIONS.map((dimension) => worst(normalized.map((review) => review.arcChecks.find((check) => check.dimension === dimension)).filter((check): check is ArcPlanValidationCheck => Boolean(check))));

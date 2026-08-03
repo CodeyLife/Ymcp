@@ -19,6 +19,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
   { key: "bootstrap", title: "规划与创作", tools: ["novel_bootstrap_run", "novel_story_arc_start", "novel_story_arc_get", "novel_chapter_review", "novel_chapter_generate"] },
   { key: "closed-loop", title: "评估闭环", tools: ["novel_closed_loop_run"] },
   { key: "workflow", title: "Workflow 查询", tools: ["novel_workflow_get", "novel_workflow_list"] },
+  { key: "workflow-decision", title: "Workflow 决策", tools: ["novel_chapter_review_decision"] },
 ];
 
 const SHORT_LABELS: Partial<Record<ToolName, string>> = {
@@ -50,6 +51,7 @@ const SHORT_LABELS: Partial<Record<ToolName, string>> = {
   novel_closed_loop_run: "执行评估闭环",
   novel_workflow_get: "查询 Workflow 状态",
   novel_workflow_list: "列出 Workflow Runs",
+  novel_chapter_review_decision: "提交章节审校决策",
 };
 
 export const TOOL_DESCRIPTIONS: Record<string, ToolInfo> = Object.fromEntries(
@@ -71,6 +73,7 @@ export const DIRECT_EXEC_TOOLS = new Set<string>([
   "novel_story_arc_start",
   "novel_story_arc_get",
   "novel_closed_loop_run",
+  "novel_chapter_review_decision",
 ]);
 
 export const TOOL_COUNT = TOOL_DEFINITIONS.length;

@@ -22,7 +22,7 @@ export async function startStoryArcPlanning(
     payload: { arcId: arc.id, mode: input.mode, reviewPolicy, authorIntent: input.authorIntent, rebase: Boolean(input.arcId) },
   });
   const handle = await temporal.workflow.start("storyArcPlanningWorkflow", {
-    args: [{ workflowId, projectId: input.projectId, arcId: arc.id, mode: input.mode, reviewPolicy, authorIntent: input.authorIntent }],
+    args: [{ workflowId, projectId: input.projectId, arcId: arc.id, mode: input.mode, reviewPolicy, authorIntent: input.authorIntent, rebase: Boolean(input.arcId) }],
     taskQueue: input.taskQueue ?? "novel-v2",
     workflowId,
   });
@@ -38,16 +38,17 @@ export async function startStoryArcReview(
   if (!arc?.blueprintArtifactId || arc.planningStatus !== "awaiting-review") throw new Error("故事弧当前没有可审核的蓝图");
   const workflowId = `story-arc-review-${randomUUID()}`;
   const reviewPolicy = input.reviewPolicy ?? (input.mode === "mcp" ? "auto" : "manual");
+  const rebase = arc.executionStatus === "completed";
   await repository.putWorkflowRun({
     id: workflowId,
     workflowType: "story-arc-planning",
     projectId: input.projectId,
     temporalWorkflowId: workflowId,
     status: "accepted",
-    payload: { arcId: input.arcId, mode: input.mode, reviewPolicy, existingArtifactId: arc.blueprintArtifactId },
+    payload: { arcId: input.arcId, mode: input.mode, reviewPolicy, existingArtifactId: arc.blueprintArtifactId, rebase },
   });
   const handle = await temporal.workflow.start("storyArcPlanningWorkflow", {
-    args: [{ workflowId, projectId: input.projectId, arcId: input.arcId, mode: input.mode, reviewPolicy, existingArtifactId: arc.blueprintArtifactId }],
+    args: [{ workflowId, projectId: input.projectId, arcId: input.arcId, mode: input.mode, reviewPolicy, existingArtifactId: arc.blueprintArtifactId, rebase }],
     taskQueue: input.taskQueue ?? "novel-v2",
     workflowId,
   });

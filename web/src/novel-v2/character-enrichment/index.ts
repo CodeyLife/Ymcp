@@ -207,8 +207,8 @@ export async function persistCharacterEnrichment(input: { projectId: string; doc
         id: `claim:knowledge:${input.revisionId}:${contentHash.slice(0, 16)}`,
         projectId: input.projectId,
         kind: "episodic",
-        title: `${delta.characterId} 知道：${knowledge.description.slice(0, 32)}`,
-        content: `${delta.characterId} 在第${input.narrativeOrder}章得知：${knowledge.description}\n证据：${knowledge.evidence}`,
+        title: `${delta.characterId} 的信息边界（第${input.narrativeOrder}章）`,
+        content: knowledge.description,
         subjectRefs: [delta.characterId],
         narrativeRange: { start: input.narrativeOrder, end: input.narrativeOrder },
         knowledgeScope: { characterId: delta.characterId },
@@ -217,6 +217,7 @@ export async function persistCharacterEnrichment(input: { projectId: string; doc
         sourceRevisionIds: [input.revisionId],
         contentHash,
         supersedes: [],
+        predicate: "character-knows",
       };
       const recorded = await deps.repository.recordFactExtraction({
         projectId: input.projectId,

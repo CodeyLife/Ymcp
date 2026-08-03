@@ -77,6 +77,27 @@ function repeatedBlocks(paragraphs: string[]): Array<{ start: number; duplicateS
     && candidate.duplicateStart + candidate.length >= block.duplicateStart + block.length));
 }
 
+// TODO: move these structural thresholds to shared output-policy configuration.
+const OUTPUT_WRAPPER_SCAN_LINES = 5;
+const OUTPUT_WRAPPER_TITLE_LENGTH = 30;
+const OUTPUT_WRAPPER_PREFIX_LENGTH = 18;
+
+function hasLeadingOutputWrapper(text: string): boolean {
+  if (/^```|```\s*$/u.test(text)) return true;
+  const lines = text.split(/\r?\n/u);
+  for (let index = 0; index < Math.min(OUTPUT_WRAPPER_SCAN_LINES, lines.length); index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) continue;
+    if (/^#{1,3}\s+\S/u.test(trimmed)) return true;
+    if (trimmed.length <= OUTPUT_WRAPPER_TITLE_LENGTH && /[:：]\s*$/u.test(trimmed)) return true;
+    const colonMatch = trimmed.match(/^([^\n:：]{2,24})[:：]\s*(.*)$/u);
+    if (colonMatch && colonMatch[1].length <= OUTPUT_WRAPPER_PREFIX_LENGTH && !/[。！？…—]/u.test(colonMatch[1])) return true;
+    if (trimmed.length <= 60 && /^[^。\n]{1,8}。\s*\S{8,}/u.test(trimmed)) return true;
+    break;
+  }
+  return false;
+}
+
 export function inspectManuscript(input: InspectManuscriptInput): ManuscriptStructuralReport {
   const text = input.text.trim();
   const paragraphs = splitParagraphs(text);
@@ -86,8 +107,8 @@ export function inspectManuscript(input: InspectManuscriptInput): ManuscriptStru
   const warnings: ReviewIssue[] = [];
 
   if (!text) blockers.push(issue("blocker", "正文为空", "正文没有任何有效内容", "manuscript.empty"));
-  if (/^```|```\s*$/u.test(text) || /^(?:#\s*)?(?:章节正文|输出结果|以下是)/u.test(text)) {
-    blockers.push(issue("blocker", "正文包含输出包装", text.slice(0, 120), "manuscript.wrapper"));
+  if (hasLeadingOutputWrapper(text)) {
+    blockers.push(issue("blocker", "正文包含输出包装或指令文本泄漏", text.slice(0, 120), "manuscript.wrapper"));
   }
   if (input.stopReason && /(?:length|max[_ -]?tokens?|token[_ -]?limit)/iu.test(input.stopReason)) {
     blockers.push(issue("blocker", "正文因输出上限截断", input.stopReason, "manuscript.truncated"));

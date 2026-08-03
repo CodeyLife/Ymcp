@@ -165,6 +165,38 @@ function endpoint(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 }
 
+function jsonSchemaPrimitiveType(value: unknown): string | undefined {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
+  return undefined;
+}
+
+/**
+ * Some OpenAI-compatible providers reject valid JSON Schema nodes that only
+ * contain enum/const. Add the inferable primitive type at the transport
+ * boundary while keeping the application schema unchanged for AJV validation.
+ */
+export function normalizeProviderJsonSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeProviderJsonSchema);
+  if (!value || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  const normalized = Object.fromEntries(Object.entries(source).map(([key, item]) => [key, normalizeProviderJsonSchema(item)])) as Record<string, unknown>;
+  if (typeof normalized.type === "string") return normalized;
+
+  const candidates = Array.isArray(normalized.enum)
+    ? normalized.enum.map(jsonSchemaPrimitiveType).filter((type): type is string => Boolean(type))
+    : "const" in normalized
+      ? [jsonSchemaPrimitiveType(normalized.const)]
+      : [];
+  const inferred = candidates.length && candidates.every((type) => type === candidates[0]) ? candidates[0] : undefined;
+  if (inferred) normalized.type = inferred;
+  else if (normalized.properties && typeof normalized.properties === "object" && !Array.isArray(normalized.properties)) normalized.type = "object";
+  else if ("items" in normalized) normalized.type = "array";
+  return normalized;
+}
+
 async function readHttpError(response: Response): Promise<never> {
   const body = await response.text().catch(() => "");
   const retryable = response.status === 408 || response.status === 409 || response.status === 429 || response.status >= 500;
@@ -275,7 +307,7 @@ async function requestChatCompletions(input: TransportRequest): Promise<Transpor
   if (stream) body.stream_options = { include_usage: true };
   if (input.maxTokens) body.max_tokens = input.maxTokens;
   if (typeof input.temperature === "number") body.temperature = input.temperature;
-  if (input.schema) body.response_format = { type: "json_schema", json_schema: { name: input.schemaName ?? "model_output", strict: true, schema: input.schema } };
+  if (input.schema) body.response_format = { type: "json_schema", json_schema: { name: input.schemaName ?? "model_output", strict: true, schema: normalizeProviderJsonSchema(input.schema) } };
   let response: Response;
   try {
     response = await fetch(endpoint(input.profile.baseUrl, "chat/completions"), { method: "POST", headers: authorization(input.profile), body: JSON.stringify(body), signal: input.signal });
@@ -309,7 +341,7 @@ async function requestResponses(input: TransportRequest): Promise<TransportRespo
   if (input.previousResponseId) body.previous_response_id = input.previousResponseId;
   if (input.maxTokens) body.max_output_tokens = input.maxTokens;
   if (typeof input.temperature === "number") body.temperature = input.temperature;
-  if (input.schema) body.text = { format: { type: "json_schema", name: input.schemaName ?? "model_output", strict: true, schema: input.schema } };
+  if (input.schema) body.text = { format: { type: "json_schema", name: input.schemaName ?? "model_output", strict: true, schema: normalizeProviderJsonSchema(input.schema) } };
   let response: Response;
   try {
     response = await fetch(endpoint(input.profile.baseUrl, "responses"), { method: "POST", headers: authorization(input.profile), body: JSON.stringify(body), signal: input.signal });

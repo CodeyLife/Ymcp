@@ -2,18 +2,31 @@ import { describe, expect, it } from "vitest";
 import { applyRevisionWindows, applyTargetedRevisionReplacements, buildAuthorRevisionAlignmentPrompt, buildAuthorRevisionBrief, buildAuthorRevisionRepairPrompt, buildFullChapterRevisionPrompt, buildFullChapterRevisionPromptPackage, buildRevisionWindowPrompt, buildTargetedRevisionBatchPrompt, planRevisionWindows, revisionWindowsCoverAllIssues, shouldUseRevisionWindows } from "../prompts/chapter-revision";
 import type { MemoryBundle, ReviewIssue, SkillBundle } from "../protocol";
 
-const memory: MemoryBundle = { id: "m", projectId: "p", preflightId: "pf", claims: [], conflicts: [], missingFacets: [], tokenBudget: 1000, sourceRevisionIds: [], fingerprint: "m", createdAt: 1 };
+const memory: MemoryBundle = {
+  id: "m", projectId: "p", preflightId: "pf", claims: [], conflicts: [], missingFacets: [], tokenBudget: 1000, sourceRevisionIds: [], fingerprint: "m", createdAt: 1,
+  narrativeRhythm: {
+    arcId: "arc-1",
+    fingerprint: "rhythm-1",
+    chapters: [{ documentId: "doc-1", revisionId: "rev-1", narrativeOrder: 1, title: "雨后", summary: "两人清理现场", keyEvents: ["归还钥匙"], emotionalArc: "紧张转为克制", narrativeFunction: "aftermath", thematicMode: "absent", themeCarrier: "none", issueFamilies: [] }],
+  },
+};
 
 describe("chapter revision windows", () => {
   it("compiles full revision sources as separate auditable sections", () => {
+    const revisionMemory: MemoryBundle = {
+      ...memory,
+      claims: [{ id: "episodic-1", projectId: "p", kind: "episodic", title: "重复前章摘要", content: "两人清理现场", subjectRefs: [], knowledgeScope: "author", authority: "derived", confidence: 1, sourceRevisionIds: ["rev-1"], contentHash: "episodic-1", supersedes: [], score: 1, matchedFacet: "chapter-memory", reason: "pinned" }],
+    };
     const packageResult = buildFullChapterRevisionPromptPackage({
       projectId: "p", workflowId: "wf", system: "revision", sourceArtifactId: "artifact-1",
-      maxInputTokens: 20_000, maxOutputTokens: 4_000, text: "旧正文", memory,
+      maxInputTokens: 20_000, maxOutputTokens: 4_000, text: "旧正文", memory: revisionMemory,
       issues: [{ severity: "major", title: "对白直白", evidence: "原句", suggestion: "改为行动与停顿" }],
       authorInstruction: "重新设计对白，让戒备通过动作呈现。",
     });
-    expect(packageResult.manifest.sections.map((section) => section.id)).toEqual(expect.arrayContaining(["revision-contract", "author-instruction", "source-manuscript", "review-issues", "revision-facts", "revision-skills"]));
+    expect(packageResult.manifest.sections.map((section) => section.id)).toEqual(expect.arrayContaining(["revision-contract", "author-instruction", "source-manuscript", "revision-interpretation-guide", "review-issues", "revision-facts", "revision-rhythm", "revision-skills"]));
+    expect(packageResult.instruction).toContain("雨后");
     expect(packageResult.instruction.match(/重新设计对白，让戒备通过动作呈现。/g)).toHaveLength(1);
+    expect(packageResult.sections.find((section) => section.id === "revision-facts")?.text).not.toContain("重复前章摘要");
   });
 
   it("merges overlapping evidence ranges and leaves unrelated paragraphs untouched", () => {
@@ -28,15 +41,18 @@ describe("chapter revision windows", () => {
     expect(applyRevisionWindows(text, [{ window: windows[0], text: "新二段\n\n新三段" }])).toBe("第一段\n\n新二段\n\n新三段\n\n第四段");
   });
 
-  it("locates an issue by excerpt and includes evidence plus read-only neighbors", () => {
+  it("locates an issue by excerpt and includes evidence plus read-only neighbors with rewrite as reference-only", () => {
     const issue: ReviewIssue = { severity: "major", title: "心理总结", evidence: "他感到安全", excerpt: "他感到安全", rewriteExample: "他把杯沿摆正。" };
     const text = "雨落下来。\n\n他感到安全。\n\n电话响了。";
     const [window] = planRevisionWindows(text, [issue]);
     const prompt = buildRevisionWindowPrompt({ text, window, memory });
     expect(window).toMatchObject({ start: 1, end: 1 });
-    expect(prompt).toContain("改写参考：他把杯沿摆正。");
+    expect(prompt).toContain("他把杯沿摆正。");
+    expect(prompt).toContain("不得直接搬用");
+    expect(prompt).toContain("必须自行完成实际改写");
     expect(prompt).toContain("雨落下来。");
     expect(prompt).toContain("电话响了。");
+    expect(prompt).toContain("连续章节叙事节奏");
   });
 
   it("applies multiple targeted replacements while preserving every protected paragraph", () => {
@@ -98,9 +114,9 @@ describe("chapter revision windows", () => {
     expect(revisionWindowsCoverAllIssues(windows, [located, authorRequirement])).toBe(false);
   });
 
-  it("does not lock author-directed regeneration to review issue windows", () => {
+  it("allows author-directed regeneration to use review issue windows", () => {
     expect(shouldUseRevisionWindows({ requiresFullRevision: false })).toBe(true);
-    expect(shouldUseRevisionWindows({ requiresFullRevision: false, authorInstruction: "重新设计本章对白关系和信息释放。" })).toBe(false);
+    expect(shouldUseRevisionWindows({ requiresFullRevision: false, authorInstruction: "重新设计本章对白关系和信息释放。" })).toBe(true);
     expect(shouldUseRevisionWindows({ requiresFullRevision: true })).toBe(false);
   });
 
@@ -115,7 +131,28 @@ describe("chapter revision windows", () => {
     expect(prompt.indexOf("作者反馈转译为本轮修订策略（最高优先级）")).toBeLessThan(prompt.indexOf("## 原文"));
     expect(prompt).toContain("女主保持高冷，删除尬聊");
     expect(prompt).toContain("逐项落实作者策略和审核问题");
-    expect(prompt.match(/女主保持高冷，删除尬聊/gu)).toHaveLength(2);
+    expect(prompt.match(/女主保持高冷，删除尬聊/gu)).toHaveLength(1);
+  });
+
+  it("frames rewrite examples as reference-only direction, not candidate text to copy", () => {
+    const issue: ReviewIssue = {
+      severity: "major",
+      title: "视角越界",
+      evidence: "他重新估量着眼前的人",
+      revisionRanges: [{ start: 1, end: 1 }],
+      suggestion: "只保留视角人物可感知的动作",
+      rewriteExample: "转而在心中重新估量着眼前这个衣衫寒酸的弟子",
+    };
+    const text = "他重新估量着眼前的人。";
+    const windows = planRevisionWindows(text, [issue]);
+
+    const fullPrompt = buildFullChapterRevisionPrompt({ text, issues: [issue], memory });
+    const windowPrompt = buildTargetedRevisionBatchPrompt({ text, windows, memory });
+
+    expect(fullPrompt).toContain(issue.rewriteExample);
+    expect(fullPrompt).toContain("不得直接搬用");
+    expect(windowPrompt).toContain(issue.rewriteExample);
+    expect(windowPrompt).toContain("不得直接搬用");
   });
 
   it("does not let full skill prompts compete with an explicit author direction", () => {
@@ -190,6 +227,7 @@ describe("chapter revision windows", () => {
     expect(prompt).toContain("交流结构没有改变");
     expect(prompt).toContain("问答句式与原文相同");
     expect(prompt).toContain("当前候选（在此基础上继续修订）");
+    expect(prompt).toContain("雨后");
     expect(prompt).not.toContain("对白必须少于");
   });
 

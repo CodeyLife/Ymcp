@@ -66,11 +66,11 @@ function terms(value: string): string[] {
 }
 
 function classify(intent: NovelIntent): PreflightPlan["taskClass"] {
-  // 显式 chapter target 优先：target.kind="chapter" + target.id 表示章节生成任务，
-  // 无论 objective 文本是否含"架构"/"世界观"等关键词，都应分类为 drafting。
-  // 原因：章节 objective 常包含"按 chapter-plan 架构产出""世界观铺陈"等描述性文字，
-  // 这些是章节内容说明，不是任务类型声明。任务类型由 target.kind 决定。
+  // 章节目标默认进入 drafting，但显式 requestedStage 仍是调用方对生命周期的声明。
+  // 这允许“替换已定稿章节”的 revision 请求进入正式 revise/commit 链路，
+  // 同时避免 objective 中的“架构/世界观”等内容描述误导任务分类。
   if (intent.target?.kind === "chapter" && intent.target?.id) {
+    if (intent.requestedStage === "revision") return "revision";
     return "drafting";
   }
   const text = `${intent.objective} ${(intent.requestedStage ?? "")}`;

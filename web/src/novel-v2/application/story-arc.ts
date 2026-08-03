@@ -268,6 +268,11 @@ export interface StoryArcRebaseTargetChapter {
    * the last approved blueprint as its execution contract during a rebase.
    */
   plannedBlueprint?: ChapterBlueprint;
+  /**
+   * A committed chapter keeps its last approved blueprint as the planning
+   * baseline; rebase may enrich its execution scale but may not rewrite it.
+   */
+  committedBlueprint?: ChapterBlueprint;
   approvedPlan: {
     summary?: string;
     sceneEvents: string[];
@@ -343,9 +348,13 @@ export function normalizeStoryArcRebaseBundle(bundle: StoryArcBundle, target: St
       const plannedBlueprint = !targetChapter?.revisionId && !targetChapter?.committedMemory
         ? targetChapter.plannedBlueprint
         : undefined;
+      const isHistoricalTarget = Boolean(targetChapter?.revisionId || targetChapter?.committedMemory);
+      const committedBlueprint = isHistoricalTarget ? targetChapter.committedBlueprint : undefined;
       const candidate = plannedBlueprint
         ? { ...plannedBlueprint, index: chapter.index, narrativeScale: chapter.narrativeScale ?? plannedBlueprint.narrativeScale }
-        : chapter;
+        : committedBlueprint
+          ? { ...committedBlueprint, index: chapter.index, narrativeScale: chapter.narrativeScale ?? committedBlueprint.narrativeScale }
+          : chapter;
       const normalized = candidate.thematicTreatment?.mode === "foreground" && targetChapter?.approvedPlan.thematicMode !== "foreground"
         ? {
         ...candidate,
@@ -358,7 +367,6 @@ export function normalizeStoryArcRebaseBundle(bundle: StoryArcBundle, target: St
         },
         }
         : candidate;
-      const isHistoricalTarget = Boolean(targetChapter?.revisionId || targetChapter?.committedMemory);
       return {
         ...normalized,
         unresolvedAtClose: targetChapter?.committedMemory
@@ -712,6 +720,82 @@ export function parseStoryArcBundle(value: unknown): StoryArcBundle {
     batch: { batchIndex, startChapterIndex, complete: rawBatch.complete === true },
     chapters,
   };
+}
+
+/**
+ * Normalize persisted chapter-planning snapshots at the read boundary.
+ *
+ * Planning contexts are intentionally immutable snapshots, so older rows can
+ * legitimately lack fields added by later contracts. Prompt consumers still
+ * need the current executable shape; this adapter supplies the same defaults
+ * used when a story-arc bundle is parsed without rewriting historical data.
+ */
+export function normalizeChapterPlanningContext(value: unknown): ChapterPlanningContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const arcSource = source.arc && typeof source.arc === "object" && !Array.isArray(source.arc) ? source.arc as Record<string, unknown> : {};
+  const arc: NarrativeArcPlan = {
+    title: typeof arcSource.title === "string" ? arcSource.title : "历史故事弧",
+    objective: typeof arcSource.objective === "string" ? arcSource.objective : "依据历史章节上下文继续创作",
+    entryState: typeof arcSource.entryState === "string" ? arcSource.entryState : "",
+    centralConflict: typeof arcSource.centralConflict === "string" ? arcSource.centralConflict : "",
+    development: strings(arcSource.development),
+    resolution: typeof arcSource.resolution === "string" ? arcSource.resolution : "",
+    exitState: typeof arcSource.exitState === "string" ? arcSource.exitState : "",
+    plotThreadRefs: strings(arcSource.plotThreadRefs),
+    foreshadowingRefs: strings(arcSource.foreshadowingRefs),
+    expectedChapterCount: Number.isInteger(arcSource.expectedChapterCount) ? Number(arcSource.expectedChapterCount) : 0,
+    phases: Array.isArray(arcSource.phases) ? arcSource.phases.flatMap((phase) => {
+      if (!phase || typeof phase !== "object" || Array.isArray(phase)) return [];
+      const item = phase as Record<string, unknown>;
+      const title = typeof item.title === "string" ? item.title : "";
+      const objective = typeof item.objective === "string" ? item.objective : "";
+      return title && objective ? [{ title, objective, exitCondition: typeof item.exitCondition === "string" ? item.exitCondition : "" }] : [];
+    }) : [],
+    thematicQuestions: Array.isArray(arcSource.thematicQuestions) ? arcSource.thematicQuestions.flatMap((question) => {
+      if (!question || typeof question !== "object" || Array.isArray(question)) return [];
+      const item = question as Record<string, unknown>;
+      const id = typeof item.id === "string" ? item.id : "";
+      const text = typeof item.question === "string" ? item.question : "";
+      return id && text ? [{ id, question: text, opposingPressures: typeof item.opposingPressures === "string" ? item.opposingPressures : "", resolutionWindow: typeof item.resolutionWindow === "string" ? item.resolutionWindow : "" }] : [];
+    }) : [],
+    authorIntent: typeof arcSource.authorIntent === "string" ? arcSource.authorIntent : undefined,
+  };
+  const projectId = typeof source.projectId === "string" ? source.projectId : "";
+  const arcId = typeof source.arcId === "string" ? source.arcId : "";
+  const contextChapter = source.chapter && typeof source.chapter === "object" && !Array.isArray(source.chapter) ? source.chapter as Record<string, unknown> : undefined;
+  if (!contextChapter) return undefined;
+  const chapterBundle = (() => {
+    try {
+      return parseStoryArcBundle({ arc: { title: arc.title, objective: arc.objective }, batch: { batchIndex: 1, startChapterIndex: 1, complete: false }, chapters: [contextChapter] }).chapters[0];
+    } catch {
+      return undefined;
+    }
+  })();
+  if (!chapterBundle) return undefined;
+  const chapter: ChapterBlueprintRecord = {
+    ...chapterBundle,
+    id: typeof contextChapter.id === "string" ? contextChapter.id : chapterBundle.id ?? `legacy-chapter-${typeof contextChapter.index === "number" ? contextChapter.index : 1}`,
+    arcId: typeof contextChapter.arcId === "string" ? contextChapter.arcId : arcId,
+    projectId: typeof contextChapter.projectId === "string" ? contextChapter.projectId : projectId,
+    documentId: typeof contextChapter.documentId === "string" ? contextChapter.documentId : undefined,
+    globalOrder: typeof contextChapter.globalOrder === "number" ? contextChapter.globalOrder : typeof contextChapter.index === "number" ? contextChapter.index : chapterBundle.index,
+    status: typeof contextChapter.status === "string" ? contextChapter.status : "planned",
+    blueprintRevision: typeof contextChapter.blueprintRevision === "number" ? contextChapter.blueprintRevision : 0,
+    index: typeof contextChapter.index === "number" ? contextChapter.index : chapterBundle.index,
+  };
+  const neighbors = Array.isArray(source.neighbors) ? source.neighbors.flatMap((item, index) => {
+    const normalized = normalizeChapterPlanningContext({ projectId, arcId, arc, chapter: item, neighbors: [], macroPlanArtifacts: [], sourceArtifactIds: [] })?.chapter;
+    if (!normalized) return [];
+    return [{ id: normalized.id ?? `legacy-neighbor-${index}`, globalOrder: normalized.globalOrder, title: normalized.title, summary: normalized.summary, chapterPurpose: normalized.chapterPurpose, narrativeFunction: normalized.narrativeFunction, readerExperience: normalized.readerExperience, thematicTreatment: normalized.thematicTreatment, worldRuleRefs: normalized.worldRuleRefs, characterFocus: normalized.characterFocus, romanceTreatment: normalized.romanceTreatment, humorTreatment: normalized.humorTreatment }];
+  }) : [];
+  const macroPlanArtifacts = Array.isArray(source.macroPlanArtifacts) ? source.macroPlanArtifacts.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    return [{ id: typeof record.id === "string" ? record.id : "legacy-macro", taskKey: typeof record.taskKey === "string" ? record.taskKey : "unknown", title: typeof record.title === "string" ? record.title : "", summary: typeof record.summary === "string" ? record.summary : "", payload: record.payload && typeof record.payload === "object" && !Array.isArray(record.payload) ? record.payload as Record<string, unknown> : {} }];
+  }) : [];
+  const withoutFingerprint = { projectId, arcId, chapterBlueprintId: typeof source.chapterBlueprintId === "string" ? source.chapterBlueprintId : chapter.id ?? "", macroPlanArtifacts, arc, chapter, neighbors, sourceArtifactIds: strings(source.sourceArtifactIds) };
+  return { ...withoutFingerprint, fingerprint: typeof source.fingerprint === "string" ? source.fingerprint : planningContextFingerprint(withoutFingerprint) };
 }
 
 export function canGenerateNextStoryArcBatch(input: { plannedInBatch: number; finalizedInBatch: number; batchStatus: StoryArcBatchRecord["status"] }): boolean {

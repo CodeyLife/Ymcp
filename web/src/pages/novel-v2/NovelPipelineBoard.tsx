@@ -846,8 +846,8 @@ function CandidateReviewWorkspace({ text, baseText, targeted = false, targetIssu
     <footer className="pb-review-actions">
       <span>{targeted ? "可继续修订当前候选、退回上一版重做，或放弃整个工作流并保留开始时正文。" : "可按审校意见继续修订、退回上一版重做，或接受当前候选稿并进入事实提取与正式提交。"}</span>
       <div>
-        {onRevisePrevious && <Button icon={<HistoryOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => requireSavedEdits(() => onRevisePrevious(feedback.trim() || undefined))}>退回上一版继续修订</Button>}
-        {onReviseAgain && <Button icon={<RobotOutlined />} disabled={quality.issues.length === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => requireSavedEdits(() => onReviseAgain(feedback.trim() || undefined))}>{targeted ? "按当前稿继续修订" : "提交意见并重新生成"}</Button>}
+        {onRevisePrevious && <Button icon={<HistoryOutlined />} disabled={quality.issues.length === 0 && targetIssueCount === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => requireSavedEdits(() => onRevisePrevious(feedback.trim() || undefined))}>退回上一版继续修订</Button>}
+        {onReviseAgain && <Button icon={<RobotOutlined />} disabled={quality.issues.length === 0 && targetIssueCount === 0 && !feedback.trim()} loading={revisingAgain} onClick={() => requireSavedEdits(() => onReviseAgain(feedback.trim() || undefined))}>{targeted ? "按当前稿继续修订" : "提交意见并重新生成"}</Button>}
         <Popconfirm title="放弃整个工作流？" description="候选稿会保留为历史产物，章节正文仍是本次工作流开始时的正式版本。" okText="确认放弃" cancelText="继续审阅" onConfirm={() => requireSavedEdits(onAbandon)}><Button danger icon={<CloseOutlined />} loading={deciding}>放弃本次工作流</Button></Popconfirm>
         {hasSeriousIssue ? <Popconfirm title="仍有严重审校问题" description="覆盖严重问题必须在上方填写作者判断理由。" okText="仍然接受" cancelText="继续审阅" disabled={!feedback.trim()} onConfirm={() => requireSavedEdits(() => onApprove(feedback.trim()))}><Button type="primary" icon={<CheckOutlined />} loading={deciding} disabled={!feedback.trim()}>接受当前稿并定稿</Button></Popconfirm> : <Button type="primary" icon={<CheckOutlined />} loading={deciding} onClick={() => requireSavedEdits(() => onApprove(feedback.trim() || undefined))}>接受当前稿并定稿</Button>}
       </div>
@@ -1277,6 +1277,19 @@ export default function NovelProductionWorkspace({
     ? liveReasonCode === "fact-approval-pending" ? "fact-review" : "manuscript-review"
     : workspaceState.mode;
 
+  // 重置 gateDecisionRef：当工作流从非 manuscript-review 状态进入 manuscript-review 时，
+  // 必须清除上一轮的 decisionKey。否则：
+  // 1. 修订被质量回退到同一 artifact（preserveDirectedRevisionCandidate）时，pendingArtifactId 不变，旧 decisionKey 永久驻留；
+  // 2. 用户在 approve 后工作流因 fact-approval 回到 manuscript-review，同一 artifact 的决策被静默吞掉。
+  // 仅检测 pendingArtifactId 变化无法覆盖这些场景，需要检测 workspace mode 的状态转换。
+  const prevWorkspaceModeRef = useRef<ChapterWorkspaceMode | undefined>(undefined);
+  useEffect(() => {
+    if (prevWorkspaceModeRef.current !== "manuscript-review" && liveWorkspaceMode === "manuscript-review") {
+      gateDecisionRef.current = undefined;
+    }
+    prevWorkspaceModeRef.current = liveWorkspaceMode;
+  }, [liveWorkspaceMode]);
+
   async function handleCancelRun() {
     try {
       await cancelRun.mutateAsync();
@@ -1347,8 +1360,8 @@ export default function NovelProductionWorkspace({
       const goal = candidateArtifact?.structuredData?.stageGoal as { authorInstruction?: string; acceptanceCriteria?: string[] } | undefined;
       const alignment = candidateArtifact?.structuredData?.authorAlignment as { satisfied?: boolean; summary?: string; unmetRequirements?: string[] } | undefined;
       const reviseAgain = async (feedback?: string) => {
-        if (targeted && !targetIssueIds.length) {
-          message.error("本次审批记录缺少可继续修复的审核意见");
+        if (targeted && !targetIssueIds.length && !feedback) {
+          message.error("本次审批记录缺少可继续修复的审核意见，请填写补充修改意见后重试");
           return;
         }
         await handleGateDecision("revise", feedback);

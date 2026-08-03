@@ -26,7 +26,7 @@ function arcCanBeEdited(arc: StoryArc): boolean {
   return arc.planningStatus !== "generating" && !["completed", "abandoned"].includes(arc.executionStatus);
 }
 function arcCanBeDeleted(arc: StoryArc): boolean {
-  return arc.planningStatus !== "generating" && arc.executionStatus !== "completed";
+  return arc.planningStatus !== "generating" || arc.executionStatus === "abandoned";
 }
 
 async function readJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -121,7 +121,7 @@ export default function StoryArcPanel({ projectId, onApplied }: { projectId: str
     if (!selected) return;
     await action("rebase", async () => {
       await readJson(`/v2/projects/${encodeURIComponent(projectId)}/story-arcs/${encodeURIComponent(selected.id)}/rebase`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ authorIntent: authorIntent.trim() || selected.arc.authorIntent, reviewPolicy }) });
-      setIntentOpen(false); message.success("已按当前宏观规划重建未开始章节蓝图");
+      setIntentOpen(false); message.success("已按当前宏观规划重建章节蓝图");
     });
   }
 
@@ -133,11 +133,12 @@ export default function StoryArcPanel({ projectId, onApplied }: { projectId: str
     });
   }
 
-  async function deleteArc() {
+  async function deleteArc(force = false) {
     if (!selected) return;
-    await action("delete", async () => {
-      await readJson(`/v2/projects/${encodeURIComponent(projectId)}/story-arcs/${encodeURIComponent(selected.id)}`, { method: "DELETE" });
-      setEditArc(undefined); setPreview(undefined); message.success("故事弧已删除");
+    await action(force ? "force-delete" : "delete", async () => {
+      const deleteUrl = "/v2/projects/" + encodeURIComponent(projectId) + "/story-arcs/" + encodeURIComponent(selected.id) + (force ? "?force=true" : "");
+      await readJson(deleteUrl, { method: "DELETE", headers: { "content-type": "application/json", ...(force ? { "x-force-delete": "true" } : {}) }, body: JSON.stringify(force ? { force: true } : {}) });
+      setEditArc(undefined); setPreview(undefined); message.success(force ? "故事弧及关联章节记忆已强制删除" : "故事弧已删除");
     });
   }
 
@@ -180,7 +181,7 @@ export default function StoryArcPanel({ projectId, onApplied }: { projectId: str
     </aside>
     <main className="novel-arc-reader">
       <header className="novel-plan-reader-head"><div><span className="novel-eyebrow">故事弧 {selected.ordinal}</span><h2>{selected.arc.title}</h2></div><Space wrap><Tag>{PLAN_LABEL[selected.planningStatus]}</Tag><Tag>{EXEC_LABEL[selected.executionStatus]}</Tag>{selected.batches.map((batch) => <Tag key={batch.id}>批次 {batch.batchIndex} · {batch.status}</Tag>)}</Space></header>
-      {selected.planningStatus === "stale" && <Alert showIcon type="warning" message="宏观规划已变化，后续章节生成已阻止。请重基线未开始章节蓝图。" />}
+      {selected.planningStatus === "stale" && <Alert showIcon type="warning" message="宏观规划已变化，后续章节生成已阻止。请重基线章节蓝图以匹配当前宏观规划。" />}
       {selected.planningStatus === "failed" && <Alert showIcon type="error" message="自动审核/修订未能通过，需作者编辑或重基线后再确认。" />}
       <section className="novel-arc-summary"><p>{selected.arc.objective}</p><dl><dt>入场状态</dt><dd>{selected.arc.entryState}</dd><dt>核心冲突</dt><dd>{selected.arc.centralConflict}</dd><dt>发展路径</dt><dd>{selected.arc.development.join(" → ")}</dd><dt>收束方式</dt><dd>{selected.arc.resolution}</dd><dt>离场状态</dt><dd>{selected.arc.exitState}</dd></dl></section>
       <div className="novel-arc-chapters">{selected.chapters.map((chapter) => <article key={chapter.id ?? chapter.index}><header><span>{String(chapter.globalOrder ?? chapter.index).padStart(2, "0")}</span><div><h3>{chapter.title}</h3><p>{chapter.summary}</p></div>{chapter.documentId && <Tag>已关联章节</Tag>}</header><div className="novel-arc-chapter-grid"><span><b>功能</b>{chapter.chapterPurpose}</span><span><b>戏剧问题</b>{chapter.dramaticQuestion}</span><span><b>情绪运动</b>{chapter.emotionalMovement}</span><span><b>章尾驱动力</b>{chapter.closingForce}</span></div>{chapter.scenes.length > 0 && <details><summary>{chapter.scenes.length} 个场景</summary>{chapter.scenes.map((scene, index) => <p key={index}><b>{scene.title}</b> · {scene.summary}</p>)}</details>}</article>)}</div>
@@ -190,9 +191,10 @@ export default function StoryArcPanel({ projectId, onApplied }: { projectId: str
       {selected.planningStatus === "awaiting-review" && <Button block type="primary" icon={<CheckOutlined />} loading={busy === "preview"} onClick={() => void previewApproval()}>审核并预览应用</Button>}
       {selected.planningStatus === "approved" && selected.executionStatus === "active" && latestBatch?.status === "approved" && !latestBatch.complete && <Button block type="primary" icon={<PlusOutlined />} loading={busy === "next-batch"} onClick={() => void startNextBatch()}>生成下一批蓝图</Button>}
       {selected.planningStatus === "generating" && <Button block disabled loading>正在生成整弧蓝图</Button>}
-      {["stale", "failed"].includes(selected.planningStatus) && <Popconfirm title="仅重建未开始章节；已有正文和定稿章节保持不变。" onConfirm={() => void rebase()}><Button block icon={<ReloadOutlined />} loading={busy === "rebase"}>重基线</Button></Popconfirm>}
+      {["stale", "failed"].includes(selected.planningStatus) && <Popconfirm title="按当前宏观规划重建章节蓝图；已有正文和定稿章节保持不变。" onConfirm={() => void rebase()}><Button block icon={<ReloadOutlined />} loading={busy === "rebase"}>重基线</Button></Popconfirm>}
       {!["completed", "abandoned"].includes(selected.executionStatus) && <Button block danger icon={<StopOutlined />} onClick={() => setAbandonOpen(true)}>放弃故事弧</Button>}
-      {canDeleteSelected && <Popconfirm title="删除此故事弧？" description="仅允许删除未产出正文的故事弧；已进入创作的章节会被后端拒绝。" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => void deleteArc()}><Button block danger icon={<DeleteOutlined />} loading={busy === "delete"}>删除故事弧</Button></Popconfirm>}
+      {canDeleteSelected && <Popconfirm title="删除此故事弧？" description="仅删除未产出正文的故事弧；已有正文时后端仍会拒绝。" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => void deleteArc()}><Button block danger icon={<DeleteOutlined />} loading={busy === "delete"}>删除故事弧</Button></Popconfirm>}
+      {canDeleteSelected && <Popconfirm title="强制删除此故事弧？" description="将删除关联章节正文、修订、章节记忆和事实记忆；该操作不可恢复。" okText="强制删除" okButtonProps={{ danger: true }} onConfirm={() => void deleteArc(true)}><Button block danger icon={<DeleteOutlined />} loading={busy === "force-delete"}>强制删除故事弧</Button></Popconfirm>}
     </Space><details className="novel-plan-audit"><summary>审计信息</summary><code>{selected.blueprintArtifactId ?? selected.sourceArtifactId ?? "暂无 artifact"}</code><code>{selected.contextFingerprint ?? "尚未批准"}</code></details></aside>
 
     <Modal title="本弧创作意图" open={intentOpen} onCancel={() => setIntentOpen(false)} onOk={() => void startNext()} confirmLoading={busy === "next"} okText="开始生成"><Space direction="vertical" size={12} style={{ width: "100%" }}><Segmented block value={reviewPolicy} onChange={(value) => setReviewPolicy(value as "manual" | "auto")} options={[{ label: "人工审核", value: "manual" }, { label: "自动审校修订", value: "auto" }]} /><Input.TextArea value={authorIntent} onChange={(event) => setAuthorIntent(event.target.value)} autoSize={{ minRows: 4, maxRows: 8 }} /></Space></Modal>
